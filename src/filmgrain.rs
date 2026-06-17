@@ -1,24 +1,53 @@
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 use crate::headers::FilmGrainData;
 use crate::intops::iclip;
 use crate::tables::GAUSSIAN_SEQUENCE;
 
-pub const GRAIN_WIDTH: usize = 82;
-pub const GRAIN_HEIGHT: usize = 73;
-pub const SUB_GRAIN_WIDTH: usize = 44;
-pub const SUB_GRAIN_HEIGHT: usize = 38;
+pub(crate) const GRAIN_WIDTH: usize = 82;
+pub(crate) const GRAIN_HEIGHT: usize = 73;
+pub(crate) const SUB_GRAIN_WIDTH: usize = 44;
+pub(crate) const SUB_GRAIN_HEIGHT: usize = 38;
 
-pub fn get_random_number(bits: u32, state: &mut u32) -> u32 {
+pub(crate) fn get_random_number(bits: u32, state: &mut u32) -> u32 {
     let r = *state;
     let bit = (r ^ (r >> 1) ^ (r >> 3) ^ (r >> 12)) & 1;
     *state = (r >> 1) | (bit << 15);
     (*state >> (16 - bits)) & ((1 << bits) - 1)
 }
 
-pub fn round2(x: i32, shift: u32) -> i32 {
+pub(crate) fn round2(x: i32, shift: u32) -> i32 {
     (x + ((1 << shift) >> 1)) >> shift
 }
 
-pub fn generate_scaling_8bpc(points: &[[u8; 2]], scaling: &mut [u8; 256]) {
+pub(crate) fn generate_scaling_8bpc(points: &[[u8; 2]], scaling: &mut [u8; 256]) {
     let num = points.len();
     if num == 0 {
         scaling.fill(0);
@@ -48,7 +77,7 @@ pub fn generate_scaling_8bpc(points: &[[u8; 2]], scaling: &mut [u8; 256]) {
     scaling[n..].fill(points[num - 1][1]);
 }
 
-pub fn generate_grain_y(
+pub(crate) fn generate_grain_y(
     buf: &mut [[i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
     data: &FilmGrainData,
     mut seed: u32,
@@ -91,7 +120,7 @@ pub fn generate_grain_y(
     }
 }
 
-pub fn generate_grain_uv(
+pub(crate) fn generate_grain_uv(
     buf: &mut [[i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
     buf_y: &[[i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
     data: &FilmGrainData,
@@ -159,7 +188,7 @@ pub fn generate_grain_uv(
     }
 }
 
-pub fn sample_lut(
+pub(crate) fn sample_lut(
     grain_lut: &[[i16; GRAIN_WIDTH]],
     bs: usize,
     offsets: &[[[i32; 2]; 2]; 2],
@@ -176,7 +205,7 @@ pub fn sample_lut(
     grain_lut[offy + y + (bs >> suby) * by][offx + x + (bs >> subx) * bx]
 }
 
-pub fn fgy_32x32xn_8bpc(
+pub(crate) fn fgy_32x32xn_8bpc(
     dst: &mut [u8],
     src: &[u8],
     stride: usize,
@@ -331,7 +360,7 @@ pub fn fgy_32x32xn_8bpc(
     }
 }
 
-pub fn fguv_32x32xn_8bpc(
+pub(crate) fn fguv_32x32xn_8bpc(
     dst: &mut [u8],
     src: &[u8],
     stride: usize,
@@ -507,14 +536,14 @@ pub fn fguv_32x32xn_8bpc(
     }
 }
 
-pub struct GrainLut {
-    pub y: [[i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
-    pub u: [[i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
-    pub v: [[i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
+pub(crate) struct GrainLut {
+    pub(crate) y: [[i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
+    pub(crate) u: [[i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
+    pub(crate) v: [[i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
 }
 
 impl GrainLut {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             y: [[0i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
             u: [[0i16; GRAIN_WIDTH]; GRAIN_HEIGHT],
@@ -530,7 +559,7 @@ impl Default for GrainLut {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn prep_grain_8bpc(
+pub(crate) fn prep_grain_8bpc(
     fgd: &FilmGrainData,
     grain_lut: &mut GrainLut,
     scaling: &mut [Vec<u8>; 3],
@@ -571,7 +600,7 @@ pub fn prep_grain_8bpc(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn apply_grain_row_8bpc(
+pub(crate) fn apply_grain_row_8bpc(
     dst_y: &mut [u8],
     dst_u: &mut [u8],
     dst_v: &mut [u8],
@@ -697,7 +726,7 @@ fn scaling_for_uv<'a>(scaling: &'a [Vec<u8>; 3], fgd: &FilmGrainData, uv: usize)
 /// `n_threads <= 1` runs the exact sequential loop (single-thread path
 /// unchanged).
 #[allow(clippy::too_many_arguments)]
-pub fn apply_grain_8bpc_mt(
+pub(crate) fn apply_grain_8bpc_mt(
     dst_y: &mut [u8],
     dst_u: &mut [u8],
     dst_v: &mut [u8],

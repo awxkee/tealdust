@@ -27,25 +27,13 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-//! NEON (aarch64) dispatch for the motion-compensation DSP family.
-//!
-//! `build.rs`) and calls them through the C ABI declared in
-//! kernel directly; scalar fallback lives in `crate::mc` and is selected by
-//! the caller before reaching this module.
-
-/// Length (in `i16` elements) to allocate for a `w`×`h` compound-prediction
-/// scratch buffer consumed by the NEON `avg`/`w_avg`/`mask`/`w_mask` kernels.
-/// Those kernels read the packed `w*h` buffer in fixed 16-element chunks, so
-/// when `w*h` is not a multiple of 16 they over-read up to 15 elements past
-/// the logical end. Callers round the allocation up with this helper; the
-/// extra elements are never written to `dst`, so output is unaffected.
 #[inline]
-pub fn compound_tmp_len(w: usize, h: usize) -> usize {
+pub(crate) fn compound_tmp_len(w: usize, h: usize) -> usize {
     (w * h).next_multiple_of(16)
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn put_8tap_8bpc(
+pub(crate) fn put_8tap_8bpc(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -72,7 +60,7 @@ pub fn put_8tap_8bpc(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn prep_8tap_8bpc(
+pub(crate) fn prep_8tap_8bpc(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -99,7 +87,7 @@ pub fn prep_8tap_8bpc(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn put_bilin_8bpc(
+pub(crate) fn put_bilin_8bpc(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -113,7 +101,7 @@ pub fn put_bilin_8bpc(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn prep_bilin_8bpc(
+pub(crate) fn prep_bilin_8bpc(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -126,12 +114,19 @@ pub fn prep_bilin_8bpc(
     crate::mc::prep_bilin_8bpc(tmp, tmp_stride, src, src_stride, w, h, mx, my);
 }
 
-pub fn avg_8bpc(dst: &mut [u8], dst_stride: usize, tmp1: &[i16], tmp2: &[i16], w: usize, h: usize) {
+pub(crate) fn avg_8bpc(
+    dst: &mut [u8],
+    dst_stride: usize,
+    tmp1: &[i16],
+    tmp2: &[i16],
+    w: usize,
+    h: usize,
+) {
     crate::mc::avg_8bpc(dst, dst_stride, tmp1, tmp2, w, h);
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn w_avg_8bpc(
+pub(crate) fn w_avg_8bpc(
     dst: &mut [u8],
     dst_stride: usize,
     tmp1: &[i16],
@@ -144,7 +139,7 @@ pub fn w_avg_8bpc(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn mask_8bpc(
+pub(crate) fn mask_8bpc(
     dst: &mut [u8],
     dst_stride: usize,
     tmp1: &[i16],
@@ -156,12 +151,19 @@ pub fn mask_8bpc(
     crate::mc::mask_8bpc(dst, dst_stride, tmp1, tmp2, w, h, m);
 }
 
-pub fn blend_8bpc(dst: &mut [u8], dst_stride: usize, tmp: &[u8], w: usize, h: usize, m: &[u8]) {
+pub(crate) fn blend_8bpc(
+    dst: &mut [u8],
+    dst_stride: usize,
+    tmp: &[u8],
+    w: usize,
+    h: usize,
+    m: &[u8],
+) {
     crate::mc::blend_8bpc(dst, dst_stride, tmp, w, h, m);
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn w_mask_8bpc(
+pub(crate) fn w_mask_8bpc(
     dst: &mut [u8],
     dst_stride: usize,
     tmp1: &[i16],
@@ -192,7 +194,7 @@ pub fn w_mask_8bpc(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn warp_affine_8x8_8bpc(
+pub(crate) fn warp_affine_8x8_8bpc(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -206,7 +208,7 @@ pub fn warp_affine_8x8_8bpc(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn warp_affine_8x8t_8bpc(
+pub(crate) fn warp_affine_8x8t_8bpc(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],

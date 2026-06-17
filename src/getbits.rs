@@ -1,6 +1,35 @@
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 use crate::intops::{inv_recenter, ulog2};
 
-pub struct GetBits<'a> {
+pub(crate) struct GetBits<'a> {
     state: u64,
     bits_left: i32,
     error: bool,
@@ -9,7 +38,7 @@ pub struct GetBits<'a> {
 }
 
 impl<'a> GetBits<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
         assert!(!data.is_empty());
         Self {
             state: 0,
@@ -21,11 +50,11 @@ impl<'a> GetBits<'a> {
     }
 
     #[inline]
-    pub fn has_error(&self) -> bool {
+    pub(crate) fn has_error(&self) -> bool {
         self.error
     }
 
-    pub fn get_bit(&mut self) -> u32 {
+    pub(crate) fn get_bit(&mut self) -> u32 {
         if self.bits_left == 0 {
             if self.ptr >= self.data.len() {
                 self.error = true;
@@ -66,7 +95,7 @@ impl<'a> GetBits<'a> {
         self.state |= (st as u64) << (64 - self.bits_left);
     }
 
-    pub fn get_bits(&mut self, n: i32) -> u32 {
+    pub(crate) fn get_bits(&mut self, n: i32) -> u32 {
         debug_assert!((0..=32).contains(&n));
         // A zero-width field carries no bits and reads as 0. The C reference
         // asserts n > 0 and relies on the field never being zero in practice;
@@ -84,7 +113,7 @@ impl<'a> GetBits<'a> {
         (state >> (64 - n)) as u32
     }
 
-    pub fn get_sbits(&mut self, n: i32) -> i32 {
+    pub(crate) fn get_sbits(&mut self, n: i32) -> i32 {
         debug_assert!((0..=32).contains(&n));
         if n == 0 {
             return 0;
@@ -98,7 +127,7 @@ impl<'a> GetBits<'a> {
         ((state as i64) >> (64 - n)) as i32
     }
 
-    pub fn get_uleb128(&mut self) -> u32 {
+    pub(crate) fn get_uleb128(&mut self) -> u32 {
         let mut val: u64 = 0;
         let mut i: u32 = 0;
 
@@ -120,7 +149,7 @@ impl<'a> GetBits<'a> {
         val as u32
     }
 
-    pub fn get_golomb(&mut self, k: u32) -> u32 {
+    pub(crate) fn get_golomb(&mut self, k: u32) -> u32 {
         debug_assert!(k < 32);
         let mut bits: u32 = 0;
         while bits < 32 - k {
@@ -135,7 +164,7 @@ impl<'a> GetBits<'a> {
         (bits << k) | self.get_bits(k as i32)
     }
 
-    pub fn get_uniform(&mut self, max: u32) -> u32 {
+    pub(crate) fn get_uniform(&mut self, max: u32) -> u32 {
         // Valid streams always call this with max > 1. A malformed stream can
         // derive max <= 1 (e.g. a corrupted subexp range); the only legal value
         // in a range of size <= 1 is 0, so return it without consuming bits or
@@ -154,7 +183,7 @@ impl<'a> GetBits<'a> {
         }
     }
 
-    pub fn get_vlc(&mut self) -> u32 {
+    pub(crate) fn get_vlc(&mut self) -> u32 {
         if self.get_bit() != 0 {
             return 0;
         }
@@ -173,7 +202,7 @@ impl<'a> GetBits<'a> {
         ((1u32 << n_bits) - 1) + self.get_bits(n_bits)
     }
 
-    pub fn get_bits_subexp_u(&mut self, ref_val: u32, n: u32, k: i32) -> u32 {
+    pub(crate) fn get_bits_subexp_u(&mut self, ref_val: u32, n: u32, k: i32) -> u32 {
         let mut v: u32 = 0;
 
         let mut i = 0;
@@ -202,13 +231,13 @@ impl<'a> GetBits<'a> {
         }
     }
 
-    pub fn get_bits_subexp(&mut self, ref_val: i32, n: u32) -> i32 {
+    pub(crate) fn get_bits_subexp(&mut self, ref_val: i32, n: u32) -> i32 {
         let off = n as i32 - 1;
         let n2 = n + off as u32;
         self.get_bits_subexp_u((ref_val + off) as u32, n2, 3) as i32 - off
     }
 
-    pub fn get_ref_uniform(&mut self, max: u32, def: u32) -> u32 {
+    pub(crate) fn get_ref_uniform(&mut self, max: u32, def: u32) -> u32 {
         if self.get_bit() == 0 {
             return def;
         }
@@ -217,24 +246,24 @@ impl<'a> GetBits<'a> {
     }
 
     #[inline]
-    pub fn bytealign(&mut self) {
+    pub(crate) fn bytealign(&mut self) {
         debug_assert!(self.bits_left <= 7);
         self.bits_left = 0;
         self.state = 0;
     }
 
     #[inline]
-    pub fn byte_pos(&self) -> usize {
+    pub(crate) fn byte_pos(&self) -> usize {
         self.ptr
     }
 
     #[inline]
-    pub fn remaining_bytes(&self) -> usize {
+    pub(crate) fn remaining_bytes(&self) -> usize {
         self.data.len() - self.ptr
     }
 
     #[inline]
-    pub fn remaining_slice(&self) -> &'a [u8] {
+    pub(crate) fn remaining_slice(&self) -> &'a [u8] {
         &self.data[self.ptr..]
     }
 }

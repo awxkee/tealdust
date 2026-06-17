@@ -25,7 +25,7 @@
 /// Dequantization lookup function.
 ///
 /// Maps a quantizer index to a dequantization value.
-pub fn dq_lookup(qidx: i32) -> i32 {
+pub(crate) fn dq_lookup(qidx: i32) -> i32 {
     // Clamp defensively so malformed streams can't index out of range; this is
     // a no-op for valid input.
     let qidx = qidx.clamp(0, 255);

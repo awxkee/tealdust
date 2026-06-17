@@ -1,17 +1,46 @@
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 use crate::headers::{WarpedMotionParams, WarpedMotionType};
 use crate::intops::{apply_sign, apply_sign64, iclip, iclip64to32, imax, imin, ulog2};
 use crate::levels::INVALID_MV;
 use crate::levels::{Av2Block, BlockSize, Mv, MvXY, RefPair};
 
-pub const INVALID_TRAJ: u16 = 0x8080;
-pub const INVALID_REF2CUR: i8 = -32;
+pub(crate) const INVALID_TRAJ: u16 = 0x8080;
+pub(crate) const INVALID_REF2CUR: i8 = -32;
 
 static DIV_MULT: [u16; 32] = [
     0, 16384, 8192, 5461, 4096, 3276, 2730, 2340, 2048, 1820, 1638, 1489, 1365, 1260, 1170, 1092,
     1024, 963, 910, 862, 819, 780, 744, 712, 682, 655, 630, 606, 585, 564, 546, 528,
 ];
 
-pub fn mv_projection(mv: Mv, num: i32, den: i32, min: i32, max: i32) -> Mv {
+pub(crate) fn mv_projection(mv: Mv, num: i32, den: i32, min: i32, max: i32) -> Mv {
     // For valid streams num (a clamped POC delta) is in [-31, 31] and den (an
     // abs POC delta / reference index) is in [1, 31]; the temporal-MV grid only
     // ever stores values in range. A malformed stream can leave out-of-range
@@ -31,7 +60,7 @@ pub fn mv_projection(mv: Mv, num: i32, den: i32, min: i32, max: i32) -> Mv {
     }
 }
 
-pub fn scale_mv(mv: Mv, sf: i32) -> Mv {
+pub(crate) fn scale_mv(mv: Mv, sf: i32) -> Mv {
     let (y_in, x_in) = (mv.y(), mv.x());
     let y = y_in as i64 * sf as i64;
     let x = x_in as i64 * sf as i64;
@@ -51,7 +80,7 @@ pub fn scale_mv(mv: Mv, sf: i32) -> Mv {
     }
 }
 
-pub fn quantize_mv_comp(absv: u32) -> u32 {
+pub(crate) fn quantize_mv_comp(absv: u32) -> u32 {
     debug_assert!(absv < 2048);
     if absv == 0 {
         return 0;
@@ -62,7 +91,7 @@ pub fn quantize_mv_comp(absv: u32) -> u32 {
     res + (nbits + has_bits) * 16
 }
 
-pub fn quantize_mv(mv: Mv) -> QMv {
+pub(crate) fn quantize_mv(mv: Mv) -> QMv {
     let (y, x) = (mv.y(), mv.x());
     let absy = y.unsigned_abs();
     let absx = x.unsigned_abs();
@@ -77,7 +106,7 @@ pub fn quantize_mv(mv: Mv) -> QMv {
     }
 }
 
-pub fn dequantize_mv_comp(v: i32) -> i32 {
+pub(crate) fn dequantize_mv_comp(v: i32) -> i32 {
     let absv = v.unsigned_abs();
     debug_assert!(absv < 0x80);
     let nbits = (absv >> 4).wrapping_sub(if absv >= 16 { 1 } else { 0 });
@@ -87,7 +116,7 @@ pub fn dequantize_mv_comp(v: i32) -> i32 {
     if v < 0 { -(res as i32) } else { res as i32 }
 }
 
-pub fn dequantize_mv(mv: QMv) -> Mv {
+pub(crate) fn dequantize_mv(mv: QMv) -> Mv {
     if mv.packed() == INVALID_TRAJ {
         return Mv {
             c: MvXY {
@@ -105,7 +134,7 @@ pub fn dequantize_mv(mv: QMv) -> Mv {
     }
 }
 
-pub fn get_warpmv_proj(
+pub(crate) fn get_warpmv_proj(
     warp_type: i8,
     m: &[i32; 6],
     x: i32,
@@ -130,7 +159,7 @@ pub fn get_warpmv_proj(
     }
 }
 
-pub fn abs_closest_ref(ref2ref: &[i8; 7], cur2ref: &[i8; 7], dir: bool) -> u32 {
+pub(crate) fn abs_closest_ref(ref2ref: &[i8; 7], cur2ref: &[i8; 7], dir: bool) -> u32 {
     let mut b = 0xffu32;
     for n in 0..7 {
         let a = (ref2ref[n] as i32).unsigned_abs();
@@ -143,7 +172,7 @@ pub fn abs_closest_ref(ref2ref: &[i8; 7], cur2ref: &[i8; 7], dir: bool) -> u32 {
     b
 }
 
-pub fn topo_insert(
+pub(crate) fn topo_insert(
     mut cnt: i32,
     idx: usize,
     order: &mut [i8],
@@ -171,54 +200,54 @@ pub fn topo_insert(
 
 #[derive(Clone, Copy, Default)]
 #[repr(C, align(2))]
-pub struct TrajMap {
-    pub y: i8,
-    pub x: i8,
+pub(crate) struct TrajMap {
+    pub(crate) y: i8,
+    pub(crate) x: i8,
 }
 
 impl TrajMap {
     #[inline(always)]
-    pub fn n(&self) -> u16 {
+    pub(crate) fn n(&self) -> u16 {
         u16::from_ne_bytes([self.y as u8, self.x as u8])
     }
 }
 
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
-pub struct SnglMvBlock {
-    pub mv: Mv,
-    pub r#ref: u8,
+pub(crate) struct SnglMvBlock {
+    pub(crate) mv: Mv,
+    pub(crate) r#ref: u8,
 }
 
 #[derive(Clone, Copy, Default)]
 #[repr(C, packed)]
-pub struct QMv {
-    pub c: [i8; 2],
+pub(crate) struct QMv {
+    pub(crate) c: [i8; 2],
 }
 
 impl QMv {
     #[inline(always)]
-    pub fn xy(self) -> [i8; 2] {
+    pub(crate) fn xy(self) -> [i8; 2] {
         self.c
     }
 
     #[inline(always)]
-    pub fn comps(self) -> [i8; 2] {
+    pub(crate) fn comps(self) -> [i8; 2] {
         self.xy()
     }
 
     #[inline(always)]
-    pub fn bits(self) -> u16 {
+    pub(crate) fn bits(self) -> u16 {
         u16::from_ne_bytes([self.c[0] as u8, self.c[1] as u8])
     }
 
     #[inline(always)]
-    pub fn packed(self) -> u16 {
+    pub(crate) fn packed(self) -> u16 {
         self.bits()
     }
 
     #[inline(always)]
-    pub fn from_packed(n: u16) -> Self {
+    pub(crate) fn from_packed(n: u16) -> Self {
         {
             let b = n.to_ne_bytes();
             Self {
@@ -231,30 +260,30 @@ impl QMv {
 #[derive(Clone, Copy)]
 #[repr(C)]
 #[derive(Default)]
-pub struct TemporalBlock {
-    pub mv: TemporalBlockMv,
-    pub r#ref: RefPair,
+pub(crate) struct TemporalBlock {
+    pub(crate) mv: TemporalBlockMv,
+    pub(crate) r#ref: RefPair,
 }
 
 #[derive(Clone, Copy, Default)]
 #[repr(C, align(4))]
-pub struct TemporalBlockMv {
-    pub mv: [QMv; 2],
+pub(crate) struct TemporalBlockMv {
+    pub(crate) mv: [QMv; 2],
 }
 
 impl TemporalBlockMv {
     #[inline(always)]
-    pub fn mvs(self) -> [QMv; 2] {
+    pub(crate) fn mvs(self) -> [QMv; 2] {
         self.mv
     }
 
     #[inline(always)]
-    pub fn mv_at(self, idx: usize) -> QMv {
+    pub(crate) fn mv_at(self, idx: usize) -> QMv {
         self.mvs()[idx]
     }
 
     #[inline(always)]
-    pub fn bits(self) -> u32 {
+    pub(crate) fn bits(self) -> u32 {
         u32::from_ne_bytes([
             self.mv[0].c[0] as u8,
             self.mv[0].c[1] as u8,
@@ -264,17 +293,17 @@ impl TemporalBlockMv {
     }
 
     #[inline(always)]
-    pub fn packed(self) -> u32 {
+    pub(crate) fn packed(self) -> u32 {
         self.bits()
     }
 
     #[inline(always)]
-    pub fn from_mvs(mv0: QMv, mv1: QMv) -> Self {
+    pub(crate) fn from_mvs(mv0: QMv, mv1: QMv) -> Self {
         Self { mv: [mv0, mv1] }
     }
 
     #[inline(always)]
-    pub fn from_packed(n: u32) -> Self {
+    pub(crate) fn from_packed(n: u32) -> Self {
         let b = n.to_ne_bytes();
         Self {
             mv: [
@@ -289,7 +318,7 @@ impl TemporalBlockMv {
     }
 
     #[inline(always)]
-    pub fn set_mv(&mut self, idx: usize, qmv: QMv) {
+    pub(crate) fn set_mv(&mut self, idx: usize, qmv: QMv) {
         self.mv[idx] = qmv;
     }
 }
@@ -297,116 +326,116 @@ impl TemporalBlockMv {
 #[derive(Clone, Copy)]
 #[repr(C, align(64))]
 #[derive(Default)]
-pub struct Block {
-    pub mv: [Mv; 2],
-    pub r#ref: RefPair,
-    pub bs: u8,
-    pub mf: i8,
-    pub ox4: u8,
-    pub oy4: u8,
-    pub subpel_filter: u8,
-    pub warp_type: i8,
-    pub lmv: [Mv; 2],
-    pub m: [i32; 6],
+pub(crate) struct Block {
+    pub(crate) mv: [Mv; 2],
+    pub(crate) r#ref: RefPair,
+    pub(crate) bs: u8,
+    pub(crate) mf: i8,
+    pub(crate) ox4: u8,
+    pub(crate) oy4: u8,
+    pub(crate) subpel_filter: u8,
+    pub(crate) warp_type: i8,
+    pub(crate) lmv: [Mv; 2],
+    pub(crate) m: [i32; 6],
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct MfmvRef {
-    pub r#ref: u8,
-    pub tgt: i8,
-    pub dir: u8,
+pub(crate) struct MfmvRef {
+    pub(crate) r#ref: u8,
+    pub(crate) tgt: i8,
+    pub(crate) dir: u8,
 }
 
 #[derive(Default)]
-pub struct Frame {
-    pub iw4: i32,
-    pub ih4: i32,
-    pub iw8: i32,
-    pub ih8: i32,
-    pub sbsz: i32,
-    pub mfmv_sbsz8: i32,
-    pub mfmv_edge: i32,
-    pub mfmv_k_shift: i32,
-    pub use_ref_frame_mvs: i32,
-    pub tip: FrameTip,
-    pub ref_sign: [u8; 7],
-    pub pocdiff: [i8; 7],
-    pub ref_flip: u64,
-    pub abspocdiff: [u8; 7],
-    pub mfmv_mask: u8,
-    pub mfmv: [MfmvRef; 4],
-    pub mfmv_ref2cur: [i8; 4],
-    pub mfmv_ref2ref: [[i8; 7]; 4],
-    pub mfmv_ref2idx: [[i8; 7]; 4],
-    pub mfmv_ref2sf: [[[i32; 2]; 7]; 4],
-    pub n_mfmvs: i32,
-    pub n_blocks: i32,
-    pub rp: Vec<TemporalBlock>,
-    pub rp_stride: isize,
-    pub rp_ref: [Vec<TemporalBlock>; 7],
-    pub rp_proj: Vec<SnglMvBlock>,
-    pub rp_traj: [Vec<Mv>; 7],
-    pub rp_map: [[Vec<TrajMap>; 7]; 3],
-    pub ra: Vec<Block>,
-    pub have_threading: bool,
-    pub have_frame_threading: bool,
+pub(crate) struct Frame {
+    pub(crate) iw4: i32,
+    pub(crate) ih4: i32,
+    pub(crate) iw8: i32,
+    pub(crate) ih8: i32,
+    pub(crate) sbsz: i32,
+    pub(crate) mfmv_sbsz8: i32,
+    pub(crate) mfmv_edge: i32,
+    pub(crate) mfmv_k_shift: i32,
+    pub(crate) use_ref_frame_mvs: i32,
+    pub(crate) tip: FrameTip,
+    pub(crate) ref_sign: [u8; 7],
+    pub(crate) pocdiff: [i8; 7],
+    pub(crate) ref_flip: u64,
+    pub(crate) abspocdiff: [u8; 7],
+    pub(crate) mfmv_mask: u8,
+    pub(crate) mfmv: [MfmvRef; 4],
+    pub(crate) mfmv_ref2cur: [i8; 4],
+    pub(crate) mfmv_ref2ref: [[i8; 7]; 4],
+    pub(crate) mfmv_ref2idx: [[i8; 7]; 4],
+    pub(crate) mfmv_ref2sf: [[[i32; 2]; 7]; 4],
+    pub(crate) n_mfmvs: i32,
+    pub(crate) n_blocks: i32,
+    pub(crate) rp: Vec<TemporalBlock>,
+    pub(crate) rp_stride: isize,
+    pub(crate) rp_ref: [Vec<TemporalBlock>; 7],
+    pub(crate) rp_proj: Vec<SnglMvBlock>,
+    pub(crate) rp_traj: [Vec<Mv>; 7],
+    pub(crate) rp_map: [[Vec<TrajMap>; 7]; 3],
+    pub(crate) ra: Vec<Block>,
+    pub(crate) have_threading: bool,
+    pub(crate) have_frame_threading: bool,
 }
 
 #[derive(Default)]
-pub struct FrameTip {
-    pub sf: [i32; 2],
-    pub r#ref: RefPair,
-    pub delta: i8,
+pub(crate) struct FrameTip {
+    pub(crate) sf: [i32; 2],
+    pub(crate) r#ref: RefPair,
+    pub(crate) delta: i8,
 }
 
-pub struct TileRange {
-    pub start: i32,
-    pub end: i32,
+pub(crate) struct TileRange {
+    pub(crate) start: i32,
+    pub(crate) end: i32,
 }
 
-pub struct MvBank {
-    pub mv: [[[Mv; 2]; 4]; 9],
-    pub cwp_idx: [[i8; 4]; 3],
-    pub r#ref: [RefPair; 4],
-    pub size: [u8; 9],
-    pub idx: [u8; 9],
-    pub hits: [u8; 2],
-    pub avail: u8,
+pub(crate) struct MvBank {
+    pub(crate) mv: [[[Mv; 2]; 4]; 9],
+    pub(crate) cwp_idx: [[i8; 4]; 3],
+    pub(crate) r#ref: [RefPair; 4],
+    pub(crate) size: [u8; 9],
+    pub(crate) idx: [u8; 9],
+    pub(crate) hits: [u8; 2],
+    pub(crate) avail: u8,
 }
 
-pub struct WarpBank {
-    pub mat: [[[i32; 6]; 4]; 7],
-    pub warp_type: [[i8; 4]; 7],
-    pub hits: u8,
-    pub size: [u8; 7],
-    pub idx: [u8; 7],
+pub(crate) struct WarpBank {
+    pub(crate) mat: [[[i32; 6]; 4]; 7],
+    pub(crate) warp_type: [[i8; 4]; 7],
+    pub(crate) hits: u8,
+    pub(crate) size: [u8; 7],
+    pub(crate) idx: [u8; 7],
 }
 
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
-pub struct Candidate {
-    pub mv: [Mv; 2],
-    pub weight: u16,
-    pub cwp_idx: i8,
-    pub y_off: i8,
-    pub x_off: i8,
+pub(crate) struct Candidate {
+    pub(crate) mv: [Mv; 2],
+    pub(crate) weight: u16,
+    pub(crate) cwp_idx: i8,
+    pub(crate) y_off: i8,
+    pub(crate) x_off: i8,
 }
 
-pub struct Tile {
-    pub _rp_proj: Vec<SnglMvBlock>,
-    pub rp_proj_off: usize,
-    pub rp_traj_off: usize,
-    pub ra: Vec<Block>,
-    pub ra_off: usize,
-    pub ra_tl: Block,
-    pub r: Vec<Block>,
-    pub tile_col: TileRange,
-    pub tile_row: TileRange,
-    pub bank: MvBank,
-    pub warp: WarpBank,
+pub(crate) struct Tile {
+    pub(crate) _rp_proj: Vec<SnglMvBlock>,
+    pub(crate) rp_proj_off: usize,
+    pub(crate) rp_traj_off: usize,
+    pub(crate) ra: Vec<Block>,
+    pub(crate) ra_off: usize,
+    pub(crate) ra_tl: Block,
+    pub(crate) r: Vec<Block>,
+    pub(crate) tile_col: TileRange,
+    pub(crate) tile_row: TileRange,
+    pub(crate) bank: MvBank,
+    pub(crate) warp: WarpBank,
 }
 
-pub fn model_from_corners(
+pub(crate) fn model_from_corners(
     mat: &mut [i32; 7],
     topleft_mv: Mv,
     topright_mv: Mv,
@@ -472,7 +501,7 @@ pub fn model_from_corners(
     true
 }
 
-pub fn add_candidate_sngl(
+pub(crate) fn add_candidate_sngl(
     mvstack: &mut [Candidate],
     cnt: &mut i32,
     max_cnt: i32,
@@ -507,7 +536,7 @@ pub fn add_candidate_sngl(
     true
 }
 
-pub fn add_candidate_c2s(
+pub(crate) fn add_candidate_c2s(
     mvstack: &mut [SnglMvBlock],
     cnt: &mut i32,
     max_cnt: i32,
@@ -536,7 +565,7 @@ pub fn add_candidate_c2s(
     *cnt = last as i32 + 1;
 }
 
-pub fn add_candidate_comp(
+pub(crate) fn add_candidate_comp(
     mvstack: &mut [Candidate],
     cnt: &mut i32,
     max_cnt: i32,
@@ -572,7 +601,7 @@ pub fn add_candidate_comp(
     true
 }
 
-pub fn tip_projection(
+pub(crate) fn tip_projection(
     rp_proj: &mut [SnglMvBlock],
     stride: isize,
     col_start8: i32,
@@ -610,7 +639,7 @@ pub fn tip_projection(
     }
 }
 
-pub fn fill_holes(
+pub(crate) fn fill_holes(
     rp_proj: &mut [SnglMvBlock],
     stride: isize,
     col_start8: i32,
@@ -676,7 +705,7 @@ pub fn fill_holes(
     }
 }
 
-pub fn warp_bank_add(warp: &mut WarpBank, mat: &WarpedMotionParams, r#ref: usize) -> i32 {
+pub(crate) fn warp_bank_add(warp: &mut WarpBank, mat: &WarpedMotionParams, r#ref: usize) -> i32 {
     if warp.hits >= 64 {
         return -1;
     }
@@ -731,7 +760,7 @@ pub fn warp_bank_add(warp: &mut WarpBank, mat: &WarpedMotionParams, r#ref: usize
     0
 }
 
-pub fn mv_bank_add_inner(bank: &mut MvBank, r#ref: RefPair, mv: &[Mv; 2], cwp_idx_val: i8) {
+pub(crate) fn mv_bank_add_inner(bank: &mut MvBank, r#ref: RefPair, mv: &[Mv; 2], cwp_idx_val: i8) {
     bank.hits[0] += 1;
 
     let (ref0, ref1) = (r#ref.r0(), r#ref.r1());
@@ -820,7 +849,7 @@ pub fn mv_bank_add_inner(bank: &mut MvBank, r#ref: RefPair, mv: &[Mv; 2], cwp_id
 
 static SMOOTHEN_IDIV: [u32; 5] = [65536, 32768, 21845, 16384, 13107];
 
-pub fn smoothen(
+pub(crate) fn smoothen(
     rp_proj: &mut [SnglMvBlock],
     stride: isize,
     col_start8: i32,
@@ -918,7 +947,7 @@ pub fn smoothen(
     }
 }
 
-pub fn fill_gap_proj(
+pub(crate) fn fill_gap_proj(
     rp_proj: &mut [SnglMvBlock],
     stride: isize,
     col_start8: i32,
@@ -1029,7 +1058,7 @@ pub fn fill_gap_proj(
     }
 }
 
-pub fn fill_gap_traj(
+pub(crate) fn fill_gap_traj(
     rp_traj: &mut [Mv],
     stride: isize,
     col_start8: i32,
@@ -1117,7 +1146,7 @@ pub fn fill_gap_traj(
     }
 }
 
-pub fn bank_update(
+pub(crate) fn bank_update(
     bank: &mut MvBank,
     bs: crate::levels::BlockSize,
     by4: i32,
@@ -1139,7 +1168,7 @@ pub fn bank_update(
     }
 }
 
-pub fn bank_add(
+pub(crate) fn bank_add(
     bank: &mut MvBank,
     bs: BlockSize,
     by4: i32,
@@ -1165,15 +1194,15 @@ pub fn bank_add(
 }
 
 #[derive(Clone)]
-pub struct MvSearchState {
-    pub dr: [Candidate; 6],
-    pub sngl: [SnglMvBlock; 4],
-    pub drvd_cnt: i32,
-    pub sngl_cnt: i32,
-    pub drvd_iter_cntr: i32,
-    pub sngl_iter_cntr: i32,
-    pub iter_cntr: i32,
-    pub b8x8: isize,
+pub(crate) struct MvSearchState {
+    pub(crate) dr: [Candidate; 6],
+    pub(crate) sngl: [SnglMvBlock; 4],
+    pub(crate) drvd_cnt: i32,
+    pub(crate) sngl_cnt: i32,
+    pub(crate) drvd_iter_cntr: i32,
+    pub(crate) sngl_iter_cntr: i32,
+    pub(crate) iter_cntr: i32,
+    pub(crate) b8x8: isize,
 }
 
 impl Default for MvSearchState {
@@ -1194,7 +1223,7 @@ impl Default for MvSearchState {
     }
 }
 
-pub fn add_derived(
+pub(crate) fn add_derived(
     st: &mut MvSearchState,
     mvstack: &mut [Candidate; 6],
     cnt: &mut i32,
@@ -1224,7 +1253,7 @@ pub fn add_derived(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn add_temporal_candidate(
+pub(crate) fn add_temporal_candidate(
     rf: &Frame,
     rp_proj: &[SnglMvBlock],
     rp_base: isize,
@@ -1287,7 +1316,7 @@ pub fn add_temporal_candidate(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn add_spatial_candidate(
+pub(crate) fn add_spatial_candidate(
     y_off: i32,
     x_off: i32,
     rf: &Frame,
@@ -1649,7 +1678,7 @@ pub fn add_spatial_candidate(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn refmvs_find(
+pub(crate) fn refmvs_find(
     rt: &Tile,
     rf: &Frame,
     rp_proj: &[SnglMvBlock],
@@ -2511,7 +2540,7 @@ pub fn refmvs_find(
     }
 }
 
-pub fn splat_mv(
+pub(crate) fn splat_mv(
     s_dst: &mut [Block],
     s_src: &mut Block,
     mut t_dst: Option<&mut [TemporalBlock]>,
@@ -2557,7 +2586,7 @@ pub fn splat_mv(
     }
 }
 
-pub fn check_traj_intersect(
+pub(crate) fn check_traj_intersect(
     rf: &Frame,
     rp_traj: &mut [Vec<Mv>; 7],
     map: &mut [[Vec<TrajMap>; 7]; 3],
@@ -2706,7 +2735,7 @@ pub fn check_traj_intersect(
     }
 }
 
-pub fn load_tmvs(
+pub(crate) fn load_tmvs(
     rf: &mut Frame,
     mut tile_row_idx: i32,
     col_start8: i32,
@@ -3034,7 +3063,7 @@ pub fn load_tmvs(
     }
 }
 
-pub fn init_frame(
+pub(crate) fn init_frame(
     rf: &mut Frame,
     seq_hdr: &crate::headers::SequenceHeader,
     frm_hdr: &crate::headers::FrameHeader,
@@ -3416,7 +3445,7 @@ pub fn init_frame(
     rf.use_ref_frame_mvs = if rf.n_mfmvs > 0 { 1 } else { 0 };
 }
 
-pub fn tile_sbrow_init(
+pub(crate) fn tile_sbrow_init(
     rt: &mut Tile,
     rf: &Frame,
     tile_col_start4: i32,
@@ -3450,7 +3479,7 @@ pub fn tile_sbrow_init(
     rt.warp.idx = [0; 7];
 }
 
-pub fn reset_sb(
+pub(crate) fn reset_sb(
     rt: &mut Tile,
     ra: &[Block],
     sbsz: i32,
@@ -3513,7 +3542,7 @@ pub fn reset_sb(
     }
 }
 
-pub fn save_tmvs(
+pub(crate) fn save_tmvs(
     r: &[Block],
     ra: &mut [Block],
     ra_tl: &mut Block,
@@ -3535,7 +3564,7 @@ pub fn save_tmvs(
     }
 }
 
-pub fn splat_warpmv(
+pub(crate) fn splat_warpmv(
     s_dst: &mut [Block],
     s_src: &mut Block,
     mut t_dst: Option<&mut [TemporalBlock]>,
@@ -3608,7 +3637,7 @@ pub fn splat_warpmv(
     }
 }
 
-pub fn splat_comp_warpmv(
+pub(crate) fn splat_comp_warpmv(
     s_dst: &mut [Block],
     s_src: &mut Block,
     mut t_dst: Option<&mut [TemporalBlock]>,

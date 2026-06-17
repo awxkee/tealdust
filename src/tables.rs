@@ -1,7 +1,36 @@
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 use crate::headers::{WarpedMotionParams, WarpedMotionType};
 use crate::levels::{N_BS_SIZES, N_RECT_TX_SIZES, N_UV_INTRA_PRED_MODES};
 
-pub static DEFAULT_WM_PARAMS: WarpedMotionParams = WarpedMotionParams {
+pub(crate) static DEFAULT_WM_PARAMS: WarpedMotionParams = WarpedMotionParams {
     wm_type: WarpedMotionType::Identity,
     matrix: [0, 0, 1 << 16, 0, 0, 1 << 16],
     abcd: [0; 4],
@@ -9,19 +38,19 @@ pub static DEFAULT_WM_PARAMS: WarpedMotionParams = WarpedMotionParams {
 };
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct TxfmInfo {
-    pub w: u8,
-    pub h: u8,
-    pub lw: u8,
-    pub lh: u8,
-    pub min: u8,
-    pub max: u8,
-    pub sub: u8,
-    pub ctx: u8,
+pub(crate) struct TxfmInfo {
+    pub(crate) w: u8,
+    pub(crate) h: u8,
+    pub(crate) lw: u8,
+    pub(crate) lh: u8,
+    pub(crate) min: u8,
+    pub(crate) max: u8,
+    pub(crate) sub: u8,
+    pub(crate) ctx: u8,
 }
 
 // [w_4px, h_4px, log2_w, log2_h]
-pub static BLOCK_DIMENSIONS: [[u8; 4]; N_BS_SIZES] = [
+pub(crate) static BLOCK_DIMENSIONS: [[u8; 4]; N_BS_SIZES] = [
     /* BS_256x256 */ [64, 64, 6, 6],
     /* BS_256x128 */ [64, 32, 6, 5],
     /* BS_128x256 */ [32, 64, 5, 6],
@@ -55,7 +84,7 @@ pub static BLOCK_DIMENSIONS: [[u8; 4]; N_BS_SIZES] = [
     /* BS_4x4     */ [1, 1, 0, 0],
 ];
 
-pub static TXFM_DIMENSIONS: [TxfmInfo; N_RECT_TX_SIZES] = [
+pub(crate) static TXFM_DIMENSIONS: [TxfmInfo; N_RECT_TX_SIZES] = [
     /* TX_4X4   */
     TxfmInfo {
         w: 1,
@@ -333,7 +362,7 @@ pub static TXFM_DIMENSIONS: [TxfmInfo; N_RECT_TX_SIZES] = [
     },
 ];
 
-pub static TX_SHIFT: [[u8; 2]; N_RECT_TX_SIZES] = [
+pub(crate) static TX_SHIFT: [[u8; 2]; N_RECT_TX_SIZES] = [
     /* TX_4X4   */ [7, 10],
     /* TX_8X8   */ [7, 11],
     /* TX_16X16 */ [6, 13],
@@ -361,7 +390,7 @@ pub static TX_SHIFT: [[u8; 2]; N_RECT_TX_SIZES] = [
     /* RTX_64X4 */ [6, 13],
 ];
 
-pub static TX_DDT_MASK: [u8; N_RECT_TX_SIZES] = [
+pub(crate) static TX_DDT_MASK: [u8; N_RECT_TX_SIZES] = [
     /* TX_4X4   */ 0x00, /* TX_8X8   */ 0x42, /* TX_16X16 */ 0x42,
     /* TX_32X32 */ 0x00, /* TX_64X64 */ 0x00, /* RTX_4X8  */ 0x40,
     /* RTX_8X4  */ 0x02, /* RTX_8X16 */ 0x42, /* RTX_16X8 */ 0x42,
@@ -375,7 +404,7 @@ pub static TX_DDT_MASK: [u8; N_RECT_TX_SIZES] = [
 
 // CDEF direction filter offsets: [direction][pass]
 // Values are stride*row + col offsets (stride=12 for CDEF)
-pub static CDEF_DIRECTIONS: [[i8; 2]; 12] = [
+pub(crate) static CDEF_DIRECTIONS: [[i8; 2]; 12] = [
     [12, 24],   // dir 6
     [12, 23],   // dir 7
     [-11, -22], // dir 0
@@ -390,9 +419,9 @@ pub static CDEF_DIRECTIONS: [[i8; 2]; 12] = [
     [1, -10],   // dir 1
 ];
 
-pub static MODE_TO_ANGLE_MAP: [u8; 8] = [90, 180, 45, 135, 113, 157, 203, 67];
+pub(crate) static MODE_TO_ANGLE_MAP: [u8; 8] = [90, 180, 45, 135, 113, 157, 203, 67];
 
-pub static SM_WEIGHTS: [[u8; 64]; 3] = [
+pub(crate) static SM_WEIGHTS: [[u8; 64]; 3] = [
     // scale 0: 32 >> min(6, (i<<2) >> 0)
     [
         32, 8, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -414,7 +443,7 @@ pub static SM_WEIGHTS: [[u8; 64]; 3] = [
 ];
 
 // sin(t), cos(t), -sin(t)
-pub static CCTX_ANGLE: [[i16; 3]; 6] = [
+pub(crate) static CCTX_ANGLE: [[i16; 3]; 6] = [
     [181, 181, -181], //  45 degrees
     [128, 222, -128], //  30 degrees
     [222, 128, -222], //  60 degrees
@@ -423,26 +452,26 @@ pub static CCTX_ANGLE: [[i16; 3]; 6] = [
     [-222, 128, 222], // -60 degrees
 ];
 
-pub static CCSO_QUANT_SZ: [[u16; 4]; 4] = [
+pub(crate) static CCSO_QUANT_SZ: [[u16; 4]; 4] = [
     [16, 8, 32, 0],
     [56, 40, 64, 128],
     [48, 24, 96, 192],
     [80, 112, 160, 256],
 ];
 
-pub static CCSO_OFFSET: [[i8; 8]; 4] = [
+pub(crate) static CCSO_OFFSET: [[i8; 8]; 4] = [
     [0, 1, -1, 3, -3, 7, -7, -10],
     [0, 2, -2, 6, -6, 14, -14, -20],
     [0, 3, -3, 9, -9, 21, -21, -30],
     [0, 4, -4, 12, -12, 28, -28, -40],
 ];
 
-pub static SUBSET_MASKS_Y: [u32; 4] = [0x3f, 0xfc3, 0xfff, 0xffff];
-pub static SUBSET_MASKS_UV: [u32; 3] = [0x3f, 0x3ff, 0x3ffff];
+pub(crate) static SUBSET_MASKS_Y: [u32; 4] = [0x3f, 0xfc3, 0xfff, 0xffff];
+pub(crate) static SUBSET_MASKS_UV: [u32; 3] = [0x3f, 0x3ff, 0x3ffff];
 
 // txtp_from_uvmode: TxfmType values for each UV intra pred mode
 // DCT_DCT=0, ADST_DCT=64, DCT_ADST=2, ADST_ADST=66
-pub static TXTP_FROM_UVMODE: [u8; N_UV_INTRA_PRED_MODES] = [
+pub(crate) static TXTP_FROM_UVMODE: [u8; N_UV_INTRA_PRED_MODES] = [
     0,  // DC_PRED      -> DCT_DCT
     64, // VERT_PRED    -> ADST_DCT
     2,  // HOR_PRED     -> DCT_ADST
@@ -459,7 +488,7 @@ pub static TXTP_FROM_UVMODE: [u8; N_UV_INTRA_PRED_MODES] = [
     0,  // CFL_PRED     (placeholder)
 ];
 
-pub static NS_WIENER_COEF_RANGE_Y: [[i8; 2]; 16] = [
+pub(crate) static NS_WIENER_COEF_RANGE_Y: [[i8; 2]; 16] = [
     [6, -24],
     [6, -24],
     [5, -14],
@@ -478,7 +507,7 @@ pub static NS_WIENER_COEF_RANGE_Y: [[i8; 2]; 16] = [
     [4, -8],
 ];
 
-pub static NS_WIENER_COEF_RANGE_UV: [[i8; 2]; 18] = [
+pub(crate) static NS_WIENER_COEF_RANGE_UV: [[i8; 2]; 18] = [
     [6, -24],
     [6, -24],
     [5, -14],
@@ -499,7 +528,7 @@ pub static NS_WIENER_COEF_RANGE_UV: [[i8; 2]; 18] = [
     [4, -8],
 ];
 
-pub static DR_INTRA_DERIVATIVE: [u16; 90] = [
+pub(crate) static DR_INTRA_DERIVATIVE: [u16; 90] = [
     0, 4096, 2048, 1365, 1024, 819, 682, 585, 512, 455, 409, 409, 409, 372, 341, 292, 273, 256,
     227, 215, 204, 186, 178, 170, 157, 151, 146, 136, 132, 128, 117, 110, 107, 99, 97, 97, 93, 87,
     83, 81, 77, 74, 73, 69, 66, 64, 62, 59, 56, 55, 53, 50, 49, 47, 44, 42, 42, 41, 38, 37, 35, 32,
@@ -507,13 +536,13 @@ pub static DR_INTRA_DERIVATIVE: [u16; 90] = [
     3, 2, 1,
 ];
 
-pub static DC_IBP_WEIGHTS: [u8; 32] = [
+pub(crate) static DC_IBP_WEIGHTS: [u8; 32] = [
     /* Unused */ 0, /* len  1 */ 96, /* len  2 */ 86, 107, /* len  4 */ 77, 90,
     102, 115, /* len  8 */ 71, 78, 86, 92, 100, 107, 114, 121, /* len 16 */ 68, 72, 76,
     79, 83, 87, 90, 94, 98, 102, 106, 109, 113, 117, 121, 124,
 ];
 
-pub static DIV_RECIP: [u16; 129] = [
+pub(crate) static DIV_RECIP: [u16; 129] = [
     512, 508, 504, 500, 496, 493, 489, 485, 482, 478, 475, 471, 468, 465, 462, 458, 455, 452, 449,
     446, 443, 440, 437, 434, 431, 428, 426, 423, 420, 417, 415, 412, 410, 407, 405, 402, 400, 397,
     395, 392, 390, 388, 386, 383, 381, 379, 377, 374, 372, 370, 368, 366, 364, 362, 360, 358, 356,
@@ -523,13 +552,14 @@ pub static DIV_RECIP: [u16; 129] = [
     271, 270, 269, 267, 266, 265, 264, 263, 262, 261, 260, 259, 258, 257, 256,
 ];
 
-pub static DIV_SCALE_SH_OFFSET: [u16; 8] = [4822, 5952, 6624, 6792, 6408, 5424, 3792, 1466];
+pub(crate) static DIV_SCALE_SH_OFFSET: [u16; 8] = [4822, 5952, 6624, 6792, 6408, 5424, 3792, 1466];
 
-pub static DIV_SCALE_SH_BIAS: [u16; 8] = [12784, 12054, 11670, 11583, 11764, 12195, 12870, 13782];
+pub(crate) static DIV_SCALE_SH_BIAS: [u16; 8] =
+    [12784, 12054, 11670, 11583, 11764, 12195, 12870, 13782];
 
-pub static DIV_SCALE_SH_COEFW: [u8; 8] = [214, 153, 113, 86, 67, 53, 43, 35];
+pub(crate) static DIV_SCALE_SH_COEFW: [u8; 8] = [214, 153, 113, 86, 67, 53, 43, 35];
 
-pub static MC_SUBPEL_FILTERS: [[[i8; 8]; 15]; 6] = [
+pub(crate) static MC_SUBPEL_FILTERS: [[[i8; 8]; 15]; 6] = [
     // DAV2D_FILTER_8TAP_REGULAR [0]
     [
         [0, 1, -3, 63, 4, -1, 0, 0],
@@ -640,7 +670,7 @@ pub static MC_SUBPEL_FILTERS: [[[i8; 8]; 15]; 6] = [
     ],
 ];
 
-pub static EXT_WARP_FILTER: [[i8; 8]; 63] = [
+pub(crate) static EXT_WARP_FILTER: [[i8; 8]; 63] = [
     [0, 0, -1, 127, 2, 0, 0, 0],
     [0, 0, -2, 127, 4, -1, 0, 0],
     [0, 0, -3, 126, 6, -1, 0, 0],
@@ -706,7 +736,7 @@ pub static EXT_WARP_FILTER: [[i8; 8]; 63] = [
     [0, 0, 0, 2, 127, -1, 0, 0],
 ];
 
-pub static DEBLOCK_SIDE_THRESHOLDS: [i16; 296] = [
+pub(crate) static DEBLOCK_SIDE_THRESHOLDS: [i16; 296] = [
     -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16,
     -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16,
     -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16, -16,
@@ -725,7 +755,7 @@ pub static DEBLOCK_SIDE_THRESHOLDS: [i16; 296] = [
     1628, 1638, 1648, 1658, 1668, 1678,
 ];
 
-pub const COMP_INTER_PRED_MODES: [[u8; 2]; 11] = [
+pub(crate) const COMP_INTER_PRED_MODES: [[u8; 2]; 11] = [
     [13, 13],
     [13, 15],
     [15, 13],
@@ -739,7 +769,7 @@ pub const COMP_INTER_PRED_MODES: [[u8; 2]; 11] = [
     [15, 15],
 ];
 
-pub const MAX_TXFM_SIZE_FOR_BS: [[u8; 4]; N_BS_SIZES] = [
+pub(crate) const MAX_TXFM_SIZE_FOR_BS: [[u8; 4]; N_BS_SIZES] = [
     [4, 4, 4, 3],
     [4, 4, 4, 3],
     [4, 4, 4, 3],
@@ -773,7 +803,7 @@ pub const MAX_TXFM_SIZE_FOR_BS: [[u8; 4]; N_BS_SIZES] = [
     [0, 0, 0, 0],
 ];
 
-pub const SS_BS: [[u8; 3]; N_BS_SIZES] = [
+pub(crate) const SS_BS: [[u8; 3]; N_BS_SIZES] = [
     [3, 2, 0],
     [4, 3, 1],
     [5, 255, 2],
@@ -807,7 +837,7 @@ pub const SS_BS: [[u8; 3]; N_BS_SIZES] = [
     [255, 255, 30],
 ];
 
-pub const TX_PART_TBL: [[i8; 8]; N_BS_SIZES] = [
+pub(crate) const TX_PART_TBL: [[i8; 8]; N_BS_SIZES] = [
     [4, -1, -1, -1, -1, -1, -1, -1],
     [4, -1, -1, -1, -1, -1, -1, -1],
     [4, -1, -1, -1, -1, -1, -1, -1],
@@ -841,7 +871,7 @@ pub const TX_PART_TBL: [[i8; 8]; N_BS_SIZES] = [
     [0, -1, -1, -1, -1, -1, -1, -1],
 ];
 
-pub const WIENER_NS_FILTERS: [[i8; 16]; 64] = [
+pub(crate) const WIENER_NS_FILTERS: [[i8; 16]; 64] = [
     [39, 39, -14, -14, -16, -16, 7, 7, -1, -3, 1, 7, 0, 0, 0, 0],
     [-1, 3, 1, -1, -2, -1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
     [12, 14, -5, -6, -6, 2, 1, -1, 2, -1, 1, 1, 0, 0, 0, 0],
@@ -908,7 +938,7 @@ pub const WIENER_NS_FILTERS: [[i8; 16]; 64] = [
     [25, 25, -8, -8, -7, -5, 1, 0, 0, 0, 1, 2, 0, 0, 0, 0],
 ];
 
-pub const PC_WIENER_FILTERS: [[[i16; 13]; 64]; 4] = [
+pub(crate) const PC_WIENER_FILTERS: [[[i16; 13]; 64]; 4] = [
     [
         [73, 127, -20, -30, -38, -29, 10, 7, -1, -3, 1, 7, -80],
         [-1, 3, 1, -1, -2, -1, 0, 0, 1, 0, 0, 0, 128],
@@ -1175,7 +1205,7 @@ pub const PC_WIENER_FILTERS: [[[i16; 13]; 64]; 4] = [
     ],
 ];
 
-pub const PC_WIENER_SUB_CLASSIFY: [[u8; 256]; 4] = [
+pub(crate) const PC_WIENER_SUB_CLASSIFY: [[u8; 256]; 4] = [
     [
         7, 54, 38, 45, 57, 51, 11, 57, 52, 51, 16, 52, 60, 6, 45, 32, 63, 27, 29, 23, 22, 23, 55,
         57, 58, 32, 25, 23, 22, 31, 35, 57, 9, 22, 16, 23, 41, 53, 44, 7, 53, 9, 9, 45, 23, 13, 52,
@@ -1230,7 +1260,7 @@ pub const PC_WIENER_SUB_CLASSIFY: [[u8; 256]; 4] = [
     ],
 ];
 
-pub const PC_WIENER_SUB_CLASSIFY_NS: [[[u8; 256]; 7]; 4] = [
+pub(crate) const PC_WIENER_SUB_CLASSIFY_NS: [[[u8; 256]; 7]; 4] = [
     [
         [
             1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0,
@@ -1559,7 +1589,7 @@ pub const PC_WIENER_SUB_CLASSIFY_NS: [[[u8; 256]; 7]; 4] = [
     ],
 ];
 
-pub const MC_WARP_FILTER: [[i8; 8]; 449] = [
+pub(crate) const MC_WARP_FILTER: [[i8; 8]; 449] = [
     [127, 1, 0, 0, 0, 0, 0, 0],
     [126, 2, 0, 0, 0, 0, 0, 0],
     [124, 4, 0, 0, 0, 0, 0, 0],
@@ -2011,7 +2041,7 @@ pub const MC_WARP_FILTER: [[i8; 8]; 449] = [
     [0, 0, 0, 0, 0, 0, 2, 126],
 ];
 
-pub const GAUSSIAN_SEQUENCE: [i16; 2048] = [
+pub(crate) const GAUSSIAN_SEQUENCE: [i16; 2048] = [
     56, 568, -180, 172, 124, -84, 172, -64, -900, 24, 820, 224, 1248, 996, 272, -8, -916, -388,
     -732, -104, -188, 800, 112, -652, -320, -376, 140, -252, 492, -168, 44, -788, 588, -584, 500,
     -228, 12, 680, 272, -476, 972, -100, 652, 368, 432, -196, -720, -192, 1000, -332, 652, -136,
@@ -2132,7 +2162,7 @@ pub const GAUSSIAN_SEQUENCE: [i16; 2048] = [
     568, -76, 172, 148, 148, 104, 32, -296, -32, 788, -80, 32, -16, 280, 288, 944, 428, -484,
 ];
 // Note: C source has typo 'weiner', we use correct 'wiener'
-pub const PC_WIENER_LUT_TO_CLASS: [u8; 4096] = [
+pub(crate) const PC_WIENER_LUT_TO_CLASS: [u8; 4096] = [
     83, 154, 254, 125, 125, 125, 253, 253, 77, 200, 207, 30, 30, 239, 239, 239, 0, 98, 101, 229,
     229, 231, 231, 231, 0, 34, 101, 100, 100, 229, 229, 231, 15, 34, 98, 100, 100, 100, 164, 164,
     15, 34, 98, 106, 100, 96, 164, 164, 15, 14, 43, 106, 96, 96, 96, 164, 15, 14, 43, 106, 106, 96,

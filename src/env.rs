@@ -1,34 +1,63 @@
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 use crate::headers::{FrameHeader, WarpedMotionParams, WarpedMotionType};
 use crate::intops::{apply_sign64, iclip, imax};
 use crate::levels::{MvXY, RefPair, TIP_FRAME};
 
 #[derive(Clone)]
-pub struct BlockContext {
-    pub fsc: [u8; 64],
-    pub mode: [u8; 64],
-    pub midx: [u8; 64],
-    pub mrl: [u8; 64],
-    pub multi_mrl: [u8; 64],
-    pub dip: [u8; 64],
-    pub lcoef: [u8; 64],
-    pub ccoef: [[u8; 64]; 2],
-    pub seg_pred: [u8; 64],
-    pub skip_txfm: [u8; 64],
-    pub skip_mode: [u8; 64],
-    pub intra: [u8; 64],
-    pub intrabc: [u8; 64],
-    pub morph_pred: [u8; 64],
-    pub comp_type: [u8; 64],
-    pub r#ref: [[i8; 64]; 2],
-    pub motion_mode: [u8; 64],
-    pub amvd: [u8; 64],
-    pub mvprec: [u8; 64],
-    pub filter: [u8; 64],
-    pub tx_lpf_y: [u8; 64],
-    pub tx_lpf_uv: [u8; 64],
-    pub partition: [[u8; 64]; 2],
-    pub uvmode: [u8; 64],
-    pub pal_sz: [u8; 64],
+pub(crate) struct BlockContext {
+    pub(crate) fsc: [u8; 64],
+    pub(crate) mode: [u8; 64],
+    pub(crate) midx: [u8; 64],
+    pub(crate) mrl: [u8; 64],
+    pub(crate) multi_mrl: [u8; 64],
+    pub(crate) dip: [u8; 64],
+    pub(crate) lcoef: [u8; 64],
+    pub(crate) ccoef: [[u8; 64]; 2],
+    pub(crate) seg_pred: [u8; 64],
+    pub(crate) skip_txfm: [u8; 64],
+    pub(crate) skip_mode: [u8; 64],
+    pub(crate) intra: [u8; 64],
+    pub(crate) intrabc: [u8; 64],
+    pub(crate) morph_pred: [u8; 64],
+    pub(crate) comp_type: [u8; 64],
+    pub(crate) r#ref: [[i8; 64]; 2],
+    pub(crate) motion_mode: [u8; 64],
+    pub(crate) amvd: [u8; 64],
+    pub(crate) mvprec: [u8; 64],
+    pub(crate) filter: [u8; 64],
+    pub(crate) tx_lpf_y: [u8; 64],
+    pub(crate) tx_lpf_uv: [u8; 64],
+    pub(crate) partition: [[u8; 64]; 2],
+    pub(crate) uvmode: [u8; 64],
+    pub(crate) pal_sz: [u8; 64],
 }
 
 impl Default for BlockContext {
@@ -64,9 +93,9 @@ impl Default for BlockContext {
 }
 
 #[derive(Clone)]
-pub struct SBEdgeCtx {
-    pub r#ref: [[i8; 64]; 2],
-    pub motion_mode: [u8; 64],
+pub(crate) struct SBEdgeCtx {
+    pub(crate) r#ref: [[i8; 64]; 2],
+    pub(crate) motion_mode: [u8; 64],
 }
 
 impl Default for SBEdgeCtx {
@@ -79,7 +108,7 @@ impl Default for SBEdgeCtx {
 }
 
 #[inline(always)]
-pub fn get_poc_diff(order_hint_n_bits: i32, poc0: i32, poc1: i32) -> i32 {
+pub(crate) fn get_poc_diff(order_hint_n_bits: i32, poc0: i32, poc1: i32) -> i32 {
     if order_hint_n_bits == 0 {
         return 0;
     }
@@ -89,13 +118,13 @@ pub fn get_poc_diff(order_hint_n_bits: i32, poc0: i32, poc1: i32) -> i32 {
 }
 
 #[inline(always)]
-pub fn fix_int_mv_precision(mv: &mut MvXY) {
+pub(crate) fn fix_int_mv_precision(mv: &mut MvXY) {
     mv.x = ((mv.x - (mv.x >> 15) + 3) as u32 & !7u32) as i32;
     mv.y = ((mv.y - (mv.y >> 15) + 3) as u32 & !7u32) as i32;
 }
 
 #[inline(always)]
-pub fn mv_reduce_prec(mv: &mut MvXY, mv_prec: i32) {
+pub(crate) fn mv_reduce_prec(mv: &mut MvXY, mv_prec: i32) {
     if mv_prec == 6 {
         return;
     }
@@ -108,7 +137,7 @@ pub fn mv_reduce_prec(mv: &mut MvXY, mv_prec: i32) {
 }
 
 #[inline(always)]
-pub fn get_warpmv_2d(
+pub(crate) fn get_warpmv_2d(
     matrix: &[i32; 6],
     bx4: i32,
     by4: i32,
@@ -147,7 +176,7 @@ pub fn get_warpmv_2d(
 }
 
 #[inline(always)]
-pub fn get_gmv_2d(
+pub(crate) fn get_gmv_2d(
     gmv: &WarpedMotionParams,
     bx4: i32,
     by4: i32,
@@ -191,7 +220,7 @@ pub fn get_gmv_2d(
 }
 
 #[inline(always)]
-pub fn warp_type(mtx: &[i32; 6]) -> WarpedMotionType {
+pub(crate) fn warp_type(mtx: &[i32; 6]) -> WarpedMotionType {
     if mtx[2] != mtx[5] || mtx[3] != -mtx[4] {
         return WarpedMotionType::Affine;
     }
@@ -206,7 +235,7 @@ pub fn warp_type(mtx: &[i32; 6]) -> WarpedMotionType {
 }
 
 #[inline(always)]
-pub fn get_partition_ctx(
+pub(crate) fn get_partition_ctx(
     a: &BlockContext,
     l: &BlockContext,
     b_dim: &[u8],
@@ -219,7 +248,7 @@ pub fn get_partition_ctx(
 }
 
 #[inline(always)]
-pub fn get_partition2_ctx(
+pub(crate) fn get_partition2_ctx(
     a: &BlockContext,
     l: &BlockContext,
     b_dim: &[u8],
@@ -240,7 +269,7 @@ pub fn get_partition2_ctx(
 }
 
 #[inline(always)]
-pub fn get_warp_ctx(
+pub(crate) fn get_warp_ctx(
     a: &BlockContext,
     a_sb_cache: &SBEdgeCtx,
     l: &BlockContext,
@@ -303,7 +332,7 @@ const NEWMV_COMP_MODE_MASK: u32 = (1 << 15)
     | (1 << 28);
 
 #[inline(always)]
-pub fn get_compref_ctx(
+pub(crate) fn get_compref_ctx(
     a: &BlockContext,
     l: &BlockContext,
     yb4: usize,

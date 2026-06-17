@@ -45,7 +45,7 @@ const II_NONDC_LEN: usize = (64 + 32 + 16 + 8 + 4) * (64 + 32 + 16 + 8 + 4) * 3;
 /// Pre-computed wedge and inter-intra masks.
 ///
 /// This struct is ~1.7 MB and should be heap-allocated via [`init_masks`].
-pub struct Masks {
+pub(crate) struct Masks {
     wedge_offsets: [u8; WEDGE_OFFSETS_LEN],
     ii_nondc_offsets: [u16; II_NONDC_OFFSETS_LEN],
     wedge_444: Vec<u8>,
@@ -62,7 +62,13 @@ impl Masks {
     /// `bs` is the `BlockSize` discriminant as `usize`, `bw4` and `bh4` are
     /// the block width/height in 4-sample units, and `ii_mode` is the
     /// `InterIntraPredMode`.
-    pub fn ii_mask(&self, bs: usize, bw4: usize, bh4: usize, ii_mode: InterIntraPredMode) -> &[u8] {
+    pub(crate) fn ii_mask(
+        &self,
+        bs: usize,
+        bw4: usize,
+        bh4: usize,
+        ii_mode: InterIntraPredMode,
+    ) -> &[u8] {
         if ii_mode == InterIntraPredMode::DcPred {
             &self.ii_dc
         } else {
@@ -74,7 +80,7 @@ impl Masks {
 
     /// Returns the wedge mask for the given block size, wedge index, and
     /// chroma subsampling index (0 = 444, 1 = 422, 2 = 420).
-    pub fn wedge_mask(
+    pub(crate) fn wedge_mask(
         &self,
         bs: usize,
         bw4: usize,
@@ -88,7 +94,7 @@ impl Masks {
     }
 
     /// Returns the TMVP wedge mask for the given block size and wedge index.
-    pub fn wedge_tmvp(&self, bs: usize, bw4: usize, bh4: usize, widx: usize) -> &[u8] {
+    pub(crate) fn wedge_tmvp(&self, bs: usize, bw4: usize, bh4: usize, widx: usize) -> &[u8] {
         let off = self.wedge_offsets[bs - BS_64X64] as usize * 68 + (bw4 * bh4 / 4) * widx;
         &self.wedge_tmvp[off..]
     }
@@ -805,7 +811,7 @@ const fn block_size_for_dims(w: usize, h: usize) -> BlockSize {
 /// Initialize all wedge and inter-intra masks.
 ///
 /// Returns a heap-allocated `Masks` struct (~1.7 MB).
-pub fn init_masks() -> Box<Masks> {
+pub(crate) fn init_masks() -> Box<Masks> {
     let mut masks = Box::new(Masks {
         wedge_offsets: [0u8; WEDGE_OFFSETS_LEN],
         ii_nondc_offsets: [0u16; II_NONDC_OFFSETS_LEN],

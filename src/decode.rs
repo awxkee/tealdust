@@ -1,3 +1,32 @@
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 use crate::cdf::{CdfModeContext, CdfMvContext};
 use crate::ctx::memset_pow2;
 use crate::env::{BlockContext, get_partition_ctx, get_partition2_ctx, warp_type};
@@ -23,7 +52,7 @@ use crate::tables::{
 };
 use crate::warpmv::{find_affine_int, get_shear_params, set_affine_mv2d};
 
-pub fn init_wiener(frame_hdr: &FrameHeader, lf: &mut LoopFilterState) {
+pub(crate) fn init_wiener(frame_hdr: &FrameHeader, lf: &mut LoopFilterState) {
     let rtype = frame_hdr.restoration.p[0].restoration_type;
     if rtype == RestorationType::None as u8 {
         return;
@@ -8072,7 +8101,7 @@ fn inter_mc_plane_8bpc<BD: crate::pixel::BitDepth>(
         let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_neon::put_bilin_8bpc(
+            crate::mc_dispatch::put_bilin_8bpc(
                 dst8,
                 dst_stride,
                 &src8[src_off..],
@@ -8083,7 +8112,7 @@ fn inter_mc_plane_8bpc<BD: crate::pixel::BitDepth>(
                 myf,
             );
         } else {
-            crate::mc_neon::put_8tap_8bpc(
+            crate::mc_dispatch::put_8tap_8bpc(
                 dst8,
                 dst_stride,
                 src8,
@@ -8233,7 +8262,7 @@ fn inter_mc_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8; the prep kernels write i16 `tmp`.
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_neon::prep_bilin_8bpc(
+            crate::mc_dispatch::prep_bilin_8bpc(
                 tmp,
                 tmp_stride,
                 &src8[src_off..],
@@ -8244,7 +8273,7 @@ fn inter_mc_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                 myf,
             );
         } else {
-            crate::mc_neon::prep_8tap_8bpc(
+            crate::mc_dispatch::prep_8tap_8bpc(
                 tmp,
                 tmp_stride,
                 src8,
@@ -8367,7 +8396,7 @@ fn warp_affine_plane_8bpc<BD: crate::pixel::BitDepth>(
                 // SAFETY: BPC==8 => BD::Pixel == u8.
                 let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(&mut dst[dst_sub..]);
                 let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                crate::mc_neon::warp_affine_8x8_8bpc(
+                crate::mc_dispatch::warp_affine_8x8_8bpc(
                     dst8, dst_stride, src8, src_stride, src_off, &abcd, mx, my,
                 );
             } else {
@@ -8492,7 +8521,7 @@ fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
                         // SAFETY: BPC==8 => BD::Pixel == u8.
                         let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(&mut dst[dst_sub..]);
                         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                        crate::mc_neon::put_8tap_8bpc(
+                        crate::mc_dispatch::put_8tap_8bpc(
                             dst8, dst_stride, src8, src_off, src_stride, 4, 4, mx, my, -1,
                         );
                     } else {
@@ -8607,7 +8636,7 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
             if BD::BPC == 8 {
                 // SAFETY: BPC==8 => BD::Pixel == u8.
                 let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                crate::mc_neon::warp_affine_8x8t_8bpc(
+                crate::mc_dispatch::warp_affine_8x8t_8bpc(
                     &mut tmp[dst_sub..],
                     tmp_stride,
                     src8,
@@ -8736,7 +8765,7 @@ fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                     if BD::BPC == 8 {
                         // SAFETY: BPC==8 => BD::Pixel == u8.
                         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                        crate::mc_neon::prep_8tap_8bpc(
+                        crate::mc_dispatch::prep_8tap_8bpc(
                             &mut tmp[dst_sub..],
                             tmp_stride,
                             src8,
@@ -9503,7 +9532,7 @@ fn iiblend_plane_8bpc<BD: crate::pixel::BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8.
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(&mut dst_plane[dst_off..]);
         let t8: &[u8] = BD::Pixel::slice_as_ne_bytes(&tmp);
-        crate::mc_neon::blend_8bpc(d8, stride, t8, w, h, &mask);
+        crate::mc_dispatch::blend_8bpc(d8, stride, t8, w, h, &mask);
     } else {
         crate::mc::blend(&mut dst_plane[dst_off..], stride, &tmp, w, h, &mask);
     }
@@ -9909,7 +9938,7 @@ fn recon_b_inter_compound<BD: crate::pixel::BitDepth>(
         let y_stride = recon.frame.y_stride_px;
         let dst_off = 4 * (by as usize * y_stride + bx as usize);
 
-        let _len = crate::mc_neon::compound_tmp_len(w, h);
+        let _len = crate::mc_dispatch::compound_tmp_len(w, h);
         let mut tmp = [vec![0i16; _len], vec![0i16; _len]];
         let mut opfl_bacp = false;
         if is_opfl {
@@ -10210,7 +10239,7 @@ fn recon_b_inter_compound<BD: crate::pixel::BitDepth>(
 
         for pl in (1..3usize).filter(|_| !sub8x8 && do_chroma_mc) {
             let dst_off = 4 * ((cby >> ss_ver) as usize * uv_stride + (cbx >> ss_hor) as usize);
-            let _len = crate::mc_neon::compound_tmp_len(cw, ch);
+            let _len = crate::mc_dispatch::compound_tmp_len(cw, ch);
             let mut tmp = [vec![0i16; _len], vec![0i16; _len]];
             let mut opfl_bacp_chroma = false;
             if is_opfl {
@@ -10455,7 +10484,7 @@ fn prep_opfl_prefetch_rect_8bpc<BD: crate::pixel::BitDepth>(
     if BD::BPC == 8 {
         let p8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(p);
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-        crate::mc_neon::put_bilin_8bpc(
+        crate::mc_dispatch::put_bilin_8bpc(
             p8,
             p_stride,
             &src8[src_off..],
@@ -11187,7 +11216,7 @@ fn recon_b_inter_tip<BD: crate::pixel::BitDepth>(
         let y_stride = recon.frame.y_stride_px;
         let dst_off = 4 * (by as usize * y_stride + bx as usize);
 
-        let _len = crate::mc_neon::compound_tmp_len(yw, yh);
+        let _len = crate::mc_dispatch::compound_tmp_len(yw, yh);
         let mut tmp = [vec![0i16; _len], vec![0i16; _len]];
         if bacp {
             for m in seg_mask.iter_mut() {
@@ -11569,7 +11598,7 @@ fn recon_b_inter_tip<BD: crate::pixel::BitDepth>(
         let mut chroma_bacp = false;
         for plane in (0..2usize).filter(|_| do_chroma_mc) {
             let dst_off = 4 * ((cby >> ss_ver) as usize * uv_stride + (cbx >> ss_hor) as usize);
-            let _len = crate::mc_neon::compound_tmp_len(cw, ch);
+            let _len = crate::mc_dispatch::compound_tmp_len(cw, ch);
             let mut tmp = [vec![0i16; _len], vec![0i16; _len]];
             let pl_bacp = rmv_uvpred(
                 recon,
@@ -11857,7 +11886,7 @@ fn prep_opfl_prefetch_8bpc<BD: crate::pixel::BitDepth>(
     if BD::BPC == 8 {
         let p8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(p);
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-        crate::mc_neon::put_bilin_8bpc(
+        crate::mc_dispatch::put_bilin_8bpc(
             p8,
             p_stride,
             &src8[src_off..],
@@ -12077,7 +12106,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8.
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_neon::prep_bilin_8bpc(
+            crate::mc_dispatch::prep_bilin_8bpc(
                 tmp,
                 tmp_stride,
                 &src8[src_off..],
@@ -12088,7 +12117,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
                 myf,
             );
         } else {
-            crate::mc_neon::prep_8tap_8bpc(
+            crate::mc_dispatch::prep_8tap_8bpc(
                 tmp,
                 tmp_stride,
                 src8,
@@ -12205,7 +12234,7 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8.
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_neon::prep_bilin_8bpc(
+            crate::mc_dispatch::prep_bilin_8bpc(
                 &mut dst16[dst_off..],
                 dst_stride,
                 &src8[src_off..],
@@ -12216,7 +12245,7 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
                 my,
             );
         } else {
-            crate::mc_neon::prep_8tap_8bpc(
+            crate::mc_dispatch::prep_8tap_8bpc(
                 &mut dst16[dst_off..],
                 dst_stride,
                 src8,
@@ -14746,12 +14775,12 @@ fn dispatch_ipred_8bpc(
         _ if m == DC_128_PRED => ipred_dc_128_8bpc(d, stride, w, h),
         _ if m == TOP_DC_PRED => ipred_dc_top_8bpc(d, stride, edge, edge_o, w, h, angle),
         _ if m == LEFT_DC_PRED => ipred_dc_left_8bpc(d, stride, edge, edge_o, w, h, angle),
-        2 /* HorPred */ => crate::ipred_neon::ipred_h(d, stride, edge, edge_o, w, h, angle),
-        1 /* VertPred */ => crate::ipred_neon::ipred_v(d, stride, edge, edge_o, w, h, angle),
+        2 /* HorPred */ => crate::ipred_dispatch::ipred_h(d, stride, edge, edge_o, w, h, angle),
+        1 /* VertPred */ => crate::ipred_dispatch::ipred_v(d, stride, edge, edge_o, w, h, angle),
         12 /* PaethPred */ => ipred_paeth_8bpc(d, stride, edge, edge_o, w, h),
         9 /* SmoothPred */ => ipred_smooth_8bpc(d, stride, edge, edge_o, w, h),
-        10 /* SmoothVPred */ => crate::ipred_neon::ipred_smooth_v(d, stride, edge, edge_o, w, h),
-        11 /* SmoothHPred */ => crate::ipred_neon::ipred_smooth_h(d, stride, edge, edge_o, w, h),
+        10 /* SmoothVPred */ => crate::ipred_dispatch::ipred_smooth_v(d, stride, edge, edge_o, w, h),
+        11 /* SmoothHPred */ => crate::ipred_dispatch::ipred_smooth_h(d, stride, edge, edge_o, w, h),
         _ if m == Z1_PRED => {
             ipred_z1_8bpc(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
         }
@@ -14778,7 +14807,7 @@ fn mc_avg<BD: crate::pixel::BitDepth>(
 ) {
     if BD::BPC == 8 {
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
-        crate::mc_neon::avg_8bpc(d8, dst_stride, tmp1, tmp2, w, h);
+        crate::mc_dispatch::avg_8bpc(d8, dst_stride, tmp1, tmp2, w, h);
     } else {
         crate::mc::avg(bd, dst, dst_stride, tmp1, tmp2, w, h);
     }
@@ -14798,7 +14827,7 @@ fn mc_w_avg<BD: crate::pixel::BitDepth>(
 ) {
     if BD::BPC == 8 {
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
-        crate::mc_neon::w_avg_8bpc(d8, dst_stride, tmp1, tmp2, w, h, weight);
+        crate::mc_dispatch::w_avg_8bpc(d8, dst_stride, tmp1, tmp2, w, h, weight);
     } else {
         crate::mc::w_avg(bd, dst, dst_stride, tmp1, tmp2, w, h, weight);
     }
@@ -14818,7 +14847,7 @@ fn mc_mask<BD: crate::pixel::BitDepth>(
 ) {
     if BD::BPC == 8 {
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
-        crate::mc_neon::mask_8bpc(d8, dst_stride, tmp1, tmp2, w, h, m);
+        crate::mc_dispatch::mask_8bpc(d8, dst_stride, tmp1, tmp2, w, h, m);
     } else {
         crate::mc::mask_fn(bd, dst, dst_stride, tmp1, tmp2, w, h, m);
     }
@@ -14842,7 +14871,7 @@ fn mc_w_mask<BD: crate::pixel::BitDepth>(
 ) {
     if BD::BPC == 8 {
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
-        crate::mc_neon::w_mask_8bpc(
+        crate::mc_dispatch::w_mask_8bpc(
             d8,
             dst_stride,
             tmp1,

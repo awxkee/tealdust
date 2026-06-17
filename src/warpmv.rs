@@ -1,3 +1,32 @@
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 use crate::headers::WarpedMotionParams;
 use crate::intops::{apply_sign, apply_sign64, iclip, iclip64to32, u64log2, ulog2};
 use crate::levels::MvXY;
@@ -8,7 +37,7 @@ fn iclip_wmp(v: i32) -> i16 {
     iclip((v + 0x20 - (v < 0) as i32) & !0x3f, -0x8000, 0x7fc0) as i16
 }
 
-pub fn resolve_divisor_32(d: u32, shift: &mut i32) -> i32 {
+pub(crate) fn resolve_divisor_32(d: u32, shift: &mut i32) -> i32 {
     *shift = ulog2(d);
     let e = d as i32 - (1 << *shift);
     let f = if *shift > 7 {
@@ -21,7 +50,7 @@ pub fn resolve_divisor_32(d: u32, shift: &mut i32) -> i32 {
     DIV_RECIP[f as usize] as i32
 }
 
-pub fn get_shear_params(wm: &mut WarpedMotionParams) -> i32 {
+pub(crate) fn get_shear_params(wm: &mut WarpedMotionParams) -> i32 {
     let mat = &wm.matrix;
 
     if mat[2] <= 0 {
@@ -85,7 +114,7 @@ fn get_mult_shift_diag(px: i64, idet: i32, rnd: i64, sh: i32) -> i32 {
     iclip(v3, 0x8040, 0x17fc0)
 }
 
-pub fn set_affine_mv2d(
+pub(crate) fn set_affine_mv2d(
     bw4: i32,
     bh4: i32,
     mv: MvXY,
@@ -114,7 +143,7 @@ pub fn set_affine_mv2d(
     );
 }
 
-pub fn find_affine_int(
+pub(crate) fn find_affine_int(
     pts: &[[[i32; 2]; 2]],
     np: usize,
     bw4: i32,

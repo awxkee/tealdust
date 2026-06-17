@@ -1,3 +1,32 @@
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 use crate::headers::PixelLayout;
 use crate::intops::{apply_sign, iclip, imax, imin, ulog2, umin};
 use crate::levels::{IntraPredMode, Mv, N_BS_SIZES, RefPair, txtp};
@@ -10,13 +39,13 @@ use crate::tables::{
 };
 use crate::warpmv::resolve_divisor_32;
 
-pub fn decode_exp_golomb(msac: &mut MsacContext, k: u32) -> u32 {
+pub(crate) fn decode_exp_golomb(msac: &mut MsacContext, k: u32) -> u32 {
     let length = msac.decode_unary_bypass(21) + k;
     let x = (1u32 << length) + msac.decode_bools_bypass(length);
     x - (1 << k)
 }
 
-pub fn decode_hr(msac: &mut MsacContext, hr_avg: i32) -> i32 {
+pub(crate) fn decode_hr(msac: &mut MsacContext, hr_avg: i32) -> i32 {
     let m = ulog2(iclip(hr_avg, 2, 64) as u32) as u32;
     let cmax = imin(m as i32 + 4, 6) as u32;
     let q = msac.decode_unary_bypass(cmax);
@@ -28,14 +57,14 @@ pub fn decode_hr(msac: &mut MsacContext, hr_avg: i32) -> i32 {
     (rem + (q << m)) as i32
 }
 
-pub fn tcq_next_state(state: i32, abs_level: i32) -> i32 {
+pub(crate) fn tcq_next_state(state: i32, abs_level: i32) -> i32 {
     (((state & 0x4) ^ (((abs_level & 1) ^ (state & 0x1)) << 2))
         | ((state & 0x6) >> 1)
         | -0x80000000i32)
         & (state >> 31)
 }
 
-pub fn wide_angle_remap(
+pub(crate) fn wide_angle_remap(
     t_dim: &TxfmInfo,
     mode: IntraPredMode,
     angle: &mut i32,
@@ -69,7 +98,7 @@ pub fn wide_angle_remap(
     mode
 }
 
-pub fn gen_mask(
+pub(crate) fn gen_mask(
     mask: &mut [u8],
     stride: usize,
     bw: i32,
@@ -92,7 +121,7 @@ pub fn gen_mask(
     }
 }
 
-pub fn derive_alpha(num: i32, den: i32, mut alpha: i32) -> i32 {
+pub(crate) fn derive_alpha(num: i32, den: i32, mut alpha: i32) -> i32 {
     let max = (2 << 8) - 1;
     if num != 0 && den != 0 {
         let num_abs = num.abs();
@@ -138,7 +167,7 @@ fn read_u64_ne(a: &[u8]) -> u64 {
     u64::from_ne_bytes(a[..8].try_into().unwrap())
 }
 
-pub fn get_skip_ctx(
+pub(crate) fn get_skip_ctx(
     t_dim: &TxfmInfo,
     bs: usize,
     a: &[u8],
@@ -211,7 +240,7 @@ pub fn get_skip_ctx(
     }
 }
 
-pub fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
+pub(crate) fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
     let mask: u64 = 0xC0C0C0C0C0C0C0C0;
     let mul: u64 = 0x0101010101010101;
     let mut t: u64 = 0;
@@ -235,7 +264,7 @@ pub fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
     (s != 0) as u32 + (s > 0) as u32
 }
 
-pub fn get_lo_ctx(
+pub(crate) fn get_lo_ctx(
     levels: &[i8],
     off: usize,
     tx_class: u8,
@@ -329,7 +358,7 @@ pub fn get_lo_ctx(
     offset + ((lo_mag + 1) >> 1).min(lim)
 }
 
-pub fn get_lo_ctx_idtx(levels: &[i8], off: usize, hi_mag: &mut u32, stride: usize) -> u32 {
+pub(crate) fn get_lo_ctx_idtx(levels: &[i8], off: usize, hi_mag: &mut u32, stride: usize) -> u32 {
     let v0 = levels[off - 1] as u32;
     let v1 = levels[off - stride] as u32;
     let lo_mag = v0.min(3) + v1.min(3);
@@ -338,7 +367,7 @@ pub fn get_lo_ctx_idtx(levels: &[i8], off: usize, hi_mag: &mut u32, stride: usiz
     lo_mag
 }
 
-pub fn get_sign_ctx_idtx(levels: &[i8], off: usize, stride: usize) -> u32 {
+pub(crate) fn get_sign_ctx_idtx(levels: &[i8], off: usize, stride: usize) -> u32 {
     let sum =
         levels[off - 1] as i32 + levels[off - stride] as i32 + levels[off - stride - 1] as i32;
     let offset = if levels[off] > 3 { 2 } else { 0 };
@@ -352,7 +381,7 @@ pub fn get_sign_ctx_idtx(levels: &[i8], off: usize, stride: usize) -> u32 {
     }
 }
 
-pub fn get_mask(
+pub(crate) fn get_mask(
     mask: &mut [u8],
     stride: usize,
     bx4: i32,
@@ -401,18 +430,18 @@ pub fn get_mask(
 
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
-pub struct OpflMvDelta {
-    pub x: i8,
-    pub y: i8,
+pub(crate) struct OpflMvDelta {
+    pub(crate) x: i8,
+    pub(crate) y: i8,
 }
 
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
-pub struct OpflMvDeltaBlock {
-    pub d: [OpflMvDelta; 2],
+pub(crate) struct OpflMvDeltaBlock {
+    pub(crate) d: [OpflMvDelta; 2],
 }
 
-pub fn opfl_mv_adj(r: &OpflRegressionData, dd: &mut OpflMvDeltaBlock, d: [i8; 2]) {
+pub(crate) fn opfl_mv_adj(r: &OpflRegressionData, dd: &mut OpflMvDeltaBlock, d: [i8; 2]) {
     let mut su2 = r.su2;
     let mut suv = r.suv;
     let mut sv2 = r.sv2;
@@ -471,7 +500,7 @@ pub fn opfl_mv_adj(r: &OpflRegressionData, dd: &mut OpflMvDeltaBlock, d: [i8; 2]
     }
 }
 
-pub fn scaledown_16pel_mv_for_chroma(mv: &mut [Mv; 2], layout: PixelLayout) {
+pub(crate) fn scaledown_16pel_mv_for_chroma(mv: &mut [Mv; 2], layout: PixelLayout) {
     match layout {
         PixelLayout::I420 => {
             for m in mv.iter_mut() {
@@ -493,7 +522,7 @@ pub fn scaledown_16pel_mv_for_chroma(mv: &mut [Mv; 2], layout: PixelLayout) {
     }
 }
 
-pub fn scaleup_8pel_mv_for_chroma(mv: &mut [Mv; 2], layout: PixelLayout) {
+pub(crate) fn scaleup_8pel_mv_for_chroma(mv: &mut [Mv; 2], layout: PixelLayout) {
     match layout {
         PixelLayout::I444 => {
             for m in mv.iter_mut() {
@@ -512,7 +541,7 @@ pub fn scaleup_8pel_mv_for_chroma(mv: &mut [Mv; 2], layout: PixelLayout) {
     }
 }
 
-pub fn update_temporal(
+pub(crate) fn update_temporal(
     t_dst: &mut [TemporalBlock],
     t_stride: usize,
     w8: usize,
@@ -558,38 +587,38 @@ pub fn update_temporal(
     }
 }
 
-pub struct DecodeCoefParams<'a> {
-    pub tx: usize,
-    pub bs: usize,
-    pub plane: i32,
-    pub intra: bool,
-    pub fsc: bool,
-    pub lossless: bool,
-    pub sdp_active: bool,
-    pub y_mode: usize,
-    pub uv_mode: usize,
-    pub _seg_id: usize,
-    pub seq_fsc: bool,
-    pub seq_ist: [bool; 2],
-    pub seq_cctx: bool,
-    pub chroma_dctonly: bool,
-    pub reduced_txtp_set: i32,
-    pub tcq_enabled: bool,
-    pub layout: PixelLayout,
-    pub u_has_cf: i32,
-    pub cbx: i32,
-    pub cby: i32,
-    pub luma_fsc_map: &'a [u8],
-    pub dq_tbl: [u32; 2],
-    pub bitdepth: u32,
-    pub qm: Option<&'a [u8]>,
-    pub ss_hor: bool,
-    pub ss_ver: bool,
+pub(crate) struct DecodeCoefParams<'a> {
+    pub(crate) tx: usize,
+    pub(crate) bs: usize,
+    pub(crate) plane: i32,
+    pub(crate) intra: bool,
+    pub(crate) fsc: bool,
+    pub(crate) lossless: bool,
+    pub(crate) sdp_active: bool,
+    pub(crate) y_mode: usize,
+    pub(crate) uv_mode: usize,
+    pub(crate) _seg_id: usize,
+    pub(crate) seq_fsc: bool,
+    pub(crate) seq_ist: [bool; 2],
+    pub(crate) seq_cctx: bool,
+    pub(crate) chroma_dctonly: bool,
+    pub(crate) reduced_txtp_set: i32,
+    pub(crate) tcq_enabled: bool,
+    pub(crate) layout: PixelLayout,
+    pub(crate) u_has_cf: i32,
+    pub(crate) cbx: i32,
+    pub(crate) cby: i32,
+    pub(crate) luma_fsc_map: &'a [u8],
+    pub(crate) dq_tbl: [u32; 2],
+    pub(crate) bitdepth: u32,
+    pub(crate) qm: Option<&'a [u8]>,
+    pub(crate) ss_hor: bool,
+    pub(crate) ss_ver: bool,
 }
 
 use crate::cdf::{CdfCoefContext, CdfModeContext};
 
-pub fn decode_coefs(
+pub(crate) fn decode_coefs(
     msac: &mut MsacContext,
     coef: &mut CdfCoefContext,
     mode: &mut CdfModeContext,
@@ -1730,7 +1759,7 @@ pub fn decode_coefs(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn intrabc_pred<BD: crate::pixel::BitDepth>(
+pub(crate) fn intrabc_pred<BD: crate::pixel::BitDepth>(
     bd: BD,
     plane: &mut [BD::Pixel],
     stride: usize,

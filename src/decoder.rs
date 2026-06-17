@@ -49,7 +49,7 @@ pub enum DecodeFrameType {
 /// Decoder configuration. Use `Settings::default()` for sensible defaults.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    /// Number of worker threads. 0 = auto-detect from CPU count.
+    /// Number of worker threads. Currently doesn't work
     pub n_threads: u32,
     /// Maximum frame delay for pipelining. 0 = auto based on thread count.
     pub max_frame_delay: u32,

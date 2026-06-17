@@ -27,22 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-//! Portable SIMD kernels (pure-Rust baseline) for the hot scalar inner loops.
-//!
-//! All kernels operate on 8-wide `i32` lanes via a hand-rolled `I32x8` newtype,
-//! with no external crate dependencies and no arch-specific intrinsics.
-//! Every kernel is bit-exact with its scalar reference — the unit tests in this
-//! module assert SIMD output == an independent scalar reimplementation over
-//! randomized inputs.
-//!
-//! Arithmetic right shift: `I32x8`'s `Shr` delegates to `i32 >>`, which is
-//! sign-propagating on every platform Rust targets.
-
 use crate::pixel::{BitDepth, Pixel};
-
-// ---------------------------------------------------------------------------
-// Hand-rolled 8-wide i32 SIMD type — no `wide` crate, stable Rust only.
-// ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct I32x8([i32; 8]);
@@ -287,7 +272,7 @@ fn sra(v: I32x8, sh: i32) -> I32x8 {
 
 /// `avg` row: `dst[x] = clip((tmp1[x] + tmp2[x] + rnd) >> sh)` for `x in 0..n`.
 #[inline]
-pub fn avg_row<BD: BitDepth>(
+pub(crate) fn avg_row<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     tmp1: &[i16],
@@ -312,7 +297,7 @@ pub fn avg_row<BD: BitDepth>(
 /// `w_avg` row: `dst[x] = clip((tmp1[x]*weight + tmp2[x]*(16-weight) + rnd) >> sh)`.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub fn w_avg_row<BD: BitDepth>(
+pub(crate) fn w_avg_row<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     tmp1: &[i16],
@@ -344,7 +329,7 @@ pub fn w_avg_row<BD: BitDepth>(
 /// `mask` row: `dst[x] = clip((tmp1[x]*m + tmp2[x]*(64-m) + rnd) >> sh)`, `m = mask[x]`.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub fn mask_row<BD: BitDepth>(
+pub(crate) fn mask_row<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     tmp1: &[i16],
@@ -375,7 +360,7 @@ pub fn mask_row<BD: BitDepth>(
 
 /// `blend` row: `dst[x] = (dst[x]*(64-m) + tmp[x]*m + 32) >> 6` (truncate, no clamp).
 #[inline]
-pub fn blend_row<P: Pixel>(dst: &mut [P], tmp: &[P], mask: &[u8], n: usize) {
+pub(crate) fn blend_row<P: Pixel>(dst: &mut [P], tmp: &[P], mask: &[u8], n: usize) {
     let c64 = I32x8::splat(64);
     let rnd_v = I32x8::splat(32);
     let mut x = 0;
@@ -398,7 +383,13 @@ pub fn blend_row<P: Pixel>(dst: &mut [P], tmp: &[P], mask: &[u8], n: usize) {
 
 /// `morph` row: `dst[x] = clip((alpha*dst[x] + beta) >> 8)`.
 #[inline]
-pub fn morph_row<BD: BitDepth>(bd: BD, dst: &mut [BD::Pixel], alpha: i32, beta: i32, n: usize) {
+pub(crate) fn morph_row<BD: BitDepth>(
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    alpha: i32,
+    beta: i32,
+    n: usize,
+) {
     let a_v = I32x8::splat(alpha);
     let b_v = I32x8::splat(beta);
     let mut x = 0;
@@ -416,7 +407,7 @@ pub fn morph_row<BD: BitDepth>(bd: BD, dst: &mut [BD::Pixel], alpha: i32, beta: 
 
 /// itx DC-only row: `dst[x] = clip(dst[x] + dc)` for `x in 0..n`.
 #[inline]
-pub fn dc_add_row<BD: BitDepth>(bd: BD, dst: &mut [BD::Pixel], dc: i32, n: usize) {
+pub(crate) fn dc_add_row<BD: BitDepth>(bd: BD, dst: &mut [BD::Pixel], dc: i32, n: usize) {
     let dc_v = I32x8::splat(dc);
     let mut x = 0;
     while x + 8 <= n {
@@ -433,7 +424,7 @@ pub fn dc_add_row<BD: BitDepth>(bd: BD, dst: &mut [BD::Pixel], dc: i32, n: usize
 
 /// itx row-clip pass: `tmp[i] = clip((tmp[i] + rnd) >> shift, min, max)` in place.
 #[inline]
-pub fn row_clip(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min: i32, max: i32) {
+pub(crate) fn row_clip(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min: i32, max: i32) {
     let rnd_v = I32x8::splat(rnd);
     let min_v = I32x8::splat(min);
     let max_v = I32x8::splat(max);
@@ -453,7 +444,7 @@ pub fn row_clip(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min: i32, max: 
 
 /// itx plain residual-add row: `dst[x] = clip(dst[x] + ((c[x]+rnd)>>shift))`.
 #[inline]
-pub fn residual_add_row<BD: BitDepth>(
+pub(crate) fn residual_add_row<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     c: &[i32],
@@ -481,7 +472,15 @@ pub fn residual_add_row<BD: BitDepth>(
 /// `v'[i] = iclip((u*sina + v*cosa + 128 - (b<0)) >> 8, min, max)`.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub fn cctx_row(u: &mut [i32], v: &mut [i32], sina: i32, cosa: i32, sz: usize, min: i32, max: i32) {
+pub(crate) fn cctx_row(
+    u: &mut [i32],
+    v: &mut [i32],
+    sina: i32,
+    cosa: i32,
+    sz: usize,
+    min: i32,
+    max: i32,
+) {
     let sina_v = I32x8::splat(sina);
     let cosa_v = I32x8::splat(cosa);
     let c128 = I32x8::splat(128);

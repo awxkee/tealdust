@@ -1,4 +1,4 @@
-pub static MSAC_RATE: [[u8; 3]; 125] = [
+pub(crate) static MSAC_RATE: [[u8; 3]; 125] = [
     [4, 5, 6],
     [4, 5, 5],
     [4, 5, 4],
@@ -139,9 +139,9 @@ static MSAC_MIN_PROB_INNER: Aligned<[[u16; 8]; 7]> = Aligned([
     [15, 31, 47, 63, 79, 95, 111, 65535],
 ]);
 
-pub static MSAC_MIN_PROB: &[[u16; 8]; 7] = &MSAC_MIN_PROB_INNER.0;
+pub(crate) static MSAC_MIN_PROB: &[[u16; 8]; 7] = &MSAC_MIN_PROB_INNER.0;
 
-pub struct MsacContext<'a> {
+pub(crate) struct MsacContext<'a> {
     buf_pos: usize,
     buf: &'a [u8],
     dif: u64,
@@ -151,7 +151,7 @@ pub struct MsacContext<'a> {
 }
 
 impl<'a> MsacContext<'a> {
-    pub fn new(data: &'a [u8], disable_cdf_update_flag: bool) -> Self {
+    pub(crate) fn new(data: &'a [u8], disable_cdf_update_flag: bool) -> Self {
         let mut s = Self {
             buf_pos: 0,
             buf: data,
@@ -196,7 +196,7 @@ impl<'a> MsacContext<'a> {
         }
     }
 
-    pub fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
+    pub(crate) fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
         debug_assert!(n_bits > 0 && n_bits <= 32);
         if (self.cnt as u32) < n_bits {
             self.ctx_refill();
@@ -223,11 +223,11 @@ impl<'a> MsacContext<'a> {
     }
 
     #[inline]
-    pub fn decode_bool_bypass(&mut self) -> u32 {
+    pub(crate) fn decode_bool_bypass(&mut self) -> u32 {
         self.decode_bools_bypass(1)
     }
 
-    pub fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
+    pub(crate) fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
         debug_assert!(max_bits == 5 || max_bits == 6 || max_bits == 21);
         if (self.cnt as u32) < max_bits {
             self.ctx_refill();
@@ -272,7 +272,7 @@ impl<'a> MsacContext<'a> {
         (ret == 0) as u32
     }
 
-    pub fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
+    pub(crate) fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
         let c = (self.dif >> 48) as u32;
         let r = self.rng >> 8;
         let mut u: u32;
@@ -315,7 +315,7 @@ impl<'a> MsacContext<'a> {
         val
     }
 
-    pub fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
+    pub(crate) fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
         let bit = self.decode_bool_raw(cdf[0] as u32);
 
         if self.allow_update_cdf {
@@ -333,7 +333,7 @@ impl<'a> MsacContext<'a> {
         bit
     }
 
-    pub fn decode_uniform(&mut self, n: u32) -> u32 {
+    pub(crate) fn decode_uniform(&mut self, n: u32) -> u32 {
         debug_assert!(n > 0);
         let l = crate::intops::ulog2(n) + 1;
         debug_assert!(l > 1);
@@ -348,7 +348,7 @@ impl<'a> MsacContext<'a> {
 
     /// Current internal bit count. Used to detect symbol-decoder overread
     /// (`cnt <= -15` after decoding a tile superblock row).
-    pub fn cnt(&self) -> i32 {
+    pub(crate) fn cnt(&self) -> i32 {
         self.cnt
     }
 }

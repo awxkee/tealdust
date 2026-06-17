@@ -1,8 +1,37 @@
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
 use crate::cdef::{CDEF_HAVE_BOTTOM, CDEF_HAVE_LEFT, CDEF_HAVE_RIGHT, CDEF_HAVE_TOP};
 use crate::intops::iclip;
 use crate::pixel::{BitDepth, Pixel};
 
-pub static CCSO_POS: [[i8; 2]; 7] = [
+pub(crate) static CCSO_POS: [[i8; 2]; 7] = [
     [-1, 0],
     [0, -1],
     [-1, -1],
@@ -13,7 +42,7 @@ pub static CCSO_POS: [[i8; 2]; 7] = [
 ];
 
 #[inline(always)]
-pub fn ccso_score(diff: i32, quant_step: i32, edge_classifier: u32) -> u32 {
+pub(crate) fn ccso_score(diff: i32, quant_step: i32, edge_classifier: u32) -> u32 {
     if diff > quant_step && edge_classifier == 0 {
         return 2;
     }
@@ -64,7 +93,7 @@ fn ccso_padding<P: Pixel>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn ccso_prep<BD: BitDepth>(
+pub(crate) fn ccso_prep<BD: BitDepth>(
     bd: BD,
     dst: &mut [u8],
     dst_stride: usize,
@@ -138,7 +167,7 @@ pub fn ccso_prep<BD: BitDepth>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn ccso_add<BD: BitDepth>(
+pub(crate) fn ccso_add<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,

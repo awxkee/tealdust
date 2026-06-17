@@ -1,4 +1,33 @@
-pub const STX_SCAN_ORDERS_4X4: [[[u8; 16]; 2]; 4] = [
+/*
+ * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without modification,
+ * are permitted provided that the following conditions are met:
+ *
+ * 1.  Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2.  Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3.  Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+pub static STX_SCAN_ORDERS_4X4: [[[u8; 16]; 2]; 4] = [
     [
         [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15],
         [0, 4, 1, 2, 5, 8, 12, 9, 6, 3, 7, 10, 13, 14, 11, 15],
@@ -17,7 +46,7 @@ pub const STX_SCAN_ORDERS_4X4: [[[u8; 16]; 2]; 4] = [
     ],
 ];
 
-pub const STX_SCAN_ORDERS_8X8: [[[u8; 64]; 2]; 3] = [
+pub static STX_SCAN_ORDERS_8X8: [[[u8; 64]; 2]; 3] = [
     [
         [
             0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34,
@@ -59,7 +88,7 @@ pub const STX_SCAN_ORDERS_8X8: [[[u8; 64]; 2]; 3] = [
     ],
 ];
 
-pub const COEFF8X8_MAPPING: [[u8; 48]; 33] = [
+pub static COEFF8X8_MAPPING: [[u8; 48]; 33] = [
     [
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
         25, 26, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 45, 46, 47, 48, 49, 50, 51, 56, 57, 58,
@@ -194,7 +223,7 @@ pub const COEFF8X8_MAPPING: [[u8; 48]; 33] = [
     ],
 ];
 
-pub const STX_4X4_KERNEL: [i8; 5376] = [
+pub static STX_4X4_KERNEL: [i8; 5376] = [
     102, -45, -53, -5, -13, -3, -3, 19, 22, -2, 3, 8, 2, -5, -8, -4, 34, 39, 55, -33, -81, -18, 0,
     -10, -14, 0, 19, 42, 8, 2, 3, -13, -53, -8, -21, -8, -43, -3, 2, 56, 72, 8, 9, 21, 4, -29, -37,
     -8, -35, -49, -40, 20, -21, 23, 5, -24, -36, 9, 29, 61, 13, 25, 30, -40, 0, -80, 74, 39, -9,
