@@ -1,7 +1,7 @@
 #[derive(Clone)]
 #[repr(C)]
-pub struct CdfModeContext {
-    pub data: [u16; 3496],
+pub(crate) struct CdfModeContext {
+    pub(crate) data: [u16; 3496],
 }
 
 impl Default for CdfModeContext {
@@ -12,8 +12,8 @@ impl Default for CdfModeContext {
 
 #[derive(Clone)]
 #[repr(C)]
-pub struct CdfCoefContext {
-    pub data: [u16; 4656],
+pub(crate) struct CdfCoefContext {
+    pub(crate) data: [u16; 4656],
 }
 
 impl Default for CdfCoefContext {
@@ -23,82 +23,82 @@ impl Default for CdfCoefContext {
 }
 
 impl CdfCoefContext {
-    pub fn skip(&mut self, i: usize, j: usize, k: usize) -> &mut [u16] {
+    pub(crate) fn skip(&mut self, i: usize, j: usize, k: usize) -> &mut [u16] {
         let o = i * 100 + j * 20 + k * 2;
         &mut self.data[o..o + 2]
     }
-    pub fn skip_v(&mut self, k: usize) -> &mut [u16] {
+    pub(crate) fn skip_v(&mut self, k: usize) -> &mut [u16] {
         let o = 4418 + k * 2;
         &mut self.data[o..o + 2]
     }
-    pub fn eob_bin_16(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_16(&mut self, i: usize) -> &mut [u16] {
         let o = 200 + i * 8;
         &mut self.data[o..o + 8]
     }
-    pub fn eob_bin_32(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_32(&mut self, i: usize) -> &mut [u16] {
         let o = 224 + i * 8;
         &mut self.data[o..o + 8]
     }
-    pub fn eob_bin_64(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_64(&mut self, i: usize) -> &mut [u16] {
         let o = 248 + i * 8;
         &mut self.data[o..o + 8]
     }
-    pub fn eob_bin_128(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_128(&mut self, i: usize) -> &mut [u16] {
         let o = 272 + i * 8;
         &mut self.data[o..o + 8]
     }
-    pub fn eob_bin_256(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_256(&mut self, i: usize) -> &mut [u16] {
         let o = 296 + i * 8;
         &mut self.data[o..o + 8]
     }
-    pub fn eob_bin_512(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_512(&mut self, i: usize) -> &mut [u16] {
         let o = 320 + i * 8;
         &mut self.data[o..o + 8]
     }
-    pub fn eob_bin_1024(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_1024(&mut self, i: usize) -> &mut [u16] {
         let o = 344 + i * 8;
         &mut self.data[o..o + 8]
     }
-    pub fn eob_hi_bit(&mut self) -> &mut [u16] {
+    pub(crate) fn eob_hi_bit(&mut self) -> &mut [u16] {
         &mut self.data[368..370]
     }
-    pub fn eob_base_y_tok_hf(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn eob_base_y_tok_hf(&mut self, i: usize, j: usize) -> &mut [u16] {
         let o = 372 + i * 16 + j * 4;
         &mut self.data[o..o + 4]
     }
-    pub fn eob_base_y_tok_lf(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn eob_base_y_tok_lf(&mut self, i: usize, j: usize) -> &mut [u16] {
         let o = 1280 + i * 32 + j * 8;
         &mut self.data[o..o + 8]
     }
-    pub fn br_y_tok_lf(&mut self, j: usize) -> &mut [u16] {
+    pub(crate) fn br_y_tok_lf(&mut self, j: usize) -> &mut [u16] {
         let o = 4080 + j * 4;
         &mut self.data[o..o + 4]
     }
-    pub fn dc_sign(&mut self, i: usize, j: usize, k: usize) -> &mut [u16] {
+    pub(crate) fn dc_sign(&mut self, i: usize, j: usize, k: usize) -> &mut [u16] {
         let o = 4136 + i * 12 + j * 6 + k * 2;
         &mut self.data[o..o + 2]
     }
-    pub fn bob_base_y_tok(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn bob_base_y_tok(&mut self, i: usize, j: usize) -> &mut [u16] {
         let o = 4160 + i * 12 + j * 4;
         &mut self.data[o..o + 4]
     }
-    pub fn br_y_tok_idtx(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn br_y_tok_idtx(&mut self, i: usize, j: usize) -> &mut [u16] {
         let o = 4196 + i * 28 + j * 4;
         &mut self.data[o..o + 4]
     }
-    pub fn base_y_tok_idtx(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn base_y_tok_idtx(&mut self, i: usize, j: usize) -> &mut [u16] {
         let o = 4280 + i * 28 + j * 4;
         &mut self.data[o..o + 4]
     }
-    pub fn sign_idtx(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn sign_idtx(&mut self, i: usize, j: usize) -> &mut [u16] {
         let o = 4364 + i * 18 + j * 2;
         &mut self.data[o..o + 2]
     }
-    pub fn eob_base_uv_tok_hf(&mut self, j: usize) -> &mut [u16] {
+    pub(crate) fn eob_base_uv_tok_hf(&mut self, j: usize) -> &mut [u16] {
         let o = 4444 + j * 4;
         &mut self.data[o..o + 4]
     }
-    pub fn eob_base_uv_tok_lf(&mut self, j: usize) -> &mut [u16] {
+    pub(crate) fn eob_base_uv_tok_lf(&mut self, j: usize) -> &mut [u16] {
         let o = 4528 + j * 8;
         &mut self.data[o..o + 8]
     }
@@ -106,8 +106,8 @@ impl CdfCoefContext {
 
 #[derive(Clone)]
 #[repr(C)]
-pub struct CdfMvContext {
-    pub data: [u16; 168],
+pub(crate) struct CdfMvContext {
+    pub(crate) data: [u16; 168],
 }
 
 impl Default for CdfMvContext {
@@ -118,24 +118,24 @@ impl Default for CdfMvContext {
 
 macro_rules! cdf_acc {
     ($name:ident, $off:expr, $len:expr) => {
-        pub fn $name(&mut self) -> &mut [u16] {
+        pub(crate) fn $name(&mut self) -> &mut [u16] {
             &mut self.data[$off..$off + $len]
         }
     };
     ($name:ident, $off:expr, $stride:expr, $len:expr) => {
-        pub fn $name(&mut self, i: usize) -> &mut [u16] {
+        pub(crate) fn $name(&mut self, i: usize) -> &mut [u16] {
             let o = $off + i * $stride;
             &mut self.data[o..o + $len]
         }
     };
     ($name:ident, $off:expr, $s1:expr, $s2:expr, $len:expr) => {
-        pub fn $name(&mut self, i: usize, j: usize) -> &mut [u16] {
+        pub(crate) fn $name(&mut self, i: usize, j: usize) -> &mut [u16] {
             let o = $off + i * $s1 + j * $s2;
             &mut self.data[o..o + $len]
         }
     };
     ($name:ident, $off:expr, $s1:expr, $s2:expr, $s3:expr, $len:expr) => {
-        pub fn $name(&mut self, i: usize, j: usize, k: usize) -> &mut [u16] {
+        pub(crate) fn $name(&mut self, i: usize, j: usize, k: usize) -> &mut [u16] {
             let o = $off + i * $s1 + j * $s2 + k * $s3;
             &mut self.data[o..o + $len]
         }
@@ -279,20 +279,20 @@ impl CdfModeContext {
 #[derive(Clone)]
 #[repr(C)]
 #[derive(Default)]
-pub struct CdfContext {
-    pub coef: CdfCoefContext,
-    pub m: CdfModeContext,
-    pub mv: CdfMvContext,
-    pub dmv: CdfMvContext,
+pub(crate) struct CdfContext {
+    pub(crate) coef: CdfCoefContext,
+    pub(crate) m: CdfModeContext,
+    pub(crate) mv: CdfMvContext,
+    pub(crate) dmv: CdfMvContext,
 }
 
 #[repr(C)]
-pub struct CdfDefaultContext {
-    pub m: CdfModeContext,
-    pub mv: CdfMvContext,
+pub(crate) struct CdfDefaultContext {
+    pub(crate) m: CdfModeContext,
+    pub(crate) mv: CdfMvContext,
 }
 
-pub static DEFAULT_CDF: CdfDefaultContext = CdfDefaultContext {
+pub(crate) static DEFAULT_CDF: CdfDefaultContext = CdfDefaultContext {
     m: CdfModeContext {
         data: [
             7226, 15872, 7218, 9472, 19969, 6400, 23717, 8192, 27870, 14336, 26680, 6656, 3482,
@@ -547,7 +547,7 @@ pub static DEFAULT_CDF: CdfDefaultContext = CdfDefaultContext {
     },
 };
 
-pub static DEFAULT_COEF_CDF: [CdfCoefContext; 4] = [
+pub(crate) static DEFAULT_COEF_CDF: [CdfCoefContext; 4] = [
     CdfCoefContext {
         data: [
             7009, 7936, 31669, 23808, 30006, 1280, 24824, 6656, 16538, 1536, 3692, 7936, 23870,
@@ -1789,12 +1789,12 @@ pub static DEFAULT_COEF_CDF: [CdfCoefContext; 4] = [
     },
 ];
 
-pub fn cdf_thread_init_static_qcat(qidx: u32) -> u32 {
+pub(crate) fn cdf_thread_init_static_qcat(qidx: u32) -> u32 {
     (qidx > 90) as u32 + (qidx > 140) as u32 + (qidx > 190) as u32
 }
 
 impl CdfContext {
-    pub fn init_from_defaults(qcat: usize) -> Self {
+    pub(crate) fn init_from_defaults(qcat: usize) -> Self {
         Self {
             coef: DEFAULT_COEF_CDF[qcat].clone(),
             m: DEFAULT_CDF.m.clone(),
@@ -1803,7 +1803,7 @@ impl CdfContext {
         }
     }
 
-    pub fn reset_count(&mut self, is_key_or_intra: bool) {
+    pub(crate) fn reset_count(&mut self, is_key_or_intra: bool) {
         visit_mode_kf_entries(|o, n| entry_reset_count(&mut self.m.data, o, n));
         visit_coef_entries(|o, n| entry_reset_count(&mut self.coef.data, o, n));
         visit_mv_entries(|o, n| entry_reset_count(&mut self.dmv.data, o, n));
@@ -1813,7 +1813,7 @@ impl CdfContext {
         }
     }
 
-    pub fn pri_sec_average(
+    pub(crate) fn pri_sec_average(
         &mut self,
         src1_m: &CdfModeContext,
         src1_coef: &CdfCoefContext,
