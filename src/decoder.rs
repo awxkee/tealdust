@@ -95,7 +95,7 @@ impl Default for Settings {
 
 fn get_num_threads(s: &Settings) -> (u32, u32) {
     #[rustfmt::skip]
-    const FC_LUT: [u8; 49] = [
+    static FC_LUT: [u8; 49] = [
         1,
         2, 2, 2,
         3, 3, 3, 3, 3,

@@ -14291,7 +14291,7 @@ fn cfl_predict_8bpc<BD: crate::pixel::BitDepth>(
             implicit,
             ss_hor,
             ss_ver,
-        );
+        )?;
 
         return Ok(());
     }

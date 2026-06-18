@@ -2224,6 +2224,13 @@ pub fn read_frame_size(
     if hdr.frame_size_override != 0 {
         hdr.width = gb.get_bits(seqhdr.width_n_bits as i32) as i32 + 1;
         hdr.height = gb.get_bits(seqhdr.height_n_bits as i32) as i32 + 1;
+        // The field width (ceil(log2(max))) can encode a value past the
+        // sequence maximum; the spec requires width <= max_width and
+        // height <= max_height. Reject otherwise so an over-large dimension
+        // cannot flow into downstream buffer sizing.
+        if hdr.width > seqhdr.max_width || hdr.height > seqhdr.max_height {
+            return Err(TealdustError::InvalidData);
+        }
     } else {
         hdr.width = seqhdr.max_width;
         hdr.height = seqhdr.max_height;

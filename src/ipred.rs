@@ -2189,7 +2189,7 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
     implicit: bool,
     ss_hor: usize,
     ss_ver: usize,
-) {
+) -> Result<(), ()> {
     #[inline(always)]
     fn add_off(base: usize, off: isize) -> usize {
         if off >= 0 {
@@ -2217,19 +2217,9 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
         plane[idx] = v;
     }
 
-    debug_assert!(w > 0 && h > 0);
-    debug_assert!(4 * wpad <= w && 4 * hpad <= h);
-    debug_assert!(ystride > 0 && cstride > 0);
-    debug_assert!(ytop_off < y_plane.len());
-    debug_assert!(ysrc_off < y_plane.len());
-    debug_assert!(utop_off < u_plane.len());
-    debug_assert!(vtop_off < v_plane.len());
-    debug_assert!(usrc_off < u_plane.len());
-    debug_assert!(vsrc_off < v_plane.len());
-
-    let cstride_u = cstride as usize;
-    debug_assert!(usrc_off + (h - 1) * cstride_u + w <= u_plane.len());
-    debug_assert!(vsrc_off + (h - 1) * cstride_u + w <= v_plane.len());
+    if w == 0 || h == 0 || 4 * wpad > w || 4 * hpad > h || ystride <= 0 || cstride <= 0 {
+        return Err(());
+    }
 
     let has_t = flags & CFL_HAS_TOP as u32 != 0;
     let has_l = flags & CFL_HAS_LEFT as u32 != 0;
@@ -2238,6 +2228,83 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
     let skiph = w == 64;
     let skipv = h == 64;
     let flt = flags & 3;
+
+    {
+        let ystr = ystride as i64;
+        let cstr = cstride as i64;
+        let yv = ystr << ss_ver; // luma row advance per chroma row
+        let xh = 1i64 << ss_hor; // luma column step
+        let ylim_i = ylim as i64;
+        let xlim_i = xlim as i64;
+        let ylen = y_plane.len() as i64;
+        let ulen = u_plane.len() as i64;
+        let vlen = v_plane.len() as i64;
+        let subs = (ss_hor | ss_ver) != 0;
+        let gauss = flt == CFL_FLT_TYPE_GAUSS as u32;
+        let vstrip = flt == CFL_FLT_TYPE_VSTRIP as u32;
+
+        let v_dn = if ss_ver == 1 { ystr } else { 0 };
+        let fwd_c = if subs { 1 } else { 0 };
+        let up = if ss_ver == 1 && gauss { ystr } else { 0 };
+        let back_l = if subs && (gauss || vstrip) { 1 } else { 0 };
+
+        let mut y_lo = i64::MAX;
+        let mut y_hi = i64::MIN;
+        if xlim > 0 && ylim > 0 {
+            // apply-loop downsample, base ysrc_off (left column clamped >= 0)
+            y_lo = y_lo.min(ysrc_off as i64 - up);
+            y_hi = y_hi.max(ysrc_off as i64 + (ylim_i - 1) * yv + (xlim_i - 1) * xh + fwd_c + v_dn);
+        }
+        if has_l && ylim > 0 {
+            // left-edge downsample, base ysrc_off - (1 + ss_hor)
+            let base = ysrc_off as i64 - (1 + ss_hor as i64);
+            y_lo = y_lo.min(base - back_l - up);
+            y_hi = y_hi.max(base + (ylim_i - 1) * yv + fwd_c + v_dn);
+        }
+        if has_t && xlim > 0 {
+            // top-edge downsample, base ytop_off; vertical reach 0 at the SB edge
+            let bottom = if flags & CFL_IS_TOP_SB_EDGE != 0 {
+                0
+            } else {
+                v_dn
+            };
+            let up_t = if gauss { bottom } else { 0 };
+            y_lo = y_lo.min(ytop_off as i64 - up_t);
+            y_hi = y_hi.max(ytop_off as i64 + (xlim_i - 1) * xh + fwd_c + bottom);
+        }
+        if y_hi >= y_lo && (y_lo < 0 || y_hi >= ylen) {
+            return Err(());
+        }
+
+        // The full w x h destination block is always written (DC fill, or apply
+        // plus the bottom-row replication), regardless of alpha.
+        let mut u_lo = usrc_off as i64;
+        let mut u_hi = usrc_off as i64 + (h as i64 - 1) * cstr + w as i64 - 1;
+        let mut v_lo = vsrc_off as i64;
+        let mut v_hi = vsrc_off as i64 + (h as i64 - 1) * cstr + w as i64 - 1;
+        if has_l {
+            // left column at usrc_off-1; the y>=ylim tail reads one column back,
+            // which for ylim==0 lands one stride before usrc_off-1.
+            let extra = if ylim == 0 { cstr } else { 0 };
+            u_lo = u_lo.min(usrc_off as i64 - 1 - extra);
+            v_lo = v_lo.min(vsrc_off as i64 - 1 - extra);
+            if ylim > 0 {
+                u_hi = u_hi.max(usrc_off as i64 - 1 + (ylim_i - 1) * cstr);
+                v_hi = v_hi.max(vsrc_off as i64 - 1 + (ylim_i - 1) * cstr);
+            }
+        }
+        if has_t {
+            // top row utop_off..utop_off+xlim-1; the xlim==0 tail reads utop_off-1.
+            let j = xlim_i - 1;
+            u_lo = u_lo.min(utop_off as i64 + j.min(0));
+            u_hi = u_hi.max(utop_off as i64 + j.max(0));
+            v_lo = v_lo.min(vtop_off as i64 + j.min(0));
+            v_hi = v_hi.max(vtop_off as i64 + j.max(0));
+        }
+        if u_lo < 0 || u_hi >= ulen || v_lo < 0 || v_hi >= vlen {
+            return Err(());
+        }
+    }
 
     let mut dc = [0i32; 3];
     let mut n_top = 0usize;
@@ -2515,7 +2582,7 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
                 alpha[0],
                 alpha[1],
             );
-            return;
+            return Ok(());
         }
     }
 
@@ -2603,4 +2670,6 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
             v_plane.copy_within(src_row..src_row + w, dst_row);
         }
     }
+
+    Ok(())
 }
