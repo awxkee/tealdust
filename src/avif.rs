@@ -57,15 +57,6 @@
 //! └── mdat  — media data (raw AV2 OBU samples, one per item)
 //! ```
 //!
-//! ## Usage
-//!
-//! ```no_run
-//! use tealdust::avif::AvifDecoder;
-//!
-//! let bytes = std::fs::read("image.avif").unwrap();
-//! let mut avif = AvifDecoder::new(&bytes).unwrap();
-//! let picture = avif.decode().unwrap();
-//! ```
 
 use crate::data::Data;
 use crate::decoder::{Decoder, Settings};
@@ -1894,23 +1885,10 @@ impl fmt::Debug for AvifImage {
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// AvifDecoder — high-level entry point
-// ────────────────────────────────────────────────────────────────────────────
-
 /// High-level AVIF / AV2 image decoder.
 ///
 /// Wraps [`AvifParser`] (container parsing) and [`Decoder`] (AV2 bitstream
 /// decoding) into a single convenient API.
-///
-/// ```no_run
-/// use tealdust::avif::AvifDecoder;
-///
-/// let bytes = std::fs::read("photo.avif").unwrap();
-/// let mut d = AvifDecoder::new(&bytes).unwrap();
-/// let info = d.image_info().unwrap();
-/// let img = d.decode().unwrap();
-/// ```
 pub struct AvifDecoder<'a> {
     file: &'a [u8],
     container: AvifContainer,

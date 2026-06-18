@@ -30,6 +30,26 @@
 use crate::intops::imin;
 use crate::itx_1d::{TX1D_FNS, TX1D_FNS_X8, inv_wht_wht_4x4, residual_add, residual_add_strided};
 use crate::itx_2d::{ITX_TMP_PIXELS, ITX_TMP_STRIDE};
+
+// Test-only switch: when set, the dedicated non-square DCT_DCT cores are
+// bypassed so `inv_txfm_add` exercises the original generic path. Used by the
+// differential tests to compare the rectangular cores against the proven
+// generic implementation. Always false (and free) in production builds.
+#[cfg(test)]
+pub(crate) static FORCE_GENERIC_ITX: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+#[inline(always)]
+fn force_generic_itx() -> bool {
+    FORCE_GENERIC_ITX.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn force_generic_itx() -> bool {
+    false
+}
 use crate::levels::txtp as txtp_kind;
 use crate::pixel::BitDepth;
 use crate::scan::LAST_EOB_PER_COL;
@@ -37,7 +57,16 @@ use crate::tables::{TX_SHIFT, TXFM_DIMENSIONS};
 
 const WHT_WHT: u32 = 6 | (6 << 5);
 
-thread_local! {
+// Per-thread reusable transform scratch. The dequant cores and the generic
+// inv_txfm_add path fully write the used S×S region before reading it (rows
+// 0..last from the row pass, rows last..S zero-filled) and never read columns
+// S..ITX_TMP_STRIDE, so leftover data from a previous transform can never leak
+// into the result. That lets us reuse one persistent, already-initialised
+// buffer per thread instead of zeroing a fresh 4 KB buffer on every call (a
+// memset the compiler can't elide, since the dequant fn is an indirect call).
+// Proven bit-exact by the `tmp_init_proof` tests: arbitrary garbage in the
+// buffer yields identical output to a zeroed buffer.
+std::thread_local! {
     static ITX_SCRATCH: core::cell::RefCell<[i32; ITX_TMP_PIXELS]> =
         const { core::cell::RefCell::new([0; ITX_TMP_PIXELS]) };
 }
@@ -335,6 +364,295 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         }
     }
 
+    // Non-square DCT_DCT. Dims <= 32 use dedicated rectangular cores. The
+    // 64-involving sizes have no real 64-point transform (the decoder maps the
+    // 64 dimension to inv_dct32), so each computes identically to its clamped
+    // (min(W,32), min(H,32)) shape and reuses that core, with the caller's `tx`
+    // (eob table) and `is_rect2` (scaling) selecting the correct behaviour.
+    if (txtp & 0xFF) == txtp_kind::DCT_DCT as u32
+        && (txtp >> 8) == 0
+        && t_dim.lw != t_dim.lh
+        && !force_generic_itx()
+    {
+        let handled = with_itx_scratch(|tmp| {
+            let mut handled = true;
+
+            match tx {
+                5 => {
+                    let f = crate::itx_2d::idct_dequant_4x8();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                6 => {
+                    let f = crate::itx_2d::idct_dequant_8x4();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                7 => {
+                    let f = crate::itx_2d::idct_dequant_8x16();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                8 => {
+                    let f = crate::itx_2d::idct_dequant_16x8();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                9 => {
+                    let f = crate::itx_2d::idct_dequant_16x32();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                10 => {
+                    let f = crate::itx_2d::idct_dequant_32x16();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                13 => {
+                    let f = crate::itx_2d::idct_dequant_4x16();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                14 => {
+                    let f = crate::itx_2d::idct_dequant_16x4();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                15 => {
+                    let f = crate::itx_2d::idct_dequant_8x32();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                16 => {
+                    let f = crate::itx_2d::idct_dequant_32x8();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                19 => {
+                    let f = crate::itx_2d::idct_dequant_4x32();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                20 => {
+                    let f = crate::itx_2d::idct_dequant_32x4();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                11 => {
+                    let f = crate::itx_2d::idct_dequant_32x32();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                12 => {
+                    let f = crate::itx_2d::idct_dequant_32x32();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                17 => {
+                    let f = crate::itx_2d::idct_dequant_16x32();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                18 => {
+                    let f = crate::itx_2d::idct_dequant_32x16();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                21 => {
+                    let f = crate::itx_2d::idct_dequant_8x32();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                22 => {
+                    let f = crate::itx_2d::idct_dequant_32x8();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                23 => {
+                    let f = crate::itx_2d::idct_dequant_4x32();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+                24 => {
+                    let f = crate::itx_2d::idct_dequant_32x4();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                    );
+                }
+
+                _ => handled = false,
+            }
+
+            if handled {
+                let rnd1 = (1 << shift1) >> 1;
+                add_tmp_to_dst(bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0);
+            }
+            handled
+        });
+        if handled {
+            return;
+        }
+    }
+
     if (txtp >> 8) == 0
         && ((txtp >> 3) & 0x3) == 0
         && t_dim.lw == t_dim.lh
@@ -379,6 +697,124 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
                 }
                 2 => {
                     let f = crate::itx_2d::iadst_dequant_16x16();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                        first_kind,
+                        second_kind,
+                    );
+                }
+                _ => handled = false,
+            }
+
+            if handled {
+                let rnd1 = (1 << shift1) >> 1;
+                add_tmp_to_dst(bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0);
+            }
+            handled
+        });
+        if handled {
+            return;
+        }
+    }
+
+    if (txtp >> 8) == 0
+        && ((txtp >> 3) & 0x3) == 0
+        && t_dim.lw != t_dim.lh
+        && t_dim.lw <= 2
+        && t_dim.lh <= 2
+        && crate::itx_2d::is_dct_adst_kind(first_kind)
+        && crate::itx_2d::is_dct_adst_kind(second_kind)
+        && (first_kind != crate::itx_2d::TX_KIND_DCT || second_kind != crate::itx_2d::TX_KIND_DCT)
+        && !force_generic_itx()
+    {
+        let handled = with_itx_scratch(|tmp| {
+            let mut handled = true;
+
+            match tx {
+                5 => {
+                    let f = crate::itx_2d::iadst_dequant_4x8();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                        first_kind,
+                        second_kind,
+                    );
+                }
+                6 => {
+                    let f = crate::itx_2d::iadst_dequant_8x4();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                        first_kind,
+                        second_kind,
+                    );
+                }
+                7 => {
+                    let f = crate::itx_2d::iadst_dequant_8x16();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                        first_kind,
+                        second_kind,
+                    );
+                }
+                8 => {
+                    let f = crate::itx_2d::iadst_dequant_16x8();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                        first_kind,
+                        second_kind,
+                    );
+                }
+                13 => {
+                    let f = crate::itx_2d::iadst_dequant_4x16();
+                    f(
+                        coeff,
+                        tmp.as_mut_array(),
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                        first_kind,
+                        second_kind,
+                    );
+                }
+                14 => {
+                    let f = crate::itx_2d::iadst_dequant_16x4();
                     f(
                         coeff,
                         tmp.as_mut_array(),
@@ -576,5 +1012,211 @@ mod scratch_reuse_proof {
             check(tx, tt::IDTX as u32, 0x300 + tx as u64);
             check(tx, tt::FLIPADST_FLIPADST as u32, 0x310 + tx as u64);
         }
+    }
+}
+
+#[cfg(test)]
+mod rect_end_to_end {
+    //! End-to-end check: full `inv_txfm_add` output with the dedicated
+    //! non-square DCT_DCT cores active, compared bit-for-bit against the same
+    //! call forced down the original generic path. This is the independent
+    //! oracle — the generic path uses its own coefficient orientation, rect2
+    //! scaling, eob handling and clipping — so it catches any systematic error
+    //! (e.g. a swapped W/H axis) that a core-vs-core test could not.
+    use super::*;
+    use crate::pixel::BitDepth8;
+    use std::sync::Mutex;
+    use std::sync::atomic::Ordering;
+
+    // The force-generic switch is process-global, so serialize these tests.
+    static LOCK: Mutex<()> = Mutex::new(());
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn range(&mut self, lo: i32, hi: i32) -> i32 {
+            lo + (self.next() % ((hi - lo) as u64 + 1)) as i32
+        }
+    }
+
+    fn run(tx: usize, w: usize, h: usize, seed: u64, trials: usize) {
+        run_tt(tx, w, h, 0, seed, trials);
+    }
+
+    fn run_tt(tx: usize, w: usize, h: usize, txtp: u32, seed: u64, trials: usize) {
+        let _guard = LOCK.lock().unwrap();
+        let mut rng = Rng(seed);
+        let stride = w;
+        let n = w * h;
+        let (sw, sh) = (w.min(32), h.min(32));
+        for _ in 0..trials {
+            let mut coeff0 = vec![0i32; n + 16];
+            for v in coeff0[..sw * sh].iter_mut() {
+                *v = rng.range(-(1 << 12), 1 << 12);
+            }
+            let eob = rng.range(1, (sw * sh) as i32);
+
+            let dst_init: Vec<u8> = (0..stride * h).map(|_| rng.range(0, 256) as u8).collect();
+
+            let mut dst_rect = dst_init.clone();
+            let mut c_rect = coeff0.clone();
+            FORCE_GENERIC_ITX.store(false, Ordering::Relaxed);
+            inv_txfm_add::<BitDepth8>(
+                BitDepth8,
+                &mut dst_rect,
+                0,
+                stride,
+                &mut c_rect,
+                txtp,
+                eob,
+                tx,
+            );
+
+            let mut dst_gen = dst_init.clone();
+            let mut c_gen = coeff0.clone();
+            FORCE_GENERIC_ITX.store(true, Ordering::Relaxed);
+            inv_txfm_add::<BitDepth8>(
+                BitDepth8,
+                &mut dst_gen,
+                0,
+                stride,
+                &mut c_gen,
+                txtp,
+                eob,
+                tx,
+            );
+            FORCE_GENERIC_ITX.store(false, Ordering::Relaxed);
+
+            assert_eq!(dst_rect, dst_gen, "tx={} {}x{} eob={}", tx, w, h, eob);
+        }
+    }
+
+    #[test]
+    fn e_4x8() {
+        run(5, 4, 8, 0xE_48, 800);
+    }
+    #[test]
+    fn e_8x4() {
+        run(6, 8, 4, 0xE_84, 800);
+    }
+    #[test]
+    fn e_8x16() {
+        run(7, 8, 16, 0xE_816, 800);
+    }
+    #[test]
+    fn e_16x8() {
+        run(8, 16, 8, 0xE_168, 800);
+    }
+    #[test]
+    fn e_16x32() {
+        run(9, 16, 32, 0xE_1632, 400);
+    }
+    #[test]
+    fn e_32x16() {
+        run(10, 32, 16, 0xE_3216, 400);
+    }
+    #[test]
+    fn e_4x16() {
+        run(13, 4, 16, 0xE_416, 800);
+    }
+    #[test]
+    fn e_16x4() {
+        run(14, 16, 4, 0xE_164, 800);
+    }
+    #[test]
+    fn e_8x32() {
+        run(15, 8, 32, 0xE_832, 800);
+    }
+    #[test]
+    fn e_32x8() {
+        run(16, 32, 8, 0xE_328, 800);
+    }
+    #[test]
+    fn e_4x32() {
+        run(19, 4, 32, 0xE_432, 800);
+    }
+    #[test]
+    fn e_32x4() {
+        run(20, 32, 4, 0xE_324, 800);
+    }
+    // 64-involving sizes (reuse clamped cores; oracle = generic path).
+    #[test]
+    fn e_32x64() {
+        run(11, 32, 64, 0xE_3264, 400);
+    }
+    #[test]
+    fn e_64x32() {
+        run(12, 64, 32, 0xE_6432, 400);
+    }
+    #[test]
+    fn e_16x64() {
+        run(17, 16, 64, 0xE_1664, 400);
+    }
+    #[test]
+    fn e_64x16() {
+        run(18, 64, 16, 0xE_6416, 400);
+    }
+    #[test]
+    fn e_8x64() {
+        run(21, 8, 64, 0xE_864, 800);
+    }
+    #[test]
+    fn e_64x8() {
+        run(22, 64, 8, 0xE_648, 800);
+    }
+    #[test]
+    fn e_4x64() {
+        run(23, 4, 64, 0xE_464, 800);
+    }
+    #[test]
+    fn e_64x4() {
+        run(24, 64, 4, 0xE_644, 800);
+    }
+
+    // Non-square ADST / mixed-type, all DCT/ADST/FLIPADST combos (minus
+    // DCT_DCT). txtp = first_kind | (second_kind << 5); ADST=2, FLIPADST=3.
+    fn adst_combos(tx: usize, w: usize, h: usize, seed: u64) {
+        let kinds = [0usize, 2, 3]; // DCT, ADST, FLIPADST
+        let mut s = seed;
+        for &f in &kinds {
+            for &sec in &kinds {
+                if f == 0 && sec == 0 {
+                    continue; // DCT_DCT handled elsewhere
+                }
+                let txtp = (f as u32) | ((sec as u32) << 5);
+                run_tt(tx, w, h, txtp, s, 250);
+                s = s.wrapping_add(0x9E3779B97F4A7C15);
+            }
+        }
+    }
+
+    #[test]
+    fn a_4x8() {
+        adst_combos(5, 4, 8, 0xAD_48);
+    }
+    #[test]
+    fn a_8x4() {
+        adst_combos(6, 8, 4, 0xAD_84);
+    }
+    #[test]
+    fn a_8x16() {
+        adst_combos(7, 8, 16, 0xAD_816);
+    }
+    #[test]
+    fn a_16x8() {
+        adst_combos(8, 16, 8, 0xAD_168);
+    }
+    #[test]
+    fn a_4x16() {
+        adst_combos(13, 4, 16, 0xAD_416);
+    }
+    #[test]
+    fn a_16x4() {
+        adst_combos(14, 16, 4, 0xAD_164);
     }
 }

@@ -2,5 +2,23 @@
 name = "tealdust"
 version = "0.1.0"
 edition = "2024"
+description = "AV1 & AV2 tiny still-image (AVIF) decoder"
+readme = "README.md"
+keywords = ["avif", "av1", "av2", "decoder", "image"]
+license = "BSD-3-Clause OR Apache-2.0"
+authors = ["Radzivon Bartoshyk"]
+documentation = "https://docs.rs/tealdust"
+categories = ["multimedia::images", "compression", "encoding"]
+homepage = "https://github.com/awxkee/tealdust"
+repository = "https://github.com/awxkee/tealdust"
+exclude = ["*.jpg", "/assets", "*.png", "*.sh", "/assets/*", "/scripts/*"]
+rust-version = "1.93.0"
 
 [dependencies]
+
+[features]
+default = ["neon"]
+neon = []
+
+[profile.release]
+debug = "full"

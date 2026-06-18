@@ -522,37 +522,71 @@ pub(crate) struct WienerTap<'a> {
     pub coef: i32,
 }
 
-/// User ("NS") Wiener FIR over a run of `n` consecutive pixels.
+// ---------------------------------------------------------------------------
+// Loop-restoration FIR dispatch (mirrors the itx neon/sse/scalar pattern).
+//
+// `ns_wiener_fir_run()` / `pc_wiener_fir_run()` return a cached function
+// pointer chosen once at runtime: hand-written NEON on aarch64, the portable
+// I32x8 path on x86, and a pure-scalar fallback everywhere else. Callers fetch
+// the pointer once per row run, exactly like `idct_dequant_4x4()` in itx_2d.
+// ---------------------------------------------------------------------------
+
+type NsWienerFirFn = fn(&mut [u8], &[u8], usize, &[WienerTap<'_>], usize);
+type PcWienerFirFn = fn(&mut [u8], &[u8], i32, usize, &[WienerTap<'_>], usize);
+
+static NS_WIENER_FIR: std::sync::OnceLock<NsWienerFirFn> = std::sync::OnceLock::new();
+static PC_WIENER_FIR: std::sync::OnceLock<PcWienerFirFn> = std::sync::OnceLock::new();
+
 #[inline]
-pub(crate) fn ns_wiener_fir_run(
+pub(crate) fn ns_wiener_fir_run() -> NsWienerFirFn {
+    *NS_WIENER_FIR.get_or_init(|| {
+        let mut f = ns_wiener_fir_run_scalar as NsWienerFirFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ns_wiener_fir_run_neon as NsWienerFirFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ns_wiener_fir_run_sse41 as NsWienerFirFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn pc_wiener_fir_run() -> PcWienerFirFn {
+    *PC_WIENER_FIR.get_or_init(|| {
+        let mut f = pc_wiener_fir_run_scalar as PcWienerFirFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::pc_wiener_fir_run_neon as PcWienerFirFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::pc_wiener_fir_run_sse41 as PcWienerFirFn;
+            }
+        }
+        f
+    })
+}
+
+/// Pure-scalar "NS" Wiener FIR — the reference implementation and the fallback
+/// for targets without a hand-written SIMD kernel.
+pub(crate) fn ns_wiener_fir_run_scalar(
     dst: &mut [u8],
     center: &[u8],
     col0: usize,
     taps: &[WienerTap],
     n: usize,
 ) {
-    let rnd = I32x8::splat(64);
-    let mut x = 0;
-    while x + 8 <= n {
-        let c = col0 + x;
-        let m = load8_u8(&center[c..]);
-        let mut s = m << I32x8::splat(7);
-        let two_m = m + m;
-        for t in taps {
-            let cp = (c as i32 + t.dx) as usize;
-            let cm = (c as i32 - t.dx) as usize;
-            let a = load8_u8(&t.row_p[cp..]);
-            let b = load8_u8(&t.row_m[cm..]);
-            s += (a + b - two_m) * I32x8::splat(t.coef);
-        }
-        let v = sra(s + rnd, 7).max(I32x8::splat(0)).min(I32x8::splat(255));
-        let arr = v.to_array();
-        for k in 0..8 {
-            dst[x + k] = arr[k] as u8;
-        }
-        x += 8;
-    }
-    while x < n {
+    for x in 0..n {
         let c = col0 + x;
         let m = center[c] as i32;
         let mut s = m << 7;
@@ -562,13 +596,11 @@ pub(crate) fn ns_wiener_fir_run(
             s += (a + b - 2 * m) * t.coef;
         }
         dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
-        x += 1;
     }
 }
 
-/// Pretrained ("PC") Wiener FIR over a run of `n` consecutive pixels.
-#[inline]
-pub(crate) fn pc_wiener_fir_run(
+/// Pure-scalar "PC" Wiener FIR.
+pub(crate) fn pc_wiener_fir_run_scalar(
     dst: &mut [u8],
     center: &[u8],
     center_coef: i32,
@@ -576,28 +608,7 @@ pub(crate) fn pc_wiener_fir_run(
     taps: &[WienerTap],
     n: usize,
 ) {
-    let rnd = I32x8::splat(64);
-    let cc = I32x8::splat(center_coef);
-    let mut x = 0;
-    while x + 8 <= n {
-        let c = col0 + x;
-        let m = load8_u8(&center[c..]);
-        let mut s = m * cc;
-        for t in taps {
-            let cp = (c as i32 + t.dx) as usize;
-            let cm = (c as i32 - t.dx) as usize;
-            let a = load8_u8(&t.row_p[cp..]);
-            let b = load8_u8(&t.row_m[cm..]);
-            s += (a + b) * I32x8::splat(t.coef);
-        }
-        let v = sra(s + rnd, 7).max(I32x8::splat(0)).min(I32x8::splat(255));
-        let arr = v.to_array();
-        for k in 0..8 {
-            dst[x + k] = arr[k] as u8;
-        }
-        x += 8;
-    }
-    while x < n {
+    for x in 0..n {
         let c = col0 + x;
         let m = center[c] as i32;
         let mut s = m * center_coef;
@@ -607,7 +618,6 @@ pub(crate) fn pc_wiener_fir_run(
             s += (a + b) * t.coef;
         }
         dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
-        x += 1;
     }
 }
 
@@ -679,5 +689,105 @@ pub(crate) fn gdf_gradient_group(
     let arr = acc.to_array();
     for k in 0..ncells {
         dst[base_cell + k][d] = (arr[2 * k] + arr[2 * k + 1]) as u16;
+    }
+}
+
+#[cfg(test)]
+mod wiener_scalar_proof {
+    use super::*;
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn u8(&mut self) -> u8 {
+            (self.next() & 0xff) as u8
+        }
+        fn range(&mut self, lo: i32, hi: i32) -> i32 {
+            lo + (self.next() % ((hi - lo) as u64 + 1)) as i32
+        }
+    }
+
+    fn buf(rng: &mut Rng, len: usize) -> Vec<u8> {
+        (0..len).map(|_| rng.u8()).collect()
+    }
+
+    #[test]
+    fn ns_wiener_dispatch_matches_scalar() {
+        let mut rng = Rng(0xD15A);
+        let f = ns_wiener_fir_run();
+        for _ in 0..400 {
+            let len = 256usize;
+            let center = buf(&mut rng, len);
+            let n_taps = rng.range(1, 8) as usize;
+            let rows: Vec<(Vec<u8>, Vec<u8>, i32, i32)> = (0..n_taps)
+                .map(|_| {
+                    (
+                        buf(&mut rng, len),
+                        buf(&mut rng, len),
+                        rng.range(1, 16),
+                        rng.range(-64, 64),
+                    )
+                })
+                .collect();
+            let taps: Vec<WienerTap> = rows
+                .iter()
+                .map(|(p, m, dx, coef)| WienerTap {
+                    row_p: p,
+                    row_m: m,
+                    dx: *dx,
+                    coef: *coef,
+                })
+                .collect();
+            let col0 = 64usize;
+            let n = rng.range(1, 100) as usize;
+            let mut d_ref = vec![0u8; n];
+            let mut d_dsp = vec![0u8; n];
+            ns_wiener_fir_run_scalar(&mut d_ref, &center, col0, &taps, n);
+            f(&mut d_dsp, &center, col0, &taps, n);
+            assert_eq!(d_ref, d_dsp, "ns dispatch mismatch n={} taps={}", n, n_taps);
+        }
+    }
+
+    #[test]
+    fn pc_wiener_dispatch_matches_scalar() {
+        let mut rng = Rng(0xD15B);
+        let f = pc_wiener_fir_run();
+        for _ in 0..400 {
+            let len = 256usize;
+            let center = buf(&mut rng, len);
+            let center_coef = rng.range(-128, 128);
+            let n_taps = rng.range(1, 6) as usize;
+            let rows: Vec<(Vec<u8>, Vec<u8>, i32, i32)> = (0..n_taps)
+                .map(|_| {
+                    (
+                        buf(&mut rng, len),
+                        buf(&mut rng, len),
+                        rng.range(1, 16),
+                        rng.range(-64, 64),
+                    )
+                })
+                .collect();
+            let taps: Vec<WienerTap> = rows
+                .iter()
+                .map(|(p, m, dx, coef)| WienerTap {
+                    row_p: p,
+                    row_m: m,
+                    dx: *dx,
+                    coef: *coef,
+                })
+                .collect();
+            let col0 = 64usize;
+            let n = rng.range(1, 100) as usize;
+            let mut d_ref = vec![0u8; n];
+            let mut d_dsp = vec![0u8; n];
+            pc_wiener_fir_run_scalar(&mut d_ref, &center, center_coef, col0, &taps, n);
+            f(&mut d_dsp, &center, center_coef, col0, &taps, n);
+            assert_eq!(d_ref, d_dsp, "pc dispatch mismatch n={} taps={}", n, n_taps);
+        }
     }
 }

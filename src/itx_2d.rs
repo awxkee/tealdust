@@ -1441,6 +1441,434 @@ pub(crate) fn iadst_dequant_16x16_scalar(
     );
 }
 
+/// Rectangular coefficient gather: `W` lanes at column stride `H`, 4 rows deep.
+#[inline(always)]
+fn load_coeff_rows_rect_x4<B: DctSimd4, const W: usize, const H: usize>(
+    coeff: &[i32],
+    y: usize,
+) -> [B::V; W] {
+    unsafe {
+        let zero = B::zero();
+        let mut out = [zero; W];
+        for (x, dst) in out.iter_mut().enumerate() {
+            *dst = B::load_slice(coeff, y + x * H);
+        }
+        out
+    }
+}
+
+/// One group of 4 rows: a `W`-point DCT applied across the `W` gathered lanes.
+#[inline(always)]
+fn process_row_group_rect_x4<B: DctSimd4, const W: usize, const H: usize>(
+    coeff: &[i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    y: usize,
+) {
+    match W {
+        4 => {
+            let mut v = load_coeff_rows_rect_x4::<B, 4, H>(coeff, y);
+            inv_dct4_simd4::<B>(&mut v);
+            store_row_group_x4::<B, 4>(tmp, y, &v);
+        }
+        8 => {
+            let mut v = load_coeff_rows_rect_x4::<B, 8, H>(coeff, y);
+            inv_dct8_simd4::<B>(&mut v);
+            store_row_group_x4::<B, 8>(tmp, y, &v);
+        }
+        16 => {
+            let mut v = load_coeff_rows_rect_x4::<B, 16, H>(coeff, y);
+            inv_dct16_simd4::<B>(&mut v);
+            store_row_group_x4::<B, 16>(tmp, y, &v);
+        }
+        32 => {
+            let mut v = load_coeff_rows_rect_x4::<B, 32, H>(coeff, y);
+            inv_dct32_simd4::<B>(&mut v);
+            store_row_group_x4::<B, 32>(tmp, y, &v);
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// SIMD row pass for the non-rect2 case (mirrors `idct_dequant_rows_dct_simd4`
+/// with separate `W`/`H`).
+fn idct_dequant_rows_rect_dct_simd4<B: DctSimd4, const N: usize, const W: usize, const H: usize>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
+    debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
+    debug_assert!(W * H <= N && N <= coeff.len());
+
+    let coeff = &mut coeff[..N];
+    let off = LAST_EOB_PER_COL.offset[tx] as usize;
+    let last_eob = &LAST_EOB_PER_COL.table[off..];
+    let mut ei = 0usize;
+    let mut y = 0usize;
+
+    loop {
+        process_row_group_rect_x4::<B, W, H>(coeff, tmp, y);
+        y += 4;
+        if eob > last_eob[ei] as i32 {
+            ei += 1;
+        } else {
+            break;
+        }
+    }
+
+    while y < H {
+        row_mut(tmp, y)[..W].fill(0);
+        y += 1;
+    }
+
+    coeff[..W * H].fill(0);
+
+    let rnd0 = (1 << shift0) >> 1;
+    for y in 0..H {
+        crate::simd::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
+    }
+}
+
+/// Scalar row pass (used for the rect2 sizes, mirroring the generic path's
+/// `tx_class == 0` loop with the `* 181 + 128 >> 8` rect2 scaling).
+fn idct_dequant_rows_rect_dct_scalar<const N: usize, const W: usize, const H: usize>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    let coeff = &mut coeff[..N];
+    let off = LAST_EOB_PER_COL.offset[tx] as usize;
+    let last_eob = &LAST_EOB_PER_COL.table[off..];
+    let mut ei = 0usize;
+    let mut row = 0usize;
+
+    loop {
+        let tmp_row = row_mut(tmp, row);
+        for (x, dst) in tmp_row[..W].iter_mut().enumerate() {
+            let v = coeff[row + x * H];
+            *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
+        }
+        dct_1d::<W>(tmp_row, 1);
+        row += 1;
+        if row & 3 == 0 {
+            if eob > last_eob[ei] as i32 {
+                ei += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    while row < H {
+        row_mut(tmp, row)[..W].fill(0);
+        row += 1;
+    }
+
+    coeff[..W * H].fill(0);
+
+    let rnd0 = (1 << shift0) >> 1;
+    for y in 0..H {
+        crate::simd::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
+    }
+}
+
+/// Column pass: an `H`-point DCT down each of the `W` columns, 4 columns at a
+/// time, with a scalar tail.
+#[inline(always)]
+fn rect_col_pass<B: DctSimd4, const W: usize, const H: usize>(tmp: &mut [i32; ITX_TMP_PIXELS]) {
+    let mut x = 0usize;
+    while x + 4 <= W {
+        dct_1d_x4::<B, H>(tmp, x);
+        x += 4;
+    }
+    while x < W {
+        dct_1d::<H>(&mut tmp[x..], ITX_TMP_STRIDE);
+        x += 1;
+    }
+}
+
+/// SIMD-structured rectangular DCT_DCT core (used by the NEON/SSE backends).
+pub(crate) fn idct_dequant_rect_simd4_core<
+    B: DctSimd4,
+    const N: usize,
+    const W: usize,
+    const H: usize,
+>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    if is_rect2 {
+        idct_dequant_rows_rect_dct_scalar::<N, W, H>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    } else {
+        idct_dequant_rows_rect_dct_simd4::<B, N, W, H>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    }
+    rect_col_pass::<B, W, H>(tmp);
+}
+
+/// Pure-scalar rectangular DCT_DCT core (the universal fallback). The column
+/// pass uses the scalar `dct_1d`, matching the generic path exactly.
+pub(crate) fn idct_dequant_rect_scalar_core<const N: usize, const W: usize, const H: usize>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    idct_dequant_rows_rect_dct_scalar::<N, W, H>(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+    );
+    for x in 0..W {
+        dct_1d::<H>(&mut tmp[x..], ITX_TMP_STRIDE);
+    }
+}
+
+// ===========================================================================
+// Non-square (rectangular) ADST / mixed-type cores (DCT / ADST / FLIPADST in
+// either dimension). These mirror the square `itx_dequant_simd4_core`,
+// generalized to independent row width `W` and column height `H`. As in the
+// square case, the rect2 sizes go fully scalar; the non-rect2 sizes use
+// kind-aware SIMD rows and an `H`-point 4-wide column pass. ADST/FLIPADST are
+// only defined for dims <= 16, so `W` and `H` are always in {4, 8, 16} here
+// (which is exactly what `apply_tx*_simd4` and `itx_1d_x4` support).
+// ===========================================================================
+
+/// One group of 4 rows: a kind-aware `W`-point transform across the gathered
+/// lanes (column-major gather at stride `H`).
+#[inline(always)]
+unsafe fn process_row_group_itx_rect_x4<B: DctSimd4, const W: usize, const H: usize>(
+    coeff: &[i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    y: usize,
+    kind: usize,
+) {
+    match W {
+        4 => {
+            let mut v = load_coeff_rows_rect_x4::<B, 4, H>(coeff, y);
+            apply_tx4_simd4::<B>(&mut v, kind);
+            store_row_group_x4::<B, 4>(tmp, y, &v);
+        }
+        8 => {
+            let mut v = load_coeff_rows_rect_x4::<B, 8, H>(coeff, y);
+            apply_tx8_simd4::<B>(&mut v, kind);
+            store_row_group_x4::<B, 8>(tmp, y, &v);
+        }
+        16 => {
+            let mut v = load_coeff_rows_rect_x4::<B, 16, H>(coeff, y);
+            apply_tx16_simd4::<B>(&mut v, kind);
+            store_row_group_x4::<B, 16>(tmp, y, &v);
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Kind-aware SIMD row pass (non-rect2), generalized to `W`/`H`.
+fn itx_dequant_rows_rect_simd4<B: DctSimd4, const N: usize, const W: usize, const H: usize>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+) {
+    debug_assert!(W == 4 || W == 8 || W == 16);
+    debug_assert!(H == 4 || H == 8 || H == 16);
+    debug_assert!(W * H <= N && N <= coeff.len());
+    debug_assert!(is_dct_adst_kind(first_kind));
+
+    let coeff = &mut coeff[..N];
+    let off = LAST_EOB_PER_COL.offset[tx] as usize;
+    let last_eob = &LAST_EOB_PER_COL.table[off..];
+    let mut ei = 0usize;
+    let mut y = 0usize;
+
+    loop {
+        unsafe {
+            process_row_group_itx_rect_x4::<B, W, H>(coeff, tmp, y, first_kind);
+        }
+        y += 4;
+        if eob > last_eob[ei] as i32 {
+            ei += 1;
+        } else {
+            break;
+        }
+    }
+
+    while y < H {
+        row_mut(tmp, y)[..W].fill(0);
+        y += 1;
+    }
+
+    coeff[..W * H].fill(0);
+
+    let rnd0 = (1 << shift0) >> 1;
+    for y in 0..H {
+        crate::simd::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
+    }
+}
+
+/// Pure-scalar kind-aware rectangular core (rect2 sizes + universal fallback).
+/// Mirrors the generic path: scalar rows with rect2 scaling, scalar columns.
+pub(crate) fn itx_dequant_rect_scalar_core<const N: usize, const W: usize, const H: usize>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    debug_assert!(is_dct_adst_kind(first_kind));
+    debug_assert!(is_dct_adst_kind(second_kind));
+
+    let coeff = &mut coeff[..N];
+    let off = LAST_EOB_PER_COL.offset[tx] as usize;
+    let last_eob = &LAST_EOB_PER_COL.table[off..];
+    let mut ei = 0usize;
+    let mut row = 0usize;
+
+    loop {
+        let dst_row = row_mut(tmp, row);
+        for (x, dst) in dst_row[..W].iter_mut().enumerate() {
+            let v = coeff[row + x * H];
+            *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
+        }
+        tx_1d_scalar::<W>(dst_row, 1, first_kind);
+        row += 1;
+        if row & 3 == 0 {
+            if eob > last_eob[ei] as i32 {
+                ei += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    while row < H {
+        row_mut(tmp, row)[..W].fill(0);
+        row += 1;
+    }
+
+    coeff[..W * H].fill(0);
+
+    let rnd0 = (1 << shift0) >> 1;
+    for y in 0..H {
+        crate::simd::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
+    }
+
+    for x in 0..W {
+        tx_1d_scalar::<H>(&mut tmp[x..], ITX_TMP_STRIDE, second_kind);
+    }
+}
+
+/// SIMD-structured kind-aware rectangular core (used by NEON/SSE). Rect2 goes
+/// fully scalar, exactly as the square `itx_dequant_simd4_core` does.
+pub(crate) fn itx_dequant_rect_simd4_core<
+    B: DctSimd4,
+    const N: usize,
+    const W: usize,
+    const H: usize,
+>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    debug_assert!(W == 4 || W == 8 || W == 16);
+    debug_assert!(H == 4 || H == 8 || H == 16);
+
+    if is_rect2 {
+        itx_dequant_rect_scalar_core::<N, W, H>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        );
+        return;
+    }
+
+    itx_dequant_rows_rect_simd4::<B, N, W, H>(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        first_kind,
+    );
+
+    let mut x = 0usize;
+    while x + 4 <= W {
+        unsafe {
+            itx_1d_x4::<B, H>(tmp, x, second_kind);
+        }
+        x += 4;
+    }
+    while x < W {
+        tx_1d_scalar::<H>(&mut tmp[x..], ITX_TMP_STRIDE, second_kind);
+        x += 1;
+    }
+}
+
 static DEQUANT_4X4: OnceLock<IdctDequantFn<16>> = OnceLock::new();
 static DEQUANT_8X8: OnceLock<IdctDequantFn<64>> = OnceLock::new();
 static DEQUANT_16X16: OnceLock<IdctDequantFn<256>> = OnceLock::new();
@@ -1604,6 +2032,390 @@ pub(crate) fn iadst_dequant_16x16() -> IadstDequantFn<256> {
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 f = crate::sse::iadst_dequant_16x16_sse41 as IadstDequantFn<256>;
+            }
+        }
+        f
+    })
+}
+
+// ---- non-square (rectangular) DCT_DCT dispatchers ----
+
+static DEQUANT_RECT_4X8: OnceLock<IdctDequantFn<32>> = OnceLock::new();
+static DEQUANT_RECT_8X4: OnceLock<IdctDequantFn<32>> = OnceLock::new();
+static DEQUANT_RECT_8X16: OnceLock<IdctDequantFn<128>> = OnceLock::new();
+static DEQUANT_RECT_16X8: OnceLock<IdctDequantFn<128>> = OnceLock::new();
+static DEQUANT_RECT_16X32: OnceLock<IdctDequantFn<512>> = OnceLock::new();
+static DEQUANT_RECT_32X16: OnceLock<IdctDequantFn<512>> = OnceLock::new();
+static DEQUANT_RECT_4X16: OnceLock<IdctDequantFn<64>> = OnceLock::new();
+static DEQUANT_RECT_16X4: OnceLock<IdctDequantFn<64>> = OnceLock::new();
+static DEQUANT_RECT_8X32: OnceLock<IdctDequantFn<256>> = OnceLock::new();
+static DEQUANT_RECT_32X8: OnceLock<IdctDequantFn<256>> = OnceLock::new();
+static DEQUANT_RECT_4X32: OnceLock<IdctDequantFn<128>> = OnceLock::new();
+static DEQUANT_RECT_32X4: OnceLock<IdctDequantFn<128>> = OnceLock::new();
+
+#[inline]
+pub(crate) fn idct_dequant_4x8() -> IdctDequantFn<32> {
+    *DEQUANT_RECT_4X8.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<32, 4, 8> as IdctDequantFn<32>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_4x8_neon as IdctDequantFn<32>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_4x8_sse41 as IdctDequantFn<32>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_8x4() -> IdctDequantFn<32> {
+    *DEQUANT_RECT_8X4.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<32, 8, 4> as IdctDequantFn<32>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_8x4_neon as IdctDequantFn<32>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_8x4_sse41 as IdctDequantFn<32>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_8x16() -> IdctDequantFn<128> {
+    *DEQUANT_RECT_8X16.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<128, 8, 16> as IdctDequantFn<128>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_8x16_neon as IdctDequantFn<128>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_8x16_sse41 as IdctDequantFn<128>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_16x8() -> IdctDequantFn<128> {
+    *DEQUANT_RECT_16X8.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<128, 16, 8> as IdctDequantFn<128>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_16x8_neon as IdctDequantFn<128>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_16x8_sse41 as IdctDequantFn<128>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_16x32() -> IdctDequantFn<512> {
+    *DEQUANT_RECT_16X32.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<512, 16, 32> as IdctDequantFn<512>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_16x32_neon as IdctDequantFn<512>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_16x32_sse41 as IdctDequantFn<512>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_32x16() -> IdctDequantFn<512> {
+    *DEQUANT_RECT_32X16.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<512, 32, 16> as IdctDequantFn<512>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_32x16_neon as IdctDequantFn<512>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_32x16_sse41 as IdctDequantFn<512>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_4x16() -> IdctDequantFn<64> {
+    *DEQUANT_RECT_4X16.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<64, 4, 16> as IdctDequantFn<64>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_4x16_neon as IdctDequantFn<64>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_4x16_sse41 as IdctDequantFn<64>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_16x4() -> IdctDequantFn<64> {
+    *DEQUANT_RECT_16X4.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<64, 16, 4> as IdctDequantFn<64>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_16x4_neon as IdctDequantFn<64>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_16x4_sse41 as IdctDequantFn<64>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_8x32() -> IdctDequantFn<256> {
+    *DEQUANT_RECT_8X32.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<256, 8, 32> as IdctDequantFn<256>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_8x32_neon as IdctDequantFn<256>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_8x32_sse41 as IdctDequantFn<256>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_32x8() -> IdctDequantFn<256> {
+    *DEQUANT_RECT_32X8.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<256, 32, 8> as IdctDequantFn<256>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_32x8_neon as IdctDequantFn<256>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_32x8_sse41 as IdctDequantFn<256>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_4x32() -> IdctDequantFn<128> {
+    *DEQUANT_RECT_4X32.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<128, 4, 32> as IdctDequantFn<128>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_4x32_neon as IdctDequantFn<128>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_4x32_sse41 as IdctDequantFn<128>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn idct_dequant_32x4() -> IdctDequantFn<128> {
+    *DEQUANT_RECT_32X4.get_or_init(|| {
+        let mut f = idct_dequant_rect_scalar_core::<128, 32, 4> as IdctDequantFn<128>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::idct_dequant_32x4_neon as IdctDequantFn<128>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::idct_dequant_32x4_sse41 as IdctDequantFn<128>;
+            }
+        }
+        f
+    })
+}
+
+// ---- non-square (rectangular) ADST / mixed-type dispatchers ----
+
+static ADST_DEQUANT_RECT_4X8: OnceLock<IadstDequantFn<32>> = OnceLock::new();
+static ADST_DEQUANT_RECT_8X4: OnceLock<IadstDequantFn<32>> = OnceLock::new();
+static ADST_DEQUANT_RECT_8X16: OnceLock<IadstDequantFn<128>> = OnceLock::new();
+static ADST_DEQUANT_RECT_16X8: OnceLock<IadstDequantFn<128>> = OnceLock::new();
+static ADST_DEQUANT_RECT_4X16: OnceLock<IadstDequantFn<64>> = OnceLock::new();
+static ADST_DEQUANT_RECT_16X4: OnceLock<IadstDequantFn<64>> = OnceLock::new();
+
+#[inline]
+pub(crate) fn iadst_dequant_4x8() -> IadstDequantFn<32> {
+    *ADST_DEQUANT_RECT_4X8.get_or_init(|| {
+        let mut f = itx_dequant_rect_scalar_core::<32, 4, 8> as IadstDequantFn<32>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::iadst_dequant_4x8_neon as IadstDequantFn<32>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::iadst_dequant_4x8_sse41 as IadstDequantFn<32>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn iadst_dequant_8x4() -> IadstDequantFn<32> {
+    *ADST_DEQUANT_RECT_8X4.get_or_init(|| {
+        let mut f = itx_dequant_rect_scalar_core::<32, 8, 4> as IadstDequantFn<32>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::iadst_dequant_8x4_neon as IadstDequantFn<32>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::iadst_dequant_8x4_sse41 as IadstDequantFn<32>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn iadst_dequant_8x16() -> IadstDequantFn<128> {
+    *ADST_DEQUANT_RECT_8X16.get_or_init(|| {
+        let mut f = itx_dequant_rect_scalar_core::<128, 8, 16> as IadstDequantFn<128>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::iadst_dequant_8x16_neon as IadstDequantFn<128>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::iadst_dequant_8x16_sse41 as IadstDequantFn<128>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn iadst_dequant_16x8() -> IadstDequantFn<128> {
+    *ADST_DEQUANT_RECT_16X8.get_or_init(|| {
+        let mut f = itx_dequant_rect_scalar_core::<128, 16, 8> as IadstDequantFn<128>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::iadst_dequant_16x8_neon as IadstDequantFn<128>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::iadst_dequant_16x8_sse41 as IadstDequantFn<128>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn iadst_dequant_4x16() -> IadstDequantFn<64> {
+    *ADST_DEQUANT_RECT_4X16.get_or_init(|| {
+        let mut f = itx_dequant_rect_scalar_core::<64, 4, 16> as IadstDequantFn<64>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::iadst_dequant_4x16_neon as IadstDequantFn<64>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::iadst_dequant_4x16_sse41 as IadstDequantFn<64>;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn iadst_dequant_16x4() -> IadstDequantFn<64> {
+    *ADST_DEQUANT_RECT_16X4.get_or_init(|| {
+        let mut f = itx_dequant_rect_scalar_core::<64, 16, 4> as IadstDequantFn<64>;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::iadst_dequant_16x4_neon as IadstDequantFn<64>;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::iadst_dequant_16x4_sse41 as IadstDequantFn<64>;
             }
         }
         f

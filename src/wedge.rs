@@ -811,6 +811,20 @@ const fn block_size_for_dims(w: usize, h: usize) -> BlockSize {
 /// Initialize all wedge and inter-intra masks.
 ///
 /// Returns a heap-allocated `Masks` struct (~1.7 MB).
+/// Process-wide wedge / interintra masks, built once on first use.
+///
+/// The mask data is content-independent geometry (it depends only on block
+/// dimensions and wedge/interintra parameters, never on pixel data), so there
+/// is no reason to rebuild it per frame. This mirrors dav2d, which builds these
+/// tables once in its cold decoder-open path (`dav2d_init_ii_wedge_masks`).
+static WEDGE_MASKS: std::sync::OnceLock<Box<Masks>> = std::sync::OnceLock::new();
+
+/// Returns the shared masks, initializing them once. Cheap on every call after
+/// the first.
+pub(crate) fn masks() -> &'static Masks {
+    &**WEDGE_MASKS.get_or_init(init_masks)
+}
+
 pub(crate) fn init_masks() -> Box<Masks> {
     let mut masks = Box::new(Masks {
         wedge_offsets: [0u8; WEDGE_OFFSETS_LEN],

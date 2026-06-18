@@ -102,6 +102,7 @@ pub(crate) mod wedge;
 
 mod avif;
 mod data;
+mod decode_partition;
 mod decoder;
 mod error;
 mod headers;

@@ -630,7 +630,7 @@ pub fn ns_wiener_single_y_8bpc(
             }
             let x0 = bx_start << 2;
             let n = (bx - bx_start) << 2;
-            crate::simd::ns_wiener_fir_run(&mut dst_row[x0..x0 + n], refs[4], o + x0, &taps, n);
+            (crate::simd::ns_wiener_fir_run())(&mut dst_row[x0..x0 + n], refs[4], o + x0, &taps, n);
         }
 
         for r in 0..8 {
@@ -895,7 +895,7 @@ fn wiener_multi_8bpc(
                             coef: filter[i] as i32,
                         }
                     });
-                    crate::simd::ns_wiener_fir_run(
+                    (crate::simd::ns_wiener_fir_run())(
                         &mut dst_row[x0..x0 + n],
                         refs[4],
                         col0,
@@ -914,7 +914,7 @@ fn wiener_multi_8bpc(
                             coef: filter[i] as i32,
                         }
                     });
-                    crate::simd::pc_wiener_fir_run(
+                    (crate::simd::pc_wiener_fir_run())(
                         &mut dst_row[x0..x0 + n],
                         refs[4],
                         filter[12] as i32,

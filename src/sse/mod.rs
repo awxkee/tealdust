@@ -28,14 +28,21 @@
  */
 mod ipred;
 mod itx;
+mod looprestoration;
 
 pub(crate) use itx::{
-    iadst_dequant_4x4_sse41, iadst_dequant_8x8_sse41, iadst_dequant_16x16_sse41,
-    idct_dequant_4x4_sse41, idct_dequant_8x8_sse41, idct_dequant_16x16_sse41,
-    idct_dequant_32x32_sse41, idct_dequant_64x64_sse41,
+    iadst_dequant_4x4_neon, iadst_dequant_4x8_neon, iadst_dequant_4x16_neon,
+    iadst_dequant_8x4_neon, iadst_dequant_8x8_neon, iadst_dequant_8x16_neon,
+    iadst_dequant_16x4_neon, iadst_dequant_16x8_neon, iadst_dequant_16x16_neon,
+    idct_dequant_4x4_neon, idct_dequant_4x8_neon, idct_dequant_4x16_neon, idct_dequant_4x32_neon,
+    idct_dequant_8x4_neon, idct_dequant_8x8_neon, idct_dequant_8x16_neon, idct_dequant_8x32_neon,
+    idct_dequant_16x4_neon, idct_dequant_16x8_neon, idct_dequant_16x16_neon,
+    idct_dequant_16x32_neon, idct_dequant_32x4_neon, idct_dequant_32x8_neon,
+    idct_dequant_32x16_neon, idct_dequant_32x32_neon, idct_dequant_64x64_neon,
 };
 
 pub(crate) use ipred::{
     ipred_h_8bpc_sse41, ipred_smooth_8bpc_sse41, ipred_smooth_h_8bpc_sse41,
     ipred_smooth_v_8bpc_sse41, ipred_v_8bpc_sse41,
 };
+pub(crate) use looprestoration::{ns_wiener_fir_run_neon, pc_wiener_fir_run_neon};

@@ -267,7 +267,7 @@ pub(crate) fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
     (s != 0) as u32 + (s > 0) as u32
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn get_lo_ctx(
     levels: &[i8],
     off: usize,
@@ -362,7 +362,7 @@ pub(crate) fn get_lo_ctx(
     offset + ((lo_mag + 1) >> 1).min(lim)
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn get_lo_ctx_idtx(levels: &[i8], off: usize, hi_mag: &mut u32, stride: usize) -> u32 {
     let v0 = levels[off - 1] as u32;
     let v1 = levels[off - stride] as u32;
@@ -372,7 +372,7 @@ pub(crate) fn get_lo_ctx_idtx(levels: &[i8], off: usize, hi_mag: &mut u32, strid
     lo_mag
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn get_sign_ctx_idtx(levels: &[i8], off: usize, stride: usize) -> u32 {
     let sum =
         levels[off - 1] as i32 + levels[off - stride] as i32 + levels[off - stride - 1] as i32;
@@ -774,7 +774,7 @@ pub(crate) fn decode_coefs(
             if (t_dim.w >= 8 && t & 0x02 != 0)
                 || (t_dim.h >= 8 && t & 0x40 != 0)
                 || (p.tx == 2 /* TX_16X16 */
-                && ((t & 0x47 == 0x41) || (t & 0xe2 == 0x22)))
+                    && ((t & 0x47 == 0x41) || (t & 0xe2 == 0x22)))
             {
                 *txtp = txtp::DCT_DCT as u16;
             } else if t == txtp::IDTX_INV {
@@ -1379,7 +1379,7 @@ pub(crate) fn decode_coefs(
         cf[rc] = tok;
         levels[(1 + x) * stride + (y + 1)] = tok as i8;
 
-        for i in (bob + 1)..=sz {
+        for i in (bob + 1)..(sz + 1) {
             let rc = scan[i as usize] as usize;
             let x = rc >> shift;
             let y = rc & mask;
@@ -1398,7 +1398,7 @@ pub(crate) fn decode_coefs(
 
         let dq = p.dq_tbl[1];
         dq_shift -= tcq_en as i32;
-        for i in bob..=sz {
+        for i in bob..(sz + 1) {
             let rc = scan[i as usize] as usize;
             let tok_val = cf[rc];
             if tok_val == 0 {
@@ -1615,7 +1615,11 @@ pub(crate) fn decode_coefs(
                 // sign & dequant for AC
                 tcq_state = if tcq_en { -0x80000000i32 } else { 0 };
                 let ac_dq = p.dq_tbl[1];
-                for i in (1..=eob).rev() {
+                // Exclusive `(1..eob+1).rev()` rather than `(1..=eob).rev()`:
+                // RangeInclusive carries an "exhausted" flag and its iterator
+                // doesn't lower to a clean counter, which showed up as a
+                // distinct `Rev<RangeInclusive>::next` frame in profiles.
+                for i in (1..eob + 1).rev() {
                     if $tx_cl == 0 {
                         rc = if is_stx {
                             i as usize

@@ -29,7 +29,8 @@
 
 use crate::cdf::{CdfModeContext, CdfMvContext};
 use crate::ctx::memset_pow2;
-use crate::env::{BlockContext, get_partition_ctx, get_partition2_ctx, warp_type};
+use crate::decode_partition::decode_partition;
+use crate::env::{BlockContext, warp_type};
 use crate::headers::{
     AdaptiveBoolean, FrameHeader, MAX_SEGMENTS, NSWienerPlane, RestorationType, WarpedMotionParams,
     WarpedMotionType,
@@ -2766,7 +2767,7 @@ pub fn decode_frame_main(fc: &mut crate::internal::FrameContext, n_passes: i32) 
     // `f->seq_hdr->hbd` (0 for 8bpc, 1 for 10/12bpc); used by deblock thresholds.
     let hbd_v: i32 = (bitdepth_v > 8) as i32;
     // once per frame for the compound + interintra recon paths.
-    let masks = crate::wedge::init_masks();
+    let masks = crate::wedge::masks();
     let recon_frame = ReconFrameCtx {
         dq: &*dq,
         qm: &*qm,
@@ -3044,7 +3045,7 @@ pub fn decode_frame_main(fc: &mut crate::internal::FrameContext, n_passes: i32) 
                             &svc_v,
                             seq_hdr,
                             frame_hdr,
-                            &masks,
+                            masks,
                         )?;
                     }
                     by += sb_step;
@@ -15000,218 +15001,33 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
 
     let pl = (lbs == BlockSize::Invalid) as usize;
     let pcc = &PARTITION_SUBB[bs as u8 as usize];
-    let mut bp = BlockPartition::Invalid;
-    let mut cbs = cbs;
-
-    if pass & (Pass::Entropy as u8) != 0 {
-        let bx4 = (*bx & 63) as usize;
-        let by4 = (*by & 63) as usize;
-        let eff_ss_ver = fi.ss_ver & (lbs == BlockSize::Invalid) as i32;
-        let eff_ss_hor = fi.ss_hor & (lbs == BlockSize::Invalid) as i32;
-        let bwh4ss = [bw4 >> eff_ss_hor, bh4 >> eff_ss_ver];
-        assert!(bwh4ss[0] >= 1 && bwh4ss[1] >= 1);
-        let mut dir = -1i32;
-
-        if imax(bwh4ss[0], bwh4ss[1]) == 1 || (pcc.part[0][0] & pcc.part[1][0]) == -1 {
-            bp = BlockPartition::None;
-        } else if !have_h_split || !have_v_split {
-            if bw4 == bh4 {
-                dir = have_v_split as i32;
-                bp = if !have_v_split {
-                    BlockPartition::H
-                } else {
-                    BlockPartition::V
-                };
-            } else if bw4 > bh4 {
-                if !have_h_split || fi.bh <= *by + qh4 {
-                    dir = 1;
-                    bp = BlockPartition::V;
-                }
-            } else {
-                if !have_v_split || fi.bw <= *bx + qw4 {
-                    dir = 0;
-                    bp = BlockPartition::H;
-                }
-            }
-        }
-
-        if bp == BlockPartition::Invalid {
-            if cbs == BlockSize::Bs64x64
-                && lbs == BlockSize::Invalid
-                && ((*dir_ptr & 0xff) == 0xff
-                    || (*dir_ptr & 0x30003) == 0x10002
-                    || (*dir_ptr & 0x30003) == 0x20001)
-            {
-                if (*dir_ptr & 0xff) == 0xff {
-                    bp = BlockPartition::None;
-                } else {
-                    dir = ((*dir_ptr & 0x30003) == 0x10002) as i32;
-                    bp = BlockPartition::from_raw(((*dir_ptr >> 8) & 0xff) as i8);
-                }
-            } else {
-                let mix_inter = fi.is_inter_or_switch && *intra_region == 0;
-                let ctx1 = get_partition_ctx(a, l, b_dim, pl, by4, bx4);
-                let ctx2 = (ctx1 + pcc.ctx[0] as i32 * 4) as usize;
-
-                let is_split = if mix_inter && b_dim[2] + b_dim[3] == 1 {
-                    0u32
-                } else if !have_h_split || !have_v_split {
-                    1u32
-                } else {
-                    msac.decode_bool_adapt(cdf_m.part_split(pl, ctx2))
-                };
-
-                if is_split == 0 {
-                    bp = BlockPartition::None;
-                } else {
-                    if (bs == BlockSize::Bs128x128 || bs == BlockSize::Bs256x256)
-                        && have_v_split
-                        && have_h_split
-                    {
-                        let ctx3 = (ctx1 + (bs == BlockSize::Bs256x256) as i32 * 4) as usize;
-                        let is_square = msac.decode_bool_adapt(cdf_m.part_square(ctx3));
-                        if is_square != 0 {
-                            bp = BlockPartition::Split;
-                        }
-                    } else if imax(bw4, bh4) >= 32 {
-                        bp = if bw4 > bh4 {
-                            BlockPartition::V
-                        } else {
-                            BlockPartition::H
-                        };
-                    }
-
-                    if bp == BlockPartition::Invalid {
-                        let aspect = 1i32 << fi.max_pb_aspect_ratio_log2;
-                        let v_aspect = bw4 * aspect >= bh4 * 2;
-                        let h_aspect = bh4 * aspect >= bw4 * 2;
-                        assert!(v_aspect || h_aspect);
-
-                        if imin(bwh4ss[0], bwh4ss[1]) == 1 {
-                            dir = (bwh4ss[0] > bwh4ss[1]) as i32;
-                        } else if !(v_aspect && h_aspect) {
-                            dir = v_aspect as i32;
-                        } else {
-                            let ctx4 = (ctx1 + pcc.ctx[1] as i32 * 4) as usize;
-
-                            dir = msac.decode_bool_adapt(cdf_m.part_dir(pl, ctx4)) as i32;
-                        }
-                        assert!(pcc.part[dir as usize][0] != -1);
-                        bp = if dir != 0 {
-                            BlockPartition::V
-                        } else {
-                            BlockPartition::H
-                        };
-
-                        if imax(bw4, bh4) <= 16 {
-                            let bwh4ss2 = [bw4 >> fi.ss_hor, bh4 >> fi.ss_ver];
-                            let ndir = (!dir) as usize & 1;
-                            let ddir = dir as usize;
-                            let has_hv3 = fi.ext_partitions
-                                && bwh4ss[ndir] >= 4
-                                && bwh4ss[ddir] >= 2
-                                && b_dim[ndir] as i32 * aspect >= b_dim[ddir] as i32 * 4
-                                && (cbs != lbs
-                                    || (bwh4ss2[ndir] >= 4 && bwh4ss2[ddir] >= 2)
-                                    || (if dir != 0 {
-                                        if lbs == BlockSize::Bs32x8 {
-                                            have_v_split
-                                        } else {
-                                            *bx + qw4 * 3 < fi.bw
-                                        }
-                                    } else {
-                                        if lbs == BlockSize::Bs8x32 {
-                                            have_h_split
-                                        } else {
-                                            *by + qh4 * 3 < fi.bh
-                                        }
-                                    }));
-                            let has_hv4ab = bwh4ss[ndir] >= 8
-                                && fi.uneven_4way
-                                && b_dim[ndir] as i32 * aspect >= b_dim[ddir] as i32 * 8
-                                && (cbs != lbs
-                                    || bwh4ss2[ndir] >= 8
-                                    || (if dir != 0 {
-                                        *bx + (qw4 >> 1) * 7 < fi.bw
-                                    } else {
-                                        *by + (qh4 >> 1) * 7 < fi.bh
-                                    }));
-
-                            if has_hv3 || has_hv4ab {
-                                assert!(pcc.part[ddir][1] != -1);
-                                let ctx5 = get_partition2_ctx(a, l, b_dim, pl, dir, by4, bx4);
-                                let ctx6 = (ctx5 + pcc.ctx[0] as i32 * 4) as usize;
-                                let is_ext = msac.decode_bool_adapt(cdf_m.part_ext(pl, ctx6));
-                                if is_ext != 0 {
-                                    bp = if dir != 0 {
-                                        BlockPartition::V3
-                                    } else {
-                                        BlockPartition::H3
-                                    };
-                                    if has_hv4ab {
-                                        assert!(pcc.part[ddir][2] != -1);
-                                        let is_4way = if !has_hv3 {
-                                            1u32
-                                        } else {
-                                            msac.decode_bool_adapt(cdf_m.part_4way(pl, ctx6))
-                                        };
-                                        if is_4way != 0 {
-                                            let is_a_or_b = msac.decode_bool_bypass();
-                                            bp = BlockPartition::from_raw(
-                                                BlockPartition::H4A as i8
-                                                    + dir as i8 * 2
-                                                    + is_a_or_b as i8,
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        dir += (dir != -1) as i32;
-        if lbs == BlockSize::Invalid && cbs == BlockSize::Bs64x64 {
-            *sdp_cfl_disallowed = (dir != -1 && dir != (*dir_ptr & 0x3)) as i32;
-        }
-        *dir_ptr |= (dir as u8) as i32 | ((bp as i8 as i32) << 8);
-
-        let mut unmix_bit = 0i32;
-        if fi.is_inter_or_switch
-            && fi.ext_sdp
-            && (cbs as i8 | lbs as i8) != BlockSize::Invalid as i8
-            && bp != BlockPartition::None
-            && (*dir_ptr & (1 << 24)) == 0
-            && (bp as i8) < BlockPartition::H4A as i8
-            && imin(bw4, bh4) >= 2
-            && bs != fi.root_bs
-            && imax(bw4, bh4) <= 16
-        {
-            let sz = b_dim[2] as i32 + b_dim[3] as i32;
-            let ctx = iclip(sz - 4, 0, 3) + (sz == 4) as i32;
-            let val = msac.decode_bool_adapt(cdf_m.region_type(ctx as usize));
-            *intra_region = (val == 0) as i32;
-            unmix_bit = *intra_region;
-            if *intra_region != 0 {
-                cbs = BlockSize::Invalid;
-            }
-        }
-        if fi.n_passes > 1 {
-            part_w[*part_w_idx] = bp as u8 | ((unmix_bit as u8) << 7);
-            *part_w_idx += 1;
-        }
-    } else {
-        let val = part_r[*part_r_idx];
-        *part_r_idx += 1;
-        if val & 0x80 != 0 {
-            assert!(*intra_region == 0);
-            *intra_region = 1;
-            cbs = BlockSize::Invalid;
-        }
-        bp = BlockPartition::from_raw((val & 0x7f) as i8);
-    }
+    let (bp, cbs) = decode_partition(
+        fi,
+        bx,
+        by,
+        lbs,
+        cbs,
+        bs,
+        b_dim,
+        bw4,
+        bh4,
+        qw4,
+        qh4,
+        have_h_split,
+        have_v_split,
+        pass,
+        a,
+        l,
+        msac,
+        cdf_m,
+        part_w,
+        part_w_idx,
+        part_r,
+        part_r_idx,
+        intra_region,
+        sdp_cfl_disallowed,
+        dir_ptr,
+    );
 
     if bs == cbs {
         *cbx = *bx;
