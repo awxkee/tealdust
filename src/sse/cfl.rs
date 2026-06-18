@@ -63,38 +63,34 @@ fn store_u8x8(a: &mut [u8; 8], v: __m128i) {
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn ac_pair(top: __m128i, bot: __m128i, ones: __m128i, dc0v: __m128i) -> (__m128i, __m128i) {
-    unsafe {
-        let tsum = _mm_maddubs_epi16(top, ones);
-        let bsum = _mm_maddubs_epi16(bot, ones);
-        let sum16 = _mm_add_epi16(tsum, bsum);
-        let sum_lo = _mm_cvtepu16_epi32(sum16);
-        let sum_hi = _mm_cvtepu16_epi32(_mm_srli_si128(sum16, 8));
-        let ac_lo = _mm_sub_epi32(_mm_slli_epi32(sum_lo, 1), dc0v);
-        let ac_hi = _mm_sub_epi32(_mm_slli_epi32(sum_hi, 1), dc0v);
-        (ac_lo, ac_hi)
-    }
+    let tsum = _mm_maddubs_epi16(top, ones);
+    let bsum = _mm_maddubs_epi16(bot, ones);
+    let sum16 = _mm_add_epi16(tsum, bsum);
+    let sum_lo = _mm_cvtepu16_epi32(sum16);
+    let sum_hi = _mm_cvtepu16_epi32(_mm_srli_si128(sum16, 8));
+    let ac_lo = _mm_sub_epi32(_mm_slli_epi32(sum_lo, 1), dc0v);
+    let ac_hi = _mm_sub_epi32(_mm_slli_epi32(sum_hi, 1), dc0v);
+    (ac_lo, ac_hi)
 }
 
 /// Apply alpha to 8 AC lanes and produce 8 clipped bytes in the low 8 bytes.
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn apply8(ac_lo: __m128i, ac_hi: __m128i, alpha: i32, dc: i32) -> __m128i {
-    unsafe {
-        let av = _mm_set1_epi32(alpha);
-        let dcv = _mm_set1_epi32(dc);
-        let r1024 = _mm_set1_epi32(1024);
+    let av = _mm_set1_epi32(alpha);
+    let dcv = _mm_set1_epi32(dc);
+    let r1024 = _mm_set1_epi32(1024);
 
-        let diff_lo = _mm_mullo_epi32(av, ac_lo);
-        let mag_lo = _mm_srli_epi32(_mm_add_epi32(_mm_abs_epi32(diff_lo), r1024), 11);
-        let val_lo = _mm_add_epi32(dcv, _mm_sign_epi32(mag_lo, diff_lo));
+    let diff_lo = _mm_mullo_epi32(av, ac_lo);
+    let mag_lo = _mm_srli_epi32(_mm_add_epi32(_mm_abs_epi32(diff_lo), r1024), 11);
+    let val_lo = _mm_add_epi32(dcv, _mm_sign_epi32(mag_lo, diff_lo));
 
-        let diff_hi = _mm_mullo_epi32(av, ac_hi);
-        let mag_hi = _mm_srli_epi32(_mm_add_epi32(_mm_abs_epi32(diff_hi), r1024), 11);
-        let val_hi = _mm_add_epi32(dcv, _mm_sign_epi32(mag_hi, diff_hi));
+    let diff_hi = _mm_mullo_epi32(av, ac_hi);
+    let mag_hi = _mm_srli_epi32(_mm_add_epi32(_mm_abs_epi32(diff_hi), r1024), 11);
+    let val_hi = _mm_add_epi32(dcv, _mm_sign_epi32(mag_hi, diff_hi));
 
-        // i32 -> i16 (signed sat) -> u8 (unsigned sat) == clamp(0, 255)
-        _mm_packus_epi16(_mm_packs_epi32(val_lo, val_hi), _mm_setzero_si128())
-    }
+    // i32 -> i16 (signed sat) -> u8 (unsigned sat) == clamp(0, 255)
+    _mm_packus_epi16(_mm_packs_epi32(val_lo, val_hi), _mm_setzero_si128())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -122,15 +118,17 @@ fn cfl_apply_420_8bpc_sse41_impl(
     let xfull = nfull * 8;
     let lfull = nfull * 16;
 
-    let ones = unsafe { _mm_set1_epi8(1) };
-    let dc0v = unsafe { _mm_set1_epi32(dc0) };
+    let ones = _mm_set1_epi8(1);
+    let dc0v = _mm_set1_epi32(dc0);
 
     let mut yrow = yrow0;
     let mut urow = urow0;
     let mut vrow = vrow0;
     for _y in 0..ylim {
         let top = y[yrow..yrow + lfull].as_chunks::<16>().0;
-        let bot = y[yrow + ystride..yrow + ystride + lfull].as_chunks::<16>().0;
+        let bot = y[yrow + ystride..yrow + ystride + lfull]
+            .as_chunks::<16>()
+            .0;
 
         if alpha0 != 0 {
             for ((d, t), b) in u[urow..urow + xfull]

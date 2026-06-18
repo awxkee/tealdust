@@ -87,7 +87,9 @@ pub(crate) fn ipred_v_8bpc_neon(
             .zip(top1.as_chunks::<16>().0.iter())
             .zip(top2.as_chunks::<16>().0.iter())
         {
-            store_u8x16_fixed(d, unsafe { vrhaddq_u8(load_u8x16_fixed(a), load_u8x16_fixed(b)) });
+            store_u8x16_fixed(d, unsafe {
+                vrhaddq_u8(load_u8x16_fixed(a), load_u8x16_fixed(b))
+            });
         }
         let base_x = (width / 16) * 16;
         for (xi, d) in drem.iter_mut().enumerate() {
@@ -235,7 +237,10 @@ pub(crate) fn ipred_smooth_h_8bpc_neon(
             {
                 let dvec = dist8((w - 1 - ci * 8) as i16);
                 let wx = load_u8x8_i16_fixed(wxc);
-                let pred = vaddq_s16(right_v, sra_i16(vaddq_s16(vmulq_s16(diff, dvec), rnd), bwl2));
+                let pred = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff, dvec), rnd), bwl2),
+                );
                 let adj = sra_i16(vaddq_s16(vmulq_s16(vsubq_s16(left_v, pred), wx), add32), 6);
                 store_i16x8_u8_fixed(oc, vaddq_s16(pred, adj));
             }
@@ -344,11 +349,6 @@ pub(crate) fn ipred_smooth_8bpc_neon(
     }
 }
 
-// ---------------------------------------------------------------------------
-// DC family (dc / dc_top / dc_left / dc_128), 8bpc. SIMD edge reduction + fill;
-// IBP-flagged blocks fall back to scalar. Bit-exact with the scalar path.
-// ---------------------------------------------------------------------------
-
 use crate::levels::ANGLE_IBP_FLAG;
 
 #[inline(always)]
@@ -364,12 +364,12 @@ fn store_u8x16_fixed(a: &mut [u8; 16], v: uint8x16_t) {
 #[inline]
 #[target_feature(enable = "neon")]
 fn sum_u8_neon(s: &[u8]) -> u32 {
-    let mut acc = unsafe { vdupq_n_u32(0) };
+    let mut acc = vdupq_n_u32(0);
     let (chunks, rem) = s.as_chunks::<16>();
     for c in chunks.iter() {
-        acc = unsafe { vpadalq_u16(acc, vpaddlq_u8(load_u8x16_fixed(c))) };
+        acc = vpadalq_u16(acc, vpaddlq_u8(load_u8x16_fixed(c)));
     }
-    let mut total = unsafe { vaddvq_u32(acc) };
+    let mut total = vaddvq_u32(acc);
     for &b in rem {
         total += b as u32;
     }
@@ -379,7 +379,7 @@ fn sum_u8_neon(s: &[u8]) -> u32 {
 #[inline]
 #[target_feature(enable = "neon")]
 fn splat_fill_neon(dst: &mut [u8], stride: usize, off: usize, w: usize, h: usize, dc: u8) {
-    let v = unsafe { vdupq_n_u8(dc) };
+    let v = vdupq_n_u8(dc);
     let mut p = off;
     for _ in 0..h {
         let (chunks, rem) = dst[p..p + w].as_chunks_mut::<16>();
@@ -495,10 +495,6 @@ pub(crate) fn ipred_dc_8bpc_neon(
     unsafe { ipred_dc_8bpc_neon_impl(dst, stride, tl, o, w, h, angle) }
 }
 
-// ---------------------------------------------------------------------------
-// Paeth predictor, 8bpc. Mirrors the SSE implementation and the scalar path.
-// ---------------------------------------------------------------------------
-
 #[target_feature(enable = "neon")]
 fn ipred_paeth_8bpc_neon_impl(
     dst: &mut [u8],
@@ -512,30 +508,28 @@ fn ipred_paeth_8bpc_neon_impl(
     if w < 8 {
         return crate::ipred::ipred_paeth_8bpc(dst, stride, tl, o, w, h);
     }
-    let tl_v = unsafe { vdupq_n_s16(topleft as i16) };
+    let tl_v = vdupq_n_s16(topleft as i16);
     let base_x = (w / 8) * 8;
     let mut off = 0;
     for y in 0..h {
         let left = tl[o - 1 - y] as i32;
-        let left_v = unsafe { vdupq_n_s16(left as i16) };
+        let left_v = vdupq_n_s16(left as i16);
         let top_src = &tl[o + 1..o + 1 + w];
         let (rc, rrem) = dst[off..off + w].as_chunks_mut::<8>();
         for (d, t) in rc.iter_mut().zip(top_src.as_chunks::<8>().0.iter()) {
             let top_v = load_u8x8_i16_fixed(t);
-            unsafe {
-                let base = vsubq_s16(vaddq_s16(left_v, top_v), tl_v);
-                let ld = vabsq_s16(vsubq_s16(left_v, base));
-                let td = vabsq_s16(vsubq_s16(top_v, base));
-                let tld = vabsq_s16(vsubq_s16(tl_v, base));
-                let cond_l = vandq_u16(
-                    vceqq_s16(ld, vminq_s16(ld, td)),
-                    vceqq_s16(ld, vminq_s16(ld, tld)),
-                );
-                let cond_t = vceqq_s16(td, vminq_s16(td, tld));
-                let inner = vbslq_s16(cond_t, top_v, tl_v);
-                let res = vbslq_s16(cond_l, left_v, inner);
-                store_i16x8_u8_fixed(d, res);
-            }
+            let base = vsubq_s16(vaddq_s16(left_v, top_v), tl_v);
+            let ld = vabsq_s16(vsubq_s16(left_v, base));
+            let td = vabsq_s16(vsubq_s16(top_v, base));
+            let tld = vabsq_s16(vsubq_s16(tl_v, base));
+            let cond_l = vandq_u16(
+                vceqq_s16(ld, vminq_s16(ld, td)),
+                vceqq_s16(ld, vminq_s16(ld, tld)),
+            );
+            let cond_t = vceqq_s16(td, vminq_s16(td, tld));
+            let inner = vbslq_s16(cond_t, top_v, tl_v);
+            let res = vbslq_s16(cond_l, left_v, inner);
+            store_i16x8_u8_fixed(d, res);
         }
         for (x, d) in rrem.iter_mut().enumerate() {
             let top = tl[o + 1 + base_x + x] as i32;
@@ -564,4 +558,559 @@ pub(crate) fn ipred_paeth_8bpc_neon(
     h: usize,
 ) {
     unsafe { ipred_paeth_8bpc_neon_impl(dst, stride, tl, o, w, h) }
+}
+
+/// 8 bytes -> two i32x4 lanes (ascending): lane k == a[k].
+#[inline(always)]
+fn load8_u8_i32(a: &[u8]) -> (int32x4_t, int32x4_t) {
+    let w = unsafe { vmovl_u8(vld1_u8(a.as_ptr())) };
+    unsafe {
+        (
+            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
+            vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
+        )
+    }
+}
+
+/// 8 bytes -> two i32x4 lanes (reversed): lane k == a[7 - k].
+#[inline(always)]
+fn load8_u8_i32_rev(a: &[u8]) -> (int32x4_t, int32x4_t) {
+    let r = unsafe { vrev64_u8(vld1_u8(a.as_ptr())) };
+    let w = unsafe { vmovl_u8(r) };
+    unsafe {
+        (
+            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
+            vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
+        )
+    }
+}
+
+/// `clamp((a*w0 + b*w1 + c*w2 + d*w3 + 64) >> 7, 0, 255)` packed to 8 u8.
+#[inline(always)]
+fn tap4_pack_neon(
+    a: int32x4_t,
+    b: int32x4_t,
+    c: int32x4_t,
+    d: int32x4_t,
+    rnd: int32x4_t,
+    w0: (int32x4_t, int32x4_t),
+    w1: (int32x4_t, int32x4_t),
+    w2: (int32x4_t, int32x4_t),
+    w3: (int32x4_t, int32x4_t),
+) -> uint8x8_t {
+    unsafe {
+        let acc_lo = vaddq_s32(
+            vaddq_s32(vmulq_s32(a, w0.0), vmulq_s32(b, w1.0)),
+            vaddq_s32(vmulq_s32(c, w2.0), vmulq_s32(d, w3.0)),
+        );
+        let acc_hi = vaddq_s32(
+            vaddq_s32(vmulq_s32(a, w0.1), vmulq_s32(b, w1.1)),
+            vaddq_s32(vmulq_s32(c, w2.1), vmulq_s32(d, w3.1)),
+        );
+        let res_lo = vshrq_n_s32::<7>(vaddq_s32(acc_lo, rnd));
+        let res_hi = vshrq_n_s32::<7>(vaddq_s32(acc_hi, rnd));
+        // saturating narrows == clamp(.,0,255)
+        vqmovn_u16(vcombine_u16(vqmovun_s32(res_lo), vqmovun_s32(res_hi)))
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn z1_luma_row_neon(
+    filt: &[u8],
+    top_off: usize,
+    base0: i32,
+    max_base_x: i32,
+    fill: u8,
+    f: &crate::ipred::DrFilter4Tap,
+    dst_row: &mut [u8],
+    w: usize,
+) {
+    let n_filter = ((max_base_x - base0 + 1).max(0) as usize).min(w);
+    let av = vdupq_n_s32(f.a as i32);
+    let bv = vdupq_n_s32(f.b as i32);
+    let cv = vdupq_n_s32(f.c as i32);
+    let dv = vdupq_n_s32(f.d as i32);
+    let rnd = vdupq_n_s32(64);
+
+    let mut x = 0usize;
+    while x + 8 <= n_filter {
+        let bi = (top_off as i32 + base0) as usize + x;
+        let packed = tap4_pack_neon(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            load8_u8_i32(&filt[bi - 1..bi - 1 + 8]),
+            load8_u8_i32(&filt[bi..bi + 8]),
+            load8_u8_i32(&filt[bi + 1..bi + 1 + 8]),
+            load8_u8_i32(&filt[bi + 2..bi + 2 + 8]),
+        );
+        unsafe { vst1_u8(dst_row[x..x + 8].as_mut_ptr(), packed) };
+        x += 8;
+    }
+    while x < n_filter {
+        let bi = (top_off as i32 + base0) as usize + x;
+        let v = f.a as i32 * filt[bi - 1] as i32
+            + f.b as i32 * filt[bi] as i32
+            + f.c as i32 * filt[bi + 1] as i32
+            + f.d as i32 * filt[bi + 2] as i32;
+        dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        x += 1;
+    }
+    dst_row[n_filter..w].fill(fill);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "neon")]
+fn ipred_z1_8bpc_neon_impl(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    use crate::levels::*;
+    let mrl_mul = angle & ANGLE_MULTI_MRL_FLAG != 0;
+    let is_luma = angle & ANGLE_IS_LUMA != 0;
+    let enable_ibp = angle & ANGLE_IBP_FLAG != 0;
+    let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
+    if mrl_mul || enable_ibp || !is_luma || mrl_idx != 0 || w < 8 {
+        return crate::ipred::ipred_z1_8bpc(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle,
+            max_width,
+            max_height,
+            ibp_weights,
+        );
+    }
+    let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
+    let enable_intra_edge_filter = angle & ANGLE_USE_EDGE_FILTER_FLAG != 0;
+    let have_top = angle & ANGLE_HAS_TOP_FLAG != 0;
+    let a = angle & 511;
+
+    let dx = crate::tables::DR_INTRA_DERIVATIVE[a as usize] as i32;
+    let max_base_x = (w + h) as i32 - 1;
+    let mut filt = [0u8; 141];
+    let top_off = 2usize;
+    let sz = 1 + w + h;
+    let str = if enable_intra_edge_filter && have_top {
+        crate::ipred::get_filter_strength((w + h) as i32, 90 - a, is_sm_t)
+    } else {
+        0
+    };
+    if str > 0 {
+        crate::ipred::filter_edge(
+            &mut filt[1..],
+            sz,
+            1,
+            sz as i32 + max_width - w as i32,
+            &tl[o..],
+            0,
+            sz as i32,
+            str as usize,
+        );
+    } else {
+        filt[1..1 + sz].copy_from_slice(&tl[o..o + sz]);
+    }
+    filt[0] = filt[1];
+    filt[sz + 1] = filt[sz];
+    filt[sz + 2] = filt[sz + 1];
+
+    let mut ypos = dx;
+    for y in 0..h {
+        let base0 = ypos >> 6;
+        let fill = filt[top_off + max_base_x as usize];
+        if base0 > max_base_x {
+            for row in dst.chunks_mut(stride).take(h).skip(y) {
+                row[..w].fill(fill);
+            }
+            break;
+        }
+        let shift = ((ypos & 0x3F) >> 1) as usize;
+        let f = &crate::ipred::DR_INTERP_FILTER[shift];
+        let dst_row = &mut dst[y * stride..y * stride + w];
+        z1_luma_row_neon(&filt, top_off, base0, max_base_x, fill, f, dst_row, w);
+        ypos += dx;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipred_z1_8bpc_neon(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    unsafe {
+        ipred_z1_8bpc_neon_impl(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle,
+            max_width,
+            max_height,
+            ibp_weights,
+        )
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn z3_luma_col_neon(
+    filt: &[u8],
+    left_off: usize,
+    base0: i32,
+    max_base_y: i32,
+    fill: u8,
+    f: &crate::ipred::DrFilter4Tap,
+    col: &mut [u8],
+    h: usize,
+) {
+    let n_filter = ((max_base_y - base0 + 1).max(0) as usize).min(h);
+    let av = vdupq_n_s32(f.a as i32);
+    let bv = vdupq_n_s32(f.b as i32);
+    let cv = vdupq_n_s32(f.c as i32);
+    let dv = vdupq_n_s32(f.d as i32);
+    let rnd = vdupq_n_s32(64);
+
+    let mut y = 0usize;
+    while y + 8 <= n_filter {
+        let bi_j = left_off as i32 - base0 - y as i32;
+        let sa = (bi_j - 6) as usize;
+        let sb = (bi_j - 7) as usize;
+        let sc = (bi_j - 8) as usize;
+        let sd = (bi_j - 9) as usize;
+        let packed = tap4_pack_neon(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            load8_u8_i32_rev(&filt[sa..sa + 8]),
+            load8_u8_i32_rev(&filt[sb..sb + 8]),
+            load8_u8_i32_rev(&filt[sc..sc + 8]),
+            load8_u8_i32_rev(&filt[sd..sd + 8]),
+        );
+        unsafe { vst1_u8(col[y..y + 8].as_mut_ptr(), packed) };
+        y += 8;
+    }
+    while y < n_filter {
+        let bi = (left_off as i32 - base0 - y as i32) as usize;
+        let v = f.a as i32 * filt[bi + 1] as i32
+            + f.b as i32 * filt[bi] as i32
+            + f.c as i32 * filt[bi - 1] as i32
+            + f.d as i32 * filt[bi - 2] as i32;
+        col[y] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        y += 1;
+    }
+    col[n_filter..h].fill(fill);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "neon")]
+fn ipred_z3_8bpc_neon_impl(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    use crate::levels::*;
+    let mrl_mul = angle & ANGLE_MULTI_MRL_FLAG != 0;
+    let is_luma = angle & ANGLE_IS_LUMA != 0;
+    let enable_ibp = angle & ANGLE_IBP_FLAG != 0;
+    let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
+    if mrl_mul || enable_ibp || !is_luma || mrl_idx != 0 || h > 64 {
+        return crate::ipred::ipred_z3_8bpc(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle,
+            max_width,
+            max_height,
+            ibp_weights,
+        );
+    }
+    let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;
+    let enable_intra_edge_filter = angle & ANGLE_USE_EDGE_FILTER_FLAG != 0;
+    let have_left = angle & ANGLE_HAS_LEFT_FLAG != 0;
+    let a = angle & 511;
+
+    let dy = crate::tables::DR_INTRA_DERIVATIVE[(270 - a) as usize] as i32;
+    let max_base_y = (w + h) as i32 - 1;
+    let mut filt = [0u8; 141];
+    let left_off = 1 + w + h;
+    let sz = 1 + w + h;
+    let str = if enable_intra_edge_filter && have_left {
+        crate::ipred::get_filter_strength((w + h) as i32, a - 180, is_sm_l)
+    } else {
+        0
+    };
+    if str > 0 {
+        crate::ipred::filter_edge(
+            &mut filt[2..],
+            sz,
+            h as i32 - max_height,
+            sz as i32 - 1,
+            &tl[o + 1 - sz..],
+            0,
+            sz as i32,
+            str as usize,
+        );
+    } else {
+        filt[2..2 + sz].copy_from_slice(&tl[o + 1 - sz..o + 1]);
+    }
+    filt[0] = filt[2];
+    filt[1] = filt[2];
+    filt[sz + 2] = filt[sz + 1];
+
+    let mut col = [0u8; 64];
+    let mut ypos = dy;
+    for x in 0..w {
+        let shift = ((ypos & 0x3F) >> 1) as usize;
+        let f = &crate::ipred::DR_INTERP_FILTER[shift];
+        let base0 = ypos >> 6;
+        let fill = filt[left_off - max_base_y as usize];
+        z3_luma_col_neon(&filt, left_off, base0, max_base_y, fill, f, &mut col, h);
+        for (y, &c) in col[..h].iter().enumerate() {
+            dst[y * stride + x] = c;
+        }
+        ypos += dy;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipred_z3_8bpc_neon(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    unsafe {
+        ipred_z3_8bpc_neon_impl(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle,
+            max_width,
+            max_height,
+            ibp_weights,
+        )
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn z2_top_span_neon(
+    filt: &[u8],
+    top_off: usize,
+    mut xpos: i32,
+    f: &crate::ipred::DrFilter4Tap,
+    dst_row: &mut [u8],
+    x_start: usize,
+    w: usize,
+) {
+    let av = vdupq_n_s32(f.a as i32);
+    let bv = vdupq_n_s32(f.b as i32);
+    let cv = vdupq_n_s32(f.c as i32);
+    let dv = vdupq_n_s32(f.d as i32);
+    let rnd = vdupq_n_s32(64);
+
+    let mut x = x_start;
+    while x + 8 <= w {
+        let base_x = xpos >> 6;
+        let ti0 = top_off as i32 + base_x;
+        if ti0 + 1 < 0 || ti0 + 12 > filt.len() as i32 {
+            break;
+        }
+        let sa = (ti0 + 1) as usize;
+        let packed = tap4_pack_neon(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            load8_u8_i32(&filt[sa..sa + 8]),
+            load8_u8_i32(&filt[sa + 1..sa + 1 + 8]),
+            load8_u8_i32(&filt[sa + 2..sa + 2 + 8]),
+            load8_u8_i32(&filt[sa + 3..sa + 3 + 8]),
+        );
+        unsafe { vst1_u8(dst_row[x..x + 8].as_mut_ptr(), packed) };
+        x += 8;
+        xpos += 64 * 8;
+    }
+    while x < w {
+        let base_x = xpos >> 6;
+        let ti = (top_off as i32 + base_x) as usize;
+        let v = f.a as i32 * filt[ti + 1] as i32
+            + f.b as i32 * filt[ti + 2] as i32
+            + f.c as i32 * filt[ti + 3] as i32
+            + f.d as i32 * filt[ti + 4] as i32;
+        dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        x += 1;
+        xpos += 64;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "neon")]
+fn ipred_z2_8bpc_neon_impl(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+) {
+    use crate::levels::*;
+    let mrl_mul = angle & ANGLE_MULTI_MRL_FLAG != 0;
+    let is_luma = angle & ANGLE_IS_LUMA != 0;
+    let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
+    if mrl_mul || !is_luma || mrl_idx != 0 {
+        return crate::ipred::ipred_z2_8bpc(dst, stride, tl, o, w, h, angle, max_width, max_height);
+    }
+    let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;
+    let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
+    let enable_intra_edge_filter = angle & ANGLE_USE_EDGE_FILTER_FLAG != 0;
+    let have_top = angle & ANGLE_HAS_TOP_FLAG != 0;
+    let have_left = angle & ANGLE_HAS_LEFT_FLAG != 0;
+    let a = angle & 511;
+
+    let dy = crate::tables::DR_INTRA_DERIVATIVE[(a - 90) as usize] as i32;
+    let dx = crate::tables::DR_INTRA_DERIVATIVE[(180 - a) as usize] as i32;
+
+    let mut filt = [0u8; 72];
+    let top_off = 0usize;
+    let sz_t = 1 + w;
+    let str_t = if enable_intra_edge_filter && have_top {
+        crate::ipred::get_filter_strength((w + h) as i32, a - 90, is_sm_t)
+    } else {
+        0
+    };
+    if str_t > 0 {
+        crate::ipred::filter_edge(
+            &mut filt[1..],
+            sz_t,
+            1,
+            sz_t as i32 + max_width - w as i32,
+            &tl[o..],
+            0,
+            sz_t as i32,
+            str_t as usize,
+        );
+    } else {
+        filt[1..1 + sz_t].copy_from_slice(&tl[o..o + sz_t]);
+    }
+    filt[0] = filt[1];
+    filt[sz_t + 1] = filt[sz_t];
+
+    let mut filt2 = [0u8; 72];
+    let left_off: usize = h + 2;
+    let sz_l = 1 + h;
+    let str_l = if enable_intra_edge_filter && have_left {
+        crate::ipred::get_filter_strength((w + h) as i32, 180 - a, is_sm_l)
+    } else {
+        0
+    };
+    if str_l > 0 {
+        crate::ipred::filter_edge(
+            &mut filt2[1..],
+            sz_l,
+            h as i32 - max_height,
+            sz_l as i32 - 1,
+            &tl[o - h..],
+            0,
+            sz_l as i32,
+            str_l as usize,
+        );
+    } else {
+        filt2[1..1 + sz_l].copy_from_slice(&tl[o - h..o + 1]);
+    }
+    filt2[1 + sz_l] = filt2[sz_l];
+    filt2[0] = filt2[1];
+
+    for y in 0..h {
+        let ypos = (y + 1) as i32;
+        let mut xpos = -ypos * dx;
+        let mut x = 0usize;
+        let dst_row = &mut dst[y * stride..y * stride + w];
+
+        while x < w && xpos < -64 {
+            let xpos_l = (x + 1) as i32;
+            let ypos_l = ((y as i32) << 6) - xpos_l * dy;
+            let base_y = ypos_l >> 6;
+            let shift = ((ypos_l & 0x3F) >> 1) as usize;
+            let bi = (left_off as i32 - base_y) as usize;
+            let f = &crate::ipred::DR_INTERP_FILTER[shift];
+            let v = f.a as i32 * filt2[bi - 1] as i32
+                + f.b as i32 * filt2[bi - 2] as i32
+                + f.c as i32 * filt2[bi - 3] as i32
+                + f.d as i32 * filt2[bi - 4] as i32;
+            dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
+            x += 1;
+            xpos += 64;
+        }
+
+        if x < w {
+            let shift = ((xpos & 0x3F) >> 1) as usize;
+            let f = &crate::ipred::DR_INTERP_FILTER[shift];
+            z2_top_span_neon(&filt, top_off, xpos, f, dst_row, x, w);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipred_z2_8bpc_neon(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+) {
+    unsafe { ipred_z2_8bpc_neon_impl(dst, stride, tl, o, w, h, angle, max_width, max_height) }
 }

@@ -388,14 +388,6 @@ pub(crate) fn ipred_smooth_h_8bpc_sse41(
     unsafe { ipred_smooth_h_8bpc_sse41_impl(dst, stride, tl, o, width, height) }
 }
 
-// ---------------------------------------------------------------------------
-// DC family (dc / dc_top / dc_left / dc_128), 8bpc.
-//
-// The SIMD work is the edge-pixel reduction (`_mm_sad_epu8`) plus a broadcast
-// fill; the rounding/division matches the scalar path bit-for-bit. Blocks that
-// request the intra-boundary (IBP) per-pixel blend fall back to scalar.
-// ---------------------------------------------------------------------------
-
 use crate::levels::ANGLE_IBP_FLAG;
 
 #[inline(always)]
@@ -412,14 +404,14 @@ fn store_u8x16_fixed(a: &mut [u8; 16], v: __m128i) {
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn sum_u8_sse41(s: &[u8]) -> u32 {
-    let zero = unsafe { _mm_setzero_si128() };
+    let zero = _mm_setzero_si128();
     let mut acc = zero;
     let (chunks, rem) = s.as_chunks::<16>();
     for c in chunks.iter() {
         // SAD against zero == sum of the 16 bytes, placed in lanes 0 and 2.
-        acc = unsafe { _mm_add_epi64(acc, _mm_sad_epu8(load_u8x16_fixed(c), zero)) };
+        acc = _mm_add_epi64(acc, _mm_sad_epu8(load_u8x16_fixed(c), zero));
     }
-    let mut total = unsafe { (_mm_extract_epi32::<0>(acc) + _mm_extract_epi32::<2>(acc)) as u32 };
+    let mut total = (_mm_extract_epi32::<0>(acc) + _mm_extract_epi32::<2>(acc)) as u32;
     for &b in rem {
         total += b as u32;
     }
@@ -430,7 +422,7 @@ fn sum_u8_sse41(s: &[u8]) -> u32 {
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn splat_fill_sse41(dst: &mut [u8], stride: usize, off: usize, w: usize, h: usize, dc: u8) {
-    let v = unsafe { _mm_set1_epi8(dc as i8) };
+    let v = _mm_set1_epi8(dc as i8);
     let mut p = off;
     for _ in 0..h {
         let (chunks, rem) = dst[p..p + w].as_chunks_mut::<16>();
@@ -548,11 +540,6 @@ pub(crate) fn ipred_dc_8bpc_sse41(
     unsafe { ipred_dc_8bpc_sse41_impl(dst, stride, tl, o, w, h, angle) }
 }
 
-// ---------------------------------------------------------------------------
-// Paeth predictor, 8bpc. Per pixel: base = left + top - topleft; pick whichever
-// of {left, top, topleft} is closest to `base` (ties prefer left, then top).
-// ---------------------------------------------------------------------------
-
 #[inline(always)]
 fn load_u8x8_i16_fixed(a: &[u8; 8]) -> __m128i {
     unsafe { _mm_cvtepu8_epi16(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
@@ -577,30 +564,28 @@ fn ipred_paeth_8bpc_sse41_impl(
     if w < 8 {
         return crate::ipred::ipred_paeth_8bpc(dst, stride, tl, o, w, h);
     }
-    let tl_v = unsafe { _mm_set1_epi16(topleft as i16) };
+    let tl_v = _mm_set1_epi16(topleft as i16);
     let base_x = (w / 8) * 8;
     let mut off = 0;
     for y in 0..h {
         let left = tl[o - 1 - y] as i32;
-        let left_v = unsafe { _mm_set1_epi16(left as i16) };
+        let left_v = _mm_set1_epi16(left as i16);
         let top_src = &tl[o + 1..o + 1 + w];
         let (rc, rrem) = dst[off..off + w].as_chunks_mut::<8>();
         for (d, t) in rc.iter_mut().zip(top_src.as_chunks::<8>().0.iter()) {
             let top_v = load_u8x8_i16_fixed(t);
-            unsafe {
-                let base = _mm_sub_epi16(_mm_add_epi16(left_v, top_v), tl_v);
-                let ld = _mm_abs_epi16(_mm_sub_epi16(left_v, base));
-                let td = _mm_abs_epi16(_mm_sub_epi16(top_v, base));
-                let tld = _mm_abs_epi16(_mm_sub_epi16(tl_v, base));
-                let cond_l = _mm_and_si128(
-                    _mm_cmpeq_epi16(ld, _mm_min_epi16(ld, td)),
-                    _mm_cmpeq_epi16(ld, _mm_min_epi16(ld, tld)),
-                );
-                let cond_t = _mm_cmpeq_epi16(td, _mm_min_epi16(td, tld));
-                let inner = _mm_blendv_epi8(tl_v, top_v, cond_t);
-                let res = _mm_blendv_epi8(inner, left_v, cond_l);
-                store_i16x8_u8_fixed(d, res);
-            }
+            let base = _mm_sub_epi16(_mm_add_epi16(left_v, top_v), tl_v);
+            let ld = _mm_abs_epi16(_mm_sub_epi16(left_v, base));
+            let td = _mm_abs_epi16(_mm_sub_epi16(top_v, base));
+            let tld = _mm_abs_epi16(_mm_sub_epi16(tl_v, base));
+            let cond_l = _mm_and_si128(
+                _mm_cmpeq_epi16(ld, _mm_min_epi16(ld, td)),
+                _mm_cmpeq_epi16(ld, _mm_min_epi16(ld, tld)),
+            );
+            let cond_t = _mm_cmpeq_epi16(td, _mm_min_epi16(td, tld));
+            let inner = _mm_blendv_epi8(tl_v, top_v, cond_t);
+            let res = _mm_blendv_epi8(inner, left_v, cond_l);
+            store_i16x8_u8_fixed(d, res);
         }
         // scalar remainder columns
         for (x, d) in rrem.iter_mut().enumerate() {
@@ -630,6 +615,590 @@ pub(crate) fn ipred_paeth_8bpc_sse41(
     h: usize,
 ) {
     unsafe { ipred_paeth_8bpc_sse41_impl(dst, stride, tl, o, w, h) }
+}
+
+/// Load 8 bytes and zero-extend to two i32x4 lanes (low 4, high 4).
+#[inline(always)]
+fn load8_u8_i32(a: &[u8]) -> (__m128i, __m128i) {
+    let v = unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) };
+    unsafe {
+        (
+            _mm_cvtepu8_epi32(v),
+            _mm_cvtepu8_epi32(_mm_srli_si128(v, 4)),
+        )
+    }
+}
+
+/// One row of the Z1 luma 4-tap interpolation. Pixels with `base <= max_base_x`
+/// are filtered; the rest of the row is set to `fill`.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn z1_luma_row_sse41(
+    filt: &[u8],
+    top_off: usize,
+    base0: i32,
+    max_base_x: i32,
+    fill: u8,
+    f: &crate::ipred::DrFilter4Tap,
+    dst_row: &mut [u8],
+    w: usize,
+) {
+    let n_filter = ((max_base_x - base0 + 1).max(0) as usize).min(w);
+    let av = _mm_set1_epi32(f.a as i32);
+    let bv = _mm_set1_epi32(f.b as i32);
+    let cv = _mm_set1_epi32(f.c as i32);
+    let dv = _mm_set1_epi32(f.d as i32);
+    let rnd = _mm_set1_epi32(64);
+    let zero = _mm_setzero_si128();
+    let maxv = _mm_set1_epi32(255);
+
+    let mut x = 0usize;
+    while x + 8 <= n_filter {
+        let bi = (top_off as i32 + base0) as usize + x;
+        let w0 = load8_u8_i32(&filt[bi - 1..bi - 1 + 8]);
+        let w1 = load8_u8_i32(&filt[bi..bi + 8]);
+        let w2 = load8_u8_i32(&filt[bi + 1..bi + 1 + 8]);
+        let w3 = load8_u8_i32(&filt[bi + 2..bi + 2 + 8]);
+        unsafe {
+            let acc_lo = _mm_add_epi32(
+                _mm_add_epi32(_mm_mullo_epi32(av, w0.0), _mm_mullo_epi32(bv, w1.0)),
+                _mm_add_epi32(_mm_mullo_epi32(cv, w2.0), _mm_mullo_epi32(dv, w3.0)),
+            );
+            let acc_hi = _mm_add_epi32(
+                _mm_add_epi32(_mm_mullo_epi32(av, w0.1), _mm_mullo_epi32(bv, w1.1)),
+                _mm_add_epi32(_mm_mullo_epi32(cv, w2.1), _mm_mullo_epi32(dv, w3.1)),
+            );
+            let res_lo = _mm_min_epi32(
+                _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_lo, rnd), 7), zero),
+                maxv,
+            );
+            let res_hi = _mm_min_epi32(
+                _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_hi, rnd), 7), zero),
+                maxv,
+            );
+            let packed = _mm_packus_epi16(_mm_packus_epi32(res_lo, res_hi), zero);
+            _mm_storel_epi64(dst_row[x..x + 8].as_mut_ptr() as *mut __m128i, packed);
+        }
+        x += 8;
+    }
+    while x < n_filter {
+        let bi = (top_off as i32 + base0) as usize + x;
+        let v = f.a as i32 * filt[bi - 1] as i32
+            + f.b as i32 * filt[bi] as i32
+            + f.c as i32 * filt[bi + 1] as i32
+            + f.d as i32 * filt[bi + 2] as i32;
+        dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        x += 1;
+    }
+    dst_row[n_filter..w].fill(fill);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "sse4.1")]
+fn ipred_z1_8bpc_sse41_impl(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    use crate::levels::*;
+    let mrl_mul = angle & ANGLE_MULTI_MRL_FLAG != 0;
+    let is_luma = angle & ANGLE_IS_LUMA != 0;
+    let enable_ibp = angle & ANGLE_IBP_FLAG != 0;
+    let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
+    // Common luma path only; defer everything else to the scalar reference.
+    if mrl_mul || enable_ibp || !is_luma || mrl_idx != 0 || w < 8 {
+        return crate::ipred::ipred_z1_8bpc(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle,
+            max_width,
+            max_height,
+            ibp_weights,
+        );
+    }
+    let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
+    let enable_intra_edge_filter = angle & ANGLE_USE_EDGE_FILTER_FLAG != 0;
+    let have_top = angle & ANGLE_HAS_TOP_FLAG != 0;
+    let a = angle & 511;
+
+    let dx = crate::tables::DR_INTRA_DERIVATIVE[a as usize] as i32;
+    let max_base_x = (w + h) as i32 - 1;
+    let mut filt = [0u8; 141];
+    let top_off = 2usize;
+    let sz = 1 + w + h;
+    let str = if enable_intra_edge_filter && have_top {
+        crate::ipred::get_filter_strength((w + h) as i32, 90 - a, is_sm_t)
+    } else {
+        0
+    };
+    if str > 0 {
+        crate::ipred::filter_edge(
+            &mut filt[1..],
+            sz,
+            1,
+            sz as i32 + max_width - w as i32,
+            &tl[o..],
+            0,
+            sz as i32,
+            str as usize,
+        );
+    } else {
+        filt[1..1 + sz].copy_from_slice(&tl[o..o + sz]);
+    }
+    filt[0] = filt[1];
+    filt[sz + 1] = filt[sz];
+    filt[sz + 2] = filt[sz + 1];
+
+    let mut ypos = dx;
+    for y in 0..h {
+        let base0 = ypos >> 6;
+        let fill = filt[top_off + max_base_x as usize];
+        if base0 > max_base_x {
+            for row in dst.chunks_mut(stride).take(h).skip(y) {
+                row[..w].fill(fill);
+            }
+            break;
+        }
+        let shift = ((ypos & 0x3F) >> 1) as usize;
+        let f = &crate::ipred::DR_INTERP_FILTER[shift];
+        let dst_row = &mut dst[y * stride..y * stride + w];
+        z1_luma_row_sse41(&filt, top_off, base0, max_base_x, fill, f, dst_row, w);
+        ypos += dx;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipred_z1_8bpc_sse41(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    unsafe {
+        ipred_z1_8bpc_sse41_impl(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle,
+            max_width,
+            max_height,
+            ibp_weights,
+        )
+    }
+}
+
+/// Load 8 bytes and zero-extend to two i32x4 lanes, REVERSED: lane `k` holds
+/// `a[7 - k]`.
+#[inline(always)]
+fn load8_u8_i32_rev(a: &[u8]) -> (__m128i, __m128i) {
+    let v = unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) };
+    let mask = unsafe { _mm_setr_epi8(7, 6, 5, 4, 3, 2, 1, 0, -1, -1, -1, -1, -1, -1, -1, -1) };
+    let rev = unsafe { _mm_shuffle_epi8(v, mask) };
+    unsafe {
+        (
+            _mm_cvtepu8_epi32(rev),
+            _mm_cvtepu8_epi32(_mm_srli_si128(rev, 4)),
+        )
+    }
+}
+
+/// Fill `col[0..h]` for one Z3 column: filtered where `base <= max_base_y`,
+/// else `fill`.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn z3_luma_col_sse41(
+    filt: &[u8],
+    left_off: usize,
+    base0: i32,
+    max_base_y: i32,
+    fill: u8,
+    f: &crate::ipred::DrFilter4Tap,
+    col: &mut [u8],
+    h: usize,
+) {
+    let n_filter = ((max_base_y - base0 + 1).max(0) as usize).min(h);
+    let av = _mm_set1_epi32(f.a as i32);
+    let bv = _mm_set1_epi32(f.b as i32);
+    let cv = _mm_set1_epi32(f.c as i32);
+    let dv = _mm_set1_epi32(f.d as i32);
+    let rnd = _mm_set1_epi32(64);
+    let zero = _mm_setzero_si128();
+    let maxv = _mm_set1_epi32(255);
+
+    let mut y = 0usize;
+    while y + 8 <= n_filter {
+        let bi_j = left_off as i32 - base0 - y as i32;
+        // tap a/b/c/d read filt[bi+1], filt[bi], filt[bi-1], filt[bi-2]; the
+        // reversed windows start at bi_j-6, bi_j-7, bi_j-8, bi_j-9.
+        let sa = (bi_j - 6) as usize;
+        let sb = (bi_j - 7) as usize;
+        let sc = (bi_j - 8) as usize;
+        let sd = (bi_j - 9) as usize;
+        let wa = load8_u8_i32_rev(&filt[sa..sa + 8]);
+        let wb = load8_u8_i32_rev(&filt[sb..sb + 8]);
+        let wc = load8_u8_i32_rev(&filt[sc..sc + 8]);
+        let wd = load8_u8_i32_rev(&filt[sd..sd + 8]);
+        let acc_lo = _mm_add_epi32(
+            _mm_add_epi32(_mm_mullo_epi32(av, wa.0), _mm_mullo_epi32(bv, wb.0)),
+            _mm_add_epi32(_mm_mullo_epi32(cv, wc.0), _mm_mullo_epi32(dv, wd.0)),
+        );
+        let acc_hi = _mm_add_epi32(
+            _mm_add_epi32(_mm_mullo_epi32(av, wa.1), _mm_mullo_epi32(bv, wb.1)),
+            _mm_add_epi32(_mm_mullo_epi32(cv, wc.1), _mm_mullo_epi32(dv, wd.1)),
+        );
+        let res_lo = _mm_min_epi32(
+            _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_lo, rnd), 7), zero),
+            maxv,
+        );
+        let res_hi = _mm_min_epi32(
+            _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_hi, rnd), 7), zero),
+            maxv,
+        );
+        let packed = _mm_packus_epi16(_mm_packus_epi32(res_lo, res_hi), zero);
+        unsafe {
+            _mm_storel_epi64(col[y..y + 8].as_mut_ptr() as *mut __m128i, packed);
+        }
+        y += 8;
+    }
+    while y < n_filter {
+        let bi = (left_off as i32 - base0 - y as i32) as usize;
+        let v = f.a as i32 * filt[bi + 1] as i32
+            + f.b as i32 * filt[bi] as i32
+            + f.c as i32 * filt[bi - 1] as i32
+            + f.d as i32 * filt[bi - 2] as i32;
+        col[y] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        y += 1;
+    }
+    col[n_filter..h].fill(fill);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "sse4.1")]
+fn ipred_z3_8bpc_sse41_impl(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    use crate::levels::*;
+    let mrl_mul = angle & ANGLE_MULTI_MRL_FLAG != 0;
+    let is_luma = angle & ANGLE_IS_LUMA != 0;
+    let enable_ibp = angle & ANGLE_IBP_FLAG != 0;
+    let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
+    if mrl_mul || enable_ibp || !is_luma || mrl_idx != 0 || h > 64 {
+        return crate::ipred::ipred_z3_8bpc(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle,
+            max_width,
+            max_height,
+            ibp_weights,
+        );
+    }
+    let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;
+    let enable_intra_edge_filter = angle & ANGLE_USE_EDGE_FILTER_FLAG != 0;
+    let have_left = angle & ANGLE_HAS_LEFT_FLAG != 0;
+    let a = angle & 511;
+
+    let dy = crate::tables::DR_INTRA_DERIVATIVE[(270 - a) as usize] as i32;
+    let max_base_y = (w + h) as i32 - 1;
+    let mut filt = [0u8; 141];
+    let left_off = 1 + w + h;
+    let sz = 1 + w + h;
+    let str = if enable_intra_edge_filter && have_left {
+        crate::ipred::get_filter_strength((w + h) as i32, a - 180, is_sm_l)
+    } else {
+        0
+    };
+    if str > 0 {
+        crate::ipred::filter_edge(
+            &mut filt[2..],
+            sz,
+            h as i32 - max_height,
+            sz as i32 - 1,
+            &tl[o + 1 - sz..],
+            0,
+            sz as i32,
+            str as usize,
+        );
+    } else {
+        filt[2..2 + sz].copy_from_slice(&tl[o + 1 - sz..o + 1]);
+    }
+    filt[0] = filt[2];
+    filt[1] = filt[2];
+    filt[sz + 2] = filt[sz + 1];
+
+    let mut col = [0u8; 64];
+    let mut ypos = dy;
+    for x in 0..w {
+        let shift = ((ypos & 0x3F) >> 1) as usize;
+        let f = &crate::ipred::DR_INTERP_FILTER[shift];
+        let base0 = ypos >> 6;
+        let fill = filt[left_off - max_base_y as usize];
+        z3_luma_col_sse41(&filt, left_off, base0, max_base_y, fill, f, &mut col, h);
+        for (y, &c) in col[..h].iter().enumerate() {
+            dst[y * stride + x] = c;
+        }
+        ypos += dy;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipred_z3_8bpc_sse41(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    unsafe {
+        ipred_z3_8bpc_sse41_impl(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle,
+            max_width,
+            max_height,
+            ibp_weights,
+        )
+    }
+}
+
+/// Fill `dst_row[x_start..w]` from the top reference; `xpos0` is `xpos` at
+/// `x_start` and `f`/`shift` are constant across the span.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn z2_top_span_sse41(
+    filt: &[u8],
+    top_off: usize,
+    mut xpos: i32,
+    f: &crate::ipred::DrFilter4Tap,
+    dst_row: &mut [u8],
+    x_start: usize,
+    w: usize,
+) {
+    let av = _mm_set1_epi32(f.a as i32);
+    let bv = _mm_set1_epi32(f.b as i32);
+    let cv = _mm_set1_epi32(f.c as i32);
+    let dv = _mm_set1_epi32(f.d as i32);
+    let rnd = _mm_set1_epi32(64);
+    let zero = _mm_setzero_si128();
+    let maxv = _mm_set1_epi32(255);
+
+    let mut x = x_start;
+    while x + 8 <= w {
+        let base_x = xpos >> 6;
+        let ti0 = top_off as i32 + base_x;
+        // Keep every lane's window (filt[ti+1..=ti+4] for ti0..ti0+7) in bounds.
+        if ti0 + 1 < 0 || ti0 + 12 > filt.len() as i32 {
+            break;
+        }
+        let sa = (ti0 + 1) as usize;
+        let w0 = load8_u8_i32(&filt[sa..sa + 8]);
+        let w1 = load8_u8_i32(&filt[sa + 1..sa + 1 + 8]);
+        let w2 = load8_u8_i32(&filt[sa + 2..sa + 2 + 8]);
+        let w3 = load8_u8_i32(&filt[sa + 3..sa + 3 + 8]);
+        unsafe {
+            let acc_lo = _mm_add_epi32(
+                _mm_add_epi32(_mm_mullo_epi32(av, w0.0), _mm_mullo_epi32(bv, w1.0)),
+                _mm_add_epi32(_mm_mullo_epi32(cv, w2.0), _mm_mullo_epi32(dv, w3.0)),
+            );
+            let acc_hi = _mm_add_epi32(
+                _mm_add_epi32(_mm_mullo_epi32(av, w0.1), _mm_mullo_epi32(bv, w1.1)),
+                _mm_add_epi32(_mm_mullo_epi32(cv, w2.1), _mm_mullo_epi32(dv, w3.1)),
+            );
+            let res_lo = _mm_min_epi32(
+                _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_lo, rnd), 7), zero),
+                maxv,
+            );
+            let res_hi = _mm_min_epi32(
+                _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_hi, rnd), 7), zero),
+                maxv,
+            );
+            let packed = _mm_packus_epi16(_mm_packus_epi32(res_lo, res_hi), zero);
+            _mm_storel_epi64(dst_row[x..x + 8].as_mut_ptr() as *mut __m128i, packed);
+        }
+        x += 8;
+        xpos += 64 * 8;
+    }
+    while x < w {
+        let base_x = xpos >> 6;
+        let ti = (top_off as i32 + base_x) as usize;
+        let v = f.a as i32 * filt[ti + 1] as i32
+            + f.b as i32 * filt[ti + 2] as i32
+            + f.c as i32 * filt[ti + 3] as i32
+            + f.d as i32 * filt[ti + 4] as i32;
+        dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        x += 1;
+        xpos += 64;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "sse4.1")]
+fn ipred_z2_8bpc_sse41_impl(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+) {
+    use crate::levels::*;
+    let mrl_mul = angle & ANGLE_MULTI_MRL_FLAG != 0;
+    let is_luma = angle & ANGLE_IS_LUMA != 0;
+    let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
+    if mrl_mul || !is_luma || mrl_idx != 0 {
+        return crate::ipred::ipred_z2_8bpc(dst, stride, tl, o, w, h, angle, max_width, max_height);
+    }
+    let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;
+    let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
+    let enable_intra_edge_filter = angle & ANGLE_USE_EDGE_FILTER_FLAG != 0;
+    let have_top = angle & ANGLE_HAS_TOP_FLAG != 0;
+    let have_left = angle & ANGLE_HAS_LEFT_FLAG != 0;
+    let a = angle & 511;
+
+    let dy = crate::tables::DR_INTRA_DERIVATIVE[(a - 90) as usize] as i32;
+    let dx = crate::tables::DR_INTRA_DERIVATIVE[(180 - a) as usize] as i32;
+
+    // Top edge buffer.
+    let mut filt = [0u8; 72];
+    let top_off = 0usize;
+    let sz_t = 1 + w;
+    let str_t = if enable_intra_edge_filter && have_top {
+        crate::ipred::get_filter_strength((w + h) as i32, a - 90, is_sm_t)
+    } else {
+        0
+    };
+    if str_t > 0 {
+        crate::ipred::filter_edge(
+            &mut filt[1..],
+            sz_t,
+            1,
+            sz_t as i32 + max_width - w as i32,
+            &tl[o..],
+            0,
+            sz_t as i32,
+            str_t as usize,
+        );
+    } else {
+        filt[1..1 + sz_t].copy_from_slice(&tl[o..o + sz_t]);
+    }
+    filt[0] = filt[1];
+    filt[sz_t + 1] = filt[sz_t];
+
+    // Left edge buffer.
+    let mut filt2 = [0u8; 72];
+    let left_off: usize = h + 2;
+    let sz_l = 1 + h;
+    let str_l = if enable_intra_edge_filter && have_left {
+        crate::ipred::get_filter_strength((w + h) as i32, 180 - a, is_sm_l)
+    } else {
+        0
+    };
+    if str_l > 0 {
+        crate::ipred::filter_edge(
+            &mut filt2[1..],
+            sz_l,
+            h as i32 - max_height,
+            sz_l as i32 - 1,
+            &tl[o - h..],
+            0,
+            sz_l as i32,
+            str_l as usize,
+        );
+    } else {
+        filt2[1..1 + sz_l].copy_from_slice(&tl[o - h..o + 1]);
+    }
+    filt2[1 + sz_l] = filt2[sz_l];
+    filt2[0] = filt2[1];
+
+    for y in 0..h {
+        let ypos = (y + 1) as i32;
+        let mut xpos = -ypos * dx;
+        let mut x = 0usize;
+        let dst_row = &mut dst[y * stride..y * stride + w];
+
+        // Left reference span (scalar: shift varies per pixel).
+        while x < w && xpos < -64 {
+            let xpos_l = (x + 1) as i32;
+            let ypos_l = ((y as i32) << 6) - xpos_l * dy;
+            let base_y = ypos_l >> 6;
+            let shift = ((ypos_l & 0x3F) >> 1) as usize;
+            let bi = (left_off as i32 - base_y) as usize;
+            let f = &crate::ipred::DR_INTERP_FILTER[shift];
+            let v = f.a as i32 * filt2[bi - 1] as i32
+                + f.b as i32 * filt2[bi - 2] as i32
+                + f.c as i32 * filt2[bi - 3] as i32
+                + f.d as i32 * filt2[bi - 4] as i32;
+            dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
+            x += 1;
+            xpos += 64;
+        }
+
+        // Top reference span (shift constant for the row).
+        if x < w {
+            let shift = ((xpos & 0x3F) >> 1) as usize;
+            let f = &crate::ipred::DR_INTERP_FILTER[shift];
+            z2_top_span_sse41(&filt, top_off, xpos, f, dst_row, x, w);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipred_z2_8bpc_sse41(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+) {
+    unsafe { ipred_z2_8bpc_sse41_impl(dst, stride, tl, o, w, h, angle, max_width, max_height) }
 }
 
 #[cfg(test)]
@@ -815,6 +1384,129 @@ mod tests {
             crate::ipred::ipred_h_8bpc(&mut a, stride, &tl, o, w, h, angle);
             ipred_h_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
             assert_eq!(a, b, "h_mrl mismatch w={} h={}", w, h);
+        }
+    }
+
+    #[test]
+    fn z1_luma_matches_scalar() {
+        if !std::is_x86_feature_detected!("sse4.1") {
+            return;
+        }
+        use crate::levels::*;
+        let ibp = [[[0u8; 16]; 16]; 7];
+        let base_flags = ANGLE_IS_LUMA | ANGLE_HAS_TOP_FLAG;
+        for &(w, h) in SIZES {
+            let sz = 1 + w + h;
+            let o = 16usize;
+            let maxd = (w + h) as i32;
+            let len = o + sz + (w + h) + 64;
+            let mut tl = vec![0u8; len];
+            let mut s = 0x7a7a + w as u64 * 13 + h as u64;
+            for v in tl.iter_mut() {
+                *v = lcg(&mut s);
+            }
+            let stride = w;
+            for a in [3i32, 30, 45, 63, 87] {
+                for extra in [
+                    0,
+                    ANGLE_USE_EDGE_FILTER_FLAG,
+                    ANGLE_USE_EDGE_FILTER_FLAG | ANGLE_SMOOTH_TOP_EDGE_FLAG,
+                ] {
+                    let angle = a | base_flags | extra;
+                    let mut sa = vec![0u8; stride * h];
+                    let mut sb = vec![0u8; stride * h];
+                    crate::ipred::ipred_z1_8bpc(
+                        &mut sa, stride, &tl, o, w, h, angle, maxd, maxd, &ibp,
+                    );
+                    ipred_z1_8bpc_sse41(&mut sb, stride, &tl, o, w, h, angle, maxd, maxd, &ibp);
+                    assert_eq!(
+                        sa, sb,
+                        "z1 mismatch w={} h={} a={} extra={:#x}",
+                        w, h, a, extra
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn z3_luma_matches_scalar() {
+        if !std::is_x86_feature_detected!("sse4.1") {
+            return;
+        }
+        use crate::levels::*;
+        let ibp = [[[0u8; 16]; 16]; 7];
+        let base_flags = ANGLE_IS_LUMA | ANGLE_HAS_LEFT_FLAG;
+        for &(w, h) in SIZES {
+            let o = w + h + 8;
+            let maxd = (w + h) as i32;
+            let len = o + 16;
+            let mut tl = vec![0u8; len];
+            let mut s = 0x5d5d + w as u64 * 11 + h as u64;
+            for v in tl.iter_mut() {
+                *v = lcg(&mut s);
+            }
+            let stride = w;
+            for a in [183i32, 200, 225, 250, 267] {
+                for extra in [
+                    0,
+                    ANGLE_USE_EDGE_FILTER_FLAG,
+                    ANGLE_USE_EDGE_FILTER_FLAG | ANGLE_SMOOTH_LEFT_EDGE_FLAG,
+                ] {
+                    let angle = a | base_flags | extra;
+                    let mut sa = vec![0u8; stride * h];
+                    let mut sb = vec![0u8; stride * h];
+                    crate::ipred::ipred_z3_8bpc(
+                        &mut sa, stride, &tl, o, w, h, angle, maxd, maxd, &ibp,
+                    );
+                    ipred_z3_8bpc_sse41(&mut sb, stride, &tl, o, w, h, angle, maxd, maxd, &ibp);
+                    assert_eq!(
+                        sa, sb,
+                        "z3 mismatch w={} h={} a={} extra={:#x}",
+                        w, h, a, extra
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn z2_luma_matches_scalar() {
+        if !std::is_x86_feature_detected!("sse4.1") {
+            return;
+        }
+        use crate::levels::*;
+        let base_flags = ANGLE_IS_LUMA | ANGLE_HAS_TOP_FLAG | ANGLE_HAS_LEFT_FLAG;
+        for &(w, h) in SIZES {
+            let o = h + 8;
+            let maxd = (w + h) as i32;
+            let len = o + 1 + w + 16;
+            let mut tl = vec![0u8; len];
+            let mut s = 0x6c6c + w as u64 * 19 + h as u64;
+            for v in tl.iter_mut() {
+                *v = lcg(&mut s);
+            }
+            let stride = w;
+            for a in [100i32, 120, 135, 150, 170] {
+                for extra in [
+                    0,
+                    ANGLE_USE_EDGE_FILTER_FLAG,
+                    ANGLE_USE_EDGE_FILTER_FLAG
+                        | ANGLE_SMOOTH_TOP_EDGE_FLAG
+                        | ANGLE_SMOOTH_LEFT_EDGE_FLAG,
+                ] {
+                    let angle = a | base_flags | extra;
+                    let mut sa = vec![0u8; stride * h];
+                    let mut sb = vec![0u8; stride * h];
+                    crate::ipred::ipred_z2_8bpc(&mut sa, stride, &tl, o, w, h, angle, maxd, maxd);
+                    ipred_z2_8bpc_sse41(&mut sb, stride, &tl, o, w, h, angle, maxd, maxd);
+                    assert_eq!(
+                        sa, sb,
+                        "z2 mismatch w={} h={} a={} extra={:#x}",
+                        w, h, a, extra
+                    );
+                }
+            }
         }
     }
 }

@@ -57,39 +57,35 @@ fn store_u8x8(a: &mut [u8; 8], v: uint8x8_t) {
 #[inline]
 #[target_feature(enable = "neon")]
 fn ac_pair(top: uint8x16_t, bot: uint8x16_t, dc0v: int32x4_t) -> (int32x4_t, int32x4_t) {
-    unsafe {
-        let sum16 = vaddq_u16(vpaddlq_u8(top), vpaddlq_u8(bot));
-        let sum_lo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(sum16)));
-        let sum_hi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(sum16)));
-        let ac_lo = vsubq_s32(vshlq_n_s32::<1>(sum_lo), dc0v);
-        let ac_hi = vsubq_s32(vshlq_n_s32::<1>(sum_hi), dc0v);
-        (ac_lo, ac_hi)
-    }
+    let sum16 = vaddq_u16(vpaddlq_u8(top), vpaddlq_u8(bot));
+    let sum_lo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(sum16)));
+    let sum_hi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(sum16)));
+    let ac_lo = vsubq_s32(vshlq_n_s32::<1>(sum_lo), dc0v);
+    let ac_hi = vsubq_s32(vshlq_n_s32::<1>(sum_hi), dc0v);
+    (ac_lo, ac_hi)
 }
 
 /// Apply alpha to 8 AC lanes and produce 8 clipped bytes.
 #[inline]
 #[target_feature(enable = "neon")]
 fn apply8(ac_lo: int32x4_t, ac_hi: int32x4_t, alpha: i32, dc: i32) -> uint8x8_t {
-    unsafe {
-        let av = vdupq_n_s32(alpha);
-        let dcv = vdupq_n_s32(dc);
-        let r1024 = vdupq_n_s32(1024);
-        let zero = vdupq_n_s32(0);
+    let av = vdupq_n_s32(alpha);
+    let dcv = vdupq_n_s32(dc);
+    let r1024 = vdupq_n_s32(1024);
+    let zero = vdupq_n_s32(0);
 
-        let diff_lo = vmulq_s32(av, ac_lo);
-        let mag_lo = vshrq_n_s32::<11>(vaddq_s32(vabsq_s32(diff_lo), r1024));
-        let signed_lo = vbslq_s32(vcltq_s32(diff_lo, zero), vnegq_s32(mag_lo), mag_lo);
-        let val_lo = vaddq_s32(dcv, signed_lo);
+    let diff_lo = vmulq_s32(av, ac_lo);
+    let mag_lo = vshrq_n_s32::<11>(vaddq_s32(vabsq_s32(diff_lo), r1024));
+    let signed_lo = vbslq_s32(vcltq_s32(diff_lo, zero), vnegq_s32(mag_lo), mag_lo);
+    let val_lo = vaddq_s32(dcv, signed_lo);
 
-        let diff_hi = vmulq_s32(av, ac_hi);
-        let mag_hi = vshrq_n_s32::<11>(vaddq_s32(vabsq_s32(diff_hi), r1024));
-        let signed_hi = vbslq_s32(vcltq_s32(diff_hi, zero), vnegq_s32(mag_hi), mag_hi);
-        let val_hi = vaddq_s32(dcv, signed_hi);
+    let diff_hi = vmulq_s32(av, ac_hi);
+    let mag_hi = vshrq_n_s32::<11>(vaddq_s32(vabsq_s32(diff_hi), r1024));
+    let signed_hi = vbslq_s32(vcltq_s32(diff_hi, zero), vnegq_s32(mag_hi), mag_hi);
+    let val_hi = vaddq_s32(dcv, signed_hi);
 
-        // i32 -> u16 (sat, negatives -> 0) -> u8 (sat to 255) == clamp(0,255)
-        vqmovn_u16(vcombine_u16(vqmovun_s32(val_lo), vqmovun_s32(val_hi)))
-    }
+    // i32 -> u16 (sat, negatives -> 0) -> u8 (sat to 255) == clamp(0,255)
+    vqmovn_u16(vcombine_u16(vqmovun_s32(val_lo), vqmovun_s32(val_hi)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -117,14 +113,16 @@ fn cfl_apply_420_8bpc_neon_impl(
     let xfull = nfull * 8;
     let lfull = nfull * 16;
 
-    let dc0v = unsafe { vdupq_n_s32(dc0) };
+    let dc0v = vdupq_n_s32(dc0);
 
     let mut yrow = yrow0;
     let mut urow = urow0;
     let mut vrow = vrow0;
     for _y in 0..ylim {
         let top = y[yrow..yrow + lfull].as_chunks::<16>().0;
-        let bot = y[yrow + ystride..yrow + ystride + lfull].as_chunks::<16>().0;
+        let bot = y[yrow + ystride..yrow + ystride + lfull]
+            .as_chunks::<16>()
+            .0;
 
         if alpha0 != 0 {
             for ((d, t), b) in u[urow..urow + xfull]

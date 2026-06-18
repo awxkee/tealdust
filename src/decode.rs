@@ -14935,11 +14935,11 @@ fn dispatch_ipred_8bpc(
         10 /* SmoothVPred */ => crate::ipred_dispatch::ipred_smooth_v(d, stride, edge, edge_o, w, h),
         11 /* SmoothHPred */ => crate::ipred_dispatch::ipred_smooth_h(d, stride, edge, edge_o, w, h),
         _ if m == Z1_PRED => {
-            ipred_z1_8bpc(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
+            crate::ipred_dispatch::ipred_z1(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
         }
-        _ if m == Z2_PRED => ipred_z2_8bpc(d, stride, edge, edge_o, w, h, angle, max_w, max_h),
+        _ if m == Z2_PRED => crate::ipred_dispatch::ipred_z2(d, stride, edge, edge_o, w, h, angle, max_w, max_h),
         _ if m == Z3_PRED => {
-            ipred_z3_8bpc(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
+            crate::ipred_dispatch::ipred_z3(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
         }
         _ if m == DIP_PRED => ipred_dip_8bpc(d, stride, edge, edge_o, w, h, angle),
         _ => crate::ipred_dispatch::ipred_dc_128(d, stride, w, h),

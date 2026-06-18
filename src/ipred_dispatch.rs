@@ -588,3 +588,249 @@ fn resolve_ipred_paeth() -> SmoothPred8Fn {
 pub(crate) fn ipred_paeth(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, w: usize, h: usize) {
     resolve_ipred_paeth()(dst, stride, tl, o, w, h);
 }
+
+// ----------------------------- Z1 (directional) ----------------------------
+// SSE accelerates the common luma path and falls back to scalar internally for
+// mrl/IBP/chroma. NEON has no z1 kernel yet, so it uses the scalar reference.
+
+pub(crate) type Z1Pred8Fn = fn(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+);
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn ipred_z1_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    crate::ipred::ipred_z1_8bpc(
+        dst,
+        stride,
+        tl,
+        o,
+        w,
+        h,
+        angle,
+        max_width,
+        max_height,
+        ibp_weights,
+    );
+}
+
+static IPRED_Z1_8BPC: OnceLock<Z1Pred8Fn> = OnceLock::new();
+
+#[inline]
+fn resolve_ipred_z1() -> Z1Pred8Fn {
+    *IPRED_Z1_8BPC.get_or_init(|| {
+        #[allow(unused_mut)]
+        let mut f = ipred_z1_scalar as Z1Pred8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_z1_8bpc_neon as Z1Pred8Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ipred_z1_8bpc_sse41 as Z1Pred8Fn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipred_z1(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    resolve_ipred_z1()(
+        dst,
+        stride,
+        tl,
+        o,
+        w,
+        h,
+        angle,
+        max_width,
+        max_height,
+        ibp_weights,
+    );
+}
+
+// ----------------------------- Z3 (directional) ----------------------------
+// Same dispatch shape as Z1. SSE accelerates the common luma path; NEON scalar.
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn ipred_z3_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    crate::ipred::ipred_z3_8bpc(
+        dst,
+        stride,
+        tl,
+        o,
+        w,
+        h,
+        angle,
+        max_width,
+        max_height,
+        ibp_weights,
+    );
+}
+
+static IPRED_Z3_8BPC: OnceLock<Z1Pred8Fn> = OnceLock::new();
+
+#[inline]
+fn resolve_ipred_z3() -> Z1Pred8Fn {
+    *IPRED_Z3_8BPC.get_or_init(|| {
+        #[allow(unused_mut)]
+        let mut f = ipred_z3_scalar as Z1Pred8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_z3_8bpc_neon as Z1Pred8Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ipred_z3_8bpc_sse41 as Z1Pred8Fn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipred_z3(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+    ibp_weights: &[[[u8; 16]; 16]; 7],
+) {
+    resolve_ipred_z3()(
+        dst,
+        stride,
+        tl,
+        o,
+        w,
+        h,
+        angle,
+        max_width,
+        max_height,
+        ibp_weights,
+    );
+}
+
+// ----------------------------- Z2 (directional) ----------------------------
+// Z2 takes no ibp_weights. SSE accelerates the top-reference span of the common
+// luma path; the left span stays scalar internally. NEON uses scalar.
+
+pub(crate) type Z2Pred8Fn = fn(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+);
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn ipred_z2_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+) {
+    crate::ipred::ipred_z2_8bpc(dst, stride, tl, o, w, h, angle, max_width, max_height);
+}
+
+static IPRED_Z2_8BPC: OnceLock<Z2Pred8Fn> = OnceLock::new();
+
+#[inline]
+fn resolve_ipred_z2() -> Z2Pred8Fn {
+    *IPRED_Z2_8BPC.get_or_init(|| {
+        #[allow(unused_mut)]
+        let mut f = ipred_z2_scalar as Z2Pred8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_z2_8bpc_neon as Z2Pred8Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ipred_z2_8bpc_sse41 as Z2Pred8Fn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ipred_z2(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+    angle: i32,
+    max_width: i32,
+    max_height: i32,
+) {
+    resolve_ipred_z2()(dst, stride, tl, o, w, h, angle, max_width, max_height);
+}
