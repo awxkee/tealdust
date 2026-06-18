@@ -148,19 +148,39 @@ fn ipred_smooth_v_8bpc_sse41_impl(
         let w_ver = _mm_set1_epi16(weights[y] as i16);
         let row = &mut dst[off..off + w];
         let top_src = &tl[o + 1..o + 1 + w];
-        let (rc, rrem) = row.as_chunks_mut::<8>();
-        for (d, t) in rc.iter_mut().zip(top_src.as_chunks::<8>().0.iter()) {
+        let add32 = _mm_set1_epi16(32);
+        let (c16, r16) = row.as_chunks_mut::<16>();
+        for (d, t) in c16.iter_mut().zip(top_src.as_chunks::<16>().0.iter()) {
+            let a0 = load_u8x8_i16_fixed((&t[..8]).try_into().unwrap());
+            let a1 = load_u8x8_i16_fixed((&t[8..]).try_into().unwrap());
+            let mul0 = _mm_mullo_epi16(_mm_sub_epi16(a0, bottom_v), off_y);
+            let pred0 = _mm_add_epi16(bottom_v, sra_i16(_mm_add_epi16(mul0, rnd), sh));
+            let adj0 = _mm_srai_epi16::<6>(_mm_add_epi16(
+                _mm_mullo_epi16(_mm_sub_epi16(a0, pred0), w_ver),
+                add32,
+            ));
+            let mul1 = _mm_mullo_epi16(_mm_sub_epi16(a1, bottom_v), off_y);
+            let pred1 = _mm_add_epi16(bottom_v, sra_i16(_mm_add_epi16(mul1, rnd), sh));
+            let adj1 = _mm_srai_epi16::<6>(_mm_add_epi16(
+                _mm_mullo_epi16(_mm_sub_epi16(a1, pred1), w_ver),
+                add32,
+            ));
+            store_i16x8x2_u8_fixed(d, _mm_add_epi16(pred0, adj0), _mm_add_epi16(pred1, adj1));
+        }
+        let done = c16.len() * 16;
+        let (c8, r8) = r16.as_chunks_mut::<8>();
+        for (d, t) in c8.iter_mut().zip(top_src[done..].as_chunks::<8>().0.iter()) {
             let above = load_u8x8_i16_fixed(t);
             let mul = _mm_mullo_epi16(_mm_sub_epi16(above, bottom_v), off_y);
             let pred = _mm_add_epi16(bottom_v, sra_i16(_mm_add_epi16(mul, rnd), sh));
             let adj = _mm_srai_epi16::<6>(_mm_add_epi16(
                 _mm_mullo_epi16(_mm_sub_epi16(above, pred), w_ver),
-                _mm_set1_epi16(32),
+                add32,
             ));
             store_i16x8_u8_fixed(d, _mm_add_epi16(pred, adj));
         }
-        let base_x = (w / 8) * 8;
-        for (xi, d) in rrem.iter_mut().enumerate() {
+        let base_x = done + c8.len() * 8;
+        for (xi, d) in r8.iter_mut().enumerate() {
             let x = base_x + xi;
             let above = tl[o + 1 + x] as i32;
             let mul = (above - bottom as i32) * (h as i32 - 1 - y as i32);
@@ -199,13 +219,64 @@ fn ipred_smooth_h_8bpc_sse41_impl(
         let left_v = _mm_set1_epi16(left);
         let diff = _mm_set1_epi16(left - right);
         let row = &mut dst[off..off + w];
-        let (rc, rrem) = row.as_chunks_mut::<8>();
-        for (ci, (d, wxc)) in rc
+        let add32 = _mm_set1_epi16(32);
+        let (c16, r16) = row.as_chunks_mut::<16>();
+        for (ci, (d, wxc)) in c16
             .iter_mut()
-            .zip(weights[..w].as_chunks::<8>().0.iter())
+            .zip(weights[..w].as_chunks::<16>().0.iter())
             .enumerate()
         {
-            let x0 = (w - 1 - ci * 8) as i16;
+            let x = ci * 16;
+            let xlo = (w - 1 - x) as i16;
+            let xhi = (w - 1 - x - 8) as i16;
+            let dist0 = _mm_setr_epi16(
+                xlo,
+                xlo - 1,
+                xlo - 2,
+                xlo - 3,
+                xlo - 4,
+                xlo - 5,
+                xlo - 6,
+                xlo - 7,
+            );
+            let dist1 = _mm_setr_epi16(
+                xhi,
+                xhi - 1,
+                xhi - 2,
+                xhi - 3,
+                xhi - 4,
+                xhi - 5,
+                xhi - 6,
+                xhi - 7,
+            );
+            let wx0 = load_u8x8_i16_fixed((&wxc[..8]).try_into().unwrap());
+            let wx1 = load_u8x8_i16_fixed((&wxc[8..]).try_into().unwrap());
+            let pred0 = _mm_add_epi16(
+                right_v,
+                sra_i16(_mm_add_epi16(_mm_mullo_epi16(diff, dist0), rnd), bwl2),
+            );
+            let adj0 = _mm_srai_epi16::<6>(_mm_add_epi16(
+                _mm_mullo_epi16(_mm_sub_epi16(left_v, pred0), wx0),
+                add32,
+            ));
+            let pred1 = _mm_add_epi16(
+                right_v,
+                sra_i16(_mm_add_epi16(_mm_mullo_epi16(diff, dist1), rnd), bwl2),
+            );
+            let adj1 = _mm_srai_epi16::<6>(_mm_add_epi16(
+                _mm_mullo_epi16(_mm_sub_epi16(left_v, pred1), wx1),
+                add32,
+            ));
+            store_i16x8x2_u8_fixed(d, _mm_add_epi16(pred0, adj0), _mm_add_epi16(pred1, adj1));
+        }
+        let done = c16.len() * 16;
+        let (c8, r8) = r16.as_chunks_mut::<8>();
+        for (ci, (d, wxc)) in c8
+            .iter_mut()
+            .zip(weights[done..w].as_chunks::<8>().0.iter())
+            .enumerate()
+        {
+            let x0 = (w - 1 - done - ci * 8) as i16;
             let dist = _mm_setr_epi16(x0, x0 - 1, x0 - 2, x0 - 3, x0 - 4, x0 - 5, x0 - 6, x0 - 7);
             let wx = load_u8x8_i16_fixed(wxc);
             let pred = _mm_add_epi16(
@@ -214,12 +285,12 @@ fn ipred_smooth_h_8bpc_sse41_impl(
             );
             let adj = _mm_srai_epi16::<6>(_mm_add_epi16(
                 _mm_mullo_epi16(_mm_sub_epi16(left_v, pred), wx),
-                _mm_set1_epi16(32),
+                add32,
             ));
             store_i16x8_u8_fixed(d, _mm_add_epi16(pred, adj));
         }
-        let base_x = (w / 8) * 8;
-        for (xi, d) in rrem.iter_mut().enumerate() {
+        let base_x = done + c8.len() * 8;
+        for (xi, d) in r8.iter_mut().enumerate() {
             let x = base_x + xi;
             let mul = (left as i32 - right as i32) * (w as i32 - 1 - x as i32);
             let pred = right as i32 + ((mul + (w >> 1) as i32) >> bwl2);
@@ -264,15 +335,121 @@ fn ipred_smooth_8bpc_sse41_impl(
         let w_ver = _mm_set1_epi16(weights[y] as i16);
         let row = &mut dst[off..off + w];
         let top_src = &tl[o + 1..o + 1 + w];
-        let (rc, rrem) = row.as_chunks_mut::<8>();
-        for (ci, ((d, t), wxc)) in rc
+        let add32 = _mm_set1_epi16(32);
+        let one = _mm_set1_epi16(1);
+        let (c16, r16) = row.as_chunks_mut::<16>();
+        for (ci, ((d, t), wxc)) in c16
             .iter_mut()
-            .zip(top_src.as_chunks::<8>().0.iter())
-            .zip(weights[..w].as_chunks::<8>().0.iter())
+            .zip(top_src.as_chunks::<16>().0.iter())
+            .zip(weights[..w].as_chunks::<16>().0.iter())
+            .enumerate()
+        {
+            let x = ci * 16;
+            let xlo = (w - 1 - x) as i16;
+            let xhi = (w - 1 - x - 8) as i16;
+            let dist0 = _mm_setr_epi16(
+                xlo,
+                xlo - 1,
+                xlo - 2,
+                xlo - 3,
+                xlo - 4,
+                xlo - 5,
+                xlo - 6,
+                xlo - 7,
+            );
+            let dist1 = _mm_setr_epi16(
+                xhi,
+                xhi - 1,
+                xhi - 2,
+                xhi - 3,
+                xhi - 4,
+                xhi - 5,
+                xhi - 6,
+                xhi - 7,
+            );
+            let a0 = load_u8x8_i16_fixed((&t[..8]).try_into().unwrap());
+            let a1 = load_u8x8_i16_fixed((&t[8..]).try_into().unwrap());
+            let wx0 = load_u8x8_i16_fixed((&wxc[..8]).try_into().unwrap());
+            let wx1 = load_u8x8_i16_fixed((&wxc[8..]).try_into().unwrap());
+
+            let pv0 = _mm_add_epi16(
+                bottom_v,
+                sra_i16(
+                    _mm_add_epi16(
+                        _mm_mullo_epi16(_mm_sub_epi16(a0, bottom_v), off_ver),
+                        rnd_ver,
+                    ),
+                    bhl2,
+                ),
+            );
+            let ph0 = _mm_add_epi16(
+                right_v,
+                sra_i16(
+                    _mm_add_epi16(_mm_mullo_epi16(diff_hor, dist0), rnd_hor),
+                    bwl2,
+                ),
+            );
+            let pv0 = _mm_add_epi16(
+                pv0,
+                _mm_srai_epi16::<6>(_mm_add_epi16(
+                    _mm_mullo_epi16(_mm_sub_epi16(a0, pv0), w_ver),
+                    add32,
+                )),
+            );
+            let ph0 = _mm_add_epi16(
+                ph0,
+                _mm_srai_epi16::<6>(_mm_add_epi16(
+                    _mm_mullo_epi16(_mm_sub_epi16(left_v, ph0), wx0),
+                    add32,
+                )),
+            );
+            let out0 = _mm_srai_epi16::<1>(_mm_add_epi16(_mm_add_epi16(pv0, ph0), one));
+
+            let pv1 = _mm_add_epi16(
+                bottom_v,
+                sra_i16(
+                    _mm_add_epi16(
+                        _mm_mullo_epi16(_mm_sub_epi16(a1, bottom_v), off_ver),
+                        rnd_ver,
+                    ),
+                    bhl2,
+                ),
+            );
+            let ph1 = _mm_add_epi16(
+                right_v,
+                sra_i16(
+                    _mm_add_epi16(_mm_mullo_epi16(diff_hor, dist1), rnd_hor),
+                    bwl2,
+                ),
+            );
+            let pv1 = _mm_add_epi16(
+                pv1,
+                _mm_srai_epi16::<6>(_mm_add_epi16(
+                    _mm_mullo_epi16(_mm_sub_epi16(a1, pv1), w_ver),
+                    add32,
+                )),
+            );
+            let ph1 = _mm_add_epi16(
+                ph1,
+                _mm_srai_epi16::<6>(_mm_add_epi16(
+                    _mm_mullo_epi16(_mm_sub_epi16(left_v, ph1), wx1),
+                    add32,
+                )),
+            );
+            let out1 = _mm_srai_epi16::<1>(_mm_add_epi16(_mm_add_epi16(pv1, ph1), one));
+
+            store_i16x8x2_u8_fixed(d, out0, out1);
+        }
+        let done = c16.len() * 16;
+        let (c8, r8) = r16.as_chunks_mut::<8>();
+        for (ci, ((d, t), wxc)) in c8
+            .iter_mut()
+            .zip(top_src[done..].as_chunks::<8>().0.iter())
+            .zip(weights[done..w].as_chunks::<8>().0.iter())
             .enumerate()
         {
             let above = load_u8x8_i16_fixed(t);
-            let x0 = (w - 1 - ci * 8) as i16;
+            let x0 = (w - 1 - done - ci * 8) as i16;
             let dist = _mm_setr_epi16(x0, x0 - 1, x0 - 2, x0 - 3, x0 - 4, x0 - 5, x0 - 6, x0 - 7);
             let wx = load_u8x8_i16_fixed(wxc);
 
@@ -297,26 +474,23 @@ fn ipred_smooth_8bpc_sse41_impl(
                 pred_ver,
                 _mm_srai_epi16::<6>(_mm_add_epi16(
                     _mm_mullo_epi16(_mm_sub_epi16(above, pred_ver), w_ver),
-                    _mm_set1_epi16(32),
+                    add32,
                 )),
             );
             let pred_hor = _mm_add_epi16(
                 pred_hor,
                 _mm_srai_epi16::<6>(_mm_add_epi16(
                     _mm_mullo_epi16(_mm_sub_epi16(left_v, pred_hor), wx),
-                    _mm_set1_epi16(32),
+                    add32,
                 )),
             );
             store_i16x8_u8_fixed(
                 d,
-                _mm_srai_epi16::<1>(_mm_add_epi16(
-                    _mm_add_epi16(pred_ver, pred_hor),
-                    _mm_set1_epi16(1),
-                )),
+                _mm_srai_epi16::<1>(_mm_add_epi16(_mm_add_epi16(pred_ver, pred_hor), one)),
             );
         }
-        let base_x = (w / 8) * 8;
-        for (xi, d) in rrem.iter_mut().enumerate() {
+        let base_x = done + c8.len() * 8;
+        for (xi, d) in r8.iter_mut().enumerate() {
             let x = base_x + xi;
             let above = tl[o + 1 + x] as i32;
             let mul_ver = (above - bottom as i32) * (h as i32 - 1 - y as i32);
@@ -551,6 +725,13 @@ fn store_i16x8_u8_fixed(a: &mut [u8; 8], v: __m128i) {
     unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, packed) };
 }
 
+/// Pack two i16x8 lanes (saturating to u8) and store 16 bytes at once.
+#[inline(always)]
+fn store_i16x8x2_u8_fixed(a: &mut [u8; 16], lo: __m128i, hi: __m128i) {
+    let packed = unsafe { _mm_packus_epi16(lo, hi) };
+    unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, packed) };
+}
+
 #[target_feature(enable = "sse4.1")]
 fn ipred_paeth_8bpc_sse41_impl(
     dst: &mut [u8],
@@ -565,14 +746,40 @@ fn ipred_paeth_8bpc_sse41_impl(
         return crate::ipred::ipred_paeth_8bpc(dst, stride, tl, o, w, h);
     }
     let tl_v = _mm_set1_epi16(topleft as i16);
-    let base_x = (w / 8) * 8;
     let mut off = 0;
     for y in 0..h {
         let left = tl[o - 1 - y] as i32;
         let left_v = _mm_set1_epi16(left as i16);
         let top_src = &tl[o + 1..o + 1 + w];
-        let (rc, rrem) = dst[off..off + w].as_chunks_mut::<8>();
-        for (d, t) in rc.iter_mut().zip(top_src.as_chunks::<8>().0.iter()) {
+        let (c16, r16) = dst[off..off + w].as_chunks_mut::<16>();
+        for (d, t) in c16.iter_mut().zip(top_src.as_chunks::<16>().0.iter()) {
+            let t0 = load_u8x8_i16_fixed((&t[..8]).try_into().unwrap());
+            let t1 = load_u8x8_i16_fixed((&t[8..]).try_into().unwrap());
+            let base0 = _mm_sub_epi16(_mm_add_epi16(left_v, t0), tl_v);
+            let ld0 = _mm_abs_epi16(_mm_sub_epi16(left_v, base0));
+            let td0 = _mm_abs_epi16(_mm_sub_epi16(t0, base0));
+            let tld0 = _mm_abs_epi16(_mm_sub_epi16(tl_v, base0));
+            let cond_l0 = _mm_and_si128(
+                _mm_cmpeq_epi16(ld0, _mm_min_epi16(ld0, td0)),
+                _mm_cmpeq_epi16(ld0, _mm_min_epi16(ld0, tld0)),
+            );
+            let cond_t0 = _mm_cmpeq_epi16(td0, _mm_min_epi16(td0, tld0));
+            let res0 = _mm_blendv_epi8(_mm_blendv_epi8(tl_v, t0, cond_t0), left_v, cond_l0);
+            let base1 = _mm_sub_epi16(_mm_add_epi16(left_v, t1), tl_v);
+            let ld1 = _mm_abs_epi16(_mm_sub_epi16(left_v, base1));
+            let td1 = _mm_abs_epi16(_mm_sub_epi16(t1, base1));
+            let tld1 = _mm_abs_epi16(_mm_sub_epi16(tl_v, base1));
+            let cond_l1 = _mm_and_si128(
+                _mm_cmpeq_epi16(ld1, _mm_min_epi16(ld1, td1)),
+                _mm_cmpeq_epi16(ld1, _mm_min_epi16(ld1, tld1)),
+            );
+            let cond_t1 = _mm_cmpeq_epi16(td1, _mm_min_epi16(td1, tld1));
+            let res1 = _mm_blendv_epi8(_mm_blendv_epi8(tl_v, t1, cond_t1), left_v, cond_l1);
+            store_i16x8x2_u8_fixed(d, res0, res1);
+        }
+        let done = c16.len() * 16;
+        let (c8, r8) = r16.as_chunks_mut::<8>();
+        for (d, t) in c8.iter_mut().zip(top_src[done..].as_chunks::<8>().0.iter()) {
             let top_v = load_u8x8_i16_fixed(t);
             let base = _mm_sub_epi16(_mm_add_epi16(left_v, top_v), tl_v);
             let ld = _mm_abs_epi16(_mm_sub_epi16(left_v, base));
@@ -588,8 +795,9 @@ fn ipred_paeth_8bpc_sse41_impl(
             store_i16x8_u8_fixed(d, res);
         }
         // scalar remainder columns
-        for (x, d) in rrem.iter_mut().enumerate() {
-            let top = tl[o + 1 + base_x + x] as i32;
+        let base_x = done + c8.len() * 8;
+        for (xi, d) in r8.iter_mut().enumerate() {
+            let top = tl[o + 1 + base_x + xi] as i32;
             let base = left + top - topleft;
             let ldiff = (left - base).abs();
             let tdiff = (top - base).abs();
