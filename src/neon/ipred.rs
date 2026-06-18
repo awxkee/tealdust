@@ -789,7 +789,6 @@ fn tap4_pack_neon(
         );
         let res_lo = vshrq_n_s32::<7>(vaddq_s32(acc_lo, rnd));
         let res_hi = vshrq_n_s32::<7>(vaddq_s32(acc_hi, rnd));
-        // saturating narrows == clamp(.,0,255)
         vqmovn_u16(vcombine_u16(vqmovun_s32(res_lo), vqmovun_s32(res_hi)))
     }
 }

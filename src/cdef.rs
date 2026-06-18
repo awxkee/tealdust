@@ -661,8 +661,6 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
             let sb64_idx = (((by & 0x30) >> 2) + (sbx & 3)) as usize;
             let cdef_idx = p.cdef_idx(sb256x, sb64_idx);
 
-            // --- CCSO prep (before CDEF) ---------------------------------------
-            // CDEF), computing the per-pixel LUT index used by ccso_add later.
             if let Some(cc) = &p.ccso {
                 let ccm = p.ccso_mask(sb256x);
                 let flag = ccm[0] | ccm[1] | ccm[2];
@@ -972,8 +970,6 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                 edges |= CDEF_HAVE_LEFT;
             }
 
-            // --- CCSO add (next_sb) -------------------------------------------
-            // the LUT index computed in the prep stage.
             if let Some(cc) = &p.ccso {
                 let ccm = p.ccso_mask(sb256x);
                 let flag = ccm[0] | ((ccm[1] | ccm[2]) << 1);

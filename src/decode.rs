@@ -3806,7 +3806,6 @@ pub fn submit_frame(c: &mut crate::internal::DecoderContext, n_tc: i32) -> Resul
         r: [0, skip_mode_r1],
     };
 
-    // ---- decode -----------------------------------------------------------
     let in_cdf_ref = fc.in_cdf.take();
     decode_frame(&mut fc, n_tc, 1, in_cdf_ref.as_ref(), qcat)?;
 
@@ -5427,7 +5426,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 inter.refine_mv = 0;
             }
         } else if is_comp {
-            // --- compound ref selection ---
             let n_refs = fi.n_ref_frames as i32;
             let (ref0, ref1): (i8, i8);
             if n_refs > 1 {
@@ -5491,11 +5489,8 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 ref0 = 0;
                 ref1 = 0;
             }
-            b.ref_pair = crate::levels::RefPair::from_refs(ref0, ref1);
+            b.ref_pair = RefPair::from_refs(ref0, ref1);
 
-            // --- compound inter_mode ---
-            // whose compound ref-pair (or TIP-coded ref) matches this block's,
-            // splitting row/col + a NEWMV bit -> ctx in {0..5}.
             let comp_ctx = crate::env::get_compref_ctx(
                 a,
                 l,
@@ -5528,7 +5523,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
             };
 
-            // --- OPFL refinement ---
             let mut final_inter_mode = inter_mode;
             if fi.opfl_refine_type == 1
                 && inter_mode != CompInterPredMode::GlobalMvGlobalMv as u8
@@ -5543,7 +5537,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             }
             b.inter_data_mut().inter_mode = final_inter_mode;
 
-            // --- compound AMVD ---
             use crate::tables::COMP_INTER_PRED_MODES;
             let mode_idx = (final_inter_mode - CompInterPredMode::NearMvNearMv as u8) as usize;
             let m_pair = if mode_idx < COMP_INTER_PRED_MODES.len() {
@@ -5576,7 +5569,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             }
             let amvd_val = b.inter_data().amvd;
 
-            // --- JMVD scale mode ---
             let mut jmvd_scale_mode = 0u8;
             if final_inter_mode == CompInterPredMode::JointNewMv as u8
                 || final_inter_mode == CompInterPredMode::OpflJointNewMv as u8
@@ -5640,7 +5632,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
             }
 
-            // --- compound DRL ---
             b.inter_data_mut().drl_idx = [0; 2];
             if final_inter_mode != CompInterPredMode::GlobalMvGlobalMv as u8 {
                 let n_drls = 1 + (final_inter_mode <= CompInterPredMode::NearMvNewMv as u8) as i32;
@@ -5671,7 +5662,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
             }
 
-            // --- MV precision ---
             let mut mv_prec = 3i32 + fi.mv_precision as i32;
             if mv_prec > 3 && amvd_val == 0 && fi.flex_mvres && is_newmv_mode {
                 let mvprec1 = if nb_boff[0] == -1 { 0u8 } else { nb_mvprec[0] };
@@ -5688,7 +5678,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             }
             b.inter_data_mut().mv_prec = mv_prec as i8;
 
-            // --- MV residuals + sign derivation ---
             if final_inter_mode != CompInterPredMode::GlobalMvGlobalMv as u8 {
                 let is_joint = final_inter_mode == CompInterPredMode::JointNewMv as u8
                     || final_inter_mode == CompInterPredMode::OpflJointNewMv as u8;
@@ -5816,7 +5805,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
             }
 
-            // --- refine_mv ---
             b.inter_data_mut().refine_mv = 0;
             // The refine_mv block is skipped entirely (no symbol read) when OPFL
             // refinement is switchable and the inter mode is one of the explicit
@@ -5854,14 +5842,12 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             }
             let refine_mv_val = b.inter_data().refine_mv;
 
-            // --- subpel filter for compound ---
             let has_subpel_filter = final_inter_mode <= CompInterPredMode::JointNewMv as u8
                 && refine_mv_val == 0
                 && b.inter_data().motion_mode == MotionMode::Translation as u8
                 && (final_inter_mode != CompInterPredMode::GlobalMvGlobalMv as u8
                     || imin(bw4, bh4) == 1);
 
-            // --- compound type ---
             b.inter_data_mut().comp_type = 1; // COMP_AVG
             if final_inter_mode <= CompInterPredMode::JointNewMv as u8
                 && refine_mv_val != 1
@@ -5911,7 +5897,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
             }
 
-            // --- CWP (compound weighted prediction) ---
             b.inter_data_mut().cwp_idx = 8;
             let comp_type_val = b.inter_data().comp_type;
             if refine_mv_val == 0
@@ -5936,13 +5921,9 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 b.inter_data_mut().cwp_idx = CWP_WEIGHTING_FACTOR[row][n as usize];
             }
 
-            // --- subpel filter ---
             if refine_mv_val != 0 || final_inter_mode >= CompInterPredMode::OpflNearMvNearMv as u8 {
                 b.inter_data_mut().filter = 2; // SHARP
             } else if fi.subpel_filter_mode == 4 && has_subpel_filter {
-                // idx-ordered spatial-neighbour cache (nb_boff/nb_ref/nb_filter)
-                // captured at block entry so the C nb[0]/nb[1] identity is kept;
-                // re-reading a/l by offset alone loses which slot is left vs top.
                 const N_SW: u8 = N_SWITCHABLE_FILTERS as u8;
                 let flt = |i: usize| -> u8 {
                     if nb_boff[i] != -1 && (nb_ref0[i] == ref0 || nb_ref1[i] == ref0) {
@@ -5969,7 +5950,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
         } else {
             b.inter_data_mut().comp_type = 0; // COMP_INTER_NONE
 
-            // --- single ref selection ---
             let ref0: i8;
             if (fi.seg_globalmv_mask | fi.seg_skip_mask) & (1 << b.seg_id) != 0 {
                 ref0 = 0;
@@ -6014,7 +5994,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 8
             };
 
-            // --- sngl_ctx ---
             let sngl_ctx = get_snglref_ctx(
                 a,
                 l,
@@ -6028,7 +6007,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 ref0,
             );
 
-            // --- inter_mode ---
             let inter_mode: u8;
             if (fi.seg_globalmv_mask | fi.seg_skip_mask) & (1 << b.seg_id) != 0 {
                 inter_mode = InterPredMode::GlobalMv as u8;
@@ -6077,7 +6055,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             };
             b.inter_data_mut().inter_mode = inter_mode;
 
-            // --- AMVD ---
             if fi.adaptive_mvd && inter_mode == InterPredMode::NewMv as u8 {
                 let ctx = (nx_ref0[0] == ref0 && nx_amvd[0] != 0) as usize
                     + (if n_ctx > 1 {
@@ -6089,7 +6066,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             }
             let amvd_val = b.inter_data().amvd;
 
-            // --- warp_ref_idx, warpmv_with_mvd, bawp defaults ---
             {
                 let inter = b.inter_data_mut();
                 inter.warp_ref_idx = 0;
@@ -6099,7 +6075,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             }
 
             if !is_tip && inter_mode <= InterPredMode::NewMv as u8 {
-                // --- BAWP (block-adaptive weighted prediction) ---
                 if fi.bawp && inter_mode != InterPredMode::GlobalMv as u8 && imin(bw4, bh4) >= 2 {
                     let bawp0 = msac.decode_bool_adapt(cdf_m.bawp(0)) as u8;
                     if bawp0 != 0 {
@@ -6122,7 +6097,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                     }
                 }
 
-                // --- inter-intra (motion mode) ---
                 let bawp0 = b.inter_data().bawp[0];
                 if fi.motion_modes & (1 << MotionMode::InterIntra as u8) != 0
                     && bawp0 == 0
@@ -6148,7 +6122,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                     }
                 }
             } else if !is_tip {
-                // --- warp motion mode for WARPMV/WARPNEWMV ---
                 b.inter_data_mut().motion_mode = MotionMode::WarpDelta as u8;
 
                 // signal is only read when a spatial neighbour references the same
@@ -6237,7 +6210,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
             }
 
-            // --- DRL index ---
             b.inter_data_mut().drl_idx[0] = 0;
             if inter_mode != InterPredMode::WarpMv as u8
                 && inter_mode != InterPredMode::GlobalMv as u8
@@ -6262,7 +6234,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 b.inter_data_mut().drl_idx[0] = n as u8;
             }
 
-            // --- MV precision ---
             let mut mv_prec = 3i32 + fi.mv_precision as i32;
             if mv_prec > 3
                 && amvd_val == 0
@@ -6284,7 +6255,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             }
             b.inter_data_mut().mv_prec = mv_prec as i8;
 
-            // --- MV residual ---
             let warpmv_with_mvd = b.inter_data().warpmv_with_mvd;
             if inter_mode == InterPredMode::NewMv as u8
                 || inter_mode == InterPredMode::WarpNewMv as u8
@@ -6295,7 +6265,7 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 } else {
                     read_mv_full(msac, cdf_dmv, mv_prec)
                 };
-                b.inter_data_mut().mv[0] = crate::levels::Mv::from_xy(mv.y(), mv.x());
+                b.inter_data_mut().mv[0] = Mv::from_xy(mv.y(), mv.x());
 
                 // sign derivation
                 let nnzc;
@@ -6346,7 +6316,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
             }
 
-            // --- warp delta parameters ---
             let motion_mode_val = b.inter_data().motion_mode;
             let warp_ref_idx = b.inter_data().warp_ref_idx;
             if inter_mode == InterPredMode::WarpNewMv as u8
@@ -6383,7 +6352,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 b.inter_data_mut().matrix = [0; 4];
             }
 
-            // --- warp_ii ---
             b.inter_data_mut().warp_ii = 0;
             if inter_mode == InterPredMode::WarpMv as u8
                 && imin(bw4, bh4) >= 2
@@ -6405,7 +6373,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
             }
 
-            // --- subpel filter ---
             let has_subpel_filter = !is_tip
                 && inter_mode <= InterPredMode::NewMv as u8
                 && (inter_mode != InterPredMode::GlobalMv as u8 || imin(bw4, bh4) == 1);
@@ -7484,8 +7451,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             splat_tworef_mv(recon, &b, bx, by, by4r, bw4, bh4, bs);
         }
     }
-
-    // ---- Reconstruction leaf (intra 8bpc) ----------------------------------
 
     if pass & (Pass::Recon as u8) != 0 && b.is_intra != 0 {
         recon_b_intra(
@@ -10015,7 +9980,6 @@ fn recon_b_inter_compound<BD: crate::pixel::BitDepth>(
         }
     }
 
-    // ---- luma ----
     let mut seg_mask = vec![0u8; 128 * 128];
     let mut seg_mask_stride = 0usize;
     if has_luma {
@@ -10243,7 +10207,6 @@ fn recon_b_inter_compound<BD: crate::pixel::BitDepth>(
         }
     }
 
-    // ---- chroma ----
     if has_chroma && cbs != BlockSize::Invalid {
         let cb_dim = &BLOCK_DIMENSIONS[cbs as u8 as usize];
         let cbw4 = cb_dim[0] as i32;
@@ -11292,7 +11255,6 @@ fn recon_b_inter_tip<BD: crate::pixel::BitDepth>(
     // SB-local projected-MV grid (`t->rt.rp_proj`).
     let rp_proj_off = recon.rt.rp_proj_off;
 
-    // ---- luma tip_pred ----------------------------------------------------
     let mut seg_mask = vec![0u8; 128 * 128];
     let mut luma_bacp = false;
     if has_luma {
@@ -11663,7 +11625,6 @@ fn recon_b_inter_tip<BD: crate::pixel::BitDepth>(
         }
     }
 
-    // ---- chroma rmv_uvpred ------------------------------------------------
     if has_chroma && cbs != BlockSize::Invalid {
         let cb_dim = &BLOCK_DIMENSIONS[cbs as u8 as usize];
         let cbw4 = cb_dim[0] as i32;
@@ -12510,7 +12471,6 @@ fn recon_b_inter<BD: crate::pixel::BitDepth>(
     // frame global motion otherwise (GLOBALMV warp).
     let use_local_warp = motion_mode >= MotionMode::WarpCausal as u8;
 
-    // ---- luma MC + residual -----------------------------------------------
     if has_luma {
         let bs = lbs;
         let b_dim = &BLOCK_DIMENSIONS[bs as u8 as usize];
@@ -12655,7 +12615,6 @@ fn recon_b_inter<BD: crate::pixel::BitDepth>(
         }
     }
 
-    // ---- chroma MC + residual ---------------------------------------------
     if has_chroma && cbs != BlockSize::Invalid {
         let cb_dim = &BLOCK_DIMENSIONS[cbs as u8 as usize];
         let cbw4 = cb_dim[0] as i32;
@@ -14508,7 +14467,6 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
         orig_y_mode
     };
 
-    // --- decode coefficients (combined pass) -------------------------------
     let mut txtp: u16 = 0;
     let mut res_ctx: u8 = 0;
     // Zero the tx coefficient region; decode_coefs may not fully initialise it.

@@ -109,8 +109,6 @@ impl Masks {
     }
 }
 
-// -- Wedge direction types --
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum WedgeDirection {
@@ -488,8 +486,6 @@ static WEDGE_CODEBOOK_16: [WedgeCodeType; 68] = [
         y_offset: 4,
     },
 ];
-
-// -- Helper functions --
 
 fn copy2d(dst: &mut [u8], src: &[u8], w8: usize, h8: usize, x_off: usize, y_off: usize) {
     let src_start = (64 - y_off * h8) * 128 + (64 - x_off * w8);

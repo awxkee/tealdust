@@ -699,8 +699,6 @@ pub(crate) fn iadst_dequant_16x16_sse41(
     }
 }
 
-// ---- non-square (rectangular) DCT_DCT SSE4.1 wrappers ----
-
 pub(crate) fn idct_dequant_4x8_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1264,8 +1262,6 @@ fn idct_dequant_32x4_sse41_impl(
         row_clip_max,
     );
 }
-
-// ---- non-square (rectangular) ADST / mixed-type SSE4.1 wrappers ----
 
 pub(crate) fn iadst_dequant_4x8_sse41(
     coeff: &mut [i32],

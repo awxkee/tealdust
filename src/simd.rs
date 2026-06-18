@@ -182,10 +182,6 @@ impl core::ops::AddAssign for I32x8 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Private helpers (mirrors original load*/store* helpers).
-// ---------------------------------------------------------------------------
-
 /// Load 8 consecutive `i16` (sign-extended) into an `I32x8`.
 #[inline(always)]
 fn load8_i16(s: &[i16]) -> I32x8 {
@@ -265,10 +261,6 @@ fn store8_trunc<P: Pixel>(dst: &mut [P], v: I32x8) {
 fn sra(v: I32x8, sh: i32) -> I32x8 {
     v >> I32x8::splat(sh)
 }
-
-// ---------------------------------------------------------------------------
-// Public kernel API (unchanged signatures).
-// ---------------------------------------------------------------------------
 
 /// `avg` row: `dst[x] = clip((tmp1[x] + tmp2[x] + rnd) >> sh)` for `x in 0..n`.
 #[inline]
@@ -509,10 +501,6 @@ pub(crate) fn cctx_row(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Loop-restoration FIR kernels.
-// ---------------------------------------------------------------------------
-
 /// One symmetric FIR tap: `a` is read from `row_p` at `+dx`, `b` from `row_m`
 /// at `-dx` (relative to the per-pixel column `o + x`).
 pub(crate) struct WienerTap<'a> {
@@ -521,15 +509,6 @@ pub(crate) struct WienerTap<'a> {
     pub dx: i32,
     pub coef: i32,
 }
-
-// ---------------------------------------------------------------------------
-// Loop-restoration FIR dispatch (mirrors the itx neon/sse/scalar pattern).
-//
-// `ns_wiener_fir_run()` / `pc_wiener_fir_run()` return a cached function
-// pointer chosen once at runtime: hand-written NEON on aarch64, the portable
-// I32x8 path on x86, and a pure-scalar fallback everywhere else. Callers fetch
-// the pointer once per row run, exactly like `idct_dequant_4x4()` in itx_2d.
-// ---------------------------------------------------------------------------
 
 type NsWienerFirFn = fn(&mut [u8], &[u8], usize, &[WienerTap<'_>], usize);
 type PcWienerFirFn = fn(&mut [u8], &[u8], i32, usize, &[WienerTap<'_>], usize);

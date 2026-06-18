@@ -2038,8 +2038,6 @@ pub(crate) fn iadst_dequant_16x16() -> IadstDequantFn<256> {
     })
 }
 
-// ---- non-square (rectangular) DCT_DCT dispatchers ----
-
 static DEQUANT_RECT_4X8: OnceLock<IdctDequantFn<32>> = OnceLock::new();
 static DEQUANT_RECT_8X4: OnceLock<IdctDequantFn<32>> = OnceLock::new();
 static DEQUANT_RECT_8X16: OnceLock<IdctDequantFn<128>> = OnceLock::new();
@@ -2292,8 +2290,6 @@ pub(crate) fn idct_dequant_32x4() -> IdctDequantFn<128> {
         f
     })
 }
-
-// ---- non-square (rectangular) ADST / mixed-type dispatchers ----
 
 static ADST_DEQUANT_RECT_4X8: OnceLock<IadstDequantFn<32>> = OnceLock::new();
 static ADST_DEQUANT_RECT_8X4: OnceLock<IadstDequantFn<32>> = OnceLock::new();

@@ -482,8 +482,6 @@ pub(crate) fn iadst_dequant_16x16_neon(
     );
 }
 
-// ---- non-square (rectangular) DCT_DCT NEON wrappers ----
-
 pub(crate) fn idct_dequant_4x8_neon(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -747,8 +745,6 @@ pub(crate) fn idct_dequant_32x4_neon(
         row_clip_max,
     );
 }
-
-// ---- non-square (rectangular) ADST / mixed-type NEON wrappers ----
 
 pub(crate) fn iadst_dequant_4x8_neon(
     coeff: &mut [i32],

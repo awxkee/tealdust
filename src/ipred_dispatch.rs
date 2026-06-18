@@ -370,11 +370,6 @@ pub(crate) fn ipred_smooth_h(
     resolve_ipred_smooth_h()(dst, stride, tl, o, w, h);
 }
 
-// ---------------------------------------------------------------------------
-// DC family dispatch. dc/dc_top/dc_left share IntraPred8Fn (they take `angle`);
-// dc_128 has no top-left edge or angle.
-// ---------------------------------------------------------------------------
-
 pub(crate) type DcPred128Fn = fn(dst: &mut [u8], stride: usize, width: usize, height: usize);
 
 #[inline]
@@ -549,8 +544,6 @@ pub(crate) fn ipred_dc_128(dst: &mut [u8], stride: usize, width: usize, height: 
     resolve_ipred_dc_128()(dst, stride, width, height);
 }
 
-// --------------------------------- Paeth -----------------------------------
-
 #[inline]
 pub(crate) fn ipred_paeth_scalar(
     dst: &mut [u8],
@@ -588,10 +581,6 @@ fn resolve_ipred_paeth() -> SmoothPred8Fn {
 pub(crate) fn ipred_paeth(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, w: usize, h: usize) {
     resolve_ipred_paeth()(dst, stride, tl, o, w, h);
 }
-
-// ----------------------------- Z1 (directional) ----------------------------
-// SSE accelerates the common luma path and falls back to scalar internally for
-// mrl/IBP/chroma. NEON has no z1 kernel yet, so it uses the scalar reference.
 
 pub(crate) type Z1Pred8Fn = fn(
     dst: &mut [u8],
@@ -684,9 +673,6 @@ pub(crate) fn ipred_z1(
     );
 }
 
-// ----------------------------- Z3 (directional) ----------------------------
-// Same dispatch shape as Z1. SSE accelerates the common luma path; NEON scalar.
-
 #[allow(clippy::too_many_arguments)]
 #[inline]
 pub(crate) fn ipred_z3_scalar(
@@ -764,10 +750,6 @@ pub(crate) fn ipred_z3(
         ibp_weights,
     );
 }
-
-// ----------------------------- Z2 (directional) ----------------------------
-// Z2 takes no ibp_weights. SSE accelerates the top-reference span of the common
-// luma path; the left span stays scalar internally. NEON uses scalar.
 
 pub(crate) type Z2Pred8Fn = fn(
     dst: &mut [u8],
