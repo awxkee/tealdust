@@ -827,7 +827,7 @@ pub(crate) fn ipred_paeth_8bpc_sse41(
 
 /// Load 8 bytes and zero-extend to two i32x4 lanes (low 4, high 4).
 #[inline(always)]
-fn load8_u8_i32(a: &[u8]) -> (__m128i, __m128i) {
+fn load8_u8_i32(a: &[u8; 8]) -> (__m128i, __m128i) {
     let v = unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) };
     unsafe {
         (
@@ -835,6 +835,64 @@ fn load8_u8_i32(a: &[u8]) -> (__m128i, __m128i) {
             _mm_cvtepu8_epi32(_mm_srli_si128(v, 4)),
         )
     }
+}
+
+/// Apply the 4-tap directional filter to four 8-lane windows and return the
+/// clamped i32 results as (low4, high4). Shared by the Z1 / Z3 kernels.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn dr_filter8(
+    av: __m128i,
+    bv: __m128i,
+    cv: __m128i,
+    dv: __m128i,
+    rnd: __m128i,
+    zero: __m128i,
+    maxv: __m128i,
+    w0: (__m128i, __m128i),
+    w1: (__m128i, __m128i),
+    w2: (__m128i, __m128i),
+    w3: (__m128i, __m128i),
+) -> (__m128i, __m128i) {
+    let acc_lo = _mm_add_epi32(
+        _mm_add_epi32(_mm_mullo_epi32(av, w0.0), _mm_mullo_epi32(bv, w1.0)),
+        _mm_add_epi32(_mm_mullo_epi32(cv, w2.0), _mm_mullo_epi32(dv, w3.0)),
+    );
+    let acc_hi = _mm_add_epi32(
+        _mm_add_epi32(_mm_mullo_epi32(av, w0.1), _mm_mullo_epi32(bv, w1.1)),
+        _mm_add_epi32(_mm_mullo_epi32(cv, w2.1), _mm_mullo_epi32(dv, w3.1)),
+    );
+    let res_lo = _mm_min_epi32(
+        _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_lo, rnd), 7), zero),
+        maxv,
+    );
+    let res_hi = _mm_min_epi32(
+        _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_hi, rnd), 7), zero),
+        maxv,
+    );
+    (res_lo, res_hi)
+}
+
+/// Pack two i32x4 lanes (already clamped to 0..=255) to 8 `u8` and store.
+#[inline(always)]
+fn store_i32x8_u8_fixed(a: &mut [u8; 8], lo: __m128i, hi: __m128i) {
+    let packed = unsafe { _mm_packus_epi16(_mm_packus_epi32(lo, hi), _mm_setzero_si128()) };
+    unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, packed) };
+}
+
+/// Pack four i32x4 lanes (already clamped to 0..=255) to 16 `u8` and store.
+#[inline(always)]
+fn store_i32x16_u8_fixed(
+    a: &mut [u8; 16],
+    a_lo: __m128i,
+    a_hi: __m128i,
+    b_lo: __m128i,
+    b_hi: __m128i,
+) {
+    let pa = unsafe { _mm_packus_epi32(a_lo, a_hi) };
+    let pb = unsafe { _mm_packus_epi32(b_lo, b_hi) };
+    let packed = unsafe { _mm_packus_epi16(pa, pb) };
+    unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, packed) };
 }
 
 /// One row of the Z1 luma 4-tap interpolation. Pixels with `base <= max_base_x`
@@ -860,45 +918,69 @@ fn z1_luma_row_sse41(
     let zero = _mm_setzero_si128();
     let maxv = _mm_set1_epi32(255);
 
-    let mut x = 0usize;
-    while x + 8 <= n_filter {
-        let bi = (top_off as i32 + base0) as usize + x;
-        let w0 = load8_u8_i32(&filt[bi - 1..bi - 1 + 8]);
-        let w1 = load8_u8_i32(&filt[bi..bi + 8]);
-        let w2 = load8_u8_i32(&filt[bi + 1..bi + 1 + 8]);
-        let w3 = load8_u8_i32(&filt[bi + 2..bi + 2 + 8]);
-        unsafe {
-            let acc_lo = _mm_add_epi32(
-                _mm_add_epi32(_mm_mullo_epi32(av, w0.0), _mm_mullo_epi32(bv, w1.0)),
-                _mm_add_epi32(_mm_mullo_epi32(cv, w2.0), _mm_mullo_epi32(dv, w3.0)),
-            );
-            let acc_hi = _mm_add_epi32(
-                _mm_add_epi32(_mm_mullo_epi32(av, w0.1), _mm_mullo_epi32(bv, w1.1)),
-                _mm_add_epi32(_mm_mullo_epi32(cv, w2.1), _mm_mullo_epi32(dv, w3.1)),
-            );
-            let res_lo = _mm_min_epi32(
-                _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_lo, rnd), 7), zero),
-                maxv,
-            );
-            let res_hi = _mm_min_epi32(
-                _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_hi, rnd), 7), zero),
-                maxv,
-            );
-            let packed = _mm_packus_epi16(_mm_packus_epi32(res_lo, res_hi), zero);
-            _mm_storel_epi64(dst_row[x..x + 8].as_mut_ptr() as *mut __m128i, packed);
-        }
-        x += 8;
+    let base_const = (top_off as i32 + base0) as usize;
+    let (body, fill_tail) = dst_row.split_at_mut(n_filter);
+    let (c16, r16) = body.as_chunks_mut::<16>();
+    for (ci, d) in c16.iter_mut().enumerate() {
+        let bi = base_const + ci * 16;
+        let (alo, ahi) = dr_filter8(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            zero,
+            maxv,
+            load8_u8_i32((&filt[bi - 1..bi - 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi..bi + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi + 1..bi + 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi + 2..bi + 2 + 8]).try_into().unwrap()),
+        );
+        let bb = bi + 8;
+        let (blo, bhi) = dr_filter8(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            zero,
+            maxv,
+            load8_u8_i32((&filt[bb - 1..bb - 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bb..bb + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bb + 1..bb + 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bb + 2..bb + 2 + 8]).try_into().unwrap()),
+        );
+        store_i32x16_u8_fixed(d, alo, ahi, blo, bhi);
     }
-    while x < n_filter {
-        let bi = (top_off as i32 + base0) as usize + x;
+    let done = c16.len() * 16;
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+    for (ci, d) in c8.iter_mut().enumerate() {
+        let bi = base_const + done + ci * 8;
+        let (lo, hi) = dr_filter8(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            zero,
+            maxv,
+            load8_u8_i32((&filt[bi - 1..bi - 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi..bi + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi + 1..bi + 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi + 2..bi + 2 + 8]).try_into().unwrap()),
+        );
+        store_i32x8_u8_fixed(d, lo, hi);
+    }
+    let base_x = done + c8.len() * 8;
+    for (xi, d) in r8.iter_mut().enumerate() {
+        let bi = base_const + base_x + xi;
         let v = f.a as i32 * filt[bi - 1] as i32
             + f.b as i32 * filt[bi] as i32
             + f.c as i32 * filt[bi + 1] as i32
             + f.d as i32 * filt[bi + 2] as i32;
-        dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
-        x += 1;
+        *d = ((v + 64) >> 7).clamp(0, 255) as u8;
     }
-    dst_row[n_filter..w].fill(fill);
+    fill_tail.fill(fill);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1018,7 +1100,7 @@ pub(crate) fn ipred_z1_8bpc_sse41(
 /// Load 8 bytes and zero-extend to two i32x4 lanes, REVERSED: lane `k` holds
 /// `a[7 - k]`.
 #[inline(always)]
-fn load8_u8_i32_rev(a: &[u8]) -> (__m128i, __m128i) {
+fn load8_u8_i32_rev(a: &[u8; 8]) -> (__m128i, __m128i) {
     let v = unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) };
     let mask = unsafe { _mm_setr_epi8(7, 6, 5, 4, 3, 2, 1, 0, -1, -1, -1, -1, -1, -1, -1, -1) };
     let rev = unsafe { _mm_shuffle_epi8(v, mask) };
@@ -1053,51 +1135,89 @@ fn z3_luma_col_sse41(
     let zero = _mm_setzero_si128();
     let maxv = _mm_set1_epi32(255);
 
-    let mut y = 0usize;
-    while y + 8 <= n_filter {
-        let bi_j = left_off as i32 - base0 - y as i32;
-        // tap a/b/c/d read filt[bi+1], filt[bi], filt[bi-1], filt[bi-2]; the
-        // reversed windows start at bi_j-6, bi_j-7, bi_j-8, bi_j-9.
-        let sa = (bi_j - 6) as usize;
-        let sb = (bi_j - 7) as usize;
-        let sc = (bi_j - 8) as usize;
-        let sd = (bi_j - 9) as usize;
-        let wa = load8_u8_i32_rev(&filt[sa..sa + 8]);
-        let wb = load8_u8_i32_rev(&filt[sb..sb + 8]);
-        let wc = load8_u8_i32_rev(&filt[sc..sc + 8]);
-        let wd = load8_u8_i32_rev(&filt[sd..sd + 8]);
-        let acc_lo = _mm_add_epi32(
-            _mm_add_epi32(_mm_mullo_epi32(av, wa.0), _mm_mullo_epi32(bv, wb.0)),
-            _mm_add_epi32(_mm_mullo_epi32(cv, wc.0), _mm_mullo_epi32(dv, wd.0)),
+    let lob = left_off as i32 - base0; // bi_j at y == 0
+    let (body, fill_tail) = col.split_at_mut(n_filter);
+    let (c16, r16) = body.as_chunks_mut::<16>();
+    for (ci, d) in c16.iter_mut().enumerate() {
+        // group A covers col[y0..y0+8], group B col[y0+8..y0+16]; bi_j drops by
+        // 8 between them. Reversed windows start at bi_j-6 .. bi_j-9.
+        let bij = lob - (ci * 16) as i32;
+        let (sa, sb, sc, sd) = (
+            (bij - 6) as usize,
+            (bij - 7) as usize,
+            (bij - 8) as usize,
+            (bij - 9) as usize,
         );
-        let acc_hi = _mm_add_epi32(
-            _mm_add_epi32(_mm_mullo_epi32(av, wa.1), _mm_mullo_epi32(bv, wb.1)),
-            _mm_add_epi32(_mm_mullo_epi32(cv, wc.1), _mm_mullo_epi32(dv, wd.1)),
-        );
-        let res_lo = _mm_min_epi32(
-            _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_lo, rnd), 7), zero),
+        let (alo, ahi) = dr_filter8(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            zero,
             maxv,
+            load8_u8_i32_rev((&filt[sa..sa + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sb..sb + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sc..sc + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sd..sd + 8]).try_into().unwrap()),
         );
-        let res_hi = _mm_min_epi32(
-            _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_hi, rnd), 7), zero),
+        let bij2 = bij - 8;
+        let (sa2, sb2, sc2, sd2) = (
+            (bij2 - 6) as usize,
+            (bij2 - 7) as usize,
+            (bij2 - 8) as usize,
+            (bij2 - 9) as usize,
+        );
+        let (blo, bhi) = dr_filter8(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            zero,
             maxv,
+            load8_u8_i32_rev((&filt[sa2..sa2 + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sb2..sb2 + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sc2..sc2 + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sd2..sd2 + 8]).try_into().unwrap()),
         );
-        let packed = _mm_packus_epi16(_mm_packus_epi32(res_lo, res_hi), zero);
-        unsafe {
-            _mm_storel_epi64(col[y..y + 8].as_mut_ptr() as *mut __m128i, packed);
-        }
-        y += 8;
+        store_i32x16_u8_fixed(d, alo, ahi, blo, bhi);
     }
-    while y < n_filter {
-        let bi = (left_off as i32 - base0 - y as i32) as usize;
+    let done = c16.len() * 16;
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+    for (ci, d) in c8.iter_mut().enumerate() {
+        let bij = lob - (done + ci * 8) as i32;
+        let (sa, sb, sc, sd) = (
+            (bij - 6) as usize,
+            (bij - 7) as usize,
+            (bij - 8) as usize,
+            (bij - 9) as usize,
+        );
+        let (lo, hi) = dr_filter8(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            zero,
+            maxv,
+            load8_u8_i32_rev((&filt[sa..sa + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sb..sb + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sc..sc + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sd..sd + 8]).try_into().unwrap()),
+        );
+        store_i32x8_u8_fixed(d, lo, hi);
+    }
+    let base_y = done + c8.len() * 8;
+    for (yi, d) in r8.iter_mut().enumerate() {
+        let bi = (lob - (base_y + yi) as i32) as usize;
         let v = f.a as i32 * filt[bi + 1] as i32
             + f.b as i32 * filt[bi] as i32
             + f.c as i32 * filt[bi - 1] as i32
             + f.d as i32 * filt[bi - 2] as i32;
-        col[y] = ((v + 64) >> 7).clamp(0, 255) as u8;
-        y += 1;
+        *d = ((v + 64) >> 7).clamp(0, 255) as u8;
     }
-    col[n_filter..h].fill(fill);
+    fill_tail.fill(fill);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1240,35 +1360,29 @@ fn z2_top_span_sse41(
             break;
         }
         let sa = (ti0 + 1) as usize;
-        let w0 = load8_u8_i32(&filt[sa..sa + 8]);
-        let w1 = load8_u8_i32(&filt[sa + 1..sa + 1 + 8]);
-        let w2 = load8_u8_i32(&filt[sa + 2..sa + 2 + 8]);
-        let w3 = load8_u8_i32(&filt[sa + 3..sa + 3 + 8]);
-        unsafe {
-            let acc_lo = _mm_add_epi32(
-                _mm_add_epi32(_mm_mullo_epi32(av, w0.0), _mm_mullo_epi32(bv, w1.0)),
-                _mm_add_epi32(_mm_mullo_epi32(cv, w2.0), _mm_mullo_epi32(dv, w3.0)),
-            );
-            let acc_hi = _mm_add_epi32(
-                _mm_add_epi32(_mm_mullo_epi32(av, w0.1), _mm_mullo_epi32(bv, w1.1)),
-                _mm_add_epi32(_mm_mullo_epi32(cv, w2.1), _mm_mullo_epi32(dv, w3.1)),
-            );
-            let res_lo = _mm_min_epi32(
-                _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_lo, rnd), 7), zero),
-                maxv,
-            );
-            let res_hi = _mm_min_epi32(
-                _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(acc_hi, rnd), 7), zero),
-                maxv,
-            );
-            let packed = _mm_packus_epi16(_mm_packus_epi32(res_lo, res_hi), zero);
-            _mm_storel_epi64(dst_row[x..x + 8].as_mut_ptr() as *mut __m128i, packed);
-        }
+        let (res_lo, res_hi) = dr_filter8(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            zero,
+            maxv,
+            load8_u8_i32((&filt[sa..sa + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[sa + 1..sa + 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[sa + 2..sa + 2 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[sa + 3..sa + 3 + 8]).try_into().unwrap()),
+        );
+        store_i32x8_u8_fixed((&mut dst_row[x..x + 8]).try_into().unwrap(), res_lo, res_hi);
         x += 8;
         xpos += 64 * 8;
     }
     while x < w {
         let base_x = xpos >> 6;
+        // Keep `ti` signed: at the left/top boundary `base_x` is -1, so
+        // `top_off + base_x` is -1 and `(ti + 1)` is 0. Casting to usize before
+        // the +1 would wrap (usize::MAX + 1) and overflow, matching neither the
+        // scalar reference nor the 8-wide path above (both keep it signed).
         let ti = top_off as i32 + base_x;
         let v = f.a as i32 * filt[(ti + 1) as usize] as i32
             + f.b as i32 * filt[(ti + 2) as usize] as i32
