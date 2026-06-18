@@ -437,7 +437,7 @@ pub(crate) fn row_clip(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min: i32
         i += 8;
     }
     while i < n {
-        tmp[i] = (((tmp[i] + rnd) >> shift).max(min)).min(max);
+        tmp[i] = ((tmp[i] + rnd) >> shift).max(min).min(max);
         i += 1;
     }
 }

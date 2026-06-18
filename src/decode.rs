@@ -108,7 +108,7 @@ pub fn compute_gdf_ref_dst_idx(frame_hdr: &FrameHeader, absrefdist: &[u8; 7]) ->
     REF_DST_IDX_TBL[imin(max_dist, 11) as usize]
 }
 
-pub fn init_ns_wiener_bank(bank: &mut NsWienerBank, pl: usize, n_classes: usize) {
+pub(crate) fn init_ns_wiener_bank(bank: &mut NsWienerBank, pl: usize, n_classes: usize) {
     bank.bank_size = [0; 16];
     bank.bank_idx = [0; 16];
     let cf_range: &[[i8; 2]] = if pl > 0 {
@@ -124,7 +124,12 @@ pub fn init_ns_wiener_bank(bank: &mut NsWienerBank, pl: usize, n_classes: usize)
     }
 }
 
-pub fn init_start_of_tile_row(buf: &mut Vec<u8>, sbh: i32, tile_rows: u8, row_start_sb: &[u16]) {
+pub(crate) fn init_start_of_tile_row(
+    buf: &mut Vec<u8>,
+    sbh: i32,
+    tile_rows: u8,
+    row_start_sb: &[u16],
+) {
     buf.resize(sbh as usize, 0);
     let sbh = sbh as usize;
     let mut sby = 0usize;
@@ -175,7 +180,7 @@ pub fn neg_deinterleave(diff: i32, r: i32, max: i32) -> i32 {
     }
 }
 
-pub fn init_quant_tables(
+pub(crate) fn init_quant_tables(
     frame_hdr: &FrameHeader,
     qidx: i32,
     dq: &mut [[[u32; 2]; 3]; MAX_SEGMENTS],
@@ -234,7 +239,7 @@ pub fn init_quant_tables_fi(fi: &SbFrameInfo, qidx: i32, dq: &mut [[[u32; 2]; 3]
 
 pub(crate) const N_SWITCHABLE_FILTERS: usize = 3;
 
-pub fn reset_context(ctx: &mut BlockContext, keyframe: bool, is_tip_frame: bool) {
+pub(crate) fn reset_context(ctx: &mut BlockContext, keyframe: bool, is_tip_frame: bool) {
     ctx.tx_lpf_y.fill(3);
     ctx.tx_lpf_uv.fill(2);
     if is_tip_frame {

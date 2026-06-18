@@ -1006,12 +1006,12 @@ pub(crate) fn residual_add<BD: crate::pixel::BitDepth>(
     match dpcm_flag {
         1 => {
             let mut ci = 0;
-            for y in 0..h {
+            for (c, dst) in c.chunks_exact(w).zip(dst.chunks_exact_mut(stride)).take(h) {
                 let mut acc = 0i32;
-                for x in 0..w {
+                for dst in dst[..w].iter_mut() {
                     acc += (c[ci] + rnd) >> shift;
-                    let p = dst[y * stride + x].into();
-                    dst[y * stride + x] = bd.pixel_clip(p + acc);
+                    let p: i32 = (*dst).into();
+                    *dst = bd.pixel_clip(p + acc);
                     ci += 1;
                 }
             }
