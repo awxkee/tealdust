@@ -27,7 +27,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-use crate::itx_2d::{Dct2dBackend, DctSimd4, ITX_TMP_PIXELS, idct_dequant_simd4_core};
+use crate::itx_2d::{
+    Adst2dBackend, Dct2dBackend, DctSimd4, ITX_TMP_PIXELS, idct_dequant_simd4_core,
+    itx_dequant_simd4_core,
+};
 use std::arch::aarch64::*;
 
 #[derive(Clone, Copy)]
@@ -208,6 +211,89 @@ impl Dct2dBackend for NeonDct2d {
     }
 }
 
+impl Adst2dBackend for NeonDct2d {
+    #[inline(always)]
+    fn iadst_dequant_4x4(
+        coeff: &mut [i32],
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        eob: i32,
+        tx: usize,
+        is_rect2: bool,
+        shift0: i32,
+        row_clip_min: i32,
+        row_clip_max: i32,
+        first_kind: usize,
+        second_kind: usize,
+    ) {
+        itx_dequant_simd4_core::<Self, 16, 4>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        );
+    }
+
+    #[inline(always)]
+    fn iadst_dequant_8x8(
+        coeff: &mut [i32],
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        eob: i32,
+        tx: usize,
+        is_rect2: bool,
+        shift0: i32,
+        row_clip_min: i32,
+        row_clip_max: i32,
+        first_kind: usize,
+        second_kind: usize,
+    ) {
+        itx_dequant_simd4_core::<Self, 64, 8>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        );
+    }
+
+    #[inline(always)]
+    fn iadst_dequant_16x16(
+        coeff: &mut [i32],
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        eob: i32,
+        tx: usize,
+        is_rect2: bool,
+        shift0: i32,
+        row_clip_min: i32,
+        row_clip_max: i32,
+        first_kind: usize,
+        second_kind: usize,
+    ) {
+        itx_dequant_simd4_core::<Self, 256, 16>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        );
+    }
+}
+
 pub(crate) fn idct_dequant_4x4_neon(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -315,5 +401,83 @@ pub(crate) fn idct_dequant_64x64_neon(
         shift0,
         row_clip_min,
         row_clip_max,
+    );
+}
+
+pub(crate) fn iadst_dequant_4x4_neon(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    NeonDct2d::iadst_dequant_4x4(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        first_kind,
+        second_kind,
+    );
+}
+
+pub(crate) fn iadst_dequant_8x8_neon(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    NeonDct2d::iadst_dequant_8x8(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        first_kind,
+        second_kind,
+    );
+}
+
+pub(crate) fn iadst_dequant_16x16_neon(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    NeonDct2d::iadst_dequant_16x16(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        first_kind,
+        second_kind,
     );
 }

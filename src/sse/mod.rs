@@ -29,6 +29,7 @@
 mod itx;
 
 pub(crate) use itx::{
+    iadst_dequant_4x4_sse41, iadst_dequant_8x8_sse41, iadst_dequant_16x16_sse41,
     idct_dequant_4x4_sse41, idct_dequant_8x8_sse41, idct_dequant_16x16_sse41,
     idct_dequant_32x32_sse41, idct_dequant_64x64_sse41,
 };

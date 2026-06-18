@@ -227,8 +227,10 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         return;
     }
 
-    let first_1d_fn = TX1D_FNS[t_dim.lw as usize][(txtp & 7) as usize].unwrap();
-    let second_1d_fn = TX1D_FNS[t_dim.lh as usize][((txtp >> 5) & 7) as usize].unwrap();
+    let first_kind = (txtp & 7) as usize;
+    let second_kind = ((txtp >> 5) & 7) as usize;
+    let first_1d_fn = TX1D_FNS[t_dim.lw as usize][first_kind].unwrap();
+    let second_1d_fn = TX1D_FNS[t_dim.lh as usize][second_kind].unwrap();
     let sh = imin(h as i32, 32) as usize;
     let sw = imin(w as i32, 32) as usize;
     // coded depth: row_clip_min = (~bitdepth_max) << 7, row_clip_max = ~min.
@@ -310,6 +312,75 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
                     shift0,
                     row_clip_min,
                     row_clip_max,
+                );
+            }
+            _ => handled = false,
+        }
+
+        if handled {
+            let rnd1 = (1 << shift1) >> 1;
+            add_tmp_to_dst(
+                bd, dst, dst_off, stride, &tmp, w, h, sw, sh, rnd1, shift1, 0,
+            );
+            return;
+        }
+    }
+
+    if (txtp >> 8) == 0
+        && ((txtp >> 3) & 0x3) == 0
+        && t_dim.lw == t_dim.lh
+        && t_dim.lw <= 2
+        && crate::itx_2d::is_dct_adst_kind(first_kind)
+        && crate::itx_2d::is_dct_adst_kind(second_kind)
+        && (first_kind != crate::itx_2d::TX_KIND_DCT || second_kind != crate::itx_2d::TX_KIND_DCT)
+    {
+        let mut tmp = Txfm2d::new();
+        let mut handled = true;
+
+        match tx {
+            0 => {
+                let f = crate::itx_2d::iadst_dequant_4x4();
+                f(
+                    coeff,
+                    tmp.as_mut_array(),
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    first_kind,
+                    second_kind,
+                );
+            }
+            1 => {
+                let f = crate::itx_2d::iadst_dequant_8x8();
+                f(
+                    coeff,
+                    tmp.as_mut_array(),
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    first_kind,
+                    second_kind,
+                );
+            }
+            2 => {
+                let f = crate::itx_2d::iadst_dequant_16x16();
+                f(
+                    coeff,
+                    tmp.as_mut_array(),
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    first_kind,
+                    second_kind,
                 );
             }
             _ => handled = false,

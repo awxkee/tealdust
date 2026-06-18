@@ -31,7 +31,10 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-use crate::itx_2d::{Dct2dBackend, DctSimd4, ITX_TMP_PIXELS, idct_dequant_simd4_core};
+use crate::itx_2d::{
+    Adst2dBackend, Dct2dBackend, DctSimd4, ITX_TMP_PIXELS, idct_dequant_simd4_core,
+    itx_dequant_simd4_core,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct SseI32x4(__m128i);
@@ -218,6 +221,95 @@ impl Dct2dBackend for SseDct2d {
                 shift0,
                 row_clip_min,
                 row_clip_max,
+            );
+        }
+    }
+}
+
+impl Adst2dBackend for SseDct2d {
+    #[inline(always)]
+    fn iadst_dequant_4x4(
+        coeff: &mut [i32],
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        eob: i32,
+        tx: usize,
+        is_rect2: bool,
+        shift0: i32,
+        row_clip_min: i32,
+        row_clip_max: i32,
+        first_kind: usize,
+        second_kind: usize,
+    ) {
+        unsafe {
+            itx_dequant_simd4_core::<Self, 16, 4>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+                first_kind,
+                second_kind,
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn iadst_dequant_8x8(
+        coeff: &mut [i32],
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        eob: i32,
+        tx: usize,
+        is_rect2: bool,
+        shift0: i32,
+        row_clip_min: i32,
+        row_clip_max: i32,
+        first_kind: usize,
+        second_kind: usize,
+    ) {
+        unsafe {
+            itx_dequant_simd4_core::<Self, 64, 8>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+                first_kind,
+                second_kind,
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn iadst_dequant_16x16(
+        coeff: &mut [i32],
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        eob: i32,
+        tx: usize,
+        is_rect2: bool,
+        shift0: i32,
+        row_clip_min: i32,
+        row_clip_max: i32,
+        first_kind: usize,
+        second_kind: usize,
+    ) {
+        unsafe {
+            itx_dequant_simd4_core::<Self, 256, 16>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+                first_kind,
+                second_kind,
             );
         }
     }
@@ -454,6 +546,171 @@ pub(crate) fn idct_dequant_64x64_sse41(
             shift0,
             row_clip_min,
             row_clip_max,
+        )
+    }
+}
+
+#[target_feature(enable = "sse4.1")]
+fn iadst_dequant_4x4_sse41_impl(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    SseDct2d::iadst_dequant_4x4(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        first_kind,
+        second_kind,
+    );
+}
+
+#[target_feature(enable = "sse4.1")]
+fn iadst_dequant_8x8_sse41_impl(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    SseDct2d::iadst_dequant_8x8(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        first_kind,
+        second_kind,
+    );
+}
+
+#[target_feature(enable = "sse4.1")]
+fn iadst_dequant_16x16_sse41_impl(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    SseDct2d::iadst_dequant_16x16(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        first_kind,
+        second_kind,
+    );
+}
+
+pub(crate) fn iadst_dequant_4x4_sse41(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    unsafe {
+        iadst_dequant_4x4_sse41_impl(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        )
+    }
+}
+
+pub(crate) fn iadst_dequant_8x8_sse41(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    unsafe {
+        iadst_dequant_8x8_sse41_impl(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        )
+    }
+}
+
+pub(crate) fn iadst_dequant_16x16_sse41(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    unsafe {
+        iadst_dequant_16x16_sse41_impl(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
         )
     }
 }
