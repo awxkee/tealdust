@@ -98,14 +98,14 @@ static DDT16_KERNEL: [i8; 256] = [
     -3, 50, -76, 83, -90, 97, -86, 83, -68, 67, -56, 49, -40, 32, -19, 5, 2,
 ];
 
-static DCT8_ODD_KERNEL: [[i8; 4]; 4] = [
+pub(crate) static DCT8_ODD_KERNEL: [[i8; 4]; 4] = [
     [89, 75, 50, 18],
     [75, -18, -89, -50],
     [50, -89, 18, 75],
     [18, -50, 75, -89],
 ];
 
-static DCT16_ODD_KERNEL: [[i8; 8]; 8] = [
+pub(crate) static DCT16_ODD_KERNEL: [[i8; 8]; 8] = [
     [90, 87, 80, 70, 57, 43, 26, 9],
     [87, 57, 9, -43, -80, -90, -70, -26],
     [80, 9, -70, -87, -26, 57, 90, 43],
@@ -116,7 +116,7 @@ static DCT16_ODD_KERNEL: [[i8; 8]; 8] = [
     [9, -26, 43, -57, 70, -80, 87, -90],
 ];
 
-static DCT32_ODD_KERNEL: [[i8; 16]; 16] = [
+pub(crate) static DCT32_ODD_KERNEL: [[i8; 16]; 16] = [
     [
         90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 47, 39, 30, 22, 13, 4,
     ],
@@ -391,28 +391,28 @@ fn inv_dct32_array(v: &mut [i32; 32]) {
 }
 
 #[inline(always)]
-fn inv_dct4_1d(c: &mut [i32], stride: usize) {
+pub(crate) fn inv_dct4_1d(c: &mut [i32], stride: usize) {
     let mut v = load_1d::<4>(c, stride);
     inv_dct4_array(&mut v);
     store_1d::<4>(c, stride, &v);
 }
 
 #[inline(always)]
-fn inv_dct8_1d(c: &mut [i32], stride: usize) {
+pub(crate) fn inv_dct8_1d(c: &mut [i32], stride: usize) {
     let mut v = load_1d::<8>(c, stride);
     inv_dct8_array(&mut v);
     store_1d::<8>(c, stride, &v);
 }
 
 #[inline(always)]
-fn inv_dct16_1d(c: &mut [i32], stride: usize) {
+pub(crate) fn inv_dct16_1d(c: &mut [i32], stride: usize) {
     let mut v = load_1d::<16>(c, stride);
     inv_dct16_array(&mut v);
     store_1d::<16>(c, stride, &v);
 }
 
 #[inline(always)]
-fn inv_dct32_1d(c: &mut [i32], stride: usize) {
+pub(crate) fn inv_dct32_1d(c: &mut [i32], stride: usize) {
     let mut v = load_1d::<32>(c, stride);
     inv_dct32_array(&mut v);
     store_1d::<32>(c, stride, &v);

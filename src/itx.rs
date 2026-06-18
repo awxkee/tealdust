@@ -29,14 +29,13 @@
 
 use crate::intops::imin;
 use crate::itx_1d::{TX1D_FNS, TX1D_FNS_X8, inv_wht_wht_4x4, residual_add, residual_add_strided};
+use crate::itx_2d::{ITX_TMP_PIXELS, ITX_TMP_STRIDE};
+use crate::levels::txtp as txtp_kind;
 use crate::pixel::BitDepth;
 use crate::scan::LAST_EOB_PER_COL;
 use crate::tables::{TX_SHIFT, TXFM_DIMENSIONS};
 
 const WHT_WHT: u32 = 6 | (6 << 5);
-
-const ITX_TMP_STRIDE: usize = 32;
-const ITX_TMP_PIXELS: usize = ITX_TMP_STRIDE * ITX_TMP_STRIDE;
 
 #[derive(Clone)]
 struct Txfm2d {
@@ -52,7 +51,17 @@ impl Txfm2d {
     }
 
     #[inline(always)]
+    fn as_slice(&self) -> &[i32] {
+        &self.buf
+    }
+
+    #[inline(always)]
     fn as_mut_slice(&mut self) -> &mut [i32] {
+        &mut self.buf
+    }
+
+    #[inline(always)]
+    fn as_mut_array(&mut self) -> &mut [i32; ITX_TMP_PIXELS] {
         &mut self.buf
     }
 
@@ -86,6 +95,85 @@ impl Txfm2d {
             out[dst..dst + width].copy_from_slice(&self.row(y)[..width]);
         }
         out
+    }
+}
+
+#[inline(always)]
+fn add_tmp_to_dst<BD: BitDepth>(
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    dst_off: usize,
+    stride: usize,
+    tmp: &Txfm2d,
+    w: usize,
+    h: usize,
+    sw: usize,
+    sh: usize,
+    rnd: i32,
+    shift: i32,
+    dpcm_flag: u8,
+) {
+    if w > sw {
+        if h > sh {
+            for (ty, y) in (0..h).step_by(2).enumerate() {
+                let tmp_row = tmp.row(ty);
+                for (tx, x) in (0..w).step_by(2).enumerate() {
+                    let cf = (tmp_row[tx] + rnd) >> shift;
+                    let d0 = dst_off + y * stride + x;
+                    let d1 = dst_off + (y + 1) * stride + x;
+                    dst[d0] = bd.pixel_clip(dst[d0].into() + cf);
+                    dst[d0 + 1] = bd.pixel_clip(dst[d0 + 1].into() + cf);
+                    dst[d1] = bd.pixel_clip(dst[d1].into() + cf);
+                    dst[d1 + 1] = bd.pixel_clip(dst[d1 + 1].into() + cf);
+                }
+            }
+        } else {
+            for y in 0..h {
+                let tmp_row = tmp.row(y);
+                for (tx, x) in (0..w).step_by(2).enumerate() {
+                    let cf = (tmp_row[tx] + rnd) >> shift;
+                    let d = dst_off + y * stride + x;
+                    dst[d] = bd.pixel_clip(dst[d].into() + cf);
+                    dst[d + 1] = bd.pixel_clip(dst[d + 1].into() + cf);
+                }
+            }
+        }
+    } else if h > sh {
+        for (ty, y) in (0..h).step_by(2).enumerate() {
+            let tmp_row = tmp.row(ty);
+            for (x, &v) in tmp_row[..w].iter().enumerate() {
+                let cf = (v + rnd) >> shift;
+                let d0 = dst_off + y * stride + x;
+                let d1 = dst_off + (y + 1) * stride + x;
+                dst[d0] = bd.pixel_clip(dst[d0].into() + cf);
+                dst[d1] = bd.pixel_clip(dst[d1].into() + cf);
+            }
+        }
+    } else if dpcm_flag == 0 {
+        residual_add_strided(
+            bd,
+            &mut dst[dst_off..],
+            stride,
+            tmp.as_slice(),
+            ITX_TMP_STRIDE,
+            w,
+            h,
+            rnd,
+            shift,
+        );
+    } else {
+        let compact = tmp.compact::<ITX_TMP_PIXELS>(w, h);
+        residual_add(
+            bd,
+            &mut dst[dst_off..],
+            stride,
+            &compact,
+            w,
+            h,
+            rnd,
+            shift,
+            dpcm_flag,
+        );
     }
 }
 
@@ -151,6 +239,91 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         (min, !min)
     };
 
+    let shift0 = tx_sh[0] as i32;
+    let shift1 = tx_sh[1] as i32;
+
+    if (txtp & 0xFF) == txtp_kind::DCT_DCT as u32 && (txtp >> 8) == 0 && t_dim.lw == t_dim.lh {
+        let mut tmp = Txfm2d::new();
+        let mut handled = true;
+
+        match tx {
+            0 => {
+                let f = crate::itx_2d::idct_dequant_4x4();
+                f(
+                    coeff,
+                    tmp.as_mut_array(),
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                );
+            }
+            1 => {
+                let f = crate::itx_2d::idct_dequant_8x8();
+                f(
+                    coeff,
+                    tmp.as_mut_array(),
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                );
+            }
+            2 => {
+                let f = crate::itx_2d::idct_dequant_16x16();
+                f(
+                    coeff,
+                    tmp.as_mut_array(),
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                );
+            }
+            3 => {
+                let f = crate::itx_2d::idct_dequant_32x32();
+                f(
+                    coeff,
+                    tmp.as_mut_array(),
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                );
+            }
+            4 => {
+                let f = crate::itx_2d::idct_dequant_64x64();
+                f(
+                    coeff,
+                    tmp.as_mut_array(),
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                );
+            }
+            _ => handled = false,
+        }
+
+        if handled {
+            let rnd1 = (1 << shift1) >> 1;
+            add_tmp_to_dst(
+                bd, dst, dst_off, stride, &tmp, w, h, sw, sh, rnd1, shift1, 0,
+            );
+            return;
+        }
+    }
+
     let mut tmp = Txfm2d::new();
     let mut row = 0usize;
     let tx_class = (txtp >> 3) & 0x3;
@@ -202,7 +375,6 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
     }
     coeff[..sw * sh].fill(0);
 
-    let shift0 = tx_sh[0] as i32;
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..sh {
         crate::simd::row_clip(tmp.row_mut(y), sw, rnd0, shift0, row_clip_min, row_clip_max);
@@ -221,74 +393,22 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         x += 1;
     }
 
-    let shift1 = tx_sh[1] as i32;
     let rnd1 = (1 << shift1) >> 1;
 
-    if w > sw {
-        if h > sh {
-            for (ty, y) in (0..h).step_by(2).enumerate() {
-                let tmp_row = tmp.row(ty);
-                for (tx, x) in (0..w).step_by(2).enumerate() {
-                    let cf = (tmp_row[tx] + rnd1) >> shift1;
-                    let d0 = dst_off + y * stride + x;
-                    let d1 = dst_off + (y + 1) * stride + x;
-                    dst[d0] = bd.pixel_clip(dst[d0].into() + cf);
-                    dst[d0 + 1] = bd.pixel_clip(dst[d0 + 1].into() + cf);
-                    dst[d1] = bd.pixel_clip(dst[d1].into() + cf);
-                    dst[d1 + 1] = bd.pixel_clip(dst[d1 + 1].into() + cf);
-                }
-            }
-        } else {
-            for y in 0..h {
-                let tmp_row = tmp.row(y);
-                for (tx, x) in (0..w).step_by(2).enumerate() {
-                    let cf = (tmp_row[tx] + rnd1) >> shift1;
-                    let d = dst_off + y * stride + x;
-                    dst[d] = bd.pixel_clip(dst[d].into() + cf);
-                    dst[d + 1] = bd.pixel_clip(dst[d + 1].into() + cf);
-                }
-            }
-        }
-    } else if h > sh {
-        for (ty, y) in (0..h).step_by(2).enumerate() {
-            let tmp_row = tmp.row(ty);
-            for (x, &v) in tmp_row[..w].iter().enumerate() {
-                let cf = (v + rnd1) >> shift1;
-                let d0 = dst_off + y * stride + x;
-                let d1 = dst_off + (y + 1) * stride + x;
-                dst[d0] = bd.pixel_clip(dst[d0].into() + cf);
-                dst[d1] = bd.pixel_clip(dst[d1].into() + cf);
-            }
-        }
-    } else {
-        let dpcm_flag = (txtp >> 8) as u8;
-        if dpcm_flag == 0 {
-            residual_add_strided(
-                bd,
-                &mut dst[dst_off..],
-                stride,
-                tmp.as_mut_slice(),
-                ITX_TMP_STRIDE,
-                w,
-                h,
-                rnd1,
-                shift1,
-            );
-        } else {
-            let compact = tmp.compact::<ITX_TMP_PIXELS>(w, h);
-            residual_add(
-                bd,
-                &mut dst[dst_off..],
-                stride,
-                &compact,
-                w,
-                h,
-                rnd1,
-                shift1,
-                dpcm_flag,
-            );
-        }
-    }
+    add_tmp_to_dst(
+        bd,
+        dst,
+        dst_off,
+        stride,
+        &tmp,
+        w,
+        h,
+        sw,
+        sh,
+        rnd1,
+        shift1,
+        (txtp >> 8) as u8,
+    );
 }
 
 /// Cross-component transform clip at the coded bit depth (`cctx_c` in

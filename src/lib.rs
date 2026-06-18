@@ -81,6 +81,7 @@ pub(crate) mod ipred;
 pub(crate) mod ipred_prepare;
 pub(crate) mod itx;
 pub(crate) mod itx_1d;
+pub(crate) mod itx_2d;
 pub(crate) mod lf_mask;
 pub(crate) mod looprestoration;
 pub(crate) mod mc;
@@ -106,8 +107,12 @@ mod error;
 mod headers;
 mod ipred_dispatch;
 mod levels;
+#[cfg(target_arch = "aarch64")]
+mod neon;
 mod picture;
 mod simd;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub(crate) mod sse;
 
 pub use avif::*;
 pub use data::Data;
