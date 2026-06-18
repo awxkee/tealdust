@@ -39,12 +39,14 @@ use crate::tables::{
 };
 use crate::warpmv::resolve_divisor_32;
 
+#[inline]
 pub(crate) fn decode_exp_golomb(msac: &mut MsacContext, k: u32) -> u32 {
     let length = msac.decode_unary_bypass(21) + k;
     let x = (1u32 << length) + msac.decode_bools_bypass(length);
     x - (1 << k)
 }
 
+#[inline]
 pub(crate) fn decode_hr(msac: &mut MsacContext, hr_avg: i32) -> i32 {
     let m = ulog2(iclip(hr_avg, 2, 64) as u32) as u32;
     let cmax = imin(m as i32 + 4, 6) as u32;
@@ -57,6 +59,7 @@ pub(crate) fn decode_hr(msac: &mut MsacContext, hr_avg: i32) -> i32 {
     (rem + (q << m)) as i32
 }
 
+#[inline]
 pub(crate) fn tcq_next_state(state: i32, abs_level: i32) -> i32 {
     (((state & 0x4) ^ (((abs_level & 1) ^ (state & 0x1)) << 2))
         | ((state & 0x6) >> 1)
@@ -264,6 +267,7 @@ pub(crate) fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
     (s != 0) as u32 + (s > 0) as u32
 }
 
+#[inline]
 pub(crate) fn get_lo_ctx(
     levels: &[i8],
     off: usize,
@@ -358,6 +362,7 @@ pub(crate) fn get_lo_ctx(
     offset + ((lo_mag + 1) >> 1).min(lim)
 }
 
+#[inline]
 pub(crate) fn get_lo_ctx_idtx(levels: &[i8], off: usize, hi_mag: &mut u32, stride: usize) -> u32 {
     let v0 = levels[off - 1] as u32;
     let v1 = levels[off - stride] as u32;
@@ -367,6 +372,7 @@ pub(crate) fn get_lo_ctx_idtx(levels: &[i8], off: usize, hi_mag: &mut u32, strid
     lo_mag
 }
 
+#[inline]
 pub(crate) fn get_sign_ctx_idtx(levels: &[i8], off: usize, stride: usize) -> u32 {
     let sum =
         levels[off - 1] as i32 + levels[off - stride] as i32 + levels[off - stride - 1] as i32;
@@ -768,7 +774,7 @@ pub(crate) fn decode_coefs(
             if (t_dim.w >= 8 && t & 0x02 != 0)
                 || (t_dim.h >= 8 && t & 0x40 != 0)
                 || (p.tx == 2 /* TX_16X16 */
-                    && ((t & 0x47 == 0x41) || (t & 0xe2 == 0x22)))
+                && ((t & 0x47 == 0x41) || (t & 0xe2 == 0x22)))
             {
                 *txtp = txtp::DCT_DCT as u16;
             } else if t == txtp::IDTX_INV {
@@ -1353,7 +1359,10 @@ pub(crate) fn decode_coefs(
     if p.seq_fsc && (!p.intra || p.fsc) && *txtp as u8 == txtp::IDTX && !chroma {
         *txtp = txtp::IDTX_INV as u16;
         let stride = 1 + (4 << slh);
-        let mut levels = vec![0i8; stride * ((4 << slw) + 1)];
+        // Worst-case stride*((4<<slw)+1) is 33*33 = 1089; use a fixed stack array
+        // to avoid a per-block heap allocation. Unused tail stays zeroed, matching
+        // the previous fully-zeroed Vec semantics required by the neighbour reads.
+        let mut levels = [0i8; 1089];
         let sz_ctx = imin(t_dim.ctx as i32, 2) as usize;
         let sz = (16 << tx2dszctx) - 1;
         let bob = sz - eob;
@@ -1429,7 +1438,12 @@ pub(crate) fn decode_coefs(
     }
 
     if eob != 0 {
-        let mut levels = vec![0i8; 1089];
+        // Stack-allocated scratch buffer. 1089 == 33*33 is the worst-case size
+        // (stride 33 * 33 rows for the largest transform). Allocating this on the
+        // heap per transform block was a significant cost in the decode hot path;
+        // a fixed stack array removes the malloc/free and the Vec indirection on
+        // every `levels[...]` access.
+        let mut levels = [0i8; 1089];
         let is_stx = stx_type != 0 && tx_class == 0;
 
         macro_rules! decode_coefs_class {
@@ -1664,7 +1678,7 @@ pub(crate) fn decode_coefs(
                 let stride = (4 << slh) as usize;
                 let shift = slh + 2;
                 let mask = (4 << slh) - 1;
-                levels[..stride * ((4 << slw) + 2)].fill(0);
+                // `levels` is already fully zeroed at allocation; no re-fill needed.
                 let hi_to_low = if chroma { 1i32 } else { 10 };
                 decode_coefs_class!(0, stride, shift, 0, mask, hi_to_low, xy_2d);
             }
@@ -1672,7 +1686,6 @@ pub(crate) fn decode_coefs(
                 let stride = 32usize;
                 let shift = slh + 2;
                 let mask = (4 << slh) - 1;
-                levels[..stride * ((4 << slh) + 2)].fill(0);
                 let hi_to_low = (8 << slh) >> chroma as usize;
                 decode_coefs_class!(1, stride, shift, 0, mask, hi_to_low, xy_h);
             }
@@ -1681,7 +1694,6 @@ pub(crate) fn decode_coefs(
                 let shift = slw + 2;
                 let shift2 = slh + 2;
                 let mask = (4 << slw) - 1;
-                levels[..stride * ((4 << slw) + 2)].fill(0);
                 let hi_to_low = (8 << slw) >> chroma as usize;
                 decode_coefs_class!(2, stride, shift, shift2, mask, hi_to_low, xy_v);
             }

@@ -266,6 +266,7 @@ impl<'a> MsacContext<'a> {
         ret
     }
 
+    #[inline]
     fn decode_bool_raw(&mut self, f: u32) -> u32 {
         let r = self.rng;
         let dif = self.dif;
@@ -282,6 +283,7 @@ impl<'a> MsacContext<'a> {
         (ret == 0) as u32
     }
 
+    #[inline]
     pub(crate) fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
         macro_rules! decode_n {
             ($n:literal) => {{
@@ -368,6 +370,7 @@ impl<'a> MsacContext<'a> {
         }
     }
 
+    #[inline]
     pub(crate) fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
         let bit = self.decode_bool_raw(cdf[0] as u32);
 
