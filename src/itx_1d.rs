@@ -991,6 +991,30 @@ pub static TX1D_FNS: [[Option<Itx1dFn>; N_TX_1D_TYPES - 1]; N_TX_SIZES] = {
     t
 };
 
+pub(crate) fn residual_add_strided<BD: crate::pixel::BitDepth>(
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    dst_stride: usize,
+    c: &[i32],
+    c_stride: usize,
+    w: usize,
+    h: usize,
+    rnd: i32,
+    shift: i32,
+) {
+    for y in 0..h {
+        let drow = y * dst_stride;
+        let crow = y * c_stride;
+        if drow >= dst.len() || crow >= c.len() {
+            break;
+        }
+        let d = &mut dst[drow..];
+        let cr = &c[crow..];
+        let n = w.min(d.len()).min(cr.len());
+        crate::simd::residual_add_row(bd, d, cr, n, rnd, shift);
+    }
+}
+
 /// type `BD::Pixel`; the reconstructed value is clipped into `[0, bitdepth_max]`.
 pub(crate) fn residual_add<BD: crate::pixel::BitDepth>(
     bd: BD,
@@ -1005,14 +1029,12 @@ pub(crate) fn residual_add<BD: crate::pixel::BitDepth>(
 ) {
     match dpcm_flag {
         1 => {
-            let mut ci = 0;
             for (c, dst) in c.chunks_exact(w).zip(dst.chunks_exact_mut(stride)).take(h) {
                 let mut acc = 0i32;
-                for dst in dst[..w].iter_mut() {
-                    acc += (c[ci] + rnd) >> shift;
+                for (dst, &c) in dst[..w].iter_mut().zip(c.iter()) {
+                    acc += (c + rnd) >> shift;
                     let p: i32 = (*dst).into();
                     *dst = bd.pixel_clip(p + acc);
-                    ci += 1;
                 }
             }
         }

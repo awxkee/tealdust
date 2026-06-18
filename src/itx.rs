@@ -28,12 +28,66 @@
  */
 
 use crate::intops::imin;
-use crate::itx_1d::{TX1D_FNS, TX1D_FNS_X8, inv_wht_wht_4x4, residual_add};
+use crate::itx_1d::{TX1D_FNS, TX1D_FNS_X8, inv_wht_wht_4x4, residual_add, residual_add_strided};
 use crate::pixel::BitDepth;
 use crate::scan::LAST_EOB_PER_COL;
 use crate::tables::{TX_SHIFT, TXFM_DIMENSIONS};
 
 const WHT_WHT: u32 = 6 | (6 << 5);
+
+const ITX_TMP_STRIDE: usize = 32;
+const ITX_TMP_PIXELS: usize = ITX_TMP_STRIDE * ITX_TMP_STRIDE;
+
+#[derive(Clone)]
+struct Txfm2d {
+    buf: [i32; ITX_TMP_PIXELS],
+}
+
+impl Txfm2d {
+    #[inline(always)]
+    fn new() -> Self {
+        Self {
+            buf: [0; ITX_TMP_PIXELS],
+        }
+    }
+
+    #[inline(always)]
+    fn as_mut_slice(&mut self) -> &mut [i32] {
+        &mut self.buf
+    }
+
+    #[inline(always)]
+    fn row(&self, y: usize) -> &[i32; ITX_TMP_STRIDE] {
+        self.buf[y * ITX_TMP_STRIDE..(y + 1) * ITX_TMP_STRIDE]
+            .try_into()
+            .unwrap()
+    }
+
+    #[inline(always)]
+    fn row_mut(&mut self, y: usize) -> &mut [i32; ITX_TMP_STRIDE] {
+        (&mut self.buf[y * ITX_TMP_STRIDE..(y + 1) * ITX_TMP_STRIDE])
+            .try_into()
+            .unwrap()
+    }
+
+    #[inline(always)]
+    fn clear_tail_rows(&mut self, start: usize, end: usize, width: usize) {
+        for y in start..end {
+            self.row_mut(y)[..width].fill(0);
+        }
+    }
+
+    #[inline(always)]
+    fn compact<const N: usize>(&self, width: usize, height: usize) -> [i32; N] {
+        debug_assert!(width * height <= N);
+        let mut out = [0i32; N];
+        for y in 0..height {
+            let dst = y * width;
+            out[dst..dst + width].copy_from_slice(&self.row(y)[..width]);
+        }
+        out
+    }
+}
 
 /// Inverse transform of `coeff` followed by clipped add into `dst`
 /// intermediate range and the final pixel clip both scale with `bd`.
@@ -97,8 +151,8 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         (min, !min)
     };
 
-    let mut tmp = [0i32; 32 * 32];
-    let mut col = 0usize;
+    let mut tmp = Txfm2d::new();
+    let mut row = 0usize;
     let tx_class = (txtp >> 3) & 0x3;
 
     if tx_class == 0 {
@@ -106,13 +160,14 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         let last_eob = &LAST_EOB_PER_COL.table[off..];
         let mut ei = 0usize;
         loop {
-            for x in 0..sw {
-                let v = coeff[col + x * sh];
-                tmp[col * sw + x] = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
+            let tmp_row = tmp.row_mut(row);
+            for (x, dst) in tmp_row[..sw].iter_mut().enumerate() {
+                let v = coeff[row + x * sh];
+                *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
             }
-            first_1d_fn(&mut tmp[col * sw..], 1);
-            col += 1;
-            if col & 3 == 0 {
+            first_1d_fn(tmp_row, 1);
+            row += 1;
+            if row & 3 == 0 {
                 if eob > last_eob[ei] as i32 {
                     ei += 1;
                 } else {
@@ -121,7 +176,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
             }
         }
     } else {
-        let last_nz_col = if tx_class == 2 {
+        let last_nz_row = if tx_class == 2 {
             imin(sh as i32 - 1, eob) as usize
         } else if tx_class == 3 {
             (eob as usize) >> (t_dim.lw as usize + 2)
@@ -129,37 +184,40 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
             sh - 1
         };
         loop {
-            for x in 0..sw {
-                let v = coeff[col + x * sh];
-                tmp[col * sw + x] = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
+            let tmp_row = tmp.row_mut(row);
+            for (x, dst) in tmp_row[..sw].iter_mut().enumerate() {
+                let v = coeff[row + x * sh];
+                *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
             }
-            first_1d_fn(&mut tmp[col * sw..], 1);
-            col += 1;
-            if col > last_nz_col {
+            first_1d_fn(tmp_row, 1);
+            row += 1;
+            if row > last_nz_row {
                 break;
             }
         }
     }
 
-    if col < sh {
-        tmp[col * sw..sh * sw].fill(0);
+    if row < sh {
+        tmp.clear_tail_rows(row, sh, sw);
     }
     coeff[..sw * sh].fill(0);
 
     let shift0 = tx_sh[0] as i32;
     let rnd0 = (1 << shift0) >> 1;
-    crate::simd::row_clip(&mut tmp, sw * sh, rnd0, shift0, row_clip_min, row_clip_max);
+    for y in 0..sh {
+        crate::simd::row_clip(tmp.row_mut(y), sw, rnd0, shift0, row_clip_min, row_clip_max);
+    }
 
     let second_1d_fn_x8 = TX1D_FNS_X8[t_dim.lh as usize][((txtp >> 5) & 7) as usize];
     let mut x = 0;
     if let Some(f8) = second_1d_fn_x8 {
         while x + 8 <= sw {
-            f8(&mut tmp, x, sw);
+            f8(tmp.as_mut_slice(), x, ITX_TMP_STRIDE);
             x += 8;
         }
     }
     while x < sw {
-        second_1d_fn(&mut tmp[x..], sw);
+        second_1d_fn(&mut tmp.as_mut_slice()[x..], ITX_TMP_STRIDE);
         x += 1;
     }
 
@@ -168,11 +226,10 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
 
     if w > sw {
         if h > sh {
-            let mut ci = 0;
-            for y in (0..h).step_by(2) {
-                for x in (0..w).step_by(2) {
-                    let cf = (tmp[ci] + rnd1) >> shift1;
-                    ci += 1;
+            for (ty, y) in (0..h).step_by(2).enumerate() {
+                let tmp_row = tmp.row(ty);
+                for (tx, x) in (0..w).step_by(2).enumerate() {
+                    let cf = (tmp_row[tx] + rnd1) >> shift1;
                     let d0 = dst_off + y * stride + x;
                     let d1 = dst_off + (y + 1) * stride + x;
                     dst[d0] = bd.pixel_clip(dst[d0].into() + cf);
@@ -182,11 +239,10 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
                 }
             }
         } else {
-            let mut ci = 0;
             for y in 0..h {
-                for x in (0..w).step_by(2) {
-                    let cf = (tmp[ci] + rnd1) >> shift1;
-                    ci += 1;
+                let tmp_row = tmp.row(y);
+                for (tx, x) in (0..w).step_by(2).enumerate() {
+                    let cf = (tmp_row[tx] + rnd1) >> shift1;
                     let d = dst_off + y * stride + x;
                     dst[d] = bd.pixel_clip(dst[d].into() + cf);
                     dst[d + 1] = bd.pixel_clip(dst[d + 1].into() + cf);
@@ -194,11 +250,10 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
             }
         }
     } else if h > sh {
-        let mut ci = 0;
-        for y in (0..h).step_by(2) {
-            for x in 0..w {
-                let cf = (tmp[ci] + rnd1) >> shift1;
-                ci += 1;
+        for (ty, y) in (0..h).step_by(2).enumerate() {
+            let tmp_row = tmp.row(ty);
+            for (x, &v) in tmp_row[..w].iter().enumerate() {
+                let cf = (v + rnd1) >> shift1;
                 let d0 = dst_off + y * stride + x;
                 let d1 = dst_off + (y + 1) * stride + x;
                 dst[d0] = bd.pixel_clip(dst[d0].into() + cf);
@@ -207,17 +262,32 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         }
     } else {
         let dpcm_flag = (txtp >> 8) as u8;
-        residual_add(
-            bd,
-            &mut dst[dst_off..],
-            stride,
-            &tmp,
-            w,
-            h,
-            rnd1,
-            shift1,
-            dpcm_flag,
-        );
+        if dpcm_flag == 0 {
+            residual_add_strided(
+                bd,
+                &mut dst[dst_off..],
+                stride,
+                tmp.as_mut_slice(),
+                ITX_TMP_STRIDE,
+                w,
+                h,
+                rnd1,
+                shift1,
+            );
+        } else {
+            let compact = tmp.compact::<ITX_TMP_PIXELS>(w, h);
+            residual_add(
+                bd,
+                &mut dst[dst_off..],
+                stride,
+                &compact,
+                w,
+                h,
+                rnd1,
+                shift1,
+                dpcm_flag,
+            );
+        }
     }
 }
 
