@@ -81,7 +81,7 @@ unsafe fn ns_wiener_fir_run_sse41_impl(
         while x + 8 <= n {
             let c = col0 + x;
             debug_assert!(c + 8 <= center.len());
-            let (mlo, mhi) = load8(center.as_ptr().add(c));
+            let (mlo, mhi) = load8(center[c..c + 8].as_ptr());
             let mut slo = _mm_slli_epi32(mlo, 7);
             let mut shi = _mm_slli_epi32(mhi, 7);
             let two_mlo = _mm_add_epi32(mlo, mlo);
@@ -90,8 +90,8 @@ unsafe fn ns_wiener_fir_run_sse41_impl(
                 let cp = (c as i32 + t.dx) as usize;
                 let cm = (c as i32 - t.dx) as usize;
                 debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8(t.row_p.as_ptr().add(cp));
-                let (blo, bhi) = load8(t.row_m.as_ptr().add(cm));
+                let (alo, ahi) = load8(t.row_p[cp..cp + 8].as_ptr());
+                let (blo, bhi) = load8(t.row_m[cm..cm + 8].as_ptr());
                 let coef = _mm_set1_epi32(t.coef);
                 // (a + b - 2*m) * coef
                 slo = _mm_add_epi32(
@@ -103,7 +103,7 @@ unsafe fn ns_wiener_fir_run_sse41_impl(
                     _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(ahi, bhi), two_mhi), coef),
                 );
             }
-            finish(dst.as_mut_ptr().add(x), slo, shi);
+            finish(dst[x..x + 8].as_mut_ptr(), slo, shi);
             x += 8;
         }
         while x < n {
@@ -135,7 +135,7 @@ unsafe fn pc_wiener_fir_run_sse41_impl(
         while x + 8 <= n {
             let c = col0 + x;
             debug_assert!(c + 8 <= center.len());
-            let (mlo, mhi) = load8(center.as_ptr().add(c));
+            let (mlo, mhi) = load8(center[c..c + 8].as_ptr());
             let cc = _mm_set1_epi32(center_coef);
             let mut slo = _mm_mullo_epi32(mlo, cc);
             let mut shi = _mm_mullo_epi32(mhi, cc);
@@ -143,14 +143,14 @@ unsafe fn pc_wiener_fir_run_sse41_impl(
                 let cp = (c as i32 + t.dx) as usize;
                 let cm = (c as i32 - t.dx) as usize;
                 debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8(t.row_p.as_ptr().add(cp));
-                let (blo, bhi) = load8(t.row_m.as_ptr().add(cm));
+                let (alo, ahi) = load8(t.row_p[cp..cp + 8].as_ptr());
+                let (blo, bhi) = load8(t.row_m[cm..cm + 8].as_ptr());
                 let coef = _mm_set1_epi32(t.coef);
                 // (a + b) * coef
                 slo = _mm_add_epi32(slo, _mm_mullo_epi32(_mm_add_epi32(alo, blo), coef));
                 shi = _mm_add_epi32(shi, _mm_mullo_epi32(_mm_add_epi32(ahi, bhi), coef));
             }
-            finish(dst.as_mut_ptr().add(x), slo, shi);
+            finish(dst[x..x + 8].as_mut_ptr(), slo, shi);
             x += 8;
         }
         while x < n {

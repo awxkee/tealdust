@@ -44,8 +44,5 @@ pub(crate) use itx::{
 };
 
 pub(crate) use cfl::cfl_apply_420_8bpc_sse41;
-pub(crate) use ipred::{
-    ipred_h_8bpc_sse41, ipred_smooth_8bpc_sse41, ipred_smooth_h_8bpc_sse41,
-    ipred_smooth_v_8bpc_sse41, ipred_v_8bpc_sse41,
-};
+pub(crate) use ipred::*;
 pub(crate) use looprestoration::{ns_wiener_fir_run_sse41, pc_wiener_fir_run_sse41};

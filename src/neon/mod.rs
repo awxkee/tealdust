@@ -32,10 +32,7 @@ mod itx;
 mod looprestoration;
 
 pub(crate) use cfl::cfl_apply_420_8bpc_neon;
-pub(crate) use ipred::{
-    ipred_h_8bpc_neon, ipred_smooth_8bpc_neon, ipred_smooth_h_8bpc_neon, ipred_smooth_v_8bpc_neon,
-    ipred_v_8bpc_neon,
-};
+pub(crate) use ipred::*;
 pub(crate) use itx::{
     iadst_dequant_4x4_neon, iadst_dequant_4x8_neon, iadst_dequant_4x16_neon,
     iadst_dequant_8x4_neon, iadst_dequant_8x8_neon, iadst_dequant_8x16_neon,

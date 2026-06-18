@@ -369,7 +369,7 @@ fn dc_gen_left<P: Pixel>(tl: &[P], o: usize, height: usize) -> u32 {
     dc >> (height as u32).trailing_zeros()
 }
 
-fn fast_div32_dc(num: u32, den: u32) -> u32 {
+pub(crate) fn fast_div32_dc(num: u32, den: u32) -> u32 {
     debug_assert!(den > 0 && den <= 255);
     let mut shift = ulog2(den);
     let rem = den as i32 - (1 << shift);

@@ -82,7 +82,7 @@ pub(crate) fn ns_wiener_fir_run_neon(
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
         unsafe {
-            let (mlo, mhi) = load8_u8_i32(center.as_ptr().add(c));
+            let (mlo, mhi) = load8_u8_i32(center[c..c + 8].as_ptr());
             let mut slo = vshlq_n_s32::<7>(mlo);
             let mut shi = vshlq_n_s32::<7>(mhi);
             let two_mlo = vaddq_s32(mlo, mlo);
@@ -91,8 +91,8 @@ pub(crate) fn ns_wiener_fir_run_neon(
                 let cp = (c as i32 + t.dx) as usize;
                 let cm = (c as i32 - t.dx) as usize;
                 debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8_u8_i32(t.row_p.as_ptr().add(cp));
-                let (blo, bhi) = load8_u8_i32(t.row_m.as_ptr().add(cm));
+                let (alo, ahi) = load8_u8_i32(t.row_p[cp..cp + 8].as_ptr());
+                let (blo, bhi) = load8_u8_i32(t.row_m[cm..cm + 8].as_ptr());
                 let coef = vdupq_n_s32(t.coef);
                 // (a + b - 2*m) * coef
                 slo = vaddq_s32(
@@ -104,7 +104,7 @@ pub(crate) fn ns_wiener_fir_run_neon(
                     vmulq_s32(vsubq_s32(vaddq_s32(ahi, bhi), two_mhi), coef),
                 );
             }
-            finish_store(dst.as_mut_ptr().add(x), slo, shi);
+            finish_store(dst[x..x + 8].as_mut_ptr(), slo, shi);
         }
         x += 8;
     }
@@ -137,7 +137,7 @@ pub(crate) fn pc_wiener_fir_run_neon(
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
         unsafe {
-            let (mlo, mhi) = load8_u8_i32(center.as_ptr().add(c));
+            let (mlo, mhi) = load8_u8_i32(center[c..c + 8].as_ptr());
             let cc = vdupq_n_s32(center_coef);
             let mut slo = vmulq_s32(mlo, cc);
             let mut shi = vmulq_s32(mhi, cc);
@@ -145,14 +145,14 @@ pub(crate) fn pc_wiener_fir_run_neon(
                 let cp = (c as i32 + t.dx) as usize;
                 let cm = (c as i32 - t.dx) as usize;
                 debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8_u8_i32(t.row_p.as_ptr().add(cp));
-                let (blo, bhi) = load8_u8_i32(t.row_m.as_ptr().add(cm));
+                let (alo, ahi) = load8_u8_i32(t.row_p[cp..cp + 8].as_ptr());
+                let (blo, bhi) = load8_u8_i32(t.row_m[cm..cm + 8].as_ptr());
                 let coef = vdupq_n_s32(t.coef);
                 // (a + b) * coef
                 slo = vaddq_s32(slo, vmulq_s32(vaddq_s32(alo, blo), coef));
                 shi = vaddq_s32(shi, vmulq_s32(vaddq_s32(ahi, bhi), coef));
             }
-            finish_store(dst.as_mut_ptr().add(x), slo, shi);
+            finish_store(dst[x..x + 8].as_mut_ptr(), slo, shi);
         }
         x += 8;
     }
