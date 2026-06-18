@@ -755,7 +755,7 @@ pub(crate) static DEBLOCK_SIDE_THRESHOLDS: [i16; 296] = [
     1628, 1638, 1648, 1658, 1668, 1678,
 ];
 
-pub(crate) const COMP_INTER_PRED_MODES: [[u8; 2]; 11] = [
+pub(crate) static COMP_INTER_PRED_MODES: [[u8; 2]; 11] = [
     [13, 13],
     [13, 15],
     [15, 13],
@@ -769,7 +769,7 @@ pub(crate) const COMP_INTER_PRED_MODES: [[u8; 2]; 11] = [
     [15, 15],
 ];
 
-pub(crate) const MAX_TXFM_SIZE_FOR_BS: [[u8; 4]; N_BS_SIZES] = [
+pub(crate) static MAX_TXFM_SIZE_FOR_BS: [[u8; 4]; N_BS_SIZES] = [
     [4, 4, 4, 3],
     [4, 4, 4, 3],
     [4, 4, 4, 3],
@@ -803,7 +803,7 @@ pub(crate) const MAX_TXFM_SIZE_FOR_BS: [[u8; 4]; N_BS_SIZES] = [
     [0, 0, 0, 0],
 ];
 
-pub(crate) const SS_BS: [[u8; 3]; N_BS_SIZES] = [
+pub(crate) static SS_BS: [[u8; 3]; N_BS_SIZES] = [
     [3, 2, 0],
     [4, 3, 1],
     [5, 255, 2],
@@ -837,7 +837,7 @@ pub(crate) const SS_BS: [[u8; 3]; N_BS_SIZES] = [
     [255, 255, 30],
 ];
 
-pub(crate) const TX_PART_TBL: [[i8; 8]; N_BS_SIZES] = [
+pub(crate) static TX_PART_TBL: [[i8; 8]; N_BS_SIZES] = [
     [4, -1, -1, -1, -1, -1, -1, -1],
     [4, -1, -1, -1, -1, -1, -1, -1],
     [4, -1, -1, -1, -1, -1, -1, -1],
@@ -871,7 +871,7 @@ pub(crate) const TX_PART_TBL: [[i8; 8]; N_BS_SIZES] = [
     [0, -1, -1, -1, -1, -1, -1, -1],
 ];
 
-pub(crate) const WIENER_NS_FILTERS: [[i8; 16]; 64] = [
+pub(crate) static WIENER_NS_FILTERS: [[i8; 16]; 64] = [
     [39, 39, -14, -14, -16, -16, 7, 7, -1, -3, 1, 7, 0, 0, 0, 0],
     [-1, 3, 1, -1, -2, -1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
     [12, 14, -5, -6, -6, 2, 1, -1, 2, -1, 1, 1, 0, 0, 0, 0],
@@ -938,7 +938,7 @@ pub(crate) const WIENER_NS_FILTERS: [[i8; 16]; 64] = [
     [25, 25, -8, -8, -7, -5, 1, 0, 0, 0, 1, 2, 0, 0, 0, 0],
 ];
 
-pub(crate) const PC_WIENER_FILTERS: [[[i16; 13]; 64]; 4] = [
+pub(crate) static PC_WIENER_FILTERS: [[[i16; 13]; 64]; 4] = [
     [
         [73, 127, -20, -30, -38, -29, 10, 7, -1, -3, 1, 7, -80],
         [-1, 3, 1, -1, -2, -1, 0, 0, 1, 0, 0, 0, 128],
@@ -1205,7 +1205,7 @@ pub(crate) const PC_WIENER_FILTERS: [[[i16; 13]; 64]; 4] = [
     ],
 ];
 
-pub(crate) const PC_WIENER_SUB_CLASSIFY: [[u8; 256]; 4] = [
+pub(crate) static PC_WIENER_SUB_CLASSIFY: [[u8; 256]; 4] = [
     [
         7, 54, 38, 45, 57, 51, 11, 57, 52, 51, 16, 52, 60, 6, 45, 32, 63, 27, 29, 23, 22, 23, 55,
         57, 58, 32, 25, 23, 22, 31, 35, 57, 9, 22, 16, 23, 41, 53, 44, 7, 53, 9, 9, 45, 23, 13, 52,
@@ -1260,7 +1260,7 @@ pub(crate) const PC_WIENER_SUB_CLASSIFY: [[u8; 256]; 4] = [
     ],
 ];
 
-pub(crate) const PC_WIENER_SUB_CLASSIFY_NS: [[[u8; 256]; 7]; 4] = [
+pub(crate) static PC_WIENER_SUB_CLASSIFY_NS: [[[u8; 256]; 7]; 4] = [
     [
         [
             1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0,
@@ -1589,7 +1589,7 @@ pub(crate) const PC_WIENER_SUB_CLASSIFY_NS: [[[u8; 256]; 7]; 4] = [
     ],
 ];
 
-pub(crate) const MC_WARP_FILTER: [[i8; 8]; 449] = [
+pub(crate) static MC_WARP_FILTER: [[i8; 8]; 449] = [
     [127, 1, 0, 0, 0, 0, 0, 0],
     [126, 2, 0, 0, 0, 0, 0, 0],
     [124, 4, 0, 0, 0, 0, 0, 0],
@@ -2041,7 +2041,7 @@ pub(crate) const MC_WARP_FILTER: [[i8; 8]; 449] = [
     [0, 0, 0, 0, 0, 0, 2, 126],
 ];
 
-pub(crate) const GAUSSIAN_SEQUENCE: [i16; 2048] = [
+pub(crate) static GAUSSIAN_SEQUENCE: [i16; 2048] = [
     56, 568, -180, 172, 124, -84, 172, -64, -900, 24, 820, 224, 1248, 996, 272, -8, -916, -388,
     -732, -104, -188, 800, 112, -652, -320, -376, 140, -252, 492, -168, 44, -788, 588, -584, 500,
     -228, 12, 680, 272, -476, 972, -100, 652, 368, 432, -196, -720, -192, 1000, -332, 652, -136,
@@ -2162,7 +2162,7 @@ pub(crate) const GAUSSIAN_SEQUENCE: [i16; 2048] = [
     568, -76, 172, 148, 148, 104, 32, -296, -32, 788, -80, 32, -16, 280, 288, 944, 428, -484,
 ];
 // Note: C source has typo 'weiner', we use correct 'wiener'
-pub(crate) const PC_WIENER_LUT_TO_CLASS: [u8; 4096] = [
+pub(crate) static PC_WIENER_LUT_TO_CLASS: [u8; 4096] = [
     83, 154, 254, 125, 125, 125, 253, 253, 77, 200, 207, 30, 30, 239, 239, 239, 0, 98, 101, 229,
     229, 231, 231, 231, 0, 34, 101, 100, 100, 229, 229, 231, 15, 34, 98, 100, 100, 100, 164, 164,
     15, 34, 98, 106, 100, 96, 164, 164, 15, 14, 43, 106, 96, 96, 96, 164, 15, 14, 43, 106, 106, 96,

@@ -105,7 +105,7 @@ pub fn compute_gdf_ref_dst_idx(frame_hdr: &FrameHeader, absrefdist: &[u8; 7]) ->
     for i in 0..imin(frame_hdr.n_ref_frames as i32, 2) as usize {
         max_dist = imax(max_dist, absrefdist[i] as i32);
     }
-    const REF_DST_IDX_TBL: [i32; 12] = [5, 1, 2, 3, 3, 3, 4, 4, 4, 4, 4, 5];
+    static REF_DST_IDX_TBL: [i32; 12] = [5, 1, 2, 3, 3, 3, 4, 4, 4, 4, 4, 5];
     REF_DST_IDX_TBL[imin(max_dist, 11) as usize]
 }
 
@@ -4682,12 +4682,12 @@ fn decode_b<BD: crate::pixel::BitDepth>(
     }
 
     // Intra mode decoding
-    const REORDERED_NONDIR_Y_MODE: [u8; 5] = [0, 9, 10, 11, 12];
-    const REORDERED_DIR_Y_MODE: [u8; 8] = [3, 8, 1, 5, 4, 6, 2, 7];
+    static REORDERED_NONDIR_Y_MODE: [u8; 5] = [0, 9, 10, 11, 12];
+    static REORDERED_DIR_Y_MODE: [u8; 8] = [3, 8, 1, 5, 4, 6, 2, 7];
 
     let mut luma_midx = 0xffu8;
     if b.is_intra != 0 && !intrabc && has_luma {
-        const DEFAULT_MODE_LIST_Y: [u8; 56] = [
+        static DEFAULT_MODE_LIST_Y: [u8; 56] = [
             17, 45, 3, 10, 24, 31, 38, 52, 15, 19, 43, 47, 1, 5, 8, 12, 22, 26, 29, 33, 36, 40, 50,
             54, 16, 18, 44, 46, 2, 4, 9, 11, 23, 25, 30, 32, 37, 39, 51, 53, 14, 20, 42, 48, 0, 6,
             7, 13, 21, 27, 28, 34, 35, 41, 49, 55,
@@ -4811,7 +4811,7 @@ fn decode_b<BD: crate::pixel::BitDepth>(
         // FSC (Frequency Segmented Coding)
         if imax(bw4, bh4) <= 8 && fi.idtx_intra {
             #[rustfmt::skip]
-            const FSC_BSIZE_GROUPS: [u8; N_BS_SIZES] = {
+            static FSC_BSIZE_GROUPS: [u8; N_BS_SIZES] = {
                 let mut t = [0u8; N_BS_SIZES];
                 t[BlockSize::Bs32x32 as u8 as usize] = 5;
                 t[BlockSize::Bs32x16 as u8 as usize] = 5;
@@ -4971,8 +4971,8 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
                 // AV2 UV directional modes (10 entries): the 8 AV1 directional modes
                 // plus PAETH (12) and SMOOTH (9). idx = uv_mode_idx - 5 - uv_mode_ctx.
-                const DEFAULT_MODE_LIST_UV_AV2: [u8; 10] = [1, 2, 3, 4, 8, 5, 6, 7, 12, 9];
-                const INTRA_DIR_MODE_Y_TO_UV_IDX: [u8; 8] = [2, 4, 0, 5, 3, 6, 1, 7];
+                static DEFAULT_MODE_LIST_UV_AV2: [u8; 10] = [1, 2, 3, 4, 8, 5, 6, 7, 12, 9];
+                static INTRA_DIR_MODE_Y_TO_UV_IDX: [u8; 8] = [2, 4, 0, 5, 3, 6, 1, 7];
 
                 // Maximum valid uv_mode_idx: ctx=0 → 14 modes (0..13 non-dir+dir),
                 // ctx=1 → same+5+9=15 modes (0..14).
@@ -6008,7 +6008,7 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             b.ref_pair = crate::levels::RefPair::from_refs(ref0, -1);
             // CWP index: 8 (equal weight) for non-TIP single-ref; TIP blocks use
             b.inter_data_mut().cwp_idx = if is_tip {
-                const TIP_WTS: [i8; 8] = [8, 12, 16, 18, 20, 4, 6, -4];
+                static TIP_WTS: [i8; 8] = [8, 12, 16, 18, 20, 4, 6, -4];
                 TIP_WTS[fi.tip_global_wtd_idx as usize]
             } else {
                 8
@@ -7605,7 +7605,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
 
     if imax(bw4, bh4) > 16 {
         // Split into 64x64 (or 128x128) sub-blocks. csplit[bs - 128x128][ss].
-        const CSPLIT: [[BlockSize; 3]; 3] = [
+        static CSPLIT: [[BlockSize; 3]; 3] = [
             // BS_128x128
             [
                 BlockSize::Bs64x64,
@@ -7692,7 +7692,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                             cdf_m: &mut *cdf_m,
                             a: &mut *a,
                             l: &mut *l,
-                            b: b,
+                            b,
                             fi,
                         },
                         sub_bx,
@@ -7719,7 +7719,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                                 cdf_m: &mut *cdf_m,
                                 a: &mut *a,
                                 l: &mut *l,
-                                b: b,
+                                b,
                                 fi,
                             },
                             sub_bx,
@@ -7751,7 +7751,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                                 cdf_m: &mut *cdf_m,
                                 a: &mut *a,
                                 l: &mut *l,
-                                b: b,
+                                b,
                                 fi,
                             },
                             sub_cbx,
@@ -7813,7 +7813,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                 cdf_m: &mut *cdf_m,
                 a: &mut *a,
                 l: &mut *l,
-                b: b,
+                b,
                 fi,
             },
             bx,
@@ -7857,7 +7857,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                 cdf_m: &mut *cdf_m,
                 a: &mut *a,
                 l: &mut *l,
-                b: b,
+                b,
                 fi,
             },
             cbx,
@@ -7964,7 +7964,7 @@ fn bawp_plane<BD: crate::pixel::BitDepth>(
     }
 
     // n_edge_samples[have_above && have_left][lh4][lw4][above, left]
-    const N_EDGE_SAMPLES: [[[[u8; 2]; 3]; 3]; 2] = [
+    static N_EDGE_SAMPLES: [[[[u8; 2]; 3]; 3]; 2] = [
         [
             [[2, 2], [3, 2], [4, 2]],
             [[2, 3], [3, 3], [4, 3]],
@@ -11095,7 +11095,7 @@ fn tip_frame_recon_sb<BD: crate::pixel::BitDepth>(
     cbs: BlockSize,
     fi: &SbFrameInfo,
 ) -> Result<(), ()> {
-    const TIP_WTS: [i8; 8] = [8, 12, 16, 18, 20, 4, 6, -4];
+    static TIP_WTS: [i8; 8] = [8, 12, 16, 18, 20, 4, 6, -4];
     let tip = &recon.frm_hdr.tip;
     let mut b = crate::levels::Av2Block {
         bs: bs as i8,
@@ -12879,7 +12879,7 @@ fn recon_b_inter_split<BD: crate::pixel::BitDepth>(
     bw4: i32,
     bh4: i32,
 ) -> Result<(), ()> {
-    const CSPLIT: [[BlockSize; 3]; 3] = [
+    static CSPLIT: [[BlockSize; 3]; 3] = [
         [
             BlockSize::Bs64x64,
             BlockSize::Bs128x64,
@@ -13166,7 +13166,7 @@ fn recon_b_intra_luma<BD: crate::pixel::BitDepth>(
             cdf_m: &mut *cdf_m,
             a: &mut *a,
             l: &mut *l,
-            b: b,
+            b,
             fi,
         },
         bx,
@@ -13245,7 +13245,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                         cdf_m: &mut *cdf_m,
                         a: &mut *a,
                         l: &mut *l,
-                        b: b,
+                        b,
                         fi,
                     },
                     tx,
@@ -13274,7 +13274,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13296,7 +13296,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13315,7 +13315,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                         cdf_m: &mut *cdf_m,
                         a: &mut *a,
                         l: &mut *l,
-                        b: b,
+                        b,
                         fi,
                     },
                     tx,
@@ -13336,7 +13336,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13354,7 +13354,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                         cdf_m: &mut *cdf_m,
                         a: &mut *a,
                         l: &mut *l,
-                        b: b,
+                        b,
                         fi,
                     },
                     tx,
@@ -13375,7 +13375,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13395,7 +13395,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13415,7 +13415,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13435,7 +13435,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13458,7 +13458,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                         cdf_m: &mut *cdf_m,
                         a: &mut *a,
                         l: &mut *l,
-                        b: b,
+                        b,
                         fi,
                     },
                     tx,
@@ -13484,7 +13484,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                         cdf_m: &mut *cdf_m,
                         a: &mut *a,
                         l: &mut *l,
-                        b: b,
+                        b,
                         fi,
                     },
                     tx,
@@ -13512,7 +13512,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13531,7 +13531,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                         cdf_m: &mut *cdf_m,
                         a: &mut *a,
                         l: &mut *l,
-                        b: b,
+                        b,
                         fi,
                     },
                     tx,
@@ -13552,7 +13552,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx_big,
@@ -13573,7 +13573,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13591,7 +13591,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                         cdf_m: &mut *cdf_m,
                         a: &mut *a,
                         l: &mut *l,
-                        b: b,
+                        b,
                         fi,
                     },
                     tx,
@@ -13616,7 +13616,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13635,7 +13635,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                         cdf_m: &mut *cdf_m,
                         a: &mut *a,
                         l: &mut *l,
-                        b: b,
+                        b,
                         fi,
                     },
                     tx,
@@ -13656,7 +13656,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx_big,
@@ -13677,7 +13677,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     cdf_m: &mut *cdf_m,
                     a: &mut *a,
                     l: &mut *l,
-                    b: b,
+                    b,
                     fi,
                 },
                 tx,
@@ -13695,7 +13695,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                         cdf_m: &mut *cdf_m,
                         a: &mut *a,
                         l: &mut *l,
-                        b: b,
+                        b,
                         fi,
                     },
                     tx,
@@ -13751,7 +13751,7 @@ fn recon_b_intra_chroma<BD: BitDepth>(
             cdf_m: &mut *cdf_m,
             a: &mut *a,
             l: &mut *l,
-            b: b,
+            b,
             fi,
         },
         cbx,

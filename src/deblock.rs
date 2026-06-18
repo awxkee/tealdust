@@ -542,7 +542,7 @@ pub(crate) struct DeblockCtx<'a> {
     pub(crate) layout: PixelLayout,
 }
 
-const PLACEHOLDER_SEGMAP: [u8; 16] = [0; 16];
+static PLACEHOLDER_SEGMAP: [u8; 16] = [0; 16];
 
 #[inline]
 fn edge_thr(cur: i32, prev: i32) -> i32 {

@@ -88,7 +88,7 @@ fn ipred_v_8bpc_sse41_impl(
             let a = unsafe { _mm_loadu_si128(tl.as_ptr().add(o + 1 + x) as *const __m128i) };
             let b =
                 unsafe { _mm_loadu_si128(tl.as_ptr().add(o + 1 + e_stride + x) as *const __m128i) };
-            let v = unsafe { _mm_avg_epu8(a, b) };
+            let v = _mm_avg_epu8(a, b);
             unsafe { _mm_storeu_si128(dst.as_mut_ptr().add(x) as *mut __m128i, v) };
             x += 16;
         }
@@ -100,15 +100,7 @@ fn ipred_v_8bpc_sse41_impl(
         }
     } else {
         let top = &tl[o + 1..o + 1 + width];
-        let mut x = 0usize;
-        while x + 16 <= width {
-            let v = unsafe { _mm_loadu_si128(top.as_ptr().add(x) as *const __m128i) };
-            unsafe { _mm_storeu_si128(dst.as_mut_ptr().add(x) as *mut __m128i, v) };
-            x += 16;
-        }
-        if x < width {
-            dst[x..width].copy_from_slice(&top[x..width]);
-        }
+        dst.copy_from_slice(top);
     }
 
     let mut off = stride;
@@ -165,31 +157,29 @@ fn ipred_smooth_v_8bpc_sse41_impl(
     }
 
     let bhl2 = ulog2(h as u32) as i32;
-    let rnd = unsafe { _mm_set1_epi16((h >> 1) as i16) };
+    let rnd = _mm_set1_epi16((h >> 1) as i16);
     let n_pel = w * h;
     let scale = (n_pel >= 64) as usize + (n_pel > 512) as usize;
     let weights = &SM_WEIGHTS[scale];
     let bottom = tl[o - h - 1] as i16;
-    let bottom_v = unsafe { _mm_set1_epi16(bottom) };
+    let bottom_v = _mm_set1_epi16(bottom);
     let sh = bhl2;
 
     let mut off = 0usize;
     for y in 0..h {
-        let off_y = unsafe { _mm_set1_epi16((h - 1 - y) as i16) };
-        let w_ver = unsafe { _mm_set1_epi16(weights[y] as i16) };
+        let off_y = _mm_set1_epi16((h - 1 - y) as i16);
+        let w_ver = _mm_set1_epi16(weights[y] as i16);
         let row = &mut dst[off..off + w];
         let mut x = 0usize;
         while x + 8 <= w {
             let above = unsafe { load_u8x8_i16(tl.as_ptr().add(o + 1 + x)) };
-            let mul = unsafe { _mm_mullo_epi16(_mm_sub_epi16(above, bottom_v), off_y) };
-            let pred = unsafe { _mm_add_epi16(bottom_v, sra_i16(_mm_add_epi16(mul, rnd), sh)) };
-            let adj = unsafe {
-                _mm_srai_epi16::<6>(_mm_add_epi16(
-                    _mm_mullo_epi16(_mm_sub_epi16(above, pred), w_ver),
-                    _mm_set1_epi16(32),
-                ))
-            };
-            let out = unsafe { _mm_add_epi16(pred, adj) };
+            let mul = _mm_mullo_epi16(_mm_sub_epi16(above, bottom_v), off_y);
+            let pred = _mm_add_epi16(bottom_v, sra_i16(_mm_add_epi16(mul, rnd), sh));
+            let adj = _mm_srai_epi16::<6>(_mm_add_epi16(
+                _mm_mullo_epi16(_mm_sub_epi16(above, pred), w_ver),
+                _mm_set1_epi16(32),
+            ));
+            let out = _mm_add_epi16(pred, adj);
             unsafe { store_i16x8_u8(row.as_mut_ptr().add(x), out) };
             x += 8;
         }
@@ -219,39 +209,33 @@ fn ipred_smooth_h_8bpc_sse41_impl(
     }
 
     let bwl2 = ulog2(w as u32) as i32;
-    let rnd = unsafe { _mm_set1_epi16((w >> 1) as i16) };
+    let rnd = _mm_set1_epi16((w >> 1) as i16);
     let n_pel = w * h;
     let scale = (n_pel >= 64) as usize + (n_pel > 512) as usize;
     let weights = &SM_WEIGHTS[scale];
     let right = tl[o + w + 1] as i16;
-    let right_v = unsafe { _mm_set1_epi16(right) };
+    let right_v = _mm_set1_epi16(right);
 
     let mut off = 0usize;
     for y in 0..h {
         let left = tl[o - 1 - y] as i16;
-        let left_v = unsafe { _mm_set1_epi16(left) };
-        let diff = unsafe { _mm_set1_epi16(left - right) };
+        let left_v = _mm_set1_epi16(left);
+        let diff = _mm_set1_epi16(left - right);
         let row = &mut dst[off..off + w];
         let mut x = 0usize;
         while x + 8 <= w {
             let x0 = (w - 1 - x) as i16;
-            let dist = unsafe {
-                _mm_setr_epi16(x0, x0 - 1, x0 - 2, x0 - 3, x0 - 4, x0 - 5, x0 - 6, x0 - 7)
-            };
+            let dist = _mm_setr_epi16(x0, x0 - 1, x0 - 2, x0 - 3, x0 - 4, x0 - 5, x0 - 6, x0 - 7);
             let wx = unsafe { load_u8x8_i16(weights.as_ptr().add(x)) };
-            let pred = unsafe {
-                _mm_add_epi16(
-                    right_v,
-                    sra_i16(_mm_add_epi16(_mm_mullo_epi16(diff, dist), rnd), bwl2),
-                )
-            };
-            let adj = unsafe {
-                _mm_srai_epi16::<6>(_mm_add_epi16(
-                    _mm_mullo_epi16(_mm_sub_epi16(left_v, pred), wx),
-                    _mm_set1_epi16(32),
-                ))
-            };
-            let out = unsafe { _mm_add_epi16(pred, adj) };
+            let pred = _mm_add_epi16(
+                right_v,
+                sra_i16(_mm_add_epi16(_mm_mullo_epi16(diff, dist), rnd), bwl2),
+            );
+            let adj = _mm_srai_epi16::<6>(_mm_add_epi16(
+                _mm_mullo_epi16(_mm_sub_epi16(left_v, pred), wx),
+                _mm_set1_epi16(32),
+            ));
+            let out = _mm_add_epi16(pred, adj);
             unsafe { store_i16x8_u8(row.as_mut_ptr().add(x), out) };
             x += 8;
         }
@@ -281,78 +265,66 @@ fn ipred_smooth_8bpc_sse41_impl(
 
     let bwl2 = ulog2(w as u32) as i32;
     let bhl2 = ulog2(h as u32) as i32;
-    let rnd_ver = unsafe { _mm_set1_epi16((h >> 1) as i16) };
-    let rnd_hor = unsafe { _mm_set1_epi16((w >> 1) as i16) };
+    let rnd_ver = _mm_set1_epi16((h >> 1) as i16);
+    let rnd_hor = _mm_set1_epi16((w >> 1) as i16);
     let n_pel = w * h;
     let scale = (n_pel >= 64) as usize + (n_pel > 512) as usize;
     let weights = &SM_WEIGHTS[scale];
     let right = tl[o + w + 1] as i16;
     let bottom = tl[o - h - 1] as i16;
-    let right_v = unsafe { _mm_set1_epi16(right) };
-    let bottom_v = unsafe { _mm_set1_epi16(bottom) };
+    let right_v = _mm_set1_epi16(right);
+    let bottom_v = _mm_set1_epi16(bottom);
 
     let mut off = 0usize;
     for y in 0..h {
         let left = tl[o - 1 - y] as i16;
-        let left_v = unsafe { _mm_set1_epi16(left) };
-        let diff_hor = unsafe { _mm_set1_epi16(left - right) };
-        let off_ver = unsafe { _mm_set1_epi16((h - 1 - y) as i16) };
-        let w_ver = unsafe { _mm_set1_epi16(weights[y] as i16) };
+        let left_v = _mm_set1_epi16(left);
+        let diff_hor = _mm_set1_epi16(left - right);
+        let off_ver = _mm_set1_epi16((h - 1 - y) as i16);
+        let w_ver = _mm_set1_epi16(weights[y] as i16);
         let row = &mut dst[off..off + w];
         let mut x = 0usize;
         while x + 8 <= w {
             let above = unsafe { load_u8x8_i16(tl.as_ptr().add(o + 1 + x)) };
             let x0 = (w - 1 - x) as i16;
-            let dist = unsafe {
-                _mm_setr_epi16(x0, x0 - 1, x0 - 2, x0 - 3, x0 - 4, x0 - 5, x0 - 6, x0 - 7)
-            };
+            let dist = _mm_setr_epi16(x0, x0 - 1, x0 - 2, x0 - 3, x0 - 4, x0 - 5, x0 - 6, x0 - 7);
             let wx = unsafe { load_u8x8_i16(weights.as_ptr().add(x)) };
 
-            let pred_ver = unsafe {
-                _mm_add_epi16(
-                    bottom_v,
-                    sra_i16(
-                        _mm_add_epi16(
-                            _mm_mullo_epi16(_mm_sub_epi16(above, bottom_v), off_ver),
-                            rnd_ver,
-                        ),
-                        bhl2,
+            let pred_ver = _mm_add_epi16(
+                bottom_v,
+                sra_i16(
+                    _mm_add_epi16(
+                        _mm_mullo_epi16(_mm_sub_epi16(above, bottom_v), off_ver),
+                        rnd_ver,
                     ),
-                )
-            };
-            let pred_hor = unsafe {
-                _mm_add_epi16(
-                    right_v,
-                    sra_i16(
-                        _mm_add_epi16(_mm_mullo_epi16(diff_hor, dist), rnd_hor),
-                        bwl2,
-                    ),
-                )
-            };
-            let pred_ver = unsafe {
-                _mm_add_epi16(
-                    pred_ver,
-                    _mm_srai_epi16::<6>(_mm_add_epi16(
-                        _mm_mullo_epi16(_mm_sub_epi16(above, pred_ver), w_ver),
-                        _mm_set1_epi16(32),
-                    )),
-                )
-            };
-            let pred_hor = unsafe {
-                _mm_add_epi16(
-                    pred_hor,
-                    _mm_srai_epi16::<6>(_mm_add_epi16(
-                        _mm_mullo_epi16(_mm_sub_epi16(left_v, pred_hor), wx),
-                        _mm_set1_epi16(32),
-                    )),
-                )
-            };
-            let out = unsafe {
-                _mm_srai_epi16::<1>(_mm_add_epi16(
-                    _mm_add_epi16(pred_ver, pred_hor),
-                    _mm_set1_epi16(1),
-                ))
-            };
+                    bhl2,
+                ),
+            );
+            let pred_hor = _mm_add_epi16(
+                right_v,
+                sra_i16(
+                    _mm_add_epi16(_mm_mullo_epi16(diff_hor, dist), rnd_hor),
+                    bwl2,
+                ),
+            );
+            let pred_ver = _mm_add_epi16(
+                pred_ver,
+                _mm_srai_epi16::<6>(_mm_add_epi16(
+                    _mm_mullo_epi16(_mm_sub_epi16(above, pred_ver), w_ver),
+                    _mm_set1_epi16(32),
+                )),
+            );
+            let pred_hor = _mm_add_epi16(
+                pred_hor,
+                _mm_srai_epi16::<6>(_mm_add_epi16(
+                    _mm_mullo_epi16(_mm_sub_epi16(left_v, pred_hor), wx),
+                    _mm_set1_epi16(32),
+                )),
+            );
+            let out = _mm_srai_epi16::<1>(_mm_add_epi16(
+                _mm_add_epi16(pred_ver, pred_hor),
+                _mm_set1_epi16(1),
+            ));
             unsafe { store_i16x8_u8(row.as_mut_ptr().add(x), out) };
             x += 8;
         }

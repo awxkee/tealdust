@@ -2484,6 +2484,41 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
         }
     }
 
+    if ss_hor == 1
+        && ss_ver == 1
+        && flt != CFL_FLT_TYPE_VSTRIP as u32
+        && flt != CFL_FLT_TYPE_GAUSS as u32
+        && !skiph
+        && !skipv
+    {
+        if let (Some(y_u8), Some(u_u8), Some(v_u8)) = (
+            BD::Pixel::try_as_u8_slice(y_plane),
+            BD::Pixel::try_as_u8_slice_mut(u_plane),
+            BD::Pixel::try_as_u8_slice_mut(v_plane),
+        ) {
+            crate::cfl_dispatch::cfl_apply_420_8bpc(
+                y_u8,
+                u_u8,
+                v_u8,
+                ysrc_off,
+                usrc_off,
+                vsrc_off,
+                ystride as usize,
+                cstride as usize,
+                w,
+                h,
+                xlim,
+                ylim,
+                dc[0],
+                dc[1],
+                dc[2],
+                alpha[0],
+                alpha[1],
+            );
+            return;
+        }
+    }
+
     let mut yrow = ysrc_off;
     let mut urow = usrc_off;
     let mut vrow = vsrc_off;

@@ -26,10 +26,12 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+mod cfl;
 mod ipred;
 mod itx;
 mod looprestoration;
 
+pub(crate) use cfl::cfl_apply_420_8bpc_neon;
 pub(crate) use ipred::{
     ipred_h_8bpc_neon, ipred_smooth_8bpc_neon, ipred_smooth_h_8bpc_neon, ipred_smooth_v_8bpc_neon,
     ipred_v_8bpc_neon,

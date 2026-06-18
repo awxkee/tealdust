@@ -822,7 +822,7 @@ static WEDGE_MASKS: std::sync::OnceLock<Box<Masks>> = std::sync::OnceLock::new()
 /// Returns the shared masks, initializing them once. Cheap on every call after
 /// the first.
 pub(crate) fn masks() -> &'static Masks {
-    &**WEDGE_MASKS.get_or_init(init_masks)
+    WEDGE_MASKS.get_or_init(init_masks)
 }
 
 pub(crate) fn init_masks() -> Box<Masks> {

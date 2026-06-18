@@ -166,7 +166,7 @@ pub(crate) fn cdef_find_dir_bd<BD: BitDepth>(
     cost[2] *= 105;
     cost[6] *= 105;
 
-    const DIV_TABLE: [u32; 7] = [840, 420, 280, 210, 168, 140, 120];
+    static DIV_TABLE: [u32; 7] = [840, 420, 280, 210, 168, 140, 120];
     for n in 0..7usize {
         let d = DIV_TABLE[n];
         cost[0] += ((partial_sum_diag[0][n] * partial_sum_diag[0][n]
@@ -484,7 +484,7 @@ impl<'a> CdefBrowParams<'a> {
     }
 }
 
-const UV_DIRS: [[u8; 8]; 2] = [[0, 1, 2, 3, 4, 5, 6, 7], [7, 0, 2, 4, 5, 6, 6, 6]];
+static UV_DIRS: [[u8; 8]; 2] = [[0, 1, 2, 3, 4, 5, 6, 7], [7, 0, 2, 4, 5, 6, 6, 6]];
 
 /// Backup the bottom 2 rows of the current 8-row band into a toggled CDEF line
 /// bank (each plane bank is laid out with the plane's positive stride spacing so

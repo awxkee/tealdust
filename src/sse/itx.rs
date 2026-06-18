@@ -111,18 +111,16 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        unsafe {
-            idct_dequant_simd4_core::<Self, 16, 4>(
-                coeff,
-                tmp,
-                eob,
-                tx,
-                is_rect2,
-                shift0,
-                row_clip_min,
-                row_clip_max,
-            );
-        }
+        idct_dequant_simd4_core::<Self, 16, 4>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
     }
 
     #[inline(always)]
@@ -136,18 +134,16 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        unsafe {
-            idct_dequant_simd4_core::<Self, 64, 8>(
-                coeff,
-                tmp,
-                eob,
-                tx,
-                is_rect2,
-                shift0,
-                row_clip_min,
-                row_clip_max,
-            );
-        }
+        idct_dequant_simd4_core::<Self, 64, 8>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
     }
 
     #[inline(always)]
@@ -161,18 +157,16 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        unsafe {
-            idct_dequant_simd4_core::<Self, 256, 16>(
-                coeff,
-                tmp,
-                eob,
-                tx,
-                is_rect2,
-                shift0,
-                row_clip_min,
-                row_clip_max,
-            );
-        }
+        idct_dequant_simd4_core::<Self, 256, 16>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
     }
 
     #[inline(always)]
@@ -186,18 +180,16 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        unsafe {
-            idct_dequant_simd4_core::<Self, 1024, 32>(
-                coeff,
-                tmp,
-                eob,
-                tx,
-                is_rect2,
-                shift0,
-                row_clip_min,
-                row_clip_max,
-            );
-        }
+        idct_dequant_simd4_core::<Self, 1024, 32>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
     }
 
     #[inline(always)]
@@ -211,18 +203,16 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        unsafe {
-            idct_dequant_simd4_core::<Self, 1024, 32>(
-                coeff,
-                tmp,
-                eob,
-                tx,
-                is_rect2,
-                shift0,
-                row_clip_min,
-                row_clip_max,
-            );
-        }
+        idct_dequant_simd4_core::<Self, 1024, 32>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
     }
 }
 
@@ -240,20 +230,18 @@ impl Adst2dBackend for SseDct2d {
         first_kind: usize,
         second_kind: usize,
     ) {
-        unsafe {
-            itx_dequant_simd4_core::<Self, 16, 4>(
-                coeff,
-                tmp,
-                eob,
-                tx,
-                is_rect2,
-                shift0,
-                row_clip_min,
-                row_clip_max,
-                first_kind,
-                second_kind,
-            );
-        }
+        itx_dequant_simd4_core::<Self, 16, 4>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        );
     }
 
     #[inline(always)]
@@ -269,20 +257,18 @@ impl Adst2dBackend for SseDct2d {
         first_kind: usize,
         second_kind: usize,
     ) {
-        unsafe {
-            itx_dequant_simd4_core::<Self, 64, 8>(
-                coeff,
-                tmp,
-                eob,
-                tx,
-                is_rect2,
-                shift0,
-                row_clip_min,
-                row_clip_max,
-                first_kind,
-                second_kind,
-            );
-        }
+        itx_dequant_simd4_core::<Self, 64, 8>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        );
     }
 
     #[inline(always)]
@@ -298,20 +284,18 @@ impl Adst2dBackend for SseDct2d {
         first_kind: usize,
         second_kind: usize,
     ) {
-        unsafe {
-            itx_dequant_simd4_core::<Self, 256, 16>(
-                coeff,
-                tmp,
-                eob,
-                tx,
-                is_rect2,
-                shift0,
-                row_clip_min,
-                row_clip_max,
-                first_kind,
-                second_kind,
-            );
-        }
+        itx_dequant_simd4_core::<Self, 256, 16>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        );
     }
 }
 

@@ -57,7 +57,7 @@ pub(crate) fn decode_partition(
     let cdf_m = &mut *ctx.cdf_m;
     let part_w = &mut *ctx.part_w;
     let part_w_idx = &mut *ctx.part_w_idx;
-    let part_r = &*ctx.part_r;
+    let part_r = ctx.part_r;
     let part_r_idx = &mut *ctx.part_r_idx;
     let intra_region = &mut *ctx.intra_region;
     let sdp_cfl_disallowed = &mut *ctx.sdp_cfl_disallowed;

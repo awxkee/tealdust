@@ -34,26 +34,23 @@ use crate::levels::ANGLE_MULTI_MRL_FLAG;
 use crate::tables::SM_WEIGHTS;
 
 #[inline(always)]
-fn fill_row_u8(row: &mut [u8], v: u8) {
-    let vv = unsafe { vdupq_n_u8(v) };
-    let mut x = 0usize;
-    while x + 16 <= row.len() {
-        unsafe { vst1q_u8(row.as_mut_ptr().add(x), vv) };
-        x += 16;
-    }
-    if x < row.len() {
-        row[x..].fill(v);
-    }
-}
-
-#[inline(always)]
 fn load_u8x8_i16(ptr: *const u8) -> int16x8_t {
     unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(ptr))) }
 }
 
 #[inline(always)]
+fn load_u8x8_i16_fixed(ptr: &[u8; 8]) -> int16x8_t {
+    unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(ptr.as_ptr()))) }
+}
+
+#[inline(always)]
 fn store_i16x8_u8(ptr: *mut u8, v: int16x8_t) {
     unsafe { vst1_u8(ptr, vqmovun_s16(v)) };
+}
+
+#[inline(always)]
+fn store_i16x8_u8_fixed(ptr: &mut [u8; 8], v: int16x8_t) {
+    unsafe { vst1_u8(ptr.as_mut_ptr(), vqmovun_s16(v)) };
 }
 
 #[inline(always)]
@@ -109,15 +106,7 @@ pub(crate) fn ipred_v_8bpc_neon(
             }
         } else {
             let top = &tl[o + 1..o + 1 + width];
-            let mut x = 0usize;
-            while x + 16 <= width {
-                let v = vld1q_u8(top.as_ptr().add(x));
-                vst1q_u8(dst.as_mut_ptr().add(x), v);
-                x += 16;
-            }
-            if x < width {
-                dst[x..width].copy_from_slice(&top[x..width]);
-            }
+            dst.copy_from_slice(top);
         }
     }
 
@@ -154,7 +143,7 @@ pub(crate) fn ipred_h_8bpc_neon(
             tl[o - 1 - y]
         };
         let row = &mut dst[off..off + width];
-        fill_row_u8(row, v);
+        row.fill(v);
         off += stride;
     }
 }
@@ -187,24 +176,31 @@ pub(crate) fn ipred_smooth_v_8bpc_neon(
             let off_y = vdupq_n_s16((h - 1 - y) as i16);
             let w_ver = vdupq_n_s16(weights[y] as i16);
             let row = &mut dst[off..off + w];
-            let mut x = 0usize;
-            while x + 8 <= w {
-                let above = load_u8x8_i16(tl.as_ptr().add(o + 1 + x));
+            let tl_src = &tl[o + 1..];
+            for (dst, tl) in row
+                .as_chunks_mut::<8>()
+                .0
+                .iter_mut()
+                .zip(tl_src.as_chunks::<8>().0.iter())
+            {
+                let above = load_u8x8_i16_fixed(tl);
                 let mul = vmulq_s16(vsubq_s16(above, bottom_v), off_y);
                 let pred = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul, rnd), bhl2));
                 let adj = sra_i16(
                     vaddq_s16(vmulq_s16(vsubq_s16(above, pred), w_ver), add32),
                     6,
                 );
-                store_i16x8_u8(row.as_mut_ptr().add(x), vaddq_s16(pred, adj));
-                x += 8;
+                store_i16x8_u8_fixed(dst, vaddq_s16(pred, adj));
             }
-            while x < w {
-                let above = tl[o + 1 + x] as i32;
+
+            let rem_dst = row.as_chunks_mut::<8>().1;
+            let rem_src = tl_src.as_chunks::<8>().1;
+
+            for (dst, &above_s) in rem_dst.iter_mut().zip(rem_src.iter()) {
+                let above = above_s as i32;
                 let mul = (above - bottom as i32) * (h as i32 - 1 - y as i32);
                 let pred = bottom as i32 + ((mul + (h >> 1) as i32) >> bhl2);
-                row[x] = (pred + (((above - pred) * weights[y] as i32 + 32) >> 6)) as u8;
-                x += 1;
+                *dst = (pred + (((above - pred) * weights[y] as i32 + 32) >> 6)) as u8;
             }
             off += stride;
         }
