@@ -5855,10 +5855,6 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 && fi.masked_compound
                 && imin(bw4, bh4) >= 2
             {
-                // neighbour (num < n_ctx) contributes: 0 if intra/single-ref
-                // with comp_type==AVG, 2 if its ref0 is the furthest-future
-                // ref; 1 if it is itself masked-compound. Combine the two
-                // neighbours + a both-nonzero bit + a same-absrefdist bias.
                 let ffr = fi.furthest_future_refidx;
                 let comptype_ctx = |num: usize| -> i32 {
                     if num >= n_ctx as usize {
