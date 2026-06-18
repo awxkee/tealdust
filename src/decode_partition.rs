@@ -27,31 +27,15 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-//! Block-partition parsing for `decode_sb`, split out as a non-generic unit.
-//!
-//! `decode_sb` is generic over `BitDepth`, but choosing the partition only
-//! reads partition symbols from the entropy coder and partition state -- it
-//! never touches pixels. Keeping it here, free of `BD`, means it is compiled
-//! once instead of once per `BitDepth` monomorphization, shrinking the hot
-//! generic body (and its register/pointer pressure) accordingly.
-
-use crate::cdf::CdfModeContext;
-use crate::decode::{PARTITION_SUBB, SbFrameInfo};
-use crate::env::{BlockContext, get_partition_ctx, get_partition2_ctx};
+use crate::decode::{PARTITION_SUBB, SbCtx};
+use crate::env::{get_partition_ctx, get_partition2_ctx};
 use crate::internal::Pass;
 use crate::intops::{iclip, imax, imin};
 use crate::levels::{BlockPartition, BlockSize};
-use crate::msac::MsacContext;
 
-/// Decode the partition type for a (super)block. This is intentionally NOT
-/// generic over `BitDepth`: it only reads partition symbols from the entropy
-/// coder and partition state, so isolating it here means it is compiled once
-/// rather than once per `BitDepth` monomorphization of `decode_sb`. Returns the
-/// chosen partition and the (possibly region-adjusted) child block size.
 pub(crate) fn decode_partition(
-    fi: &SbFrameInfo,
-    bx: &i32,
-    by: &i32,
+    ctx: &mut SbCtx<'_, '_>,
+    pass: u8,
     lbs: BlockSize,
     cbs: BlockSize,
     bs: BlockSize,
@@ -62,19 +46,21 @@ pub(crate) fn decode_partition(
     qh4: i32,
     have_h_split: bool,
     have_v_split: bool,
-    pass: u8,
-    a: &BlockContext,
-    l: &BlockContext,
-    msac: &mut MsacContext,
-    cdf_m: &mut CdfModeContext,
-    part_w: &mut Vec<u8>,
-    part_w_idx: &mut usize,
-    part_r: &[u8],
-    part_r_idx: &mut usize,
-    intra_region: &mut i32,
-    sdp_cfl_disallowed: &mut i32,
     dir_ptr: &mut i32,
 ) -> (BlockPartition, BlockSize) {
+    let fi = ctx.fi;
+    let bx = &*ctx.bx;
+    let by = &*ctx.by;
+    let a = &*ctx.a;
+    let l = &*ctx.l;
+    let msac = &mut *ctx.msac;
+    let cdf_m = &mut *ctx.cdf_m;
+    let part_w = &mut *ctx.part_w;
+    let part_w_idx = &mut *ctx.part_w_idx;
+    let part_r = &*ctx.part_r;
+    let part_r_idx = &mut *ctx.part_r_idx;
+    let intra_region = &mut *ctx.intra_region;
+    let sdp_cfl_disallowed = &mut *ctx.sdp_cfl_disallowed;
     let pl = (lbs == BlockSize::Invalid) as usize;
     let pcc = &PARTITION_SUBB[bs as u8 as usize];
     let mut bp = BlockPartition::Invalid;

@@ -2580,25 +2580,28 @@ pub fn decode_tile_sbrow_entropy<BD: crate::pixel::BitDepth>(
                 fi,
             )?;
         } else {
-            decode_sb(
+            let mut sb_ctx = SbCtx {
                 fi,
-                &mut bx_m,
-                &mut by_m,
-                &mut cbx,
-                &mut cby,
-                &mut intra_region,
-                &mut sdp_cfl_disallowed,
-                crate::internal::PASS_ALL,
-                &mut a_arr[a_idx],
-                l,
-                msac,
-                &mut ts.cdf.m,
-                &mut ts.cdf.dmv,
-                &mut recon,
-                part_w,
-                &mut part_w_idx,
+                bx: &mut bx_m,
+                by: &mut by_m,
+                cbx: &mut cbx,
+                cby: &mut cby,
+                intra_region: &mut intra_region,
+                sdp_cfl_disallowed: &mut sdp_cfl_disallowed,
+                a: &mut a_arr[a_idx],
+                l: &mut *l,
+                msac: &mut *msac,
+                cdf_m: &mut ts.cdf.m,
+                cdf_dmv: &mut ts.cdf.dmv,
+                part_w: &mut *part_w,
+                part_w_idx: &mut part_w_idx,
                 part_r,
-                &mut part_r_idx,
+                part_r_idx: &mut part_r_idx,
+            };
+            decode_sb(
+                &mut sb_ctx,
+                &mut recon,
+                crate::internal::PASS_ALL,
                 root_bs,
                 c_root_bs,
                 &mut dir,
@@ -4046,23 +4049,26 @@ fn get_snglref_ctx(
 
 #[allow(unused)]
 fn decode_b<BD: crate::pixel::BitDepth>(
-    fi: &SbFrameInfo,
-    bx: i32,
-    by: i32,
-    cbx: i32,
-    cby: i32,
-    intra_region: i32,
-    _sdp_cfl_disallowed: i32,
-    pass: u8,
-    a: &mut BlockContext,
-    l: &mut BlockContext,
-    msac: &mut MsacContext,
-    cdf_m: &mut CdfModeContext,
-    cdf_dmv: &mut CdfMvContext,
+    ctx: &mut SbCtx<'_, '_>,
     recon: &mut ReconCtx<BD>,
+    pass: u8,
     lbs: BlockSize,
     cbs: BlockSize,
 ) -> Result<Av2Block, ()> {
+    // Reborrow the bundled state into locals with the original names so the
+    // body below is unchanged (decode_b is a leaf: it never re-passes `ctx`).
+    let fi = ctx.fi;
+    let bx = *ctx.bx;
+    let by = *ctx.by;
+    let cbx = *ctx.cbx;
+    let cby = *ctx.cby;
+    let intra_region = *ctx.intra_region;
+    let _sdp_cfl_disallowed = *ctx.sdp_cfl_disallowed;
+    let a = &mut *ctx.a;
+    let l = &mut *ctx.l;
+    let msac = &mut *ctx.msac;
+    let cdf_m = &mut *ctx.cdf_m;
+    let cdf_dmv = &mut *ctx.cdf_dmv;
     let _ = &mut *recon;
     let bs = if lbs == BlockSize::Invalid { cbs } else { lbs };
     debug_assert!(bs != BlockSize::Invalid);
@@ -7483,7 +7489,23 @@ fn decode_b<BD: crate::pixel::BitDepth>(
 
     if pass & (Pass::Recon as u8) != 0 && b.is_intra != 0 {
         recon_b_intra(
-            recon, msac, cdf_m, a, l, &b, bx, by, cbx, cby, lbs, cbs, has_luma, has_chroma, fi,
+            &mut ReconBCtx {
+                recon: &mut *recon,
+                msac: &mut *msac,
+                cdf_m: &mut *cdf_m,
+                a: &mut *a,
+                l: &mut *l,
+                b: &b,
+                fi,
+            },
+            bx,
+            by,
+            cbx,
+            cby,
+            lbs,
+            cbs,
+            has_luma,
+            has_chroma,
         )?;
     } else if pass & (Pass::Recon as u8) != 0 && b.is_intra == 0 && !intrabc {
         recon_b_inter(
@@ -7543,13 +7565,23 @@ fn decode_b<BD: crate::pixel::BitDepth>(
 /// the pixels reconstructed with the last (the `cbs_stage` mechanism), so the
 /// MSAC ordering matches the C decoder. <=64px blocks take the direct path.
 #[allow(clippy::too_many_arguments)]
+/// Shared per-block reconstruction state threaded through the intra `recon_b_*`
+/// subtree. Replaces the seven leading arguments (`recon, msac, cdf_m, a, l, b,
+/// fi`) that every function in the tree passed identically, so each call moves
+/// one pointer instead of seven. Each function reborrows the fields into locals
+/// of the original names, leaving its body unchanged.
+pub(crate) struct ReconBCtx<'r, 'a, 'f, 'm, BD: crate::pixel::BitDepth> {
+    pub(crate) recon: &'r mut ReconCtx<'a, 'f, BD>,
+    pub(crate) msac: &'r mut MsacContext<'m>,
+    pub(crate) cdf_m: &'r mut CdfModeContext,
+    pub(crate) a: &'r mut BlockContext,
+    pub(crate) l: &'r mut BlockContext,
+    pub(crate) b: &'r Av2Block,
+    pub(crate) fi: &'r SbFrameInfo,
+}
+
 fn recon_b_intra<BD: crate::pixel::BitDepth>(
-    recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext,
-    cdf_m: &mut CdfModeContext,
-    a: &mut BlockContext,
-    l: &mut BlockContext,
-    b: &Av2Block,
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
     bx: i32,
     by: i32,
     cbx: i32,
@@ -7558,8 +7590,14 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
     cbs: BlockSize,
     has_luma: bool,
     has_chroma: bool,
-    fi: &SbFrameInfo,
 ) -> Result<(), ()> {
+    let recon = &mut *rb.recon;
+    let msac = &mut *rb.msac;
+    let cdf_m = &mut *rb.cdf_m;
+    let a = &mut *rb.a;
+    let l = &mut *rb.l;
+    let b = rb.b;
+    let fi = rb.fi;
     let bs = if lbs == BlockSize::Invalid { cbs } else { lbs };
     let b_dim = &BLOCK_DIMENSIONS[bs as u8 as usize];
     let bw4 = b_dim[0] as i32;
@@ -7648,12 +7686,15 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                 {
                     // 256px case: recurse one more level (lbs2 == 128x128).
                     recon_b_intra(
-                        recon,
-                        msac,
-                        cdf_m,
-                        a,
-                        l,
-                        b,
+                        &mut ReconBCtx {
+                            recon: &mut *recon,
+                            msac: &mut *msac,
+                            cdf_m: &mut *cdf_m,
+                            a: &mut *a,
+                            l: &mut *l,
+                            b: b,
+                            fi,
+                        },
                         sub_bx,
                         sub_by,
                         sub_cbx,
@@ -7666,23 +7707,24 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                         },
                         lbs2 != BlockSize::Invalid,
                         read_cbs != BlockSize::Invalid || recon_cbs != BlockSize::Invalid,
-                        fi,
                     )?;
                 } else {
                     // Luma 64x64 sub-block: the tx walk uses the sub-block size,
                     // but `b.bs` (passed to coef decode) stays the full block.
                     if lbs2 != BlockSize::Invalid {
                         recon_b_intra_luma_geom(
-                            recon,
-                            msac,
-                            cdf_m,
-                            a,
-                            l,
-                            b,
+                            &mut ReconBCtx {
+                                recon: &mut *recon,
+                                msac: &mut *msac,
+                                cdf_m: &mut *cdf_m,
+                                a: &mut *a,
+                                l: &mut *l,
+                                b: b,
+                                fi,
+                            },
                             sub_bx,
                             sub_by,
                             lbs2 as usize,
-                            fi,
                         )?;
                     }
                     // Chroma: read phase with the first sub-block, recon with the last.
@@ -7703,7 +7745,20 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                         };
                         let sdp_active = lbs2 == BlockSize::Invalid;
                         recon_b_intra_chroma_phase(
-                            recon, msac, cdf_m, a, l, b, sub_cbx, sub_cby, ccbs, sdp_active, fi, ph,
+                            &mut ReconBCtx {
+                                recon: &mut *recon,
+                                msac: &mut *msac,
+                                cdf_m: &mut *cdf_m,
+                                a: &mut *a,
+                                l: &mut *l,
+                                b: b,
+                                fi,
+                            },
+                            sub_cbx,
+                            sub_cby,
+                            ccbs,
+                            sdp_active,
+                            ph,
                         )?;
                     }
                 }
@@ -7751,7 +7806,22 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                 fi.bh * 4,
             );
         }
-        recon_b_intra_luma(recon, msac, cdf_m, a, l, b, bx, by, bx4, by4, intrabc, fi)?;
+        recon_b_intra_luma(
+            &mut ReconBCtx {
+                recon: &mut *recon,
+                msac: &mut *msac,
+                cdf_m: &mut *cdf_m,
+                a: &mut *a,
+                l: &mut *l,
+                b: b,
+                fi,
+            },
+            bx,
+            by,
+            bx4,
+            by4,
+            intrabc,
+        )?;
     }
     if has_chroma {
         if intrabc {
@@ -7781,7 +7851,20 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
         }
         let sdp_active = lbs == BlockSize::Invalid;
         recon_b_intra_chroma(
-            recon, msac, cdf_m, a, l, b, cbx, cby, cbs, intrabc, sdp_active, fi,
+            &mut ReconBCtx {
+                recon: &mut *recon,
+                msac: &mut *msac,
+                cdf_m: &mut *cdf_m,
+                a: &mut *a,
+                l: &mut *l,
+                b: b,
+                fi,
+            },
+            cbx,
+            cby,
+            cbs,
+            intrabc,
+            sdp_active,
         )?;
     }
     Ok(())
@@ -13062,20 +13145,34 @@ fn inter_luma_tx_walk<BD: crate::pixel::BitDepth>(
 ///    edge backup) is passed as `None` (no cross-SB-row prefilter buffer yet).
 #[allow(clippy::too_many_arguments)]
 fn recon_b_intra_luma<BD: crate::pixel::BitDepth>(
-    recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext,
-    cdf_m: &mut CdfModeContext,
-    a: &mut BlockContext,
-    l: &mut BlockContext,
-    b: &Av2Block,
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
     bx: i32,
     by: i32,
     _bx4: usize,
     _by4: usize,
     _intrabc: bool,
-    fi: &SbFrameInfo,
 ) -> Result<(), ()> {
-    recon_b_intra_luma_geom(recon, msac, cdf_m, a, l, b, bx, by, b.bs as usize, fi)
+    let recon = &mut *rb.recon;
+    let msac = &mut *rb.msac;
+    let cdf_m = &mut *rb.cdf_m;
+    let a = &mut *rb.a;
+    let l = &mut *rb.l;
+    let b = rb.b;
+    let fi = rb.fi;
+    recon_b_intra_luma_geom(
+        &mut ReconBCtx {
+            recon: &mut *recon,
+            msac: &mut *msac,
+            cdf_m: &mut *cdf_m,
+            a: &mut *a,
+            l: &mut *l,
+            b: b,
+            fi,
+        },
+        bx,
+        by,
+        b.bs as usize,
+    )
 }
 
 /// As `recon_b_intra_luma`, but with the transform-walk geometry block size
@@ -13083,17 +13180,18 @@ fn recon_b_intra_luma<BD: crate::pixel::BitDepth>(
 /// uses the sub-block size while coefficient decoding still uses the full
 #[allow(clippy::too_many_arguments)]
 fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
-    recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext,
-    cdf_m: &mut CdfModeContext,
-    a: &mut BlockContext,
-    l: &mut BlockContext,
-    b: &Av2Block,
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
     bx: i32,
     by: i32,
     geom_bs: usize,
-    fi: &SbFrameInfo,
 ) -> Result<(), ()> {
+    let recon = &mut *rb.recon;
+    let msac = &mut *rb.msac;
+    let cdf_m = &mut *rb.cdf_m;
+    let a = &mut *rb.a;
+    let l = &mut *rb.l;
+    let b = rb.b;
+    let fi = rb.fi;
     let bs = geom_bs;
     let seg_id = b.seg_id as usize;
     let lossless = recon.frame.seg_lossless[seg_id] != 0;
@@ -13141,19 +13239,21 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             let mut x = 0;
             while x < w4 {
                 recon_b_luma_tx(
-                    recon,
-                    msac,
-                    cdf_m,
-                    a,
-                    l,
-                    b,
+                    &mut ReconBCtx {
+                        recon: &mut *recon,
+                        msac: &mut *msac,
+                        cdf_m: &mut *cdf_m,
+                        a: &mut *a,
+                        l: &mut *l,
+                        b: b,
+                        fi,
+                    },
                     tx,
                     bx + x,
                     by + y,
                     pb_col_start,
                     pb_row_start,
                     lossless,
-                    fi,
                 )?;
                 x += tw4;
             }
@@ -13168,19 +13268,21 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
     match TxPartition::from_raw(b.tx_part) {
         TxPartition::None => {
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx,
                 by,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
         }
         TxPartition::Split => {
@@ -13188,144 +13290,160 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             let tw4 = t_dim.w as i32;
             let th4 = t_dim.h as i32;
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx,
                 by,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             let have_v_split = bx + tw4 < fi.bw;
             if have_v_split {
                 recon_b_luma_tx(
-                    recon,
-                    msac,
-                    cdf_m,
-                    a,
-                    l,
-                    b,
+                    &mut ReconBCtx {
+                        recon: &mut *recon,
+                        msac: &mut *msac,
+                        cdf_m: &mut *cdf_m,
+                        a: &mut *a,
+                        l: &mut *l,
+                        b: b,
+                        fi,
+                    },
                     tx,
                     bx + tw4,
                     by,
                     pb_col_start,
                     pb_row_start,
                     lossless,
-                    fi,
                 )?;
             }
             if by + th4 >= fi.bh {
                 return Ok(());
             }
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx,
                 by + th4,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             if have_v_split {
                 recon_b_luma_tx(
-                    recon,
-                    msac,
-                    cdf_m,
-                    a,
-                    l,
-                    b,
+                    &mut ReconBCtx {
+                        recon: &mut *recon,
+                        msac: &mut *msac,
+                        cdf_m: &mut *cdf_m,
+                        a: &mut *a,
+                        l: &mut *l,
+                        b: b,
+                        fi,
+                    },
                     tx,
                     bx + tw4,
                     by + th4,
                     pb_col_start,
                     pb_row_start,
                     lossless,
-                    fi,
                 )?;
             }
         }
         TxPartition::H => {
             let th4 = TXFM_DIMENSIONS[tx].h as i32;
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx,
                 by,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             if by + th4 >= fi.bh {
                 return Ok(());
             }
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx,
                 by + th4,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
         }
         TxPartition::V => {
             let tw4 = TXFM_DIMENSIONS[tx].w as i32;
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx,
                 by,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             if bx + tw4 >= fi.bw {
                 return Ok(());
             }
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx + tw4,
                 by,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
         }
         TxPartition::H4 => {
@@ -13334,19 +13452,21 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             for i in 0..4 {
                 let yy = by + i * th4;
                 recon_b_luma_tx(
-                    recon,
-                    msac,
-                    cdf_m,
-                    a,
-                    l,
-                    b,
+                    &mut ReconBCtx {
+                        recon: &mut *recon,
+                        msac: &mut *msac,
+                        cdf_m: &mut *cdf_m,
+                        a: &mut *a,
+                        l: &mut *l,
+                        b: b,
+                        fi,
+                    },
                     tx,
                     bx,
                     yy,
                     pb_col_start,
                     pb_row_start,
                     lossless,
-                    fi,
                 )?;
                 if yy + th4 >= fi.bh {
                     break;
@@ -13358,19 +13478,21 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             for i in 0..4 {
                 let xx = bx + i * tw4;
                 recon_b_luma_tx(
-                    recon,
-                    msac,
-                    cdf_m,
-                    a,
-                    l,
-                    b,
+                    &mut ReconBCtx {
+                        recon: &mut *recon,
+                        msac: &mut *msac,
+                        cdf_m: &mut *cdf_m,
+                        a: &mut *a,
+                        l: &mut *l,
+                        b: b,
+                        fi,
+                    },
                     tx,
                     xx,
                     by,
                     pb_col_start,
                     pb_row_start,
                     lossless,
-                    fi,
                 )?;
                 if xx + tw4 >= fi.bw {
                     break;
@@ -13384,90 +13506,100 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             let th4_small = t_dim_small.h as i32;
             let th4_big = TXFM_DIMENSIONS[tx_big].h as i32;
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx,
                 by,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             let have_v_split = bx + tw4_small < fi.bw;
             if have_v_split {
                 recon_b_luma_tx(
-                    recon,
-                    msac,
-                    cdf_m,
-                    a,
-                    l,
-                    b,
+                    &mut ReconBCtx {
+                        recon: &mut *recon,
+                        msac: &mut *msac,
+                        cdf_m: &mut *cdf_m,
+                        a: &mut *a,
+                        l: &mut *l,
+                        b: b,
+                        fi,
+                    },
                     tx,
                     bx + tw4_small,
                     by,
                     pb_col_start,
                     pb_row_start,
                     lossless,
-                    fi,
                 )?;
             }
             if by + th4_small >= fi.bh {
                 return Ok(());
             }
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx_big,
                 bx,
                 by + th4_small,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             if by + th4_small + th4_big >= fi.bh {
                 return Ok(());
             }
             let yb = by + th4_small + th4_big;
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx,
                 yb,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             if have_v_split {
                 recon_b_luma_tx(
-                    recon,
-                    msac,
-                    cdf_m,
-                    a,
-                    l,
-                    b,
+                    &mut ReconBCtx {
+                        recon: &mut *recon,
+                        msac: &mut *msac,
+                        cdf_m: &mut *cdf_m,
+                        a: &mut *a,
+                        l: &mut *l,
+                        b: b,
+                        fi,
+                    },
                     tx,
                     bx + tw4_small,
                     yb,
                     pb_col_start,
                     pb_row_start,
                     lossless,
-                    fi,
                 )?;
             }
         }
@@ -13478,90 +13610,100 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             let th4_small = t_dim_small.h as i32;
             let tw4_big = TXFM_DIMENSIONS[tx_big].w as i32;
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 bx,
                 by,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             let have_h_split = by + th4_small < fi.bh;
             if have_h_split {
                 recon_b_luma_tx(
-                    recon,
-                    msac,
-                    cdf_m,
-                    a,
-                    l,
-                    b,
+                    &mut ReconBCtx {
+                        recon: &mut *recon,
+                        msac: &mut *msac,
+                        cdf_m: &mut *cdf_m,
+                        a: &mut *a,
+                        l: &mut *l,
+                        b: b,
+                        fi,
+                    },
                     tx,
                     bx,
                     by + th4_small,
                     pb_col_start,
                     pb_row_start,
                     lossless,
-                    fi,
                 )?;
             }
             if bx + tw4_small >= fi.bw {
                 return Ok(());
             }
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx_big,
                 bx + tw4_small,
                 by,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             if bx + tw4_small + tw4_big >= fi.bw {
                 return Ok(());
             }
             let xb = bx + tw4_small + tw4_big;
             recon_b_luma_tx(
-                recon,
-                msac,
-                cdf_m,
-                a,
-                l,
-                b,
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: b,
+                    fi,
+                },
                 tx,
                 xb,
                 by,
                 pb_col_start,
                 pb_row_start,
                 lossless,
-                fi,
             )?;
             if have_h_split {
                 recon_b_luma_tx(
-                    recon,
-                    msac,
-                    cdf_m,
-                    a,
-                    l,
-                    b,
+                    &mut ReconBCtx {
+                        recon: &mut *recon,
+                        msac: &mut *msac,
+                        cdf_m: &mut *cdf_m,
+                        a: &mut *a,
+                        l: &mut *l,
+                        b: b,
+                        fi,
+                    },
                     tx,
                     xb,
                     by + th4_small,
                     pb_col_start,
                     pb_row_start,
                     lossless,
-                    fi,
                 )?;
             }
         }
@@ -13587,51 +13729,55 @@ enum ChromaPhase {
     ReconOnly,
 }
 
-fn recon_b_intra_chroma<BD: crate::pixel::BitDepth>(
-    recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext,
-    cdf_m: &mut CdfModeContext,
-    a: &mut BlockContext,
-    l: &mut BlockContext,
-    b: &Av2Block,
+fn recon_b_intra_chroma<BD: BitDepth>(
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
     cbx: i32,
     cby: i32,
     cbs: BlockSize,
     _intrabc: bool,
     sdp_active: bool,
-    fi: &SbFrameInfo,
 ) -> Result<(), ()> {
+    let recon = &mut *rb.recon;
+    let msac = &mut *rb.msac;
+    let cdf_m = &mut *rb.cdf_m;
+    let a = &mut *rb.a;
+    let l = &mut *rb.l;
+    let b = rb.b;
+    let fi = rb.fi;
     recon_b_intra_chroma_phase(
-        recon,
-        msac,
-        cdf_m,
-        a,
-        l,
-        b,
+        &mut ReconBCtx {
+            recon: &mut *recon,
+            msac: &mut *msac,
+            cdf_m: &mut *cdf_m,
+            a: &mut *a,
+            l: &mut *l,
+            b: b,
+            fi,
+        },
         cbx,
         cby,
         cbs,
         sdp_active,
-        fi,
         ChromaPhase::Both,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn recon_b_intra_chroma_phase<BD: crate::pixel::BitDepth>(
-    recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext,
-    cdf_m: &mut CdfModeContext,
-    a: &mut BlockContext,
-    l: &mut BlockContext,
-    b: &Av2Block,
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
     cbx: i32,
     cby: i32,
     cbs: BlockSize,
     sdp_active: bool,
-    fi: &SbFrameInfo,
     phase: ChromaPhase,
 ) -> Result<(), ()> {
+    let recon = &mut *rb.recon;
+    let msac = &mut *rb.msac;
+    let cdf_m = &mut *rb.cdf_m;
+    let a = &mut *rb.a;
+    let l = &mut *rb.l;
+    let b = rb.b;
+    let fi = rb.fi;
     let is_intrabc = b.intrabc != 0;
     let is_intra = b.is_intra != 0 && (sdp_active || !is_intrabc);
 
@@ -14312,20 +14458,21 @@ fn cfl_predict_8bpc<BD: crate::pixel::BitDepth>(
 /// transform residual. `bx`/`by` are the tx block's 4x4 grid position.
 #[allow(clippy::too_many_arguments)]
 fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
-    recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext,
-    cdf_m: &mut CdfModeContext,
-    a: &mut BlockContext,
-    l: &mut BlockContext,
-    b: &Av2Block,
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
     tx: usize,
     bx: i32,
     by: i32,
     pb_col_start: i32,
     pb_row_start: i32,
     lossless: bool,
-    fi: &SbFrameInfo,
 ) -> Result<(), ()> {
+    let recon = &mut *rb.recon;
+    let msac = &mut *rb.msac;
+    let cdf_m = &mut *rb.cdf_m;
+    let a = &mut *rb.a;
+    let l = &mut *rb.l;
+    let b = rb.b;
+    let fi = rb.fi;
     use crate::levels::IntraPredMode;
 
     let bd = recon.bd;
@@ -14908,25 +15055,36 @@ fn mc_w_mask<BD: crate::pixel::BitDepth>(
     }
 }
 
+/// Bundle of the superblock-decode state that threads unchanged through the
+/// `decode_sb` partition recursion. Passing a single `&mut SbCtx` instead of
+/// ~16 individual `&mut` arguments removes the per-call pointer crowding (the
+/// "pointer congestion" of spilling that many references at every recursive
+/// call) and keeps the call sites legible. It is deliberately NOT generic over
+/// `BitDepth` -- the bit-depth-dependent `recon` stays a separate argument --
+/// so the non-generic `decode_partition` can borrow from it as well.
+pub(crate) struct SbCtx<'a, 'm> {
+    pub(crate) fi: &'a SbFrameInfo,
+    pub(crate) bx: &'a mut i32,
+    pub(crate) by: &'a mut i32,
+    pub(crate) cbx: &'a mut i32,
+    pub(crate) cby: &'a mut i32,
+    pub(crate) intra_region: &'a mut i32,
+    pub(crate) sdp_cfl_disallowed: &'a mut i32,
+    pub(crate) a: &'a mut BlockContext,
+    pub(crate) l: &'a mut BlockContext,
+    pub(crate) msac: &'a mut MsacContext<'m>,
+    pub(crate) cdf_m: &'a mut CdfModeContext,
+    pub(crate) cdf_dmv: &'a mut CdfMvContext,
+    pub(crate) part_w: &'a mut Vec<u8>,
+    pub(crate) part_w_idx: &'a mut usize,
+    pub(crate) part_r: &'a [u8],
+    pub(crate) part_r_idx: &'a mut usize,
+}
+
 pub fn decode_sb<BD: crate::pixel::BitDepth>(
-    fi: &SbFrameInfo,
-    bx: &mut i32,
-    by: &mut i32,
-    cbx: &mut i32,
-    cby: &mut i32,
-    intra_region: &mut i32,
-    sdp_cfl_disallowed: &mut i32,
-    pass: u8,
-    a: &mut BlockContext,
-    l: &mut BlockContext,
-    msac: &mut MsacContext,
-    cdf_m: &mut CdfModeContext,
-    cdf_dmv: &mut CdfMvContext,
+    ctx: &mut SbCtx<'_, '_>,
     recon: &mut ReconCtx<BD>,
-    part_w: &mut Vec<u8>,
-    part_w_idx: &mut usize,
-    part_r: &[u8],
-    part_r_idx: &mut usize,
+    pass: u8,
     lbs: BlockSize,
     cbs: BlockSize,
     dir_ptr: &mut i32,
@@ -14945,66 +15103,25 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
     let hh4 = bh4 >> 1;
     let qw4 = hw4 >> 1;
     let qh4 = hh4 >> 1;
-    let have_h_split = fi.bw > *bx + hw4;
-    let have_v_split = fi.bh > *by + hh4;
+    let have_h_split = ctx.fi.bw > *ctx.bx + hw4;
+    let have_v_split = ctx.fi.bh > *ctx.by + hh4;
     let cbs_orig = cbs;
 
-    if lbs == BlockSize::Bs64x64 && cbs == BlockSize::Bs64x64 && fi.sdp && !fi.is_inter_or_switch {
+    if lbs == BlockSize::Bs64x64
+        && cbs == BlockSize::Bs64x64
+        && ctx.fi.sdp
+        && !ctx.fi.is_inter_or_switch
+    {
         let mut dir = 0i32;
-        decode_sb(
-            fi,
-            bx,
-            by,
-            cbx,
-            cby,
-            intra_region,
-            sdp_cfl_disallowed,
-            pass,
-            a,
-            l,
-            msac,
-            cdf_m,
-            cdf_dmv,
-            recon,
-            part_w,
-            part_w_idx,
-            part_r,
-            part_r_idx,
-            lbs,
-            BlockSize::Invalid,
-            &mut dir,
-        )?;
-        return decode_sb(
-            fi,
-            bx,
-            by,
-            cbx,
-            cby,
-            intra_region,
-            sdp_cfl_disallowed,
-            pass,
-            a,
-            l,
-            msac,
-            cdf_m,
-            cdf_dmv,
-            recon,
-            part_w,
-            part_w_idx,
-            part_r,
-            part_r_idx,
-            BlockSize::Invalid,
-            cbs,
-            &mut dir,
-        );
+        decode_sb(ctx, recon, pass, lbs, BlockSize::Invalid, &mut dir)?;
+        return decode_sb(ctx, recon, pass, BlockSize::Invalid, cbs, &mut dir);
     }
 
     let pl = (lbs == BlockSize::Invalid) as usize;
     let pcc = &PARTITION_SUBB[bs as u8 as usize];
     let (bp, cbs) = decode_partition(
-        fi,
-        bx,
-        by,
+        ctx,
+        pass,
         lbs,
         cbs,
         bs,
@@ -15015,23 +15132,12 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
         qh4,
         have_h_split,
         have_v_split,
-        pass,
-        a,
-        l,
-        msac,
-        cdf_m,
-        part_w,
-        part_w_idx,
-        part_r,
-        part_r_idx,
-        intra_region,
-        sdp_cfl_disallowed,
         dir_ptr,
     );
 
     if bs == cbs {
-        *cbx = *bx;
-        *cby = *by;
+        *ctx.cbx = *ctx.bx;
+        *ctx.cby = *ctx.by;
     }
 
     let lim = &PARTITION_LIM[bp as u8 as usize];
@@ -15039,43 +15145,26 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
 
     match bp {
         BlockPartition::None => {
-            let _b = decode_b(
-                fi,
-                *bx,
-                *by,
-                *cbx,
-                *cby,
-                *intra_region,
-                *sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
-                recon,
-                lbs,
-                cbs,
-            )?;
+            let _b = decode_b(ctx, recon, pass, lbs, cbs)?;
             if pass & (Pass::Entropy as u8) != 0 {
-                let bx4 = (*bx & 63) as usize;
-                let by4 = (*by & 63) as usize;
+                let bx4 = (*ctx.bx & 63) as usize;
+                let by4 = (*ctx.by & 63) as usize;
                 if (cbs as i8 | lbs as i8) != BlockSize::Invalid as i8 {
                     // C: case_set(b_dim[2 + i]) writes 1<<b_dim[2+i] bytes (pow2 length),
                     // for both partition[0] and partition[1].
-                    memset_pow2(&mut a.partition[0], bx4, !(b_dim[0] - 1), b_dim[2]);
-                    memset_pow2(&mut a.partition[1], bx4, !(b_dim[0] - 1), b_dim[2]);
-                    memset_pow2(&mut l.partition[0], by4, !(b_dim[1] - 1), b_dim[3]);
-                    memset_pow2(&mut l.partition[1], by4, !(b_dim[1] - 1), b_dim[3]);
+                    memset_pow2(&mut ctx.a.partition[0], bx4, !(b_dim[0] - 1), b_dim[2]);
+                    memset_pow2(&mut ctx.a.partition[1], bx4, !(b_dim[0] - 1), b_dim[2]);
+                    memset_pow2(&mut ctx.l.partition[0], by4, !(b_dim[1] - 1), b_dim[3]);
+                    memset_pow2(&mut ctx.l.partition[1], by4, !(b_dim[1] - 1), b_dim[3]);
                 } else {
-                    memset_pow2(&mut a.partition[pl], bx4, !(b_dim[0] - 1), b_dim[2]);
-                    memset_pow2(&mut l.partition[pl], by4, !(b_dim[1] - 1), b_dim[3]);
+                    memset_pow2(&mut ctx.a.partition[pl], bx4, !(b_dim[0] - 1), b_dim[2]);
+                    memset_pow2(&mut ctx.l.partition[pl], by4, !(b_dim[1] - 1), b_dim[3]);
                 }
             }
         }
         BlockPartition::V => {
             assert!(hw4 > 0);
-            let sub4 = bs == cbs && (hw4 >> fi.ss_hor) > 0;
+            let sub4 = bs == cbs && (hw4 >> ctx.fi.ss_hor) > 0;
             assert!(sub4 || pl == 0);
             let child_lbs = if pl != 0 {
                 BlockSize::Invalid
@@ -15087,66 +15176,29 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
             } else {
                 BlockSize::Invalid
             };
-            decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
-                recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
-                child_lbs,
-                child_cbs_first,
-                &mut child_dir,
-            )?;
-            if *bx + hw4 >= fi.bw { /* done */
+            decode_sb(ctx, recon, pass, child_lbs, child_cbs_first, &mut child_dir)?;
+            if *ctx.bx + hw4 >= ctx.fi.bw { /* done */
             } else {
-                *bx += hw4;
+                *ctx.bx += hw4;
                 let child_cbs_second = if sub4 {
                     BlockSize::from_raw(pcc.part[1][0])
                 } else {
                     cbs
                 };
                 decode_sb(
-                    fi,
-                    bx,
-                    by,
-                    cbx,
-                    cby,
-                    intra_region,
-                    sdp_cfl_disallowed,
-                    pass,
-                    a,
-                    l,
-                    msac,
-                    cdf_m,
-                    cdf_dmv,
+                    ctx,
                     recon,
-                    part_w,
-                    part_w_idx,
-                    part_r,
-                    part_r_idx,
+                    pass,
                     child_lbs,
                     child_cbs_second,
                     &mut child_dir,
                 )?;
-                *bx -= hw4;
+                *ctx.bx -= hw4;
             }
         }
         BlockPartition::H => {
             assert!(hh4 > 0);
-            let sub4 = bs == cbs && (hh4 >> fi.ss_ver) > 0;
+            let sub4 = bs == cbs && (hh4 >> ctx.fi.ss_ver) > 0;
             assert!(sub4 || pl == 0);
             let child_lbs = if pl != 0 {
                 BlockSize::Invalid
@@ -15158,61 +15210,24 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
             } else {
                 BlockSize::Invalid
             };
-            decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
-                recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
-                child_lbs,
-                child_cbs_first,
-                &mut child_dir,
-            )?;
-            if *by + hh4 >= fi.bh { /* done */
+            decode_sb(ctx, recon, pass, child_lbs, child_cbs_first, &mut child_dir)?;
+            if *ctx.by + hh4 >= ctx.fi.bh { /* done */
             } else {
-                *by += hh4;
+                *ctx.by += hh4;
                 let child_cbs_second = if sub4 {
                     BlockSize::from_raw(pcc.part[0][0])
                 } else {
                     cbs
                 };
                 decode_sb(
-                    fi,
-                    bx,
-                    by,
-                    cbx,
-                    cby,
-                    intra_region,
-                    sdp_cfl_disallowed,
-                    pass,
-                    a,
-                    l,
-                    msac,
-                    cdf_m,
-                    cdf_dmv,
+                    ctx,
                     recon,
-                    part_w,
-                    part_w_idx,
-                    part_r,
-                    part_r_idx,
+                    pass,
                     child_lbs,
                     child_cbs_second,
                     &mut child_dir,
                 )?;
-                *by -= hh4;
+                *ctx.by -= hh4;
             }
         }
         BlockPartition::Split => {
@@ -15224,170 +15239,38 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
                 return Err(());
             }
             let sbs = BlockSize::from_raw(pcc.part[0][3]);
-            decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
-                recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
-                sbs,
-                sbs,
-                &mut child_dir,
-            )?;
-            *bx += hw4;
-            decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
-                recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
-                sbs,
-                sbs,
-                &mut child_dir,
-            )?;
-            *bx -= hw4;
-            *by += hh4;
-            decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
-                recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
-                sbs,
-                sbs,
-                &mut child_dir,
-            )?;
-            *bx += hw4;
-            decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
-                recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
-                sbs,
-                sbs,
-                &mut child_dir,
-            )?;
-            *bx -= hw4;
-            *by -= hh4;
+            decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+            *ctx.bx += hw4;
+            decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+            *ctx.bx -= hw4;
+            *ctx.by += hh4;
+            decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+            *ctx.bx += hw4;
+            decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+            *ctx.bx -= hw4;
+            *ctx.by -= hh4;
         }
         BlockPartition::V3 => {
             assert!(qw4 > 0 && hh4 > 0);
-            let sub4 = bs == cbs && (qw4 >> fi.ss_hor) > 0 && (hh4 >> fi.ss_ver) > 0;
+            let sub4 = bs == cbs && (qw4 >> ctx.fi.ss_hor) > 0 && (hh4 >> ctx.fi.ss_ver) > 0;
             assert!(sub4 || pl == 0);
             let i_3only = cbs == BlockSize::Invalid || (!sub4 && bs != BlockSize::Bs32x8);
             let p1_1 = BlockSize::from_raw(pcc.part[1][1]);
             let p1_3 = BlockSize::from_raw(pcc.part[1][3]);
             let lbs_child = if pl != 0 { BlockSize::Invalid } else { p1_1 };
             let cbs_first = if i_3only { BlockSize::Invalid } else { p1_1 };
-            decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
-                recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
-                lbs_child,
-                cbs_first,
-                &mut child_dir,
-            )?;
-            if *bx + qw4 >= fi.bw { /* done */
+            decode_sb(ctx, recon, pass, lbs_child, cbs_first, &mut child_dir)?;
+            if *ctx.bx + qw4 >= ctx.fi.bw { /* done */
             } else {
-                *bx += qw4;
+                *ctx.bx += qw4;
                 if !i_3only {
-                    *cbx = *bx;
+                    *ctx.cbx = *ctx.bx;
                 }
                 let lbs_mid = if pl != 0 { BlockSize::Invalid } else { p1_3 };
                 let cbs_mid = if sub4 { p1_3 } else { BlockSize::Invalid };
-                decode_sb(
-                    fi,
-                    bx,
-                    by,
-                    cbx,
-                    cby,
-                    intra_region,
-                    sdp_cfl_disallowed,
-                    pass,
-                    a,
-                    l,
-                    msac,
-                    cdf_m,
-                    cdf_dmv,
-                    recon,
-                    part_w,
-                    part_w_idx,
-                    part_r,
-                    part_r_idx,
-                    lbs_mid,
-                    cbs_mid,
-                    &mut child_dir,
-                )?;
-                if *by + hh4 < fi.bh {
-                    *by += hh4;
+                decode_sb(ctx, recon, pass, lbs_mid, cbs_mid, &mut child_dir)?;
+                if *ctx.by + hh4 < ctx.fi.bh {
+                    *ctx.by += hh4;
                     let cbs_mid2 = if i_3only {
                         BlockSize::Invalid
                     } else if sub4 {
@@ -15395,128 +15278,40 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
                     } else {
                         BlockSize::from_raw(pcc.part[1][0])
                     };
-                    decode_sb(
-                        fi,
-                        bx,
-                        by,
-                        cbx,
-                        cby,
-                        intra_region,
-                        sdp_cfl_disallowed,
-                        pass,
-                        a,
-                        l,
-                        msac,
-                        cdf_m,
-                        cdf_dmv,
-                        recon,
-                        part_w,
-                        part_w_idx,
-                        part_r,
-                        part_r_idx,
-                        lbs_mid,
-                        cbs_mid2,
-                        &mut child_dir,
-                    )?;
-                    *by -= hh4;
+                    decode_sb(ctx, recon, pass, lbs_mid, cbs_mid2, &mut child_dir)?;
+                    *ctx.by -= hh4;
                 }
-                if *bx + hw4 >= fi.bw {
-                    *bx -= qw4;
+                if *ctx.bx + hw4 >= ctx.fi.bw {
+                    *ctx.bx -= qw4;
                 } else {
-                    *bx += hw4;
+                    *ctx.bx += hw4;
                     let cbs_last = if i_3only { cbs } else { p1_1 };
-                    decode_sb(
-                        fi,
-                        bx,
-                        by,
-                        cbx,
-                        cby,
-                        intra_region,
-                        sdp_cfl_disallowed,
-                        pass,
-                        a,
-                        l,
-                        msac,
-                        cdf_m,
-                        cdf_dmv,
-                        recon,
-                        part_w,
-                        part_w_idx,
-                        part_r,
-                        part_r_idx,
-                        lbs_child,
-                        cbs_last,
-                        &mut child_dir,
-                    )?;
-                    *bx -= 3 * qw4;
+                    decode_sb(ctx, recon, pass, lbs_child, cbs_last, &mut child_dir)?;
+                    *ctx.bx -= 3 * qw4;
                 }
             }
         }
         BlockPartition::H3 => {
             assert!(qh4 > 0 && hw4 > 0);
-            let sub4 = bs == cbs && (qh4 >> fi.ss_ver) > 0 && (hw4 >> fi.ss_hor) > 0;
+            let sub4 = bs == cbs && (qh4 >> ctx.fi.ss_ver) > 0 && (hw4 >> ctx.fi.ss_hor) > 0;
             assert!(sub4 || pl == 0);
             let i_3only = cbs == BlockSize::Invalid || (!sub4 && bs != BlockSize::Bs8x32);
             let p0_1 = BlockSize::from_raw(pcc.part[0][1]);
             let p0_3 = BlockSize::from_raw(pcc.part[0][3]);
             let lbs_child = if pl != 0 { BlockSize::Invalid } else { p0_1 };
             let cbs_first = if i_3only { BlockSize::Invalid } else { p0_1 };
-            decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
-                recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
-                lbs_child,
-                cbs_first,
-                &mut child_dir,
-            )?;
-            if *by + qh4 >= fi.bh { /* done */
+            decode_sb(ctx, recon, pass, lbs_child, cbs_first, &mut child_dir)?;
+            if *ctx.by + qh4 >= ctx.fi.bh { /* done */
             } else {
-                *by += qh4;
+                *ctx.by += qh4;
                 if !i_3only {
-                    *cby = *by;
+                    *ctx.cby = *ctx.by;
                 }
                 let lbs_mid = if pl != 0 { BlockSize::Invalid } else { p0_3 };
                 let cbs_mid = if sub4 { p0_3 } else { BlockSize::Invalid };
-                decode_sb(
-                    fi,
-                    bx,
-                    by,
-                    cbx,
-                    cby,
-                    intra_region,
-                    sdp_cfl_disallowed,
-                    pass,
-                    a,
-                    l,
-                    msac,
-                    cdf_m,
-                    cdf_dmv,
-                    recon,
-                    part_w,
-                    part_w_idx,
-                    part_r,
-                    part_r_idx,
-                    lbs_mid,
-                    cbs_mid,
-                    &mut child_dir,
-                )?;
-                if *bx + hw4 < fi.bw {
-                    *bx += hw4;
+                decode_sb(ctx, recon, pass, lbs_mid, cbs_mid, &mut child_dir)?;
+                if *ctx.bx + hw4 < ctx.fi.bw {
+                    *ctx.bx += hw4;
                     let cbs_mid2 = if i_3only {
                         BlockSize::Invalid
                     } else if sub4 {
@@ -15524,67 +15319,23 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
                     } else {
                         BlockSize::from_raw(pcc.part[0][0])
                     };
-                    decode_sb(
-                        fi,
-                        bx,
-                        by,
-                        cbx,
-                        cby,
-                        intra_region,
-                        sdp_cfl_disallowed,
-                        pass,
-                        a,
-                        l,
-                        msac,
-                        cdf_m,
-                        cdf_dmv,
-                        recon,
-                        part_w,
-                        part_w_idx,
-                        part_r,
-                        part_r_idx,
-                        lbs_mid,
-                        cbs_mid2,
-                        &mut child_dir,
-                    )?;
-                    *bx -= hw4;
+                    decode_sb(ctx, recon, pass, lbs_mid, cbs_mid2, &mut child_dir)?;
+                    *ctx.bx -= hw4;
                 }
-                if *by + hh4 >= fi.bh {
-                    *by -= qh4;
+                if *ctx.by + hh4 >= ctx.fi.bh {
+                    *ctx.by -= qh4;
                 } else {
-                    *by += hh4;
+                    *ctx.by += hh4;
                     let cbs_last = if i_3only { cbs } else { p0_1 };
-                    decode_sb(
-                        fi,
-                        bx,
-                        by,
-                        cbx,
-                        cby,
-                        intra_region,
-                        sdp_cfl_disallowed,
-                        pass,
-                        a,
-                        l,
-                        msac,
-                        cdf_m,
-                        cdf_dmv,
-                        recon,
-                        part_w,
-                        part_w_idx,
-                        part_r,
-                        part_r_idx,
-                        lbs_child,
-                        cbs_last,
-                        &mut child_dir,
-                    )?;
-                    *by -= 3 * qh4;
+                    decode_sb(ctx, recon, pass, lbs_child, cbs_last, &mut child_dir)?;
+                    *ctx.by -= 3 * qh4;
                 }
             }
         }
         BlockPartition::V4A | BlockPartition::V4B => {
             let ew4 = qw4 >> 1;
             assert!(ew4 > 0);
-            let sub4 = bs == cbs && (ew4 >> fi.ss_hor) > 0;
+            let sub4 = bs == cbs && (ew4 >> ctx.fi.ss_hor) > 0;
             assert!(sub4 || pl == 0);
             let p1_2 = BlockSize::from_raw(pcc.part[1][2]);
             let var = bp as i8 - BlockPartition::V4A as i8;
@@ -15595,111 +15346,51 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
             let lbs_var = if pl != 0 { BlockSize::Invalid } else { p1_var };
 
             decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
+                ctx,
                 recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
+                pass,
                 lbs_edge,
                 if sub4 { p1_2 } else { BlockSize::Invalid },
                 &mut child_dir,
             )?;
-            if *bx + ew4 >= fi.bw { /* done */
+            if *ctx.bx + ew4 >= ctx.fi.bw { /* done */
             } else {
-                *bx += ew4;
+                *ctx.bx += ew4;
                 decode_sb(
-                    fi,
-                    bx,
-                    by,
-                    cbx,
-                    cby,
-                    intra_region,
-                    sdp_cfl_disallowed,
-                    pass,
-                    a,
-                    l,
-                    msac,
-                    cdf_m,
-                    cdf_dmv,
+                    ctx,
                     recon,
-                    part_w,
-                    part_w_idx,
-                    part_r,
-                    part_r_idx,
+                    pass,
                     lbs_nvar,
                     if sub4 { p1_nvar } else { BlockSize::Invalid },
                     &mut child_dir,
                 )?;
                 let w4a = qw4 << var;
                 let w4b = hw4 >> var;
-                if *bx + w4a >= fi.bw {
-                    *bx -= ew4;
+                if *ctx.bx + w4a >= ctx.fi.bw {
+                    *ctx.bx -= ew4;
                 } else {
-                    *bx += w4a;
+                    *ctx.bx += w4a;
                     decode_sb(
-                        fi,
-                        bx,
-                        by,
-                        cbx,
-                        cby,
-                        intra_region,
-                        sdp_cfl_disallowed,
-                        pass,
-                        a,
-                        l,
-                        msac,
-                        cdf_m,
-                        cdf_dmv,
+                        ctx,
                         recon,
-                        part_w,
-                        part_w_idx,
-                        part_r,
-                        part_r_idx,
+                        pass,
                         lbs_var,
                         if sub4 { p1_var } else { BlockSize::Invalid },
                         &mut child_dir,
                     )?;
-                    if *bx + w4b >= fi.bw {
-                        *bx -= ew4 + w4a;
+                    if *ctx.bx + w4b >= ctx.fi.bw {
+                        *ctx.bx -= ew4 + w4a;
                     } else {
-                        *bx += w4b;
+                        *ctx.bx += w4b;
                         decode_sb(
-                            fi,
-                            bx,
-                            by,
-                            cbx,
-                            cby,
-                            intra_region,
-                            sdp_cfl_disallowed,
-                            pass,
-                            a,
-                            l,
-                            msac,
-                            cdf_m,
-                            cdf_dmv,
+                            ctx,
                             recon,
-                            part_w,
-                            part_w_idx,
-                            part_r,
-                            part_r_idx,
+                            pass,
                             lbs_edge,
                             if sub4 { p1_2 } else { cbs },
                             &mut child_dir,
                         )?;
-                        *bx -= 7 * ew4;
+                        *ctx.bx -= 7 * ew4;
                     }
                 }
             }
@@ -15707,7 +15398,7 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
         BlockPartition::H4A | BlockPartition::H4B => {
             let eh4 = qh4 >> 1;
             assert!(eh4 > 0);
-            let sub4 = bs == cbs && (eh4 >> fi.ss_ver) > 0;
+            let sub4 = bs == cbs && (eh4 >> ctx.fi.ss_ver) > 0;
             assert!(sub4 || pl == 0);
             let p0_2 = BlockSize::from_raw(pcc.part[0][2]);
             let var = bp as i8 - BlockPartition::H4A as i8;
@@ -15718,111 +15409,51 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
             let lbs_var = if pl != 0 { BlockSize::Invalid } else { p0_var };
 
             decode_sb(
-                fi,
-                bx,
-                by,
-                cbx,
-                cby,
-                intra_region,
-                sdp_cfl_disallowed,
-                pass,
-                a,
-                l,
-                msac,
-                cdf_m,
-                cdf_dmv,
+                ctx,
                 recon,
-                part_w,
-                part_w_idx,
-                part_r,
-                part_r_idx,
+                pass,
                 lbs_edge,
                 if sub4 { p0_2 } else { BlockSize::Invalid },
                 &mut child_dir,
             )?;
-            if *by + eh4 >= fi.bh { /* done */
+            if *ctx.by + eh4 >= ctx.fi.bh { /* done */
             } else {
-                *by += eh4;
+                *ctx.by += eh4;
                 decode_sb(
-                    fi,
-                    bx,
-                    by,
-                    cbx,
-                    cby,
-                    intra_region,
-                    sdp_cfl_disallowed,
-                    pass,
-                    a,
-                    l,
-                    msac,
-                    cdf_m,
-                    cdf_dmv,
+                    ctx,
                     recon,
-                    part_w,
-                    part_w_idx,
-                    part_r,
-                    part_r_idx,
+                    pass,
                     lbs_nvar,
                     if sub4 { p0_nvar } else { BlockSize::Invalid },
                     &mut child_dir,
                 )?;
                 let h4a = qh4 << var;
                 let h4b = hh4 >> var;
-                if *by + h4a >= fi.bh {
-                    *by -= eh4;
+                if *ctx.by + h4a >= ctx.fi.bh {
+                    *ctx.by -= eh4;
                 } else {
-                    *by += h4a;
+                    *ctx.by += h4a;
                     decode_sb(
-                        fi,
-                        bx,
-                        by,
-                        cbx,
-                        cby,
-                        intra_region,
-                        sdp_cfl_disallowed,
-                        pass,
-                        a,
-                        l,
-                        msac,
-                        cdf_m,
-                        cdf_dmv,
+                        ctx,
                         recon,
-                        part_w,
-                        part_w_idx,
-                        part_r,
-                        part_r_idx,
+                        pass,
                         lbs_var,
                         if sub4 { p0_var } else { BlockSize::Invalid },
                         &mut child_dir,
                     )?;
-                    if *by + h4b >= fi.bh {
-                        *by -= eh4 + h4a;
+                    if *ctx.by + h4b >= ctx.fi.bh {
+                        *ctx.by -= eh4 + h4a;
                     } else {
-                        *by += h4b;
+                        *ctx.by += h4b;
                         decode_sb(
-                            fi,
-                            bx,
-                            by,
-                            cbx,
-                            cby,
-                            intra_region,
-                            sdp_cfl_disallowed,
-                            pass,
-                            a,
-                            l,
-                            msac,
-                            cdf_m,
-                            cdf_dmv,
+                            ctx,
                             recon,
-                            part_w,
-                            part_w_idx,
-                            part_r,
-                            part_r_idx,
+                            pass,
                             lbs_edge,
                             if sub4 { p0_2 } else { cbs },
                             &mut child_dir,
                         )?;
-                        *by -= 7 * eh4;
+                        *ctx.by -= 7 * eh4;
                     }
                 }
             }
@@ -15832,28 +15463,11 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
 
     *dir_ptr |= (child_dir & 0xff) << 16;
 
-    if *intra_region != 0 && cbs_orig != BlockSize::Invalid {
-        *cbx = *bx;
-        *cby = *by;
-        let _b = decode_b(
-            fi,
-            *bx,
-            *by,
-            *cbx,
-            *cby,
-            *intra_region,
-            *sdp_cfl_disallowed,
-            pass,
-            a,
-            l,
-            msac,
-            cdf_m,
-            cdf_dmv,
-            recon,
-            BlockSize::Invalid,
-            cbs_orig,
-        )?;
-        *intra_region = 0;
+    if *ctx.intra_region != 0 && cbs_orig != BlockSize::Invalid {
+        *ctx.cbx = *ctx.bx;
+        *ctx.cby = *ctx.by;
+        let _b = decode_b(ctx, recon, pass, BlockSize::Invalid, cbs_orig)?;
+        *ctx.intra_region = 0;
     }
 
     Ok(())
