@@ -1,6 +1,6 @@
 # tealdust
 
-Still images AV1 and AV2 AVIFs decoder in Rust.
+Still images AV2 AVIFs decoder in Rust.
 
 ## Example
 
