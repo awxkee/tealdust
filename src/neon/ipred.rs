@@ -742,7 +742,7 @@ pub(crate) fn ipred_paeth_8bpc_neon(
 
 /// 8 bytes -> two i32x4 lanes (ascending): lane k == a[k].
 #[inline(always)]
-fn load8_u8_i32(a: &[u8]) -> (int32x4_t, int32x4_t) {
+fn load8_u8_i32(a: &[u8; 8]) -> (int32x4_t, int32x4_t) {
     let w = unsafe { vmovl_u8(vld1_u8(a.as_ptr())) };
     unsafe {
         (
@@ -754,7 +754,7 @@ fn load8_u8_i32(a: &[u8]) -> (int32x4_t, int32x4_t) {
 
 /// 8 bytes -> two i32x4 lanes (reversed): lane k == a[7 - k].
 #[inline(always)]
-fn load8_u8_i32_rev(a: &[u8]) -> (int32x4_t, int32x4_t) {
+fn load8_u8_i32_rev(a: &[u8; 8]) -> (int32x4_t, int32x4_t) {
     let r = unsafe { vrev64_u8(vld1_u8(a.as_ptr())) };
     let w = unsafe { vmovl_u8(r) };
     unsafe {
@@ -794,6 +794,16 @@ fn tap4_pack_neon(
     }
 }
 
+#[inline(always)]
+fn store_u8x8_fixed(a: &mut [u8; 8], v: uint8x8_t) {
+    unsafe { vst1_u8(a.as_mut_ptr(), v) };
+}
+
+#[inline(always)]
+fn store_u8x8x2_fixed(a: &mut [u8; 16], lo: uint8x8_t, hi: uint8x8_t) {
+    unsafe { vst1q_u8(a.as_mut_ptr(), vcombine_u8(lo, hi)) };
+}
+
 #[inline]
 #[target_feature(enable = "neon")]
 fn z1_luma_row_neon(
@@ -813,33 +823,63 @@ fn z1_luma_row_neon(
     let dv = vdupq_n_s32(f.d as i32);
     let rnd = vdupq_n_s32(64);
 
-    let mut x = 0usize;
-    while x + 8 <= n_filter {
-        let bi = (top_off as i32 + base0) as usize + x;
-        let packed = tap4_pack_neon(
+    let base_const = (top_off as i32 + base0) as usize;
+    let (body, fill_tail) = dst_row.split_at_mut(n_filter);
+    let (c16, r16) = body.as_chunks_mut::<16>();
+    for (ci, d) in c16.iter_mut().enumerate() {
+        let bi = base_const + ci * 16;
+        let pa = tap4_pack_neon(
             av,
             bv,
             cv,
             dv,
             rnd,
-            load8_u8_i32(&filt[bi - 1..bi - 1 + 8]),
-            load8_u8_i32(&filt[bi..bi + 8]),
-            load8_u8_i32(&filt[bi + 1..bi + 1 + 8]),
-            load8_u8_i32(&filt[bi + 2..bi + 2 + 8]),
+            load8_u8_i32((&filt[bi - 1..bi - 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi..bi + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi + 1..bi + 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi + 2..bi + 2 + 8]).try_into().unwrap()),
         );
-        unsafe { vst1_u8(dst_row[x..x + 8].as_mut_ptr(), packed) };
-        x += 8;
+        let bb = bi + 8;
+        let pb = tap4_pack_neon(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            load8_u8_i32((&filt[bb - 1..bb - 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bb..bb + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bb + 1..bb + 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bb + 2..bb + 2 + 8]).try_into().unwrap()),
+        );
+        store_u8x8x2_fixed(d, pa, pb);
     }
-    while x < n_filter {
-        let bi = (top_off as i32 + base0) as usize + x;
+    let done = c16.len() * 16;
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+    for (ci, d) in c8.iter_mut().enumerate() {
+        let bi = base_const + done + ci * 8;
+        let p = tap4_pack_neon(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            load8_u8_i32((&filt[bi - 1..bi - 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi..bi + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi + 1..bi + 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[bi + 2..bi + 2 + 8]).try_into().unwrap()),
+        );
+        store_u8x8_fixed(d, p);
+    }
+    let base_x = done + c8.len() * 8;
+    for (xi, d) in r8.iter_mut().enumerate() {
+        let bi = base_const + base_x + xi;
         let v = f.a as i32 * filt[bi - 1] as i32
             + f.b as i32 * filt[bi] as i32
             + f.c as i32 * filt[bi + 1] as i32
             + f.d as i32 * filt[bi + 2] as i32;
-        dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
-        x += 1;
+        *d = ((v + 64) >> 7).clamp(0, 255) as u8;
     }
-    dst_row[n_filter..w].fill(fill);
+    fill_tail.fill(fill);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -974,37 +1014,83 @@ fn z3_luma_col_neon(
     let dv = vdupq_n_s32(f.d as i32);
     let rnd = vdupq_n_s32(64);
 
-    let mut y = 0usize;
-    while y + 8 <= n_filter {
-        let bi_j = left_off as i32 - base0 - y as i32;
-        let sa = (bi_j - 6) as usize;
-        let sb = (bi_j - 7) as usize;
-        let sc = (bi_j - 8) as usize;
-        let sd = (bi_j - 9) as usize;
-        let packed = tap4_pack_neon(
+    let lob = left_off as i32 - base0; // bi_j at y == 0
+    let (body, fill_tail) = col.split_at_mut(n_filter);
+    let (c16, r16) = body.as_chunks_mut::<16>();
+    for (ci, d) in c16.iter_mut().enumerate() {
+        // group A covers col[y0..y0+8], group B col[y0+8..y0+16]; bi_j drops by
+        // 8 between them. Reversed windows start at bi_j-6 .. bi_j-9.
+        let bij = lob - (ci * 16) as i32;
+        let (sa, sb, sc, sd) = (
+            (bij - 6) as usize,
+            (bij - 7) as usize,
+            (bij - 8) as usize,
+            (bij - 9) as usize,
+        );
+        let pa = tap4_pack_neon(
             av,
             bv,
             cv,
             dv,
             rnd,
-            load8_u8_i32_rev(&filt[sa..sa + 8]),
-            load8_u8_i32_rev(&filt[sb..sb + 8]),
-            load8_u8_i32_rev(&filt[sc..sc + 8]),
-            load8_u8_i32_rev(&filt[sd..sd + 8]),
+            load8_u8_i32_rev((&filt[sa..sa + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sb..sb + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sc..sc + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sd..sd + 8]).try_into().unwrap()),
         );
-        unsafe { vst1_u8(col[y..y + 8].as_mut_ptr(), packed) };
-        y += 8;
+        let bij2 = bij - 8;
+        let (sa2, sb2, sc2, sd2) = (
+            (bij2 - 6) as usize,
+            (bij2 - 7) as usize,
+            (bij2 - 8) as usize,
+            (bij2 - 9) as usize,
+        );
+        let pb = tap4_pack_neon(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            load8_u8_i32_rev((&filt[sa2..sa2 + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sb2..sb2 + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sc2..sc2 + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sd2..sd2 + 8]).try_into().unwrap()),
+        );
+        store_u8x8x2_fixed(d, pa, pb);
     }
-    while y < n_filter {
-        let bi = (left_off as i32 - base0 - y as i32) as usize;
+    let done = c16.len() * 16;
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+    for (ci, d) in c8.iter_mut().enumerate() {
+        let bij = lob - (done + ci * 8) as i32;
+        let (sa, sb, sc, sd) = (
+            (bij - 6) as usize,
+            (bij - 7) as usize,
+            (bij - 8) as usize,
+            (bij - 9) as usize,
+        );
+        let p = tap4_pack_neon(
+            av,
+            bv,
+            cv,
+            dv,
+            rnd,
+            load8_u8_i32_rev((&filt[sa..sa + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sb..sb + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sc..sc + 8]).try_into().unwrap()),
+            load8_u8_i32_rev((&filt[sd..sd + 8]).try_into().unwrap()),
+        );
+        store_u8x8_fixed(d, p);
+    }
+    let base_y = done + c8.len() * 8;
+    for (yi, d) in r8.iter_mut().enumerate() {
+        let bi = (lob - (base_y + yi) as i32) as usize;
         let v = f.a as i32 * filt[bi + 1] as i32
             + f.b as i32 * filt[bi] as i32
             + f.c as i32 * filt[bi - 1] as i32
             + f.d as i32 * filt[bi - 2] as i32;
-        col[y] = ((v + 64) >> 7).clamp(0, 255) as u8;
-        y += 1;
+        *d = ((v + 64) >> 7).clamp(0, 255) as u8;
     }
-    col[n_filter..h].fill(fill);
+    fill_tail.fill(fill);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1148,22 +1234,25 @@ fn z2_top_span_neon(
             cv,
             dv,
             rnd,
-            load8_u8_i32(&filt[sa..sa + 8]),
-            load8_u8_i32(&filt[sa + 1..sa + 1 + 8]),
-            load8_u8_i32(&filt[sa + 2..sa + 2 + 8]),
-            load8_u8_i32(&filt[sa + 3..sa + 3 + 8]),
+            load8_u8_i32((&filt[sa..sa + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[sa + 1..sa + 1 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[sa + 2..sa + 2 + 8]).try_into().unwrap()),
+            load8_u8_i32((&filt[sa + 3..sa + 3 + 8]).try_into().unwrap()),
         );
-        unsafe { vst1_u8(dst_row[x..x + 8].as_mut_ptr(), packed) };
+        store_u8x8_fixed((&mut dst_row[x..x + 8]).try_into().unwrap(), packed);
         x += 8;
         xpos += 64 * 8;
     }
     while x < w {
         let base_x = xpos >> 6;
-        let ti = (top_off as i32 + base_x) as usize;
-        let v = f.a as i32 * filt[ti + 1] as i32
-            + f.b as i32 * filt[ti + 2] as i32
-            + f.c as i32 * filt[ti + 3] as i32
-            + f.d as i32 * filt[ti + 4] as i32;
+        // Keep `ti` signed: at the left/top boundary `base_x` is -1, so `ti` is
+        // -1 and `(ti + 1)` is 0. Casting to usize before the +1 would wrap and
+        // overflow (matches the scalar reference and the 8-wide path above).
+        let ti = top_off as i32 + base_x;
+        let v = f.a as i32 * filt[(ti + 1) as usize] as i32
+            + f.b as i32 * filt[(ti + 2) as usize] as i32
+            + f.c as i32 * filt[(ti + 3) as usize] as i32
+            + f.d as i32 * filt[(ti + 4) as usize] as i32;
         dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
         x += 1;
         xpos += 64;
