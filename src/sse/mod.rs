@@ -26,10 +26,16 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+mod ipred;
 mod itx;
 
 pub(crate) use itx::{
     iadst_dequant_4x4_sse41, iadst_dequant_8x8_sse41, iadst_dequant_16x16_sse41,
     idct_dequant_4x4_sse41, idct_dequant_8x8_sse41, idct_dequant_16x16_sse41,
     idct_dequant_32x32_sse41, idct_dequant_64x64_sse41,
+};
+
+pub(crate) use ipred::{
+    ipred_h_8bpc_sse41, ipred_smooth_8bpc_sse41, ipred_smooth_h_8bpc_sse41,
+    ipred_smooth_v_8bpc_sse41, ipred_v_8bpc_sse41,
 };

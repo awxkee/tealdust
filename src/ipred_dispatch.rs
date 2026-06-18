@@ -27,6 +27,297 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use std::sync::OnceLock;
+
+pub(crate) type IntraPred8Fn =
+    fn(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, width: usize, height: usize, angle: i32);
+
+pub(crate) type SmoothPred8Fn =
+    fn(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, width: usize, height: usize);
+
+pub(crate) trait IntraPred8Backend {
+    fn ipred_v(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+        angle: i32,
+    );
+
+    fn ipred_h(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+        angle: i32,
+    );
+
+    fn ipred_smooth(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+    );
+
+    fn ipred_smooth_v(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+    );
+
+    fn ipred_smooth_h(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+    );
+}
+
+pub(crate) struct ScalarIntraPred8;
+
+impl IntraPred8Backend for ScalarIntraPred8 {
+    #[inline(always)]
+    fn ipred_v(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+        angle: i32,
+    ) {
+        crate::ipred::ipred_v_8bpc(dst, stride, tl, o, width, height, angle);
+    }
+
+    #[inline(always)]
+    fn ipred_h(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+        angle: i32,
+    ) {
+        crate::ipred::ipred_h_8bpc(dst, stride, tl, o, width, height, angle);
+    }
+
+    #[inline(always)]
+    fn ipred_smooth(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+    ) {
+        crate::ipred::ipred_smooth_8bpc(dst, stride, tl, o, width, height);
+    }
+
+    #[inline(always)]
+    fn ipred_smooth_v(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+    ) {
+        crate::ipred::ipred_smooth_v_8bpc(dst, stride, tl, o, width, height);
+    }
+
+    #[inline(always)]
+    fn ipred_smooth_h(
+        dst: &mut [u8],
+        stride: usize,
+        tl: &[u8],
+        o: usize,
+        width: usize,
+        height: usize,
+    ) {
+        crate::ipred::ipred_smooth_h_8bpc(dst, stride, tl, o, width, height);
+    }
+}
+
+#[inline]
+pub(crate) fn ipred_v_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    width: usize,
+    height: usize,
+    angle: i32,
+) {
+    ScalarIntraPred8::ipred_v(dst, stride, tl, o, width, height, angle);
+}
+
+#[inline]
+pub(crate) fn ipred_h_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    width: usize,
+    height: usize,
+    angle: i32,
+) {
+    ScalarIntraPred8::ipred_h(dst, stride, tl, o, width, height, angle);
+}
+
+#[inline]
+pub(crate) fn ipred_smooth_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    width: usize,
+    height: usize,
+) {
+    ScalarIntraPred8::ipred_smooth(dst, stride, tl, o, width, height);
+}
+
+#[inline]
+pub(crate) fn ipred_smooth_v_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    width: usize,
+    height: usize,
+) {
+    ScalarIntraPred8::ipred_smooth_v(dst, stride, tl, o, width, height);
+}
+
+#[inline]
+pub(crate) fn ipred_smooth_h_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    width: usize,
+    height: usize,
+) {
+    ScalarIntraPred8::ipred_smooth_h(dst, stride, tl, o, width, height);
+}
+
+static IPRED_V_8BPC: OnceLock<IntraPred8Fn> = OnceLock::new();
+static IPRED_H_8BPC: OnceLock<IntraPred8Fn> = OnceLock::new();
+static IPRED_SMOOTH_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
+static IPRED_SMOOTH_V_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
+static IPRED_SMOOTH_H_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
+
+#[inline]
+fn resolve_ipred_v() -> IntraPred8Fn {
+    *IPRED_V_8BPC.get_or_init(|| {
+        let mut f = ipred_v_scalar as IntraPred8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_v_8bpc_neon as IntraPred8Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ipred_v_8bpc_sse41 as IntraPred8Fn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_ipred_h() -> IntraPred8Fn {
+    *IPRED_H_8BPC.get_or_init(|| {
+        let mut f = ipred_h_scalar as IntraPred8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_h_8bpc_neon as IntraPred8Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ipred_h_8bpc_sse41 as IntraPred8Fn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_ipred_smooth() -> SmoothPred8Fn {
+    *IPRED_SMOOTH_8BPC.get_or_init(|| {
+        let mut f = ipred_smooth_scalar as SmoothPred8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_smooth_8bpc_neon as SmoothPred8Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ipred_smooth_8bpc_sse41 as SmoothPred8Fn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_ipred_smooth_v() -> SmoothPred8Fn {
+    *IPRED_SMOOTH_V_8BPC.get_or_init(|| {
+        let mut f = ipred_smooth_v_scalar as SmoothPred8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_smooth_v_8bpc_neon as SmoothPred8Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ipred_smooth_v_8bpc_sse41 as SmoothPred8Fn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_ipred_smooth_h() -> SmoothPred8Fn {
+    *IPRED_SMOOTH_H_8BPC.get_or_init(|| {
+        let mut f = ipred_smooth_h_scalar as SmoothPred8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_smooth_h_8bpc_neon as SmoothPred8Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ipred_smooth_h_8bpc_sse41 as SmoothPred8Fn;
+            }
+        }
+        f
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ipred_v(
     dst: &mut [u8],
@@ -37,13 +328,11 @@ pub(crate) fn ipred_v(
     height: usize,
     angle: i32,
 ) {
-    crate::ipred::ipred_v_8bpc(dst, stride, tl, o, width, height, angle);
+    resolve_ipred_v()(dst, stride, tl, o, width, height, angle);
 }
 
-/// HOR_PRED: replicate the left column across each row.
-/// Falls back to scalar when the AV2 MRL-averaging flag is set.
 #[allow(clippy::too_many_arguments)]
-pub fn ipred_h(
+pub(crate) fn ipred_h(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -52,15 +341,31 @@ pub fn ipred_h(
     height: usize,
     angle: i32,
 ) {
-    crate::ipred::ipred_h_8bpc(dst, stride, tl, o, width, height, angle);
+    resolve_ipred_h()(dst, stride, tl, o, width, height, angle);
 }
 
-/// SMOOTH_V_PRED: vertical smooth interpolation.
-pub fn ipred_smooth_v(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, w: usize, h: usize) {
-    crate::ipred::ipred_smooth_v_8bpc(dst, stride, tl, o, w, h);
+pub(crate) fn ipred_smooth(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, w: usize, h: usize) {
+    resolve_ipred_smooth()(dst, stride, tl, o, w, h);
 }
 
-/// SMOOTH_H_PRED: horizontal smooth interpolation.
-pub fn ipred_smooth_h(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, w: usize, h: usize) {
-    crate::ipred::ipred_smooth_h_8bpc(dst, stride, tl, o, w, h);
+pub(crate) fn ipred_smooth_v(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+) {
+    resolve_ipred_smooth_v()(dst, stride, tl, o, w, h);
+}
+
+pub(crate) fn ipred_smooth_h(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    h: usize,
+) {
+    resolve_ipred_smooth_h()(dst, stride, tl, o, w, h);
 }
