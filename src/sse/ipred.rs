@@ -1269,11 +1269,11 @@ fn z2_top_span_sse41(
     }
     while x < w {
         let base_x = xpos >> 6;
-        let ti = (top_off as i32 + base_x) as usize;
-        let v = f.a as i32 * filt[ti + 1] as i32
-            + f.b as i32 * filt[ti + 2] as i32
-            + f.c as i32 * filt[ti + 3] as i32
-            + f.d as i32 * filt[ti + 4] as i32;
+        let ti = top_off as i32 + base_x;
+        let v = f.a as i32 * filt[(ti + 1) as usize] as i32
+            + f.b as i32 * filt[(ti + 2) as usize] as i32
+            + f.c as i32 * filt[(ti + 3) as usize] as i32
+            + f.d as i32 * filt[(ti + 4) as usize] as i32;
         dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
         x += 1;
         xpos += 64;
