@@ -103,6 +103,7 @@ pub(crate) mod wedge;
 mod avif;
 mod cfl_dispatch;
 mod data;
+mod deblock_dispatch;
 mod decode_partition;
 mod decoder;
 mod error;

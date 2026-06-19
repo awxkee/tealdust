@@ -225,6 +225,24 @@ fn deblock_bd<BD: BitDepth>(
     }
 
     let q_thr_clamp = q_thr as i32 * Q_THRESH_MULTS[(width - 1) as usize] as i32;
+
+    if BD::BPC == 8 {
+        if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+            crate::deblock_dispatch::deblock_apply_8bpc(
+                d8,
+                off,
+                stridea,
+                strideb,
+                width_neg,
+                width_pos,
+                q_thr_clamp,
+                neg_lossless,
+                pos_lossless,
+            );
+            return;
+        }
+    }
+
     let mut dp = off;
     for _ in 0..4 {
         let d0: i32 = dst[dp as usize].into();

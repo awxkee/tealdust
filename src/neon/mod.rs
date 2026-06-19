@@ -27,12 +27,14 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 mod cfl;
+mod deblocking;
 mod filter;
 mod ipred;
 mod itx;
 mod looprestoration;
 
 pub(crate) use cfl::cfl_apply_420_8bpc_neon;
+pub(crate) use deblocking::deblock_apply_8bpc_neon;
 pub(crate) use filter::{
     avg_row_8bpc_neon, blend_row_8bpc_neon, cctx_row_neon, dc_add_row_8bpc_neon,
     gdf_add_run_8bpc_neon, gdf_gradient_group_neon, mask_row_8bpc_neon, morph_row_8bpc_neon,

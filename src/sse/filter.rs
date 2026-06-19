@@ -170,7 +170,7 @@ pub(crate) fn row_clip_sse41(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, mi
     let shc = _mm_cvtsi32_si128(shift);
     let min_v = _mm_set1_epi32(min);
     let max_v = _mm_set1_epi32(max);
-    let clip = |v: __m128i| unsafe {
+    let clip = |v: __m128i| {
         _mm_min_epi32(
             _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(v, rnd_v), shc), min_v),
             max_v,
@@ -215,7 +215,7 @@ pub(crate) fn cctx_row_sse41(
     let max_v = _mm_set1_epi32(max);
     let sh8 = _mm_cvtsi32_si128(8);
     let rot = |uu: __m128i, vv: __m128i| -> (__m128i, __m128i) {
-        unsafe {
+        {
             let a = _mm_sub_epi32(_mm_mullo_epi32(uu, cosa_v), _mm_mullo_epi32(vv, sina_v));
             let b = _mm_add_epi32(_mm_mullo_epi32(uu, sina_v), _mm_mullo_epi32(vv, cosa_v));
             let ra = _mm_sra_epi32(
@@ -274,9 +274,7 @@ pub(crate) fn avg_row_8bpc_sse41(
 ) {
     let rnd_v = _mm_set1_epi32(rnd);
     let shc = _mm_cvtsi32_si128(sh);
-    let f = |a: __m128i, b: __m128i| unsafe {
-        _mm_sra_epi32(_mm_add_epi32(_mm_add_epi32(a, b), rnd_v), shc)
-    };
+    let f = |a: __m128i, b: __m128i| _mm_sra_epi32(_mm_add_epi32(_mm_add_epi32(a, b), rnd_v), shc);
     let (c8, r8) = dst[..n].as_chunks_mut::<8>();
     let (a8, _) = t1[..n].as_chunks::<8>();
     let (b8, _) = t2[..n].as_chunks::<8>();
@@ -320,7 +318,7 @@ pub(crate) fn w_avg_row_8bpc_sse41(
     let w2 = _mm_set1_epi32(16 - weight);
     let rnd_v = _mm_set1_epi32(rnd);
     let shc = _mm_cvtsi32_si128(sh);
-    let f = |a: __m128i, b: __m128i| unsafe {
+    let f = |a: __m128i, b: __m128i| {
         _mm_sra_epi32(
             _mm_add_epi32(
                 _mm_add_epi32(_mm_mullo_epi32(a, w1), _mm_mullo_epi32(b, w2)),
@@ -371,7 +369,7 @@ pub(crate) fn mask_row_8bpc_sse41(
     let rnd_v = _mm_set1_epi32(rnd);
     let c64 = _mm_set1_epi32(64);
     let shc = _mm_cvtsi32_si128(sh);
-    let f = |a: __m128i, b: __m128i, m: __m128i| unsafe {
+    let f = |a: __m128i, b: __m128i, m: __m128i| {
         _mm_sra_epi32(
             _mm_add_epi32(
                 _mm_add_epi32(
@@ -421,7 +419,7 @@ pub(crate) fn mask_row_8bpc_sse41(
 pub(crate) fn blend_row_8bpc_sse41(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: usize) {
     let c64 = _mm_set1_epi16(64);
     let rnd_v = _mm_set1_epi16(32);
-    let f = |d: __m128i, t: __m128i, m: __m128i| unsafe {
+    let f = |d: __m128i, t: __m128i, m: __m128i| {
         _mm_srai_epi16::<6>(_mm_add_epi16(
             _mm_add_epi16(
                 _mm_mullo_epi16(d, _mm_sub_epi16(c64, m)),
@@ -467,7 +465,7 @@ pub(crate) fn morph_row_8bpc_sse41(dst: &mut [u8], alpha: i32, beta: i32, n: usi
     let a_v = _mm_set1_epi32(alpha);
     let b_v = _mm_set1_epi32(beta);
     let sh8 = _mm_cvtsi32_si128(8);
-    let f = |d: __m128i| unsafe { _mm_sra_epi32(_mm_add_epi32(_mm_mullo_epi32(d, a_v), b_v), sh8) };
+    let f = |d: __m128i| _mm_sra_epi32(_mm_add_epi32(_mm_mullo_epi32(d, a_v), b_v), sh8);
     let (c8, r8) = dst[..n].as_chunks_mut::<8>();
     for d in c8.iter_mut() {
         let lo = f(load_u8x4_i32((&d[..4]).try_into().unwrap()));
@@ -493,7 +491,7 @@ pub(crate) fn gdf_add_run_8bpc_sse41(dst: &mut [u8], err: &[i8], scale: i32, n: 
     let rnd = _mm_set1_epi32(8);
     let sh4 = _mm_cvtsi32_si128(4);
     let zero = _mm_setzero_si128();
-    let adj = |e: __m128i| unsafe {
+    let adj = |e: __m128i| {
         let diff = _mm_mullo_epi32(e, sc);
         let mag = _mm_sra_epi32(_mm_add_epi32(_mm_abs_epi32(diff), rnd), sh4);
         _mm_blendv_epi8(mag, _mm_sub_epi32(zero, mag), _mm_cmpgt_epi32(zero, diff))
@@ -550,7 +548,7 @@ pub(crate) fn gdf_gradient_group_sse41(
         let brow: &[u8; 8] = center_rows[y][bcol..bcol + 8].try_into().unwrap();
         let arow: &[u8; 8] = a_rows[y][acol..acol + 8].try_into().unwrap();
         let crow: &[u8; 8] = c_rows[y][ccol..ccol + 8].try_into().unwrap();
-        let sh = |a: &[u8; 4]| unsafe { _mm_srl_epi32(load_u8x4_i32(a), shc) };
+        let sh = |a: &[u8; 4]| _mm_srl_epi32(load_u8x4_i32(a), shc);
         let b_lo = sh((&brow[..4]).try_into().unwrap());
         let b_hi = sh((&brow[4..]).try_into().unwrap());
         let a_lo = sh((&arow[..4]).try_into().unwrap());
