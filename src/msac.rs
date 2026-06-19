@@ -195,9 +195,6 @@ impl<'a> MsacContext<'a> {
 
     #[inline]
     fn ctx_refill(&mut self) {
-        let mut c = 40 - self.cnt;
-        debug_assert!(c >= 0);
-
         let start = self.buf_pos;
         let len = self.buf.len();
 
@@ -205,31 +202,49 @@ impl<'a> MsacContext<'a> {
             return;
         }
 
-        let max_read = (c as usize >> 3) + 1;
-        let n = max_read.min(len - start);
+        let c = 40 - self.cnt;
+        debug_assert!(c >= 0);
+        debug_assert!(c <= 55);
 
-        let src = &self.buf[start..start + n];
+        let c = c as u32;
+        let available = len - start;
+        let n = ((c as usize >> 3) + 1).min(available);
 
-        let mut dif = self.dif;
+        if available >= 8 {
+            let chunk = &self.buf[start..start + 8];
+            let val = u64::from_be_bytes(chunk.try_into().unwrap());
 
-        for &byte in src {
-            dif ^= (byte as u64) << c;
-            c -= 8;
+            let refill = (val >> (56 - c)) & (u64::MAX << (c & 7));
+
+            self.dif ^= refill;
+            self.buf_pos = start + n;
+            self.cnt += (n as i32) * 8;
+        } else {
+            let mut c_shift = c;
+            let mut dif = self.dif;
+
+            for &byte in &self.buf[start..start + n] {
+                dif ^= (byte as u64) << c_shift;
+                c_shift -= 8;
+            }
+
+            self.dif = dif;
+            self.buf_pos = start + n;
+            self.cnt += (n as i32) * 8;
         }
-
-        self.buf_pos = start + n;
-        self.dif = dif;
-        self.cnt = 40 - c;
     }
 
     #[inline]
     fn ctx_norm(&mut self, dif: u64, rng: u32) {
-        let d = 15 ^ (31 ^ rng.leading_zeros());
+        debug_assert!(rng <= 65535 && rng > 0);
+
+        let d = rng.leading_zeros() ^ 16;
         let cnt = self.cnt;
-        debug_assert!(rng <= 65535);
+
         self.dif = ((dif + 1) << d) - 1;
         self.rng = rng << d;
         self.cnt = cnt - d as i32;
+
         if (cnt as u32) < d {
             self.ctx_refill();
         }
@@ -332,11 +347,9 @@ impl<'a> MsacContext<'a> {
                 let c = (self.dif >> 48) as u32;
                 let r = self.rng >> 8;
 
-                // Safe stack array padded to avoid "val == 0" branch
                 let mut v_arr = [0u32; $n + 2];
                 v_arr[0] = self.rng;
 
-                // Branchless computation loop (LLVM unrolls/vectorizes this safely)
                 for i in 0..=$n {
                     let p_raw = (cdf_all[i] | 127) as i32 - min_prob[i] as i32;
                     let p = p_raw.max(0) as u32;
@@ -373,7 +386,6 @@ impl<'a> MsacContext<'a> {
                     let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize]
                         + if $n > 2 { 1 } else { 0 };
 
-                    // Branchless bitwise CDF adaptation step
                     for (i, cdf_i) in cdf_syms.iter_mut().enumerate() {
                         let mask = ((i < val_usize) as u16).wrapping_neg(); // 0xFFFF if true, 0x0000 if false
                         let v_true = (32768 - *cdf_i) >> rate;
