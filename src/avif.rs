@@ -96,10 +96,6 @@ const MAX_AUXC_URN_LEN: usize = 512;
 /// Prevents O(n) work when a crafted file claims millions of alpha references.
 const MAX_IREF_REFS: u16 = 256;
 
-// ────────────────────────────────────────────────────────────────────────────
-// Public error type
-// ────────────────────────────────────────────────────────────────────────────
-
 /// Errors that can occur when parsing or decoding an AVIF file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AvifError {
@@ -152,10 +148,6 @@ impl From<TealdustError> for AvifError {
 
 type Result<T> = std::result::Result<T, AvifError>;
 
-// ────────────────────────────────────────────────────────────────────────────
-// Colour information
-// ────────────────────────────────────────────────────────────────────────────
-
 /// Color information extracted from the `colr` item property.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ColorInfo {
@@ -168,10 +160,6 @@ pub struct ColorInfo {
     /// Full-range flag (`0` = limited, `1` = full).
     pub full_range: bool,
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// ICC profile (`colr` box types `rICC` and `prof`)
-// ────────────────────────────────────────────────────────────────────────────
 
 /// Device-class signature from ICC profile header (bytes 12–15).
 ///
@@ -1661,8 +1649,6 @@ impl AvifParser {
         Ok(())
     }
 
-    // ── iref → alpha resolution ───────────────────────────────────────────────
-
     /// Walk an `iref` box and return the item ID of the alpha auxiliary image
     /// associated with `primary_item_id`, if any.
     ///
@@ -2223,10 +2209,6 @@ impl<'a> AvifDecoder<'a> {
         }
     }
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Helper: scan HDR CLL metadata from AV2 OBUs.
-// ────────────────────────────────────────────────────────────────────────────
 
 fn scan_content_light_level_from_obus(obu_data: &[u8]) -> Result<Option<ContentLightLevel>> {
     let mut pos = 0usize;
