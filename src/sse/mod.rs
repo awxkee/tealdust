@@ -55,4 +55,6 @@ pub(crate) use filter::{
     residual_add_row_8bpc_sse41, row_clip_sse41, w_avg_row_8bpc_sse41,
 };
 pub(crate) use ipred::*;
-pub(crate) use looprestoration::{ns_wiener_fir_run_sse41, pc_wiener_fir_run_sse41};
+pub(crate) use looprestoration::{
+    ns_wiener_fir_run_sse41, ns_wiener_uv_fir_run_sse41, pc_wiener_fir_run_sse41,
+};

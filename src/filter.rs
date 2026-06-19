@@ -336,6 +336,71 @@ pub(crate) fn ns_wiener_fir_run_scalar(
     }
 }
 
+pub(crate) struct UvLumaTap<'a> {
+    pub(crate) row: &'a [u8],
+    pub(crate) ldx: i32,
+    pub(crate) coef: i32,
+}
+
+type NsWienerUvFirFn =
+    fn(&mut [u8], &[u8], usize, &[WienerTap<'_>], &[u8], usize, &[UvLumaTap<'_>], usize, usize);
+
+static NS_WIENER_UV_FIR: std::sync::OnceLock<NsWienerUvFirFn> = std::sync::OnceLock::new();
+
+#[inline]
+pub(crate) fn ns_wiener_uv_fir_run() -> NsWienerUvFirFn {
+    *NS_WIENER_UV_FIR.get_or_init(|| {
+        let mut f = ns_wiener_uv_fir_run_scalar as NsWienerUvFirFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ns_wiener_uv_fir_run_neon as NsWienerUvFirFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ns_wiener_uv_fir_run_sse41 as NsWienerUvFirFn;
+            }
+        }
+        f
+    })
+}
+
+/// Pure-scalar chroma NS-Wiener FIR: 6 symmetric chroma taps (center = chroma
+/// `m`) plus 12 asymmetric luma cross-taps (center = luma `lc`, subsampled by
+/// `lstep = 1 << ss_hor`). Reference and fallback.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ns_wiener_uv_fir_run_scalar(
+    dst: &mut [u8],
+    c_center: &[u8],
+    co: usize,
+    ctaps: &[WienerTap],
+    l_center: &[u8],
+    lo: usize,
+    ltaps: &[UvLumaTap],
+    lstep: usize,
+    n: usize,
+) {
+    for x in 0..n {
+        let cc = co + x;
+        let m = c_center[cc] as i32;
+        let mut s = m << 7;
+        for t in ctaps {
+            let a = t.row_p[(cc as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(cc as i32 - t.dx) as usize] as i32;
+            s += (a + b - 2 * m) * t.coef;
+        }
+        let lcx = lo + x * lstep;
+        let lc = l_center[lcx] as i32;
+        for t in ltaps {
+            let lv = t.row[(lcx as i32 + t.ldx) as usize] as i32;
+            s += (lv - lc) * t.coef;
+        }
+        dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
+    }
+}
+
 /// Pure-scalar "PC" Wiener FIR.
 pub(crate) fn pc_wiener_fir_run_scalar(
     dst: &mut [u8],

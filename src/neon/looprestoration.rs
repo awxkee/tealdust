@@ -27,17 +27,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-//! Hand-written NEON loop-restoration FIR kernels.
-//!
-//! These are a 1:1 translation of the portable `I32x8` kernels in
-//! `crate::simd` (`ns_wiener_fir_run_simd` / `pc_wiener_fir_run_simd`), which
-//! are proven bit-exact against the pure-scalar reference by the
-//! `wiener_scalar_proof` tests. Eight pixels are processed per iteration as two
-//! `int32x4_t` halves (`lo`/`hi`); the scalar tail handles the remainder.
-//!
-//! NEON is part of the aarch64 baseline, so no `#[target_feature]` is required
-//! (matching `crate::neon::itx`); the intrinsics are invoked inside `unsafe`.
-
 use crate::filter::WienerTap;
 use std::arch::aarch64::*;
 
@@ -164,6 +153,110 @@ pub(crate) fn pc_wiener_fir_run_neon(
             let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
             let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
             s += (a + b) * t.coef;
+        }
+        dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
+        x += 1;
+    }
+}
+
+use crate::filter::UvLumaTap;
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn widen4_u8_i32(arr: [u8; 4]) -> int32x4_t {
+    let dup = vreinterpret_u8_u32(vdup_n_u32(u32::from_le_bytes(arr)));
+    vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(dup))))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load4u8(row: &[u8], idx: usize) -> int32x4_t {
+    widen4_u8_i32(row[idx..idx + 4].try_into().unwrap())
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn gather4u8(row: &[u8], idx: usize, step: usize) -> int32x4_t {
+    let arr: [u8; 4] = if step == 1 {
+        row[idx..idx + 4].try_into().unwrap()
+    } else {
+        [
+            row[idx],
+            row[idx + step],
+            row[idx + 2 * step],
+            row[idx + 3 * step],
+        ]
+    };
+    widen4_u8_i32(arr)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn finish4(dst: &mut [u8], x: usize, s: int32x4_t) {
+    let v = vminq_s32(
+        vmaxq_s32(
+            vshrq_n_s32::<7>(vaddq_s32(s, vdupq_n_s32(64))),
+            vdupq_n_s32(0),
+        ),
+        vdupq_n_s32(255),
+    );
+    let u16x4 = vmovn_u32(vreinterpretq_u32_s32(v));
+    let u8x8 = vmovn_u16(vcombine_u16(u16x4, u16x4));
+    let lane = vget_lane_u32::<0>(vreinterpret_u32_u8(u8x8));
+    dst[x..x + 4].copy_from_slice(&lane.to_le_bytes());
+}
+
+/// NEON chroma NS-Wiener FIR. Mirror of `ns_wiener_uv_fir_run_sse41`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ns_wiener_uv_fir_run_neon(
+    dst: &mut [u8],
+    c_center: &[u8],
+    co: usize,
+    ctaps: &[WienerTap],
+    l_center: &[u8],
+    lo: usize,
+    ltaps: &[UvLumaTap],
+    lstep: usize,
+    n: usize,
+) {
+    let mut x = 0;
+    while x + 4 <= n {
+        let cb = co + x;
+        unsafe {
+            let m = load4u8(c_center, cb);
+            let two_m = vaddq_s32(m, m);
+            let mut s = vshlq_n_s32::<7>(m);
+            for t in ctaps {
+                let a = load4u8(t.row_p, (cb as i32 + t.dx) as usize);
+                let b = load4u8(t.row_m, (cb as i32 - t.dx) as usize);
+                let coef = vdupq_n_s32(t.coef);
+                s = vaddq_s32(s, vmulq_s32(vsubq_s32(vaddq_s32(a, b), two_m), coef));
+            }
+            let lb = lo + x * lstep;
+            let lc = gather4u8(l_center, lb, lstep);
+            for t in ltaps {
+                let lv = gather4u8(t.row, (lb as i32 + t.ldx) as usize, lstep);
+                let coef = vdupq_n_s32(t.coef);
+                s = vaddq_s32(s, vmulq_s32(vsubq_s32(lv, lc), coef));
+            }
+            finish4(dst, x, s);
+        }
+        x += 4;
+    }
+    while x < n {
+        let cc = co + x;
+        let m = c_center[cc] as i32;
+        let mut s = m << 7;
+        for t in ctaps {
+            let a = t.row_p[(cc as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(cc as i32 - t.dx) as usize] as i32;
+            s += (a + b - 2 * m) * t.coef;
+        }
+        let lcx = lo + x * lstep;
+        let lc = l_center[lcx] as i32;
+        for t in ltaps {
+            let lv = t.row[(lcx as i32 + t.ldx) as usize] as i32;
+            s += (lv - lc) * t.coef;
         }
         dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
         x += 1;

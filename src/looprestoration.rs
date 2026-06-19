@@ -31,14 +31,14 @@ use crate::gdf_tables::{GDF_ALPHA, GDF_BIAS, GDF_INTER_ERROR, GDF_INTRA_ERROR, G
 use crate::intops::{apply_sign, iclip, imax, imin};
 use crate::tables::PC_WIENER_LUT_TO_CLASS;
 
-pub const LR_HAVE_LEFT: u8 = 1 << 0;
-pub const LR_HAVE_RIGHT: u8 = 1 << 1;
-pub const LR_HAVE_TOP: u8 = 1 << 2;
-pub const LR_HAVE_BOTTOM: u8 = 1 << 3;
-pub const LR_HAVE_TOP_INTEGRATED: u8 = 1 << 4;
-pub const LR_HAVE_BOTTOM_INTEGRATED: u8 = 1 << 5;
+pub(crate) const LR_HAVE_LEFT: u8 = 1 << 0;
+pub(crate) const LR_HAVE_RIGHT: u8 = 1 << 1;
+pub(crate) const LR_HAVE_TOP: u8 = 1 << 2;
+pub(crate) const LR_HAVE_BOTTOM: u8 = 1 << 3;
+pub(crate) const LR_HAVE_TOP_INTEGRATED: u8 = 1 << 4;
+pub(crate) const LR_HAVE_BOTTOM_INTEGRATED: u8 = 1 << 5;
 
-pub static PC_WIENER_NORMALIZER: [u16; 4] = [3739, 3273, 3074, 7];
+pub(crate) static PC_WIENER_NORMALIZER: [u16; 4] = [3739, 3273, 3074, 7];
 
 static MODE_WEIGHTS: [[i16; 3]; 4] = [
     [-527, 15325, 321],
@@ -49,7 +49,12 @@ static MODE_WEIGHTS: [[i16; 3]; 4] = [
 
 static MODE_OFFSETS: [i16; 4] = [-547, -21565, -573, -680];
 
-pub fn get_qval_given_tskip(mut qstep: i32, tskip: i32, i: usize, bitdepth_min_8: i32) -> i32 {
+pub(crate) fn get_qval_given_tskip(
+    mut qstep: i32,
+    tskip: i32,
+    i: usize,
+    bitdepth_min_8: i32,
+) -> i32 {
     qstep = (qstep + ((1 << bitdepth_min_8) >> 1)) >> bitdepth_min_8;
     let prod = (tskip * qstep + 128) >> 8;
     let qval = MODE_WEIGHTS[i][0] as i32 * (tskip << 5)
@@ -63,7 +68,7 @@ pub fn get_qval_given_tskip(mut qstep: i32, tskip: i32, i: usize, bitdepth_min_8
 /// Backup a row with edge extension. `dst` and `src` are indexed with `o` as the
 /// origin (position 0 in C). Left edge fills dst[o-edge_len..o], right fills
 /// dst[o+w..o+w+edge_len].
-pub fn backup_row_8bpc(
+pub(crate) fn backup_row_8bpc(
     dst: &mut [u8],
     o: usize,
     src: &[u8],
@@ -94,7 +99,7 @@ pub fn backup_row_8bpc(
 /// Backup N pixels per row for U rows, right-aligned in a [u8; 6] buffer.
 /// Copies src[off-n..off] into dst[row][6-n..6] per row, advancing by stride.
 /// Backup a row from LPF buffer with edge extension.
-pub fn backup_row_lpf_8bpc(
+pub(crate) fn backup_row_lpf_8bpc(
     dst: &mut [u8],
     o: usize,
     src: &[u8],
@@ -123,7 +128,7 @@ pub fn backup_row_lpf_8bpc(
 /// Compute 2x2 gradient features for 4 directions.
 /// `rows[row_off]` is the first center row. `col_off` is the column origin
 /// in each row (matching the C convention where row pointers are pre-offset).
-pub fn compute_gradient_row_8bpc(
+pub(crate) fn compute_gradient_row_8bpc(
     dst: &mut [[u16; 4]],
     rows: &[&[u8]],
     row_off: usize,
@@ -195,7 +200,7 @@ pub fn compute_gradient_row_8bpc(
 }
 
 /// Compute PC-Wiener class LUT index from gradient features and skip mask.
-pub fn get_class_lut_idx_8bpc(
+pub(crate) fn get_class_lut_idx_8bpc(
     rows: &[&[u8]],
     row_center: usize,
     col_off: usize,
@@ -257,7 +262,7 @@ pub fn get_class_lut_idx_8bpc(
     lut_idx
 }
 
-pub fn gdf_add_8bpc(
+pub(crate) fn gdf_add_8bpc(
     p: &mut [u8],
     stride: usize,
     err: &[i8],
@@ -296,10 +301,10 @@ pub fn gdf_add_8bpc(
     }
 }
 
-pub const REST_UNIT_STRIDE: usize = 76;
+pub(crate) const REST_UNIT_STRIDE: usize = 76;
 const ROW_ORIGIN: usize = 6;
 
-pub static GDF_COORDS: [[i8; 2]; 18] = [
+pub(crate) static GDF_COORDS: [[i8; 2]; 18] = [
     [6, 0],
     [5, 0],
     [4, 0],
@@ -322,9 +327,10 @@ pub static GDF_COORDS: [[i8; 2]; 18] = [
 
 const GRADIENT_BUF_STRIDE: usize = 33;
 
-pub static WIENER_NS_CONFIG_UV: [[i8; 2]; 6] = [[1, 0], [0, 1], [1, 1], [-1, 1], [2, 0], [0, 2]];
+pub(crate) static WIENER_NS_CONFIG_UV: [[i8; 2]; 6] =
+    [[1, 0], [0, 1], [1, 1], [-1, 1], [2, 0], [0, 2]];
 
-pub static WIENER_NS_CONFIG_UV_FROM_Y: [[i8; 2]; 12] = [
+pub(crate) static WIENER_NS_CONFIG_UV_FROM_Y: [[i8; 2]; 12] = [
     [1, 0],
     [-1, 0],
     [0, 1],
@@ -339,7 +345,7 @@ pub static WIENER_NS_CONFIG_UV_FROM_Y: [[i8; 2]; 12] = [
     [0, -2],
 ];
 
-pub static PC_WIENER_CONFIG: [[i8; 2]; 12] = [
+pub(crate) static PC_WIENER_CONFIG: [[i8; 2]; 12] = [
     [1, 0],
     [0, 1],
     [2, 0],
@@ -354,7 +360,7 @@ pub static PC_WIENER_CONFIG: [[i8; 2]; 12] = [
     [0, 3],
 ];
 
-pub static WIENER_NS_CONFIG_Y: [[i8; 2]; 16] = [
+pub(crate) static WIENER_NS_CONFIG_Y: [[i8; 2]; 16] = [
     [1, 0],
     [0, 1],
     [2, 0],
@@ -373,7 +379,7 @@ pub static WIENER_NS_CONFIG_Y: [[i8; 2]; 16] = [
     [3, -3],
 ];
 
-pub fn backup_row_luma_8bpc(
+pub(crate) fn backup_row_luma_8bpc(
     dst: &mut [u8],
     o: usize,
     src: &[u8],
@@ -475,7 +481,7 @@ pub fn backup_row_luma_8bpc(
     }
 }
 
-pub fn ns_wiener_single_y_8bpc(
+pub(crate) fn ns_wiener_single_y_8bpc(
     p: &mut [u8],
     p_off: usize,
     stride: usize,
@@ -938,7 +944,7 @@ fn wiener_multi_8bpc(
     }
 }
 
-pub fn ns_wiener_multi_8bpc(
+pub(crate) fn ns_wiener_multi_8bpc(
     p: &mut [u8],
     p_off: usize,
     stride: usize,
@@ -977,7 +983,7 @@ pub fn ns_wiener_multi_8bpc(
     );
 }
 
-pub fn pc_wiener_8bpc(
+pub(crate) fn pc_wiener_8bpc(
     p: &mut [u8],
     p_off: usize,
     stride: usize,
@@ -1018,7 +1024,7 @@ pub fn pc_wiener_8bpc(
 
 const LUMA_BUF_STRIDE: usize = REST_UNIT_STRIDE + 64;
 
-pub fn ns_wiener_single_uv_8bpc(
+pub(crate) fn ns_wiener_single_uv_8bpc(
     p: &mut [u8],
     p_off: usize,
     stride: usize,
@@ -1263,32 +1269,55 @@ pub fn ns_wiener_single_uv_8bpc(
             lbak_idx = 0;
         }
 
-        for bx in 0..(w >> 2) {
-            if ll_mask[y >> 2][0] & (1 << bx) != 0 {
+        let c_refs: [&[u8]; 5] = core::array::from_fn(|i| &c_buffers[c_ptrs[i]] as &[u8]);
+        let l_refs: [&[u8]; 5] = core::array::from_fn(|i| &l_buffers[l_ptrs[i]] as &[u8]);
+        let lstep = 1usize << ss_hor;
+        let ctaps: [crate::filter::WienerTap; 6] = core::array::from_fn(|i| {
+            let dy = WIENER_NS_CONFIG_UV[i][0] as i32;
+            let dx = WIENER_NS_CONFIG_UV[i][1] as i32;
+            crate::filter::WienerTap {
+                row_p: c_refs[(2 + dy) as usize],
+                row_m: c_refs[(2 - dy) as usize],
+                dx,
+                coef: filter[i] as i32,
+            }
+        });
+        let ltaps: [crate::filter::UvLumaTap; 12] = core::array::from_fn(|i| {
+            let dy = WIENER_NS_CONFIG_UV_FROM_Y[i][0] as i32;
+            let dx = WIENER_NS_CONFIG_UV_FROM_Y[i][1] as i32;
+            crate::filter::UvLumaTap {
+                row: l_refs[(2 + dy) as usize],
+                ldx: dx * lstep as i32,
+                coef: filter[6 + i] as i32,
+            }
+        });
+        let skip_mask = ll_mask[y >> 2][0];
+        let dst_row = &mut p[p_off + y * stride..];
+        let bw = w >> 2;
+        let mut bx = 0usize;
+        while bx < bw {
+            if skip_mask & (1 << bx) != 0 {
+                bx += 1;
                 continue;
             }
-            for x in bx * 4..bx * 4 + 4 {
-                let m = c_buffers[c_ptrs[2]][o + x] as i32;
-                let mut s = m << 7;
-                for i in 0..6 {
-                    let dy = WIENER_NS_CONFIG_UV[i][0] as i32;
-                    let dx = WIENER_NS_CONFIG_UV[i][1] as i32;
-                    let a = c_buffers[c_ptrs[(2 + dy) as usize]]
-                        [(o as i32 + x as i32 + dx) as usize] as i32;
-                    let b = c_buffers[c_ptrs[(2 - dy) as usize]]
-                        [(o as i32 + x as i32 - dx) as usize] as i32;
-                    s += (a + b - 2 * m) * filter[i] as i32;
-                }
-                let l = l_buffers[l_ptrs[2]][o + (x << ss_hor)] as i32;
-                for i in 0..12 {
-                    let dy = WIENER_NS_CONFIG_UV_FROM_Y[i][0] as i32;
-                    let dx = WIENER_NS_CONFIG_UV_FROM_Y[i][1] as i32;
-                    let lx = (o as i32 + (x as i32 + dx) * (1i32 << ss_hor)) as usize;
-                    let lval = l_buffers[l_ptrs[(2 + dy) as usize]][lx] as i32;
-                    s += (lval - l) * filter[6 + i] as i32;
-                }
-                p[p_off + y * stride + x] = iclip((s + 64) >> 7, 0, 255) as u8;
+            let bx_start = bx;
+            bx += 1;
+            while bx < bw && skip_mask & (1 << bx) == 0 {
+                bx += 1;
             }
+            let x0 = bx_start << 2;
+            let n = (bx - bx_start) << 2;
+            (crate::filter::ns_wiener_uv_fir_run())(
+                &mut dst_row[x0..x0 + n],
+                c_refs[2],
+                o + x0,
+                &ctaps,
+                l_refs[2],
+                o + (x0 << ss_hor),
+                &ltaps,
+                lstep,
+                n,
+            );
         }
 
         for r in 0..4 {
@@ -1301,7 +1330,7 @@ pub fn ns_wiener_single_uv_8bpc(
     }
 }
 
-pub fn gdf_prep_8bpc(
+pub(crate) fn gdf_prep_8bpc(
     dst: &mut [i8],
     dst_stride: usize,
     p: &[u8],
@@ -1522,15 +1551,15 @@ pub(crate) const LR_RESTORE_Y: i32 = 1 << 0;
 pub(crate) const LR_RESTORE_U: i32 = 1 << 1;
 pub(crate) const LR_RESTORE_V: i32 = 1 << 2;
 
-pub const INLOOPFILTER_DEBLOCK: u32 = 1 << 0;
-pub const INLOOPFILTER_CDEF: u32 = 1 << 1;
-pub const INLOOPFILTER_CCSO: u32 = 1 << 2;
-pub const INLOOPFILTER_WIENER: u32 = 1 << 3;
-pub const INLOOPFILTER_GDF: u32 = 1 << 4;
+pub(crate) const INLOOPFILTER_DEBLOCK: u32 = 1 << 0;
+pub(crate) const INLOOPFILTER_CDEF: u32 = 1 << 1;
+pub(crate) const INLOOPFILTER_CCSO: u32 = 1 << 2;
+pub(crate) const INLOOPFILTER_WIENER: u32 = 1 << 3;
+pub(crate) const INLOOPFILTER_GDF: u32 = 1 << 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum FirstSbInTileRow {
+pub(crate) enum FirstSbInTileRow {
     None = 0,
     Top = 1,
     Bottom = 2,
@@ -1539,35 +1568,35 @@ pub enum FirstSbInTileRow {
 use crate::headers::{FhRestorationPlane, PixelLayout};
 use crate::lf_mask::{Av2Filter, Av2Restoration};
 
-pub struct LrContext<'a> {
-    pub restoration_p: &'a [FhRestorationPlane; 3],
-    pub gdf_qp_idx: i32,
-    pub gdf_scale: i32,
-    pub sb128: bool,
-    pub cfl_ds_filter_index: i32,
-    pub layout: PixelLayout,
-    pub bw: i32,
-    pub bh: i32,
-    pub sb256w: i32,
-    pub sbh: i32,
-    pub mask: &'a [Av2Filter],
-    pub lr_mask: &'a [Av2Restoration],
-    pub lr_db_line: &'a [Vec<u8>; 3],
-    pub lr_cdef_line: &'a [Vec<u8>; 3],
+pub(crate) struct LrContext<'a> {
+    pub(crate) restoration_p: &'a [FhRestorationPlane; 3],
+    pub(crate) gdf_qp_idx: i32,
+    pub(crate) gdf_scale: i32,
+    pub(crate) sb128: bool,
+    pub(crate) cfl_ds_filter_index: i32,
+    pub(crate) layout: PixelLayout,
+    pub(crate) bw: i32,
+    pub(crate) bh: i32,
+    pub(crate) sb256w: i32,
+    pub(crate) sbh: i32,
+    pub(crate) mask: &'a [Av2Filter],
+    pub(crate) lr_mask: &'a [Av2Restoration],
+    pub(crate) lr_db_line: &'a [Vec<u8>; 3],
+    pub(crate) lr_cdef_line: &'a [Vec<u8>; 3],
     /// `f->lf.p[0]`. The deferred filter pass processes chroma before luma, so
     /// this is the pre-luma-LR luma for the current sbrow.
-    pub lf_p_luma: &'a [u8],
-    pub base_q: i32,
-    pub gdf_ref_dst_idx: i32,
-    pub start_of_tile_row: &'a [u8],
-    pub ns_subclass_lut: &'a [u8],
-    pub pc_subclass_lut: &'a [u8],
-    pub pc_filters: &'a [[i16; 13]],
-    pub n_tc: i32,
-    pub inloop_filters: u32,
-    pub cur_stride: [isize; 2],
-    pub unit_size: [u8; 2],
-    pub restore_planes: i32,
+    pub(crate) lf_p_luma: &'a [u8],
+    pub(crate) base_q: i32,
+    pub(crate) gdf_ref_dst_idx: i32,
+    pub(crate) start_of_tile_row: &'a [u8],
+    pub(crate) ns_subclass_lut: &'a [u8],
+    pub(crate) pc_subclass_lut: &'a [u8],
+    pub(crate) pc_filters: &'a [[i16; 13]],
+    pub(crate) n_tc: i32,
+    pub(crate) inloop_filters: u32,
+    pub(crate) cur_stride: [isize; 2],
+    pub(crate) unit_size: [u8; 2],
+    pub(crate) restore_planes: i32,
 }
 
 fn lr_stripe_8bpc(
@@ -2094,7 +2123,7 @@ fn lr_sbrow(
     }
 }
 
-pub fn lr_sbrow_8bpc(ctx: &LrContext, dst: &mut [&mut [u8]; 3], sby: i32) {
+pub(crate) fn lr_sbrow_8bpc(ctx: &LrContext, dst: &mut [&mut [u8]; 3], sby: i32) {
     let dst_stride = ctx.cur_stride;
     // For monochrome frames the chroma destination planes are empty; a malformed
     // stream can still signal chroma restoration, so mask off the U/V restore

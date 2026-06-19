@@ -191,3 +191,193 @@ pub(crate) fn pc_wiener_fir_run_sse41(
 ) {
     unsafe { pc_wiener_fir_run_sse41_impl(dst, center, center_coef, col0, taps, n) }
 }
+
+use crate::filter::UvLumaTap;
+
+/// 4 consecutive `u8` -> i32x4.
+#[inline(always)]
+unsafe fn load4u8(row: &[u8], idx: usize) -> __m128i {
+    let arr: [u8; 4] = row[idx..idx + 4].try_into().unwrap();
+    unsafe { _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(arr))) }
+}
+
+/// Gather 4 `u8` at `idx, idx+step, ..` -> i32x4 (contiguous fast path for step 1).
+#[inline(always)]
+unsafe fn gather4u8(row: &[u8], idx: usize, step: usize) -> __m128i {
+    let arr: [u8; 4] = if step == 1 {
+        row[idx..idx + 4].try_into().unwrap()
+    } else {
+        [
+            row[idx],
+            row[idx + step],
+            row[idx + 2 * step],
+            row[idx + 3 * step],
+        ]
+    };
+    unsafe { _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(arr))) }
+}
+
+/// `(s + 64) >> 7` clamped to `[0,255]`, narrowed to 4 `u8`, stored at `dst[x..x+4]`.
+#[inline(always)]
+unsafe fn finish4(dst: &mut [u8], x: usize, s: __m128i) {
+    unsafe {
+        let v = _mm_min_epi32(
+            _mm_max_epi32(
+                _mm_srai_epi32(_mm_add_epi32(s, _mm_set1_epi32(64)), 7),
+                _mm_setzero_si128(),
+            ),
+            _mm_set1_epi32(255),
+        );
+        let p8 = _mm_packus_epi16(_mm_packus_epi32(v, v), _mm_packus_epi32(v, v));
+        let bytes = (_mm_cvtsi128_si32(p8) as u32).to_le_bytes();
+        dst[x..x + 4].copy_from_slice(&bytes);
+    }
+}
+
+#[target_feature(enable = "sse4.1")]
+fn ns_wiener_uv_fir_run_sse41_impl(
+    dst: &mut [u8],
+    c_center: &[u8],
+    co: usize,
+    ctaps: &[WienerTap],
+    l_center: &[u8],
+    lo: usize,
+    ltaps: &[UvLumaTap],
+    lstep: usize,
+    n: usize,
+) {
+    unsafe {
+        let mut x = 0;
+        while x + 4 <= n {
+            let cb = co + x;
+            let m = load4u8(c_center, cb);
+            let two_m = _mm_add_epi32(m, m);
+            let mut s = _mm_slli_epi32(m, 7);
+            for t in ctaps {
+                let a = load4u8(t.row_p, (cb as i32 + t.dx) as usize);
+                let b = load4u8(t.row_m, (cb as i32 - t.dx) as usize);
+                let coef = _mm_set1_epi32(t.coef);
+                s = _mm_add_epi32(
+                    s,
+                    _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(a, b), two_m), coef),
+                );
+            }
+            let lb = lo + x * lstep;
+            let lc = gather4u8(l_center, lb, lstep);
+            for t in ltaps {
+                let lv = gather4u8(t.row, (lb as i32 + t.ldx) as usize, lstep);
+                let coef = _mm_set1_epi32(t.coef);
+                s = _mm_add_epi32(s, _mm_mullo_epi32(_mm_sub_epi32(lv, lc), coef));
+            }
+            finish4(dst, x, s);
+            x += 4;
+        }
+        while x < n {
+            let cc = co + x;
+            let m = c_center[cc] as i32;
+            let mut s = m << 7;
+            for t in ctaps {
+                let a = t.row_p[(cc as i32 + t.dx) as usize] as i32;
+                let b = t.row_m[(cc as i32 - t.dx) as usize] as i32;
+                s += (a + b - 2 * m) * t.coef;
+            }
+            let lcx = lo + x * lstep;
+            let lc = l_center[lcx] as i32;
+            for t in ltaps {
+                let lv = t.row[(lcx as i32 + t.ldx) as usize] as i32;
+                s += (lv - lc) * t.coef;
+            }
+            dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
+            x += 1;
+        }
+    }
+}
+
+/// Safe entry point. See [`ns_wiener_fir_run_sse41`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ns_wiener_uv_fir_run_sse41(
+    dst: &mut [u8],
+    c_center: &[u8],
+    co: usize,
+    ctaps: &[WienerTap],
+    l_center: &[u8],
+    lo: usize,
+    ltaps: &[UvLumaTap],
+    lstep: usize,
+    n: usize,
+) {
+    unsafe {
+        ns_wiener_uv_fir_run_sse41_impl(dst, c_center, co, ctaps, l_center, lo, ltaps, lstep, n)
+    }
+}
+
+#[cfg(test)]
+mod uv_fir_sse_tests {
+    use crate::filter::{UvLumaTap, WienerTap, ns_wiener_uv_fir_run_scalar};
+
+    struct R(u64);
+    impl R {
+        fn next(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x
+        }
+        fn range(&mut self, lo: i32, hi: i32) -> i32 {
+            lo + (self.next() % ((hi - lo + 1) as u64)) as i32
+        }
+    }
+
+    #[test]
+    fn ns_wiener_uv_fir_sse_matches_scalar() {
+        if !std::is_x86_feature_detected!("sse4.1") {
+            return;
+        }
+        const CW: usize = 96;
+        const LW: usize = 160;
+        let mut rng = R(0x243f6a8885a308d3);
+        for _ in 0..40_000 {
+            let c_rows: Vec<Vec<u8>> = (0..5)
+                .map(|_| (0..CW).map(|_| rng.range(0, 255) as u8).collect())
+                .collect();
+            let l_rows: Vec<Vec<u8>> = (0..5)
+                .map(|_| (0..LW).map(|_| rng.range(0, 255) as u8).collect())
+                .collect();
+
+            let lstep = if rng.range(0, 1) == 0 { 1usize } else { 2 };
+            let ctaps: Vec<WienerTap> = (0..6)
+                .map(|_| WienerTap {
+                    row_p: &c_rows[rng.range(0, 4) as usize],
+                    row_m: &c_rows[rng.range(0, 4) as usize],
+                    dx: rng.range(-2, 2),
+                    coef: rng.range(-128, 127),
+                })
+                .collect();
+            let ltaps: Vec<UvLumaTap> = (0..12)
+                .map(|_| UvLumaTap {
+                    row: &l_rows[rng.range(0, 4) as usize],
+                    ldx: rng.range(-2, 2) * lstep as i32,
+                    coef: rng.range(-128, 127),
+                })
+                .collect();
+
+            let co = 8usize;
+            let lo = 8usize;
+            let n = (rng.range(1, 4) as usize) * 4; // 4,8,12,16
+
+            let mut a = vec![0u8; n];
+            let mut b = vec![0u8; n];
+            ns_wiener_uv_fir_run_scalar(
+                &mut a, &c_rows[2], co, &ctaps, &l_rows[2], lo, &ltaps, lstep, n,
+            );
+            unsafe {
+                super::ns_wiener_uv_fir_run_sse41(
+                    &mut b, &c_rows[2], co, &ctaps, &l_rows[2], lo, &ltaps, lstep, n,
+                );
+            }
+            assert_eq!(a, b, "mismatch lstep={lstep} n={n}");
+        }
+    }
+}
