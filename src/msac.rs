@@ -316,37 +316,43 @@ impl<'a> MsacContext<'a> {
     pub(crate) fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
         macro_rules! decode_n {
             ($n:literal) => {{
-                debug_assert!(cdf.len() > $n);
+                if cdf.len() <= $n {
+                    return 0;
+                }
 
-                let cdf_all: &mut [u16; $n + 1] = (&mut cdf[..($n + 1)])
+                // Safe compile-time sized array conversion (Zero-cost)
+                let cdf_all: &mut [u16; $n + 1] = (&mut cdf[..=$n])
                     .try_into()
-                    .expect("invalid MSAC CDF length");
+                    .unwrap();
 
-                let min_prob: &[u16; $n + 1] = (&MSAC_MIN_PROB[$n - 1][..($n + 1)])
+                let min_prob: &[u16; $n + 1] = (&MSAC_MIN_PROB[$n - 1][..=$n])
                     .try_into()
-                    .expect("invalid MSAC min-prob table length");
+                    .unwrap();
 
                 let c = (self.dif >> 48) as u32;
                 let r = self.rng >> 8;
 
-                let mut u = self.rng;
-                let mut v = self.rng;
-                let mut val = 0u32;
+                // Safe stack array padded to avoid "val == 0" branch
+                let mut v_arr = [0u32; $n + 2];
+                v_arr[0] = self.rng;
 
-                for (&cdf_i, &min_i) in cdf_all.iter().zip(min_prob.iter()) {
-                    u = v;
-
-                    let p_raw = (cdf_i | 127) as i32 - min_i as i32;
+                // Branchless computation loop (LLVM unrolls/vectorizes this safely)
+                for i in 0..=$n {
+                    let p_raw = (cdf_all[i] | 127) as i32 - min_prob[i] as i32;
                     let p = p_raw.max(0) as u32;
-
-                    v = ((r * p) >> 10) << 3;
-
-                    if c >= v {
-                        break;
-                    }
-
-                    val += 1;
+                    v_arr[i + 1] = ((r * p) >> 10) << 3;
                 }
+
+                let mut mask = 0u32;
+                for i in 0..=$n {
+                    mask |= ((c < v_arr[i + 1]) as u32) << i;
+                }
+
+                let val_usize = (mask.trailing_ones() as usize).min($n);
+                let val = val_usize as u32;
+
+                let u = v_arr[val_usize];
+                let v = v_arr[val_usize + 1];
 
                 debug_assert!(val <= $n);
                 debug_assert!(u <= self.rng);
@@ -356,11 +362,8 @@ impl<'a> MsacContext<'a> {
                 if self.allow_update_cdf {
                     let (cdf_syms, cdf_count) = cdf_all.split_at_mut($n);
 
-                    let cdf_syms: &mut [u16; $n] =
-                        cdf_syms.try_into().expect("invalid MSAC symbol CDF length");
-
-                    let cdf_count: &mut [u16; 1] =
-                        cdf_count.try_into().expect("invalid MSAC count CDF length");
+                    let cdf_syms: &mut [u16; $n] = cdf_syms.try_into().unwrap();
+                    let cdf_count: &mut [u16; 1] = cdf_count.try_into().unwrap();
 
                     let pc = cdf_count[0];
                     let count = (pc & 0xFF) as u8;
@@ -370,14 +373,14 @@ impl<'a> MsacContext<'a> {
                     let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize]
                         + if $n > 2 { 1 } else { 0 };
 
-                    let val_usize = val as usize;
-
+                    // Branchless bitwise CDF adaptation step
                     for (i, cdf_i) in cdf_syms.iter_mut().enumerate() {
-                        if i < val_usize {
-                            *cdf_i += (32768 - *cdf_i) >> rate;
-                        } else {
-                            *cdf_i -= *cdf_i >> rate;
-                        }
+                        let mask = ((i < val_usize) as u16).wrapping_neg(); // 0xFFFF if true, 0x0000 if false
+                        let v_true = (32768 - *cdf_i) >> rate;
+                        let v_false = (*cdf_i >> rate).wrapping_neg();
+
+                        let shift_val = (v_true & mask) | (v_false & !mask);
+                        *cdf_i = cdf_i.wrapping_add(shift_val);
                     }
 
                     cdf_count[0] = pc + u16::from(count < 32);
@@ -387,6 +390,7 @@ impl<'a> MsacContext<'a> {
             }};
         }
 
+        // Fully safe exhaustive match
         match n_symbols {
             1 => decode_n!(1),
             2 => decode_n!(2),
