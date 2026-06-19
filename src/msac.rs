@@ -278,7 +278,25 @@ impl<'a> MsacContext<'a> {
 
     #[inline]
     pub(crate) fn decode_bool_bypass(&mut self) -> u32 {
-        self.decode_bools_bypass(1)
+        if self.cnt < 1 {
+            self.ctx_refill();
+        }
+
+        let vw = (self.rng as u64) << 47;
+        let dif = self.dif;
+
+        debug_assert!(self.rng & 1 == 0);
+        debug_assert!((dif >> 48) < self.rng as u64);
+
+        let ge = (dif >= vw) as u64;
+        let mask = 0u64.wrapping_sub(ge);
+
+        let dif = dif - (vw & mask);
+
+        self.dif = ((dif + 1) << 1) - 1;
+        self.cnt -= 1;
+
+        (ge as u32) ^ 1
     }
 
     pub(crate) fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {

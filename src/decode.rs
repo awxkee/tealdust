@@ -13718,7 +13718,7 @@ fn recon_b_intra_chroma<BD: BitDepth>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn recon_b_intra_chroma_phase<BD: crate::pixel::BitDepth>(
+fn recon_b_intra_chroma_phase<BD: BitDepth>(
     rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
     cbx: i32,
     cby: i32,

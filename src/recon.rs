@@ -268,6 +268,11 @@ pub(crate) fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
 }
 
 #[inline(always)]
+fn cap<const N: u32>(x: i8) -> u32 {
+    (x as u8 as u32).min(N)
+}
+
+#[inline(always)]
 pub(crate) fn get_lo_ctx(
     levels: &[i8],
     off: usize,
@@ -277,89 +282,145 @@ pub(crate) fn get_lo_ctx(
     plane: i32,
     stride: usize,
 ) -> u32 {
-    let chroma = plane != 0;
-    let lo_freq = xy
-        < if chroma {
-            1
-        } else if tx_class == 0 {
-            4
+    let base = &levels[off..];
+
+    if plane != 0 {
+        if tx_class == 0 {
+            get_lo_ctx_chroma_2d(base, hi_mag, xy, plane, stride)
         } else {
-            2
+            get_lo_ctx_chroma_1d(base, hi_mag, xy, stride)
+        }
+    } else if tx_class == 0 {
+        get_lo_ctx_luma_2d(base, hi_mag, xy, stride)
+    } else {
+        get_lo_ctx_luma_1d(base, hi_mag, xy, stride)
+    }
+}
+
+#[inline(always)]
+fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
+    let a = base[1];
+    let b = base[stride];
+    let c = base[stride + 1];
+    let d = base[2];
+    let e = base[2 * stride];
+
+    let hi = cap::<5>(a) + cap::<5>(b) + cap::<5>(c);
+
+    let lo_freq = xy < 4;
+
+    let lo;
+    let offset;
+    let lim;
+
+    if lo_freq {
+        lo = cap::<5>(a) + cap::<5>(b) + cap::<5>(c) + cap::<5>(d) + cap::<5>(e);
+
+        if xy == 0 {
+            offset = 0;
+            lim = 8;
+        } else if xy < 2 {
+            offset = 9;
+            lim = 6;
+        } else {
+            offset = 16;
+            lim = 4;
+        }
+
+        *hi_mag = if xy > 0 { 7 } else { 0 } + ((hi + 1) >> 1).min(6);
+    } else {
+        lo = cap::<3>(a) + cap::<3>(b) + cap::<3>(c) + cap::<3>(d) + cap::<3>(e);
+
+        offset = if xy < 6 {
+            0
+        } else if xy < 8 {
+            5
+        } else {
+            10
         };
-    let mut lim: u32 = if lo_freq { 5 } else { 3 };
-    let mut lo_mag: u32 = 0;
-    let mut hi: u32 = 0;
 
-    macro_rules! add {
-        ($v:expr) => {{
-            let val = $v as u32;
-            lo_mag += val.min(lim);
-            hi += val.min(5);
-        }};
+        lim = 4;
+        *hi_mag = ((hi + 1) >> 1).min(6);
     }
 
-    add!(levels[off + 1]);
-    add!(levels[off + stride]);
+    offset + ((lo + 1) >> 1).min(lim)
+}
 
-    let offset: u32;
-    if tx_class == 0 {
-        add!(levels[off + stride + 1]);
-        if !chroma {
-            lo_mag +=
-                (levels[off + 2] as u32).min(lim) + (levels[off + 2 * stride] as u32).min(lim);
-            if lo_freq {
-                offset = if xy == 0 {
-                    0
-                } else if xy < 2 {
-                    9
-                } else {
-                    16
-                };
-                lim = if xy == 0 {
-                    8
-                } else if xy < 2 {
-                    6
-                } else {
-                    4
-                };
-            } else {
-                offset = if xy < 6 {
-                    0
-                } else if xy < 8 {
-                    5
-                } else {
-                    10
-                };
-                lim = 4;
-            }
+#[inline(always)]
+fn get_lo_ctx_luma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
+    let e = base[4];
+    let a = base[1];
+    let b = base[stride];
+    let c = base[2];
+    let d = base[3];
+
+    let hi = cap::<5>(a) + cap::<5>(b) + cap::<5>(c);
+
+    let lo;
+    let offset;
+    let lim;
+
+    if xy < 2 {
+        lo = cap::<5>(a) + cap::<5>(b) + cap::<3>(c) + cap::<3>(d) + cap::<3>(e);
+
+        if xy == 0 {
+            offset = 21;
+            lim = 6;
         } else {
-            lim = 3;
-            offset = if plane == 1 { 0 } else { 4 };
+            offset = 28;
+            lim = 4;
         }
+
+        *hi_mag = 7 + ((hi + 1) >> 1).min(6);
     } else {
-        if !chroma {
-            lim = 3;
-            add!(levels[off + 2]);
-            lo_mag += (levels[off + 3] as u32).min(3) + (levels[off + 4] as u32).min(3);
-            if lo_freq {
-                offset = if xy == 0 { 21 } else { 28 };
-                lim = if xy == 0 { 6 } else { 4 };
-            } else {
-                offset = 15;
-                lim = 4;
-            }
-        } else {
-            offset = 8;
-            lim = 3;
-        }
+        lo = cap::<3>(a) + cap::<3>(b) + cap::<3>(c) + cap::<3>(d) + cap::<3>(e);
+
+        offset = 15;
+        lim = 4;
+
+        *hi_mag = ((hi + 1) >> 1).min(6);
     }
 
-    *hi_mag = (if !chroma && lo_freq && (xy > 0 || tx_class != 0) {
-        7
+    offset + ((lo + 1) >> 1).min(lim)
+}
+
+#[inline(always)]
+fn get_lo_ctx_chroma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, plane: i32, stride: usize) -> u32 {
+    let a = base[1];
+    let b = base[stride];
+    let c = base[stride + 1];
+
+    let hi = cap::<5>(a) + cap::<5>(b) + cap::<5>(c);
+
+    let lo = if xy == 0 {
+        hi
     } else {
-        0
-    }) + ((hi + 1) >> 1).min(if chroma { 3 } else { 6 });
-    offset + ((lo_mag + 1) >> 1).min(lim)
+        cap::<3>(a) + cap::<3>(b) + cap::<3>(c)
+    };
+
+    *hi_mag = ((hi + 1) >> 1).min(3);
+
+    let offset = if plane == 1 { 0 } else { 4 };
+
+    offset + ((lo + 1) >> 1).min(3)
+}
+
+#[inline(always)]
+fn get_lo_ctx_chroma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
+    let a = base[1];
+    let b = base[stride];
+
+    let hi = cap::<5>(a) + cap::<5>(b);
+
+    let lo = if xy == 0 {
+        hi
+    } else {
+        cap::<3>(a) + cap::<3>(b)
+    };
+
+    *hi_mag = ((hi + 1) >> 1).min(3);
+
+    8 + ((lo + 1) >> 1).min(3)
 }
 
 #[inline(always)]
