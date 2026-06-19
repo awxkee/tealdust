@@ -27,12 +27,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-//! NEON CfL prediction apply (4:2:0, uniform 2x2 filter). Bit-exact with
-//! `crate::cfl_dispatch::cfl_apply_420_8bpc_scalar`.
-//!
-//! Memory access goes through `as_chunks` iteration and fixed-size load/store
-//! helpers, so the only `unsafe` is the SIMD arithmetic itself.
-
 use core::arch::aarch64::*;
 
 #[inline(always)]

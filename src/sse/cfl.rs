@@ -27,12 +27,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-//! SSE4.1 CfL prediction apply (4:2:0, uniform 2x2 filter). Bit-exact with
-//! `crate::cfl_dispatch::cfl_apply_420_8bpc_scalar`.
-//!
-//! Memory access goes through `as_chunks` iteration and fixed-size load/store
-//! helpers, so the only `unsafe` is the SIMD arithmetic itself.
-
 #[cfg(target_arch = "x86")]
 use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
@@ -57,9 +51,6 @@ fn load_u8x16(a: &[u8; 16]) -> __m128i {
 fn store_u8x8(a: &mut [u8; 8], v: __m128i) {
     unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, v) };
 }
-
-/// Form the 8 mean-removed AC lanes (`ac = (sum2x2 << 1) - dc0`) from a 16-byte
-/// top row and 16-byte bottom row, returned as two 4-lane i32 vectors.
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn ac_pair(top: __m128i, bot: __m128i, ones: __m128i, dc0v: __m128i) -> (__m128i, __m128i) {

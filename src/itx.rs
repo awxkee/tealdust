@@ -368,7 +368,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
     // 64-involving sizes have no real 64-point transform (the decoder maps the
     // 64 dimension to inv_dct32), so each computes identically to its clamped
     // (min(W,32), min(H,32)) shape and reuses that core, with the caller's `tx`
-    // (eob table) and `is_rect2` (scaling) selecting the correct behaviour.
+    // (eob table) and `is_rect2` (scaling) selecting the correct behavior.
     if (txtp & 0xFF) == txtp_kind::DCT_DCT as u32
         && (txtp >> 8) == 0
         && t_dim.lw != t_dim.lh
