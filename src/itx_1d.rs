@@ -28,8 +28,79 @@
  */
 
 use crate::levels::{N_TX_1D_TYPES, N_TX_SIZES};
-use crate::simd::I32x8 as i32x8;
 use std::convert::TryInto;
+
+/// Portable 8-lane i32 vector backing the column inverse-transform kernels
+/// below. It is a plain `[i32; 8]` that the autovectorizer lowers to SIMD;
+/// the exact-integer transform math (wrapping add/sub/mul, no rounding) means
+/// the lanes must be ordinary two's-complement i32. Relocated here from
+/// `simd.rs`, of which it is now the sole user.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct I32x8([i32; 8]);
+
+impl I32x8 {
+    #[inline(always)]
+    pub(crate) fn splat(v: i32) -> Self {
+        I32x8([v; 8])
+    }
+
+    #[inline(always)]
+    pub(crate) fn to_array(self) -> [i32; 8] {
+        self.0
+    }
+}
+
+impl From<[i32; 8]> for I32x8 {
+    #[inline(always)]
+    fn from(a: [i32; 8]) -> Self {
+        I32x8(a)
+    }
+}
+
+impl core::ops::Add for I32x8 {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, rhs: Self) -> Self {
+        let mut r = [0i32; 8];
+        for i in 0..8 {
+            r[i] = self.0[i].wrapping_add(rhs.0[i]);
+        }
+        I32x8(r)
+    }
+}
+
+impl core::ops::Sub for I32x8 {
+    type Output = Self;
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> Self {
+        let mut r = [0i32; 8];
+        for i in 0..8 {
+            r[i] = self.0[i].wrapping_sub(rhs.0[i]);
+        }
+        I32x8(r)
+    }
+}
+
+impl core::ops::Mul for I32x8 {
+    type Output = Self;
+    #[inline(always)]
+    fn mul(self, rhs: Self) -> Self {
+        let mut r = [0i32; 8];
+        for i in 0..8 {
+            r[i] = self.0[i].wrapping_mul(rhs.0[i]);
+        }
+        I32x8(r)
+    }
+}
+
+impl core::ops::AddAssign for I32x8 {
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: Self) {
+        for i in 0..8 {
+            self.0[i] = self.0[i].wrapping_add(rhs.0[i]);
+        }
+    }
+}
 
 pub type Itx1dFn = fn(c: &mut [i32], stride: usize);
 
@@ -645,27 +716,27 @@ fn inv_identity32_1d(c: &mut [i32], stride: usize) {
 pub(crate) type Itx1dFnX8 = fn(&mut [i32], usize, usize);
 
 #[inline(always)]
-fn ldx8(c: &[i32], off: usize) -> i32x8 {
+fn ldx8(c: &[i32], off: usize) -> I32x8 {
     let src: &[i32; 8] = c[off..off + 8].try_into().unwrap();
-    i32x8::from(*src)
+    I32x8::from(*src)
 }
 
 #[inline(always)]
-fn stx8(c: &mut [i32], off: usize, v: i32x8) {
+fn stx8(c: &mut [i32], off: usize, v: I32x8) {
     let dst: &mut [i32; 8] = (&mut c[off..off + 8]).try_into().unwrap();
     *dst = v.to_array();
 }
 
 #[inline(always)]
-fn mulc(v: i32x8, k: i32) -> i32x8 {
-    v * i32x8::splat(k)
+fn mulc(v: I32x8, k: i32) -> I32x8 {
+    v * I32x8::splat(k)
 }
 
 #[inline(always)]
-fn load_1d_x8<const N: usize>(c: &[i32], base: usize, stride: usize) -> [i32x8; N] {
+fn load_1d_x8<const N: usize>(c: &[i32], base: usize, stride: usize) -> [I32x8; N] {
     let span = base + (N - 1) * stride + 7;
     let c = &c[..=span];
-    let zero = i32x8::splat(0);
+    let zero = I32x8::splat(0);
     let mut out = [zero; N];
     for (i, dst) in out.iter_mut().enumerate() {
         *dst = ldx8(c, base + i * stride);
@@ -674,7 +745,7 @@ fn load_1d_x8<const N: usize>(c: &[i32], base: usize, stride: usize) -> [i32x8; 
 }
 
 #[inline(always)]
-fn store_1d_x8<const N: usize>(c: &mut [i32], base: usize, stride: usize, v: &[i32x8; N]) {
+fn store_1d_x8<const N: usize>(c: &mut [i32], base: usize, stride: usize, v: &[I32x8; N]) {
     let span = base + (N - 1) * stride + 7;
     let c = &mut c[..=span];
     for (i, &src) in v.iter().enumerate() {
@@ -683,8 +754,8 @@ fn store_1d_x8<const N: usize>(c: &mut [i32], base: usize, stride: usize, v: &[i
 }
 
 #[inline(always)]
-fn sum_row4_x8(row: &[i8; 4], x: &[i32x8; 4]) -> i32x8 {
-    let mut acc = i32x8::splat(0);
+fn sum_row4_x8(row: &[i8; 4], x: &[I32x8; 4]) -> I32x8 {
+    let mut acc = I32x8::splat(0);
     acc += mulc(x[0], row[0] as i32);
     acc += mulc(x[1], row[1] as i32);
     acc += mulc(x[2], row[2] as i32);
@@ -693,8 +764,8 @@ fn sum_row4_x8(row: &[i8; 4], x: &[i32x8; 4]) -> i32x8 {
 }
 
 #[inline(always)]
-fn sum_row8_x8(row: &[i8; 8], x: &[i32x8; 8]) -> i32x8 {
-    let mut acc = i32x8::splat(0);
+fn sum_row8_x8(row: &[i8; 8], x: &[I32x8; 8]) -> I32x8 {
+    let mut acc = I32x8::splat(0);
     acc += mulc(x[0], row[0] as i32);
     acc += mulc(x[1], row[1] as i32);
     acc += mulc(x[2], row[2] as i32);
@@ -707,8 +778,8 @@ fn sum_row8_x8(row: &[i8; 8], x: &[i32x8; 8]) -> i32x8 {
 }
 
 #[inline(always)]
-fn sum_row16_x8(row: &[i8; 16], x: &[i32x8; 16]) -> i32x8 {
-    let mut acc = i32x8::splat(0);
+fn sum_row16_x8(row: &[i8; 16], x: &[I32x8; 16]) -> I32x8 {
+    let mut acc = I32x8::splat(0);
     acc += mulc(x[0], row[0] as i32);
     acc += mulc(x[1], row[1] as i32);
     acc += mulc(x[2], row[2] as i32);
@@ -729,27 +800,27 @@ fn sum_row16_x8(row: &[i8; 16], x: &[i32x8; 16]) -> i32x8 {
 }
 
 #[inline(always)]
-fn odd_4_x8(v: &[i32x8; 8]) -> [i32x8; 4] {
+fn odd_4_x8(v: &[I32x8; 8]) -> [I32x8; 4] {
     [v[1], v[3], v[5], v[7]]
 }
 
 #[inline(always)]
-fn even_4_from_8_x8(v: &[i32x8; 8]) -> [i32x8; 4] {
+fn even_4_from_8_x8(v: &[I32x8; 8]) -> [I32x8; 4] {
     [v[0], v[2], v[4], v[6]]
 }
 
 #[inline(always)]
-fn odd_8_x8(v: &[i32x8; 16]) -> [i32x8; 8] {
+fn odd_8_x8(v: &[I32x8; 16]) -> [I32x8; 8] {
     [v[1], v[3], v[5], v[7], v[9], v[11], v[13], v[15]]
 }
 
 #[inline(always)]
-fn even_8_from_16_x8(v: &[i32x8; 16]) -> [i32x8; 8] {
+fn even_8_from_16_x8(v: &[I32x8; 16]) -> [I32x8; 8] {
     [v[0], v[2], v[4], v[6], v[8], v[10], v[12], v[14]]
 }
 
 #[inline(always)]
-fn odd_16_x8(v: &[i32x8; 32]) -> [i32x8; 16] {
+fn odd_16_x8(v: &[I32x8; 32]) -> [I32x8; 16] {
     [
         v[1], v[3], v[5], v[7], v[9], v[11], v[13], v[15], v[17], v[19], v[21], v[23], v[25],
         v[27], v[29], v[31],
@@ -757,7 +828,7 @@ fn odd_16_x8(v: &[i32x8; 32]) -> [i32x8; 16] {
 }
 
 #[inline(always)]
-fn even_16_from_32_x8(v: &[i32x8; 32]) -> [i32x8; 16] {
+fn even_16_from_32_x8(v: &[I32x8; 32]) -> [I32x8; 16] {
     [
         v[0], v[2], v[4], v[6], v[8], v[10], v[12], v[14], v[16], v[18], v[20], v[22], v[24],
         v[26], v[28], v[30],
@@ -765,7 +836,7 @@ fn even_16_from_32_x8(v: &[i32x8; 32]) -> [i32x8; 16] {
 }
 
 #[inline(always)]
-fn inv_dct4_array_x8(v: &mut [i32x8; 4]) {
+fn inv_dct4_array_x8(v: &mut [I32x8; 4]) {
     let a0 = mulc(v[0], 64) + mulc(v[2], 64);
     let a1 = mulc(v[0], 64) - mulc(v[2], 64);
     let b0 = mulc(v[1], 83) + mulc(v[3], 35);
@@ -778,7 +849,7 @@ fn inv_dct4_array_x8(v: &mut [i32x8; 4]) {
 }
 
 #[inline(always)]
-fn inv_dct8_array_x8(v: &mut [i32x8; 8]) {
+fn inv_dct8_array_x8(v: &mut [I32x8; 8]) {
     let mut e = even_4_from_8_x8(v);
     inv_dct4_array_x8(&mut e);
     let odd = odd_4_x8(v);
@@ -798,7 +869,7 @@ fn inv_dct8_array_x8(v: &mut [i32x8; 8]) {
 }
 
 #[inline(always)]
-fn inv_dct16_array_x8(v: &mut [i32x8; 16]) {
+fn inv_dct16_array_x8(v: &mut [I32x8; 16]) {
     let mut e = even_8_from_16_x8(v);
     inv_dct8_array_x8(&mut e);
     let odd = odd_8_x8(v);
@@ -830,7 +901,7 @@ fn inv_dct16_array_x8(v: &mut [i32x8; 16]) {
 }
 
 #[inline(always)]
-fn inv_dct32_array_x8(v: &mut [i32x8; 32]) {
+fn inv_dct32_array_x8(v: &mut [I32x8; 32]) {
     let mut e = even_16_from_32_x8(v);
     inv_dct16_array_x8(&mut e);
     let odd = odd_16_x8(v);
@@ -914,14 +985,14 @@ fn inv_dct32_1d_x8(c: &mut [i32], base: usize, stride: usize) {
 }
 
 #[inline(always)]
-fn scale_array_x8<const N: usize>(v: &mut [i32x8; N], scale: i32) {
+fn scale_array_x8<const N: usize>(v: &mut [I32x8; N], scale: i32) {
     for x in v.iter_mut() {
         *x = mulc(*x, scale);
     }
 }
 
 fn inv_dst_1d_x8(c: &mut [i32], base: usize, stride: usize, mat: &[i8], n: usize, flip: bool) {
-    let zero = i32x8::splat(0);
+    let zero = I32x8::splat(0);
     let mut sums = [zero; 16];
     let mut mi = 0;
     for sum in sums.iter_mut().take(n) {
@@ -1059,7 +1130,7 @@ pub(crate) fn cctx(u: &mut [i32], v: &mut [i32], angle: &[i16; 3], sz: usize, bi
     let sina = angle[0] as i32;
     let cosa = angle[1] as i32;
     debug_assert!(angle[2] == -angle[0]);
-    crate::simd::cctx_row(u, v, sina, cosa, sz, min, max);
+    crate::filter::cctx_row(u, v, sina, cosa, sz, min, max);
 }
 
 pub(crate) fn inv_wht_wht_4x4(coeff: &[i32; 16], tmp: &mut [i32; 16]) {
@@ -1138,7 +1209,7 @@ pub(crate) fn residual_add_strided<BD: crate::pixel::BitDepth>(
         let d = &mut dst[drow..];
         let cr = &c[crow..];
         let n = w.min(d.len()).min(cr.len());
-        crate::simd::residual_add_row(bd, d, cr, n, rnd, shift);
+        crate::filter::residual_add_row(bd, d, cr, n, rnd, shift);
     }
 }
 
@@ -1188,7 +1259,7 @@ pub(crate) fn residual_add<BD: crate::pixel::BitDepth>(
                 let d = &mut dst[row..];
                 let cr = &c[cw.min(c.len())..];
                 let n = w.min(d.len()).min(cr.len());
-                crate::simd::residual_add_row(bd, d, cr, n, rnd, shift);
+                crate::filter::residual_add_row(bd, d, cr, n, rnd, shift);
             }
         }
     }

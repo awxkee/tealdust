@@ -106,13 +106,14 @@ mod data;
 mod decode_partition;
 mod decoder;
 mod error;
+mod filter;
 mod headers;
 mod ipred_dispatch;
 mod levels;
 #[cfg(target_arch = "aarch64")]
 mod neon;
 mod picture;
-mod simd;
+mod rowops_dispatch;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub(crate) mod sse;
 

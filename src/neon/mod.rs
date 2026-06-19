@@ -27,11 +27,17 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 mod cfl;
+mod filter;
 mod ipred;
 mod itx;
 mod looprestoration;
 
 pub(crate) use cfl::cfl_apply_420_8bpc_neon;
+pub(crate) use filter::{
+    avg_row_8bpc_neon, blend_row_8bpc_neon, cctx_row_neon, dc_add_row_8bpc_neon,
+    gdf_add_run_8bpc_neon, gdf_gradient_group_neon, mask_row_8bpc_neon, morph_row_8bpc_neon,
+    residual_add_row_8bpc_neon, row_clip_neon, w_avg_row_8bpc_neon,
+};
 pub(crate) use ipred::*;
 pub(crate) use itx::{
     iadst_dequant_4x4_neon, iadst_dequant_4x8_neon, iadst_dequant_4x16_neon,

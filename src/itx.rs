@@ -258,7 +258,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
             }
             let d = &mut dst[row..];
             let n = w.min(d.len());
-            crate::simd::dc_add_row(bd, d, dc, n);
+            crate::filter::dc_add_row(bd, d, dc, n);
         }
         return;
     }
@@ -895,7 +895,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
 
         let rnd0 = (1 << shift0) >> 1;
         for y in 0..sh {
-            crate::simd::row_clip(tmp.row_mut(y), sw, rnd0, shift0, row_clip_min, row_clip_max);
+            crate::filter::row_clip(tmp.row_mut(y), sw, rnd0, shift0, row_clip_min, row_clip_max);
         }
 
         let second_1d_fn_x8 = TX1D_FNS_X8[t_dim.lh as usize][((txtp >> 5) & 7) as usize];

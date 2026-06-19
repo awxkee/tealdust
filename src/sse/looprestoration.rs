@@ -32,7 +32,7 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-use crate::simd::WienerTap;
+use crate::filter::WienerTap;
 
 /// Load 8 consecutive `u8` and zero-extend into two `__m128i` (4×i32) halves.
 #[inline(always)]
@@ -69,7 +69,7 @@ unsafe fn finish(dst: *mut u8, slo: __m128i, shi: __m128i) {
 }
 
 #[target_feature(enable = "sse4.1")]
-unsafe fn ns_wiener_fir_run_sse41_impl(
+fn ns_wiener_fir_run_sse41_impl(
     dst: &mut [u8],
     center: &[u8],
     col0: usize,
@@ -122,7 +122,7 @@ unsafe fn ns_wiener_fir_run_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-unsafe fn pc_wiener_fir_run_sse41_impl(
+fn pc_wiener_fir_run_sse41_impl(
     dst: &mut [u8],
     center: &[u8],
     center_coef: i32,

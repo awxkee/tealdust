@@ -120,7 +120,7 @@ pub(crate) fn avg<BD: BitDepth>(
         let t1 = &tmp1[yw.min(tmp1.len())..];
         let t2 = &tmp2[yw.min(tmp2.len())..];
         let n = w.min(d.len()).min(t1.len()).min(t2.len());
-        crate::simd::avg_row(bd, d, t1, t2, n, rnd, sh);
+        crate::filter::avg_row(bd, d, t1, t2, n, rnd, sh);
     }
 }
 
@@ -160,7 +160,7 @@ pub(crate) fn w_avg<BD: BitDepth>(
         let t1 = &tmp1[yw.min(tmp1.len())..];
         let t2 = &tmp2[yw.min(tmp2.len())..];
         let n = w.min(d.len()).min(t1.len()).min(t2.len());
-        crate::simd::w_avg_row(bd, d, t1, t2, n, weight, rnd, sh);
+        crate::filter::w_avg_row(bd, d, t1, t2, n, weight, rnd, sh);
     }
 }
 
@@ -201,7 +201,7 @@ pub(crate) fn mask_fn<BD: BitDepth>(
         let t2 = &tmp2[yw.min(tmp2.len())..];
         let mk = &mask[yw.min(mask.len())..];
         let n = w.min(d.len()).min(t1.len()).min(t2.len()).min(mk.len());
-        crate::simd::mask_row(bd, d, t1, t2, mk, n, rnd, sh);
+        crate::filter::mask_row(bd, d, t1, t2, mk, n, rnd, sh);
     }
 }
 
@@ -234,7 +234,7 @@ pub(crate) fn blend<P: Pixel>(
         let t = &tmp[yw.min(tmp.len())..];
         let mk = &mask[yw.min(mask.len())..];
         let n = w.min(d.len()).min(t.len()).min(mk.len());
-        crate::simd::blend_row(d, t, mk, n);
+        crate::filter::blend_row(d, t, mk, n);
     }
 }
 
@@ -254,7 +254,7 @@ pub(crate) fn morph<BD: BitDepth>(
         }
         let d = &mut dst[row..];
         let n = w.min(d.len());
-        crate::simd::morph_row(bd, d, alpha, beta, n);
+        crate::filter::morph_row(bd, d, alpha, beta, n);
     }
 }
 

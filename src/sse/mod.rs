@@ -27,6 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 mod cfl;
+mod filter;
 mod ipred;
 mod itx;
 mod looprestoration;
@@ -44,5 +45,10 @@ pub(crate) use itx::{
 };
 
 pub(crate) use cfl::cfl_apply_420_8bpc_sse41;
+pub(crate) use filter::{
+    avg_row_8bpc_sse41, blend_row_8bpc_sse41, cctx_row_sse41, dc_add_row_8bpc_sse41,
+    gdf_add_run_8bpc_sse41, gdf_gradient_group_sse41, mask_row_8bpc_sse41, morph_row_8bpc_sse41,
+    residual_add_row_8bpc_sse41, row_clip_sse41, w_avg_row_8bpc_sse41,
+};
 pub(crate) use ipred::*;
 pub(crate) use looprestoration::{ns_wiener_fir_run_sse41, pc_wiener_fir_run_sse41};

@@ -457,7 +457,7 @@ pub(crate) fn idct_dequant_scalar_core<const N: usize, const S: usize>(
 
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..S {
-        crate::simd::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
+        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
     }
 
     let mut x = 0usize;
@@ -544,7 +544,7 @@ pub(crate) fn itx_dequant_scalar_core<const N: usize, const S: usize>(
 
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..S {
-        crate::simd::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
+        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
     }
 
     let mut x = 0usize;
@@ -608,7 +608,7 @@ pub(crate) fn idct_dequant_rows_dct<const N: usize, const S: usize>(
 
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..S {
-        crate::simd::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
+        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
     }
 }
 
@@ -774,7 +774,7 @@ fn idct_dequant_rows_dct_simd4<B: DctSimd4, const N: usize, const S: usize>(
 
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..S {
-        crate::simd::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
+        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
     }
 }
 
@@ -1095,7 +1095,7 @@ fn itx_dequant_rows_simd4<B: DctSimd4, const N: usize, const S: usize>(
 
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..S {
-        crate::simd::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
+        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
     }
 }
 
@@ -1529,7 +1529,7 @@ fn idct_dequant_rows_rect_dct_simd4<B: DctSimd4, const N: usize, const W: usize,
 
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..H {
-        crate::simd::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
+        crate::filter::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
     }
 }
 
@@ -1577,7 +1577,7 @@ fn idct_dequant_rows_rect_dct_scalar<const N: usize, const W: usize, const H: us
 
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..H {
-        crate::simd::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
+        crate::filter::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
     }
 }
 
@@ -1746,7 +1746,7 @@ fn itx_dequant_rows_rect_simd4<B: DctSimd4, const N: usize, const W: usize, cons
 
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..H {
-        crate::simd::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
+        crate::filter::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
     }
 }
 
@@ -1799,7 +1799,7 @@ pub(crate) fn itx_dequant_rect_scalar_core<const N: usize, const W: usize, const
 
     let rnd0 = (1 << shift0) >> 1;
     for y in 0..H {
-        crate::simd::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
+        crate::filter::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
     }
 
     for x in 0..W {

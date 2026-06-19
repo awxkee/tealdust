@@ -38,7 +38,7 @@
 //! NEON is part of the aarch64 baseline, so no `#[target_feature]` is required
 //! (matching `crate::neon::itx`); the intrinsics are invoked inside `unsafe`.
 
-use crate::simd::WienerTap;
+use crate::filter::WienerTap;
 use std::arch::aarch64::*;
 
 #[inline]

@@ -154,7 +154,7 @@ pub fn compute_gradient_row_8bpc(
                 rows[(row_off as i32 - 1 + dy) as usize],
                 rows[(row_off as i32 + dy) as usize],
             ];
-            crate::simd::gdf_gradient_group(
+            crate::filter::gdf_gradient_group(
                 dst,
                 d,
                 base_cell,
@@ -285,7 +285,7 @@ pub fn gdf_add_8bpc(
             let x0 = bx_start << 2;
             let n = (bx - bx_start) << 2;
             for y in by * 4..by * 4 + 4 {
-                crate::simd::gdf_add_run(
+                crate::filter::gdf_add_run(
                     &mut p[y * stride + x0..],
                     &err[y * err_stride + x0..],
                     scale,
@@ -604,10 +604,10 @@ pub fn ns_wiener_single_y_8bpc(
         }
 
         let refs: [&[u8]; 9] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u8]);
-        let taps: [crate::simd::WienerTap; 16] = core::array::from_fn(|i| {
+        let taps: [crate::filter::WienerTap; 16] = core::array::from_fn(|i| {
             let dy = WIENER_NS_CONFIG_Y[i][0] as i32;
             let dx = WIENER_NS_CONFIG_Y[i][1] as i32;
-            crate::simd::WienerTap {
+            crate::filter::WienerTap {
                 row_p: refs[(4 + dy) as usize],
                 row_m: refs[(4 - dy) as usize],
                 dx,
@@ -630,7 +630,13 @@ pub fn ns_wiener_single_y_8bpc(
             }
             let x0 = bx_start << 2;
             let n = (bx - bx_start) << 2;
-            (crate::simd::ns_wiener_fir_run())(&mut dst_row[x0..x0 + n], refs[4], o + x0, &taps, n);
+            (crate::filter::ns_wiener_fir_run())(
+                &mut dst_row[x0..x0 + n],
+                refs[4],
+                o + x0,
+                &taps,
+                n,
+            );
         }
 
         for r in 0..8 {
@@ -885,17 +891,17 @@ fn wiener_multi_8bpc(
 
                 if let Some(fu) = filters_user {
                     let filter = &fu[cls as usize];
-                    let taps: [crate::simd::WienerTap; 16] = core::array::from_fn(|i| {
+                    let taps: [crate::filter::WienerTap; 16] = core::array::from_fn(|i| {
                         let dy = WIENER_NS_CONFIG_Y[i][0] as i32;
                         let dx = WIENER_NS_CONFIG_Y[i][1] as i32;
-                        crate::simd::WienerTap {
+                        crate::filter::WienerTap {
                             row_p: refs[(4 + dy) as usize],
                             row_m: refs[(4 - dy) as usize],
                             dx,
                             coef: filter[i] as i32,
                         }
                     });
-                    (crate::simd::ns_wiener_fir_run())(
+                    (crate::filter::ns_wiener_fir_run())(
                         &mut dst_row[x0..x0 + n],
                         refs[4],
                         col0,
@@ -904,17 +910,17 @@ fn wiener_multi_8bpc(
                     );
                 } else if let Some(fp) = filters_pretrained {
                     let filter = &fp[cls as usize];
-                    let taps: [crate::simd::WienerTap; 12] = core::array::from_fn(|i| {
+                    let taps: [crate::filter::WienerTap; 12] = core::array::from_fn(|i| {
                         let dy = PC_WIENER_CONFIG[i][0] as i32;
                         let dx = PC_WIENER_CONFIG[i][1] as i32;
-                        crate::simd::WienerTap {
+                        crate::filter::WienerTap {
                             row_p: refs[(4 + dy) as usize],
                             row_m: refs[(4 - dy) as usize],
                             dx,
                             coef: filter[i] as i32,
                         }
                     });
-                    (crate::simd::pc_wiener_fir_run())(
+                    (crate::filter::pc_wiener_fir_run())(
                         &mut dst_row[x0..x0 + n],
                         refs[4],
                         filter[12] as i32,
