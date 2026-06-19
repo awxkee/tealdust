@@ -29,13 +29,6 @@
 
 use std::arch::aarch64::*;
 
-// ---------------------------------------------------------------------------
-// Fixed-array SIMD load/store helpers (NEON mirror of the SSE filter helpers).
-// Each takes/returns a `&[T; N]` so the bounds are proven at the call site via
-// `as_chunks` + `try_into`; the bodies wrap the (pointer-dereferencing) NEON
-// intrinsics in `unsafe` and fold into the `#[target_feature]` kernels below.
-// ---------------------------------------------------------------------------
-
 #[inline(always)]
 fn load_i16x4_i32(a: &[i16; 4]) -> int32x4_t {
     unsafe { vmovl_s16(vld1_s16(a.as_ptr())) }
@@ -101,10 +94,6 @@ fn store_i16x8x2_u8(a: &mut [u8; 16], lo: int16x8_t, hi: int16x8_t) {
     };
 }
 
-// ---------------------------------------------------------------------------
-
-/// 8-bit residual add: `dst[i] = clip(dst[i] + ((c[i] + rnd) >> shift), 0, 255)`.
-/// i32 lanes, 2x-unrolled to 8 px/iter (two i32x4), then a 4-px tail and scalar.
 #[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn residual_add_row_8bpc_neon(
@@ -192,8 +181,6 @@ pub(crate) fn row_clip_neon(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min
     }
 }
 
-/// cctx rotate+clip over two i32 planes. `vcltq_s32(a, 0)` is the `-1` mask
-/// where `a < 0`, so `a + 128 + mask == a + 128 - (a < 0)`.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]

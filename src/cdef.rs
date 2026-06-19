@@ -301,6 +301,44 @@ pub(crate) fn cdef_filter_block<BD: BitDepth>(
     );
 
     let bitdepth_min_8 = bd.bitdepth_min_8();
+
+    if BD::BPC == 8 {
+        if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+            let pri_tap = if pri_strength != 0 {
+                4 - ((pri_strength >> bitdepth_min_8) & 1)
+            } else {
+                0
+            };
+            let pri_shift = if pri_strength != 0 {
+                imax(0, damping - ulog2(pri_strength as u32))
+            } else {
+                0
+            };
+            let sec_shift = if sec_strength != 0 {
+                damping - ulog2(sec_strength as u32)
+            } else {
+                0
+            };
+            crate::cdef_dispatch::cdef_filter_block_8bpc(
+                d8,
+                dst_stride,
+                dst_off,
+                &tmp_buf,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+                w,
+                h,
+            );
+            return;
+        }
+    }
+
     let mut dp = dst_off;
     let mut tp = o;
 

@@ -32,7 +32,6 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-/// Gather the 4 line values at `base + i*stride_line` (i = 0..4) into i32 lanes.
 #[inline(always)]
 fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
     let arr: [u8; 4] = if stride_line == 1 {
@@ -65,8 +64,6 @@ fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: __m128i) {
     }
 }
 
-/// 8-bit deblock apply (SSE4.1). Bit-exact mirror of `deblock_apply_8bpc_scalar`
-/// with the 4 lines in the 4 lanes.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "sse4.1")]

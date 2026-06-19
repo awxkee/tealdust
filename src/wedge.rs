@@ -593,8 +593,6 @@ fn build_nondc_ii_masks(mask_v: &mut [u8], w: usize, h: usize, step: usize) {
     }
 }
 
-// -- Block size helpers for the fill macro equivalent --
-
 /// Returns the `BlockSize` discriminant as `usize` for a given variant.
 const fn bs(b: BlockSize) -> usize {
     b as i8 as u8 as usize

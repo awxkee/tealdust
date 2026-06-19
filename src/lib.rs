@@ -101,6 +101,7 @@ pub(crate) mod warpmv;
 pub(crate) mod wedge;
 
 mod avif;
+mod cdef_dispatch;
 mod cfl_dispatch;
 mod data;
 mod deblock_dispatch;

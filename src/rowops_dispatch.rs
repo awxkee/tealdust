@@ -244,10 +244,6 @@ pub(crate) fn avg_row_8bpc(dst: &mut [u8], t1: &[i16], t2: &[i16], n: usize, rnd
     unsafe { resolve_avg()(dst, t1, t2, n, rnd, sh) };
 }
 
-// ---------------------------------------------------------------------------
-// w_avg_row (8bpc)
-// ---------------------------------------------------------------------------
-
 pub(crate) type WAvgFn = unsafe fn(&mut [u8], &[i16], &[i16], usize, i32, i32, i32);
 
 #[allow(clippy::too_many_arguments)]
@@ -302,10 +298,6 @@ pub(crate) fn w_avg_row_8bpc(
     // SAFETY: see `avg_row_8bpc`.
     unsafe { resolve_w_avg()(dst, t1, t2, n, weight, rnd, sh) };
 }
-
-// ---------------------------------------------------------------------------
-// mask_row (8bpc)
-// ---------------------------------------------------------------------------
 
 pub(crate) type MaskFn = unsafe fn(&mut [u8], &[i16], &[i16], &[u8], usize, i32, i32);
 

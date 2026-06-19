@@ -26,6 +26,7 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+mod cdef;
 mod cfl;
 mod deblocking;
 mod filter;
@@ -45,6 +46,7 @@ pub(crate) use itx::{
     idct_dequant_32x32_sse41, idct_dequant_64x64_sse41,
 };
 
+pub(crate) use cdef::cdef_filter_block_8bpc_sse41;
 pub(crate) use cfl::cfl_apply_420_8bpc_sse41;
 pub(crate) use deblocking::deblock_apply_8bpc_sse41;
 pub(crate) use filter::{

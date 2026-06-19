@@ -32,14 +32,6 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-// ---------------------------------------------------------------------------
-// Fixed-array SIMD load/store helpers. Each takes/returns a `&[T; N]` so the
-// bounds are proven at the call site (via `as_chunks` + `try_into`) and the
-// body needs no raw-pointer arithmetic. `#[inline(always)]` folds them into the
-// `#[target_feature]` kernels below, where the SSE4.1 widening/pack intrinsics
-// are valid.
-// ---------------------------------------------------------------------------
-
 #[inline(always)]
 fn load_i16x4_i32(a: &[i16; 4]) -> __m128i {
     unsafe { _mm_cvtepi16_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
@@ -97,8 +89,6 @@ fn store_i16x8_u8(a: &mut [u8; 8], v: __m128i) {
 fn store_i16x8x2_u8(a: &mut [u8; 16], lo: __m128i, hi: __m128i) {
     unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, _mm_packus_epi16(lo, hi)) };
 }
-
-// ---------------------------------------------------------------------------
 
 /// 8-bit residual add: `dst[i] = clip(dst[i] + ((c[i] + rnd) >> shift), 0, 255)`.
 /// i32 lanes, 2x-unrolled to 8 px/iter (two i32x4), then a 4-px tail and scalar.

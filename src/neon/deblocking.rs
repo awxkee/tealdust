@@ -29,7 +29,6 @@
 
 use std::arch::aarch64::*;
 
-/// Gather the 4 line values at `base + i*stride_line` (i = 0..4) into i32 lanes.
 #[inline(always)]
 fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> int32x4_t {
     let arr: [u8; 4] = if stride_line == 1 {
@@ -46,7 +45,6 @@ fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> int32x4_t {
     unsafe { vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(dup)))) }
 }
 
-/// Scatter a pre-clipped (`0..=255`) i32x4 back to the 4 line positions.
 #[inline(always)]
 fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: int32x4_t) {
     if stride_line == 1 {
@@ -64,8 +62,6 @@ fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: int32x4_t)
     }
 }
 
-/// 8-bit deblock apply (NEON). Bit-exact mirror of `deblock_apply_8bpc_scalar`
-/// with the 4 lines in the 4 lanes.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]

@@ -39,8 +39,8 @@ pub(crate) fn pal_idx_finish(dst: &mut [u8], src: &[u8], bw: usize, bh: usize, w
     for y in 0..h {
         let src_row = &src[y * bw..];
         let dst_row = &mut dst[y * dst_bw..];
-        for x in 0..dst_w {
-            dst_row[x] = src_row[x * 2] | (src_row[x * 2 + 1] << 4);
+        for (x, dst) in dst_row[..dst_w].iter_mut().enumerate() {
+            *dst = src_row[x * 2] | (src_row[x * 2 + 1] << 4);
         }
         if dst_w < dst_bw {
             let fill = src_row[w - 1] * 0x11;
