@@ -9598,7 +9598,7 @@ fn inter_residual_tx_8bpc<BD: crate::pixel::BitDepth>(
         txtp,
         eob,
         tx,
-        &mut *recon.scratch.itx_tmp,
+        &mut recon.scratch.itx_tmp,
     );
     Ok(())
 }
@@ -9848,7 +9848,7 @@ fn inter_chroma_residual_8bpc<BD: BitDepth>(
                     txtp,
                     tu_eob[i][pl],
                     uvtx,
-                    &mut *recon.scratch.itx_tmp,
+                    &mut recon.scratch.itx_tmp,
                 );
             }
             x += txw;
@@ -14607,7 +14607,7 @@ fn recon_b_intra_chroma_phase<BD: BitDepth>(
                         txtp,
                         tu_eob[i][pl] as i32,
                         uvtx,
-                        &mut *recon.scratch.itx_tmp,
+                        &mut recon.scratch.itx_tmp,
                     );
                 }
             }
@@ -15269,7 +15269,7 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
             txtp,
             eob,
             tx,
-            &mut *recon.scratch.itx_tmp,
+            &mut recon.scratch.itx_tmp,
         );
     }
 
@@ -15303,7 +15303,7 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
 
 /// Dispatch the resolved intra predictor `m` into `dst` (mirrors the C
 #[allow(clippy::too_many_arguments)]
-fn dispatch_ipred<BD: crate::pixel::BitDepth>(
+fn dispatch_ipred<BD: BitDepth>(
     bd: BD,
     m: u8,
     dst: &mut [BD::Pixel],

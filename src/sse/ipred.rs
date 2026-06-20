@@ -931,7 +931,7 @@ fn z1_luma_row_sse41(
     let (c16, r16) = body.as_chunks_mut::<16>();
     for (ci, d) in c16.iter_mut().enumerate() {
         let bi = base_const + ci * 16;
-        let va = _mm_loadu_si128(filt[bi - 1..].as_ptr() as *const __m128i);
+        let va = unsafe { _mm_loadu_si128(filt[bi - 1..].as_ptr() as *const __m128i) };
         let (alo, ahi) = dr_filter8(
             av,
             bv,
@@ -946,7 +946,7 @@ fn z1_luma_row_sse41(
             widen8_at::<3, 7>(va),
         );
         // group B taps bi+7..bi+10 → byte-offsets 5..8 of a load at bi+2.
-        let vb = _mm_loadu_si128(filt[bi + 2..].as_ptr() as *const __m128i);
+        let vb = unsafe { _mm_loadu_si128(filt[bi + 2..].as_ptr() as *const __m128i) };
         let (blo, bhi) = dr_filter8(
             av,
             bv,
@@ -1174,7 +1174,7 @@ fn z3_luma_col_sse41(
         let bij = lob - (ci * 16) as i32;
         // ra[i] = filt[bij+1 - i]; windows sa..sd = byte-offsets 0..3.
         let ra = _mm_shuffle_epi8(
-            _mm_loadu_si128(filt[(bij - 14) as usize..].as_ptr() as *const __m128i),
+            unsafe { _mm_loadu_si128(filt[(bij - 14) as usize..].as_ptr() as *const __m128i) },
             rev16,
         );
         let (alo, ahi) = dr_filter8(
@@ -1192,7 +1192,7 @@ fn z3_luma_col_sse41(
         );
         // rb[i] = filt[bij-2 - i]; group B windows = byte-offsets 5..8.
         let rb = _mm_shuffle_epi8(
-            _mm_loadu_si128(filt[(bij - 17) as usize..].as_ptr() as *const __m128i),
+            unsafe { _mm_loadu_si128(filt[(bij - 17) as usize..].as_ptr() as *const __m128i) },
             rev16,
         );
         let (blo, bhi) = dr_filter8(
