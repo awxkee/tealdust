@@ -49,7 +49,7 @@ pub enum DecodeFrameType {
 /// Decoder configuration. Use `Settings::default()` for sensible defaults.
 #[derive(Debug, Clone)]
 pub struct Settings {
-    /// Number of worker threads. Currently doesn't work
+    /// Number of worker threads (tile-row parallel decode). 0 = single-threaded.
     pub n_threads: u32,
     /// Maximum frame delay for pipelining. 0 = auto based on thread count.
     pub max_frame_delay: u32,
@@ -200,6 +200,9 @@ impl Decoder {
             run_decode: s.run_decode,
             frame_out: Vec::new(),
             n_tc,
+            pool: None,
+            pic_allocator: std::sync::Arc::new(crate::picture::PoolPicAllocator::new()),
+            fc: crate::internal::FrameContext::default(),
         };
 
         Ok(Self {
@@ -336,7 +339,12 @@ impl Decoder {
         // The grain synthesis + base copy are parallelised across `n_tc` threads
         // (`n_tc == 1` keeps the byte-identical sequential path).
         if self.ctx.apply_grain && crate::decode::picture_has_grain(&pic) {
-            let grained = crate::decode::apply_grain_to_picture_mt(&pic, self.n_tc);
+            let grained = crate::decode::apply_grain_to_picture_mt(
+                &pic,
+                self.n_tc,
+                self.ctx.pool.as_ref(),
+                self.ctx.pic_allocator.clone(),
+            );
             pic.unref();
             return Ok(grained);
         }
@@ -391,7 +399,12 @@ impl Decoder {
             };
             // Append a fresh, independently-owned copy of the stored picture.
             let pic = self.ctx.refs[slot].p.pic.as_ref().unwrap().clone();
-            self.dpb[self.dpb_in].pic.p = crate::decode::clone_picture_mt(&pic, self.n_tc);
+            self.dpb[self.dpb_in].pic.p = crate::decode::clone_picture_mt(
+                &pic,
+                self.n_tc,
+                self.ctx.pool.as_ref(),
+                self.ctx.pic_allocator.clone(),
+            );
             self.dpb_in += 1;
             if self.dpb_in == self.dpb_sz {
                 self.dpb_in = 0;

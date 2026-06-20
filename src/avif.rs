@@ -96,6 +96,10 @@ const MAX_AUXC_URN_LEN: usize = 512;
 /// Prevents O(n) work when a crafted file claims millions of alpha references.
 const MAX_IREF_REFS: u16 = 256;
 
+// ────────────────────────────────────────────────────────────────────────────
+// Public error type
+// ────────────────────────────────────────────────────────────────────────────
+
 /// Errors that can occur when parsing or decoding an AVIF file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AvifError {
@@ -1967,14 +1971,8 @@ impl<'a> AvifDecoder<'a> {
             return Err(AvifError::MissingBox("mdat"));
         }
 
-        // ── Decode primary item ───────────────────────────────────────────────
         let picture = Self::run_decoder(primary_obu)?;
 
-        // ── Copy color planes ────────────────────────────────────────────────
-        // Use the decoded picture as the source of truth for storage geometry.
-        // The container av2C/pixi metadata is only metadata; if it disagrees
-        // with the bitstream, copying using the container bpc would either
-        // truncate 10/12-bit output to 8-bit-sized rows or over-read 8-bit rows.
         let layout = picture.p.layout;
         let bpc = u8::try_from(picture.p.bpc).map_err(|_| AvifError::InvalidCodecConfig)?;
         let bps: usize = picture.bytes_per_sample();
@@ -2185,7 +2183,12 @@ impl<'a> AvifDecoder<'a> {
     /// Open an AV2 decoder, feed it `obu_data`, drain one [`Picture`].
     fn run_decoder(obu_data: Vec<u8>) -> Result<Picture> {
         let mut settings = Settings::default();
-        settings.n_threads = 1;
+        // Honor the host's parallelism for the tile-row-parallel frame decode;
+        // callers wanting determinism or a fixed budget can cap this. Falls back
+        // to single-threaded if the platform can't report a thread count.
+        settings.n_threads = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1);
         settings.run_decode = true;
 
         let mut decoder = Decoder::open(&settings).map_err(AvifError::DecodeError)?;

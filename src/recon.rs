@@ -738,7 +738,7 @@ pub(crate) fn decode_coefs(
         4 => {
             let mut e = msac.decode_symbol_adapt(coef.eob_bin_256(eob_ctx), 7) as i32;
             if e == 7 {
-                e += msac.decode_bools_bypass(1) as i32;
+                e += msac.decode_bool_bypass() as i32;
             }
             e
         }

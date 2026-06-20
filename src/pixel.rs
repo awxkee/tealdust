@@ -58,6 +58,7 @@ pub trait Pixel: Copy + Default + Send + Sync + Into<i32> + 'static {
     fn slice_from_plane_storage_mut(
         storage: &mut crate::picture::PlaneStorage,
     ) -> Option<&mut [Self]>;
+
     fn try_as_u8_slice(samples: &[Self]) -> Option<&[u8]>;
 
     /// Mutable counterpart of [`Pixel::try_as_u8_slice`].

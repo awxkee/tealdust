@@ -154,7 +154,7 @@ impl Default for FrameThread {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct LoopFilterState {
     pub(crate) mask: Vec<Av2Filter>,
     pub(crate) lr_mask: Vec<Av2Restoration>,
@@ -328,6 +328,26 @@ pub(crate) struct DecoderContext {
     /// parallelise the disjoint-output display passes (output-frame copy / film
     /// grain). `1` keeps every such pass on the byte-identical sequential path.
     pub(crate) n_tc: u32,
+
+    /// Persistent worker pool, owned by this decoder and created lazily on the
+    /// first multi-threaded frame (sized to `n_tc`). Tying it to the decoder —
+    /// rather than a process-wide static — honours each decoder's own
+    /// `n_threads` and frees the workers when the decoder is dropped, instead of
+    /// leaking them for the lifetime of the process.
+    pub(crate) pool: Option<crate::mtpool::ThreadPool>,
+
+    /// Recycles picture plane buffers across frames so steady-state decoding of a
+    /// constant-resolution stream performs no per-frame picture heap traffic.
+    /// Shared (cloned `Arc`) into every picture this decoder allocates.
+    pub(crate) pic_allocator: std::sync::Arc<dyn crate::picture::PicAllocator>,
+
+    /// Per-frame working state, retained across frames so its scratch buffers
+    /// (block context, tile states, loop-filter masks, segment maps) keep their
+    /// allocations and `decode_frame_init`'s size-based `resize` becomes a no-op
+    /// for a constant-resolution stream — instead of rebuilding and tearing down
+    /// the whole context every frame. Taken out by `submit_frame` for the decode
+    /// and restored afterward.
+    pub(crate) fc: FrameContext,
 }
 
 #[derive(Default)]

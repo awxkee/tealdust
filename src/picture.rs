@@ -76,6 +76,28 @@ impl PlaneStorage {
         }
     }
 
+    /// True if this buffer is exactly `byte_len` bytes in the element width a
+    /// `with_len_for_bpc(byte_len, hbd)` allocation would use — i.e. it can be
+    /// recycled for such a request without re-sizing.
+    #[inline]
+    fn byte_capacity_matches(&self, byte_len: usize, hbd: bool) -> bool {
+        match (self, hbd) {
+            (PlaneStorage::U16(v), true) => v.len() * core::mem::size_of::<u16>() == byte_len,
+            (PlaneStorage::U8(v), false) => v.len() == byte_len,
+            _ => false,
+        }
+    }
+
+    /// Zero every sample, so a recycled buffer matches a fresh `vec![0; n]`.
+    #[inline]
+    fn zero_fill(&mut self) {
+        match self {
+            PlaneStorage::Empty => {}
+            PlaneStorage::U8(v) => v.fill(0),
+            PlaneStorage::U16(v) => v.fill(0),
+        }
+    }
+
     #[inline]
     pub fn bytes(&self) -> &[u8] {
         match self {
@@ -138,68 +160,130 @@ pub struct PictureAllocation {
     pub stride: [isize; 2],
 }
 
-pub struct DefaultPicAllocator;
+/// The byte layout of a picture: the two strides (luma, chroma) and the total
+/// byte length of the luma and chroma planes. Shared by every allocator so they
+/// produce bit-identical geometry.
+struct PlaneByteLayout {
+    stride: [isize; 2],
+    y_sz: usize,
+    uv_sz: usize,
+    hbd: bool,
+    has_chroma: bool,
+}
 
-impl Default for DefaultPicAllocator {
+fn plane_byte_layout(p: &PictureParameters) -> PlaneByteLayout {
+    let hbd = p.bpc > 8;
+    let aligned_w = (p.w as usize + 127) & !127;
+    let aligned_h = (p.h as usize + 127) & !127;
+    let has_chroma = p.layout != PixelLayout::I400;
+    let ss_ver = p.layout == PixelLayout::I420;
+    let ss_hor = p.layout != PixelLayout::I444;
+
+    let mut y_stride = (aligned_w << (hbd as usize)) as isize;
+    let mut uv_stride = if has_chroma {
+        y_stride >> (ss_hor as usize)
+    } else {
+        0
+    };
+
+    if y_stride & 1023 == 0 {
+        y_stride += PICTURE_ALIGNMENT as isize;
+    }
+    if uv_stride & 1023 == 0 && has_chroma {
+        uv_stride += PICTURE_ALIGNMENT as isize;
+    }
+
+    let y_sz = y_stride as usize * aligned_h;
+    let uv_sz = uv_stride as usize * (aligned_h >> (ss_ver as usize));
+
+    PlaneByteLayout {
+        stride: [y_stride, uv_stride],
+        y_sz,
+        uv_sz,
+        hbd,
+        has_chroma,
+    }
+}
+
+/// A `PicAllocator` that recycles plane buffers across frames instead of freeing
+/// and re-allocating them. For a constant-resolution stream (every AVIF frame,
+/// and almost every video) the freed planes from one frame exactly fit the next,
+/// so steady-state decoding performs no picture heap traffic at all — removing
+/// both the multi-megabyte `alloc_zeroed` and the matching free/`drop` per frame.
+///
+/// A recycled buffer is zeroed before it is handed back out, so it is
+/// indistinguishable from a fresh `vec![0; n]`: the decoder observes identical
+/// bytes whether a plane is pooled or freshly allocated, which is what keeps the
+/// output bit-exact regardless of pool state.
+pub struct PoolPicAllocator {
+    /// Freed plane buffers awaiting reuse. Behind a `Mutex` because pictures may
+    /// be released from worker threads (e.g. the parallel display copy).
+    free: std::sync::Mutex<Vec<PlaneStorage>>,
+    /// Cap on retained buffers, a safety valve against pathological growth; the
+    /// live set is naturally bounded by the DPB + reference slots.
+    cap: usize,
+}
+
+impl Default for PoolPicAllocator {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl DefaultPicAllocator {
+impl PoolPicAllocator {
     pub fn new() -> Self {
-        Self
+        Self {
+            free: std::sync::Mutex::new(Vec::new()),
+            cap: 64,
+        }
+    }
+
+    /// A pooled buffer of exactly `byte_len` bytes (and matching element width),
+    /// zeroed for reuse; or a fresh zeroed allocation when the pool can't match.
+    fn take_or_make(&self, byte_len: usize, hbd: bool) -> PlaneStorage {
+        if byte_len == 0 {
+            return PlaneStorage::Empty;
+        }
+        if let Ok(mut free) = self.free.lock() {
+            if let Some(idx) = free
+                .iter()
+                .position(|s| s.byte_capacity_matches(byte_len, hbd))
+            {
+                let mut s = free.swap_remove(idx);
+                s.zero_fill();
+                return s;
+            }
+        }
+        PlaneStorage::with_len_for_bpc(byte_len, hbd)
     }
 }
 
-impl PicAllocator for DefaultPicAllocator {
+impl PicAllocator for PoolPicAllocator {
     fn alloc_picture(&self, p: &PictureParameters) -> Option<PictureAllocation> {
-        let hbd = p.bpc > 8;
-        let aligned_w = (p.w as usize + 127) & !127;
-        let aligned_h = (p.h as usize + 127) & !127;
-        let has_chroma = p.layout != PixelLayout::I400;
-        let ss_ver = p.layout == PixelLayout::I420;
-        let ss_hor = p.layout != PixelLayout::I444;
-
-        let mut y_stride = (aligned_w << (hbd as usize)) as isize;
-        let mut uv_stride = if has_chroma {
-            y_stride >> (ss_hor as usize)
+        let l = plane_byte_layout(p);
+        let y = self.take_or_make(l.y_sz, l.hbd);
+        let (u, v) = if l.has_chroma {
+            (
+                self.take_or_make(l.uv_sz, l.hbd),
+                self.take_or_make(l.uv_sz, l.hbd),
+            )
         } else {
-            0
+            (PlaneStorage::Empty, PlaneStorage::Empty)
         };
-
-        if y_stride & 1023 == 0 {
-            y_stride += PICTURE_ALIGNMENT as isize;
-        }
-        if uv_stride & 1023 == 0 && has_chroma {
-            uv_stride += PICTURE_ALIGNMENT as isize;
-        }
-
-        let y_sz = y_stride as usize * aligned_h;
-        let uv_sz = uv_stride as usize * (aligned_h >> (ss_ver as usize));
-
-        let y = PlaneStorage::with_len_for_bpc(y_sz, hbd);
-        let u = if has_chroma {
-            PlaneStorage::with_len_for_bpc(uv_sz, hbd)
-        } else {
-            PlaneStorage::Empty
-        };
-        let v = if has_chroma {
-            PlaneStorage::with_len_for_bpc(uv_sz, hbd)
-        } else {
-            PlaneStorage::Empty
-        };
-
         Some(PictureAllocation {
             data: [y, u, v],
-            stride: [y_stride, uv_stride],
+            stride: l.stride,
         })
     }
 
-    fn release_picture(&self, _alloc: PictureAllocation) {
-        // Dropping the owned PlaneStorage Vecs releases the picture. A reusable
-        // allocator can still implement this trait later by keeping typed Vecs
-        // in a pool, without exposing raw addresses in Picture.
+    fn release_picture(&self, alloc: PictureAllocation) {
+        if let Ok(mut free) = self.free.lock() {
+            for s in alloc.data {
+                if s.is_some() && free.len() < self.cap {
+                    free.push(s);
+                }
+            }
+        }
     }
 }
 
@@ -562,5 +646,46 @@ impl From<u32> for EventFlags {
             (false, true) => EventFlags::NewOpParamsInfo,
             (true, true) => EventFlags::Both,
         }
+    }
+}
+
+#[cfg(test)]
+mod pool_tests {
+    use super::*;
+
+    fn params() -> PictureParameters {
+        PictureParameters {
+            w: 1620,
+            h: 1080,
+            layout: PixelLayout::I420,
+            bpc: 8,
+        }
+    }
+
+    // A released picture's planes are recycled by the next allocation of the
+    // same geometry: the pool ends empty and the reused buffer is zeroed.
+    #[test]
+    fn pool_recycles_and_zeroes() {
+        let pool = PoolPicAllocator::new();
+        let p = params();
+
+        let a = pool.alloc_picture(&p).unwrap();
+        // Capture the luma buffer's identity (capacity + pointer) to prove reuse.
+        let y_len = a.data[0].len_bytes();
+        assert!(y_len > 0);
+
+        // Dirty the luma plane, then release it to the pool.
+        let mut a = a;
+        a.data[0].bytes_mut()[0] = 0xAB;
+        let dirtied_ptr = a.data[0].bytes().as_ptr();
+        pool.release_picture(a);
+
+        // Next allocation of identical geometry must reuse a freed buffer...
+        let b = pool.alloc_picture(&p).unwrap();
+        let reused = b.data.iter().any(|s| s.bytes().as_ptr() == dirtied_ptr);
+        assert!(reused, "expected a pooled buffer to be reused");
+        // ...and it must be zeroed, indistinguishable from a fresh allocation.
+        assert!(b.data[0].bytes().iter().all(|&x| x == 0));
+        assert_eq!(b.data[0].len_bytes(), y_len);
     }
 }

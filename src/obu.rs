@@ -2777,8 +2777,12 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
             }
             // referenced stored picture. With output_invisible_frames this is a
             // owned clone of the referenced reconstruction onto the output queue.
-            c.frame_out
-                .push(crate::decode::clone_picture_mt(&ref_pic, c.n_tc));
+            c.frame_out.push(crate::decode::clone_picture_mt(
+                &ref_pic,
+                c.n_tc,
+                c.pool.as_ref(),
+                c.pic_allocator.clone(),
+            ));
             // slot into every other ref slot and clears its showable flag.
             if c.refs[idx]
                 .p
@@ -2814,7 +2818,8 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                 if c.run_decode {
                     // Best-effort during bring-up: a frame that cannot be decoded
                     // yet (e.g. inter frames) must not abort header parsing.
-                    let _ = crate::decode::submit_frame(c, 1);
+                    let n_tc = c.n_tc as i32;
+                    let _ = crate::decode::submit_frame(c, n_tc);
                 }
                 c.frame_hdr = None;
                 c.n_tiles = 0;

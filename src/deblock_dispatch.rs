@@ -96,7 +96,6 @@ fn resolve_deblock_apply() -> DeblockApplyFn {
     })
 }
 
-/// Dispatched 8-bit deblock apply. See `DeblockApplyFn` for the argument layout.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 pub(crate) fn deblock_apply_8bpc(

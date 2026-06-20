@@ -2123,7 +2123,26 @@ pub struct ReconFrameCtx<'a> {
     pub ibp_weights: [[[u8; 16]; 16]; 7],
 }
 
-/// Per-superblock reconstruction scratch (mirrors the relevant parts of
+/// When `true`, the multi-threaded decode/filter runs on the persistent
+/// [`crate::mtpool`] worker pool (spawned once per process) instead of spawning
+/// fresh `std::thread::scope` threads every frame. Both paths are byte-identical
+/// in output (validated against the golden hash); the pool path removes the
+/// per-frame `pthread_create` cost. Flip to `false` to A/B the scope path.
+pub(crate) const DECODE_POOL: bool = true;
+
+std::thread_local! {
+    /// Per-thread reusable coefficient scratch (one max 64x64 transform block).
+    ///
+    /// The inverse transform zeroes each block's coefficient region after
+    /// consuming it (see `itx`), so this buffer is left entirely zero between
+    /// blocks and between frames. Reusing it therefore needs no
+    /// re-initialization — which removes the per-frame zeroed heap allocation
+    /// (`vec![0i32; 64*64]`) that each decode worker used to make. It lives in
+    /// TLS as a plain array, so there is no heap allocation at all and no
+    /// `MaybeUninit`: it is value-initialized to zero once per thread.
+    static CF_SCRATCH: core::cell::RefCell<[i32; 64 * 64]> =
+        const { core::cell::RefCell::new([0; 64 * 64]) };
+}
 /// `Dav2dTaskContext` used by the luma recon leaf). `is_coded[0]` tracks the
 /// 64x64 grid of decoded luma tx blocks for top-right / bottom-left availability.
 pub struct ReconScratch {
@@ -2665,7 +2684,62 @@ pub fn decode_tile_sbrow_entropy<BD: crate::pixel::BitDepth>(
 /// Tiles are decoded sequentially (entropy/recon are tile-independent); the
 /// per-superblock-row post-filter interleaving that the C version performs is
 /// handled separately by the filter pass (M2).
-pub fn decode_frame_main(fc: &mut crate::internal::FrameContext, n_passes: i32) -> Result<(), ()> {
+/// Minimal shared-mutable view used only by the parallel tile-row decode below.
+///
+/// `decode_frame_main` reconstructs each AV2 tile row into a disjoint picture
+/// band and disjoint context-array regions. The picture is touched at 180+
+/// absolute-offset sites across `ipred`/`recon`, so rather than rebase every one
+/// to a band-relative slice we hand each scoped worker a `&mut` view of the
+/// whole buffer and rely on the tile-row partition for disjointness.
+///
+/// SAFETY INVARIANT: at any instant the regions that concurrently-running
+/// workers actually read or write through `whole()` must be mutually disjoint.
+/// This holds because (a) AV2 prediction never crosses a tile boundary, so a
+/// tile row's reconstruction only touches its own pixel band and its own
+/// per-tile-row context slices, and (b) this was checked empirically — the
+/// decode is bit-identical whether the tile rows run front-to-back or
+/// back-to-front, which can only be true if no tile row reads or writes another
+/// tile row's PHASE-A regions. The single-threaded path (`n_tc <= 1`) never
+/// constructs this type and stays byte-identical to the pre-threading decoder.
+struct DisjointMut<T> {
+    ptr: *mut T,
+    len: usize,
+}
+
+impl<T> Clone for DisjointMut<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for DisjointMut<T> {}
+
+// SAFETY: the wrapper is just a `(ptr, len)` pair; sharing it across threads is
+// sound provided the disjointness invariant documented above is upheld by the
+// caller (the tile-row partition).
+unsafe impl<T: Send> Send for DisjointMut<T> {}
+unsafe impl<T: Send> Sync for DisjointMut<T> {}
+
+impl<T> DisjointMut<T> {
+    fn new(s: &mut [T]) -> Self {
+        Self {
+            ptr: s.as_mut_ptr(),
+            len: s.len(),
+        }
+    }
+    /// SAFETY: the caller must only access indices that are disjoint from every
+    /// other concurrent caller (guaranteed here by the tile-row partition).
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn whole(&self) -> &mut [T] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+}
+
+pub fn decode_frame_main(
+    fc: &mut crate::internal::FrameContext,
+    n_passes: i32,
+    n_tc: i32,
+    pool: Option<&crate::mtpool::ThreadPool>,
+) -> Result<(), ()> {
     let crate::internal::FrameContext {
         seq_hdr,
         frame_hdr,
@@ -2928,165 +3002,406 @@ pub fn decode_frame_main(fc: &mut crate::internal::FrameContext, n_passes: i32) 
     macro_rules! run_decode_tile_rows {
         ($bd:expr, $Pixel:ty) => {{
             let bd_local = $bd;
+            let do_parallel = rows >= 2 && (n_tc as usize) >= 2 && !need_load_tmvs;
+            let active_pool = if crate::decode::DECODE_POOL {
+                pool
+            } else {
+                None
+            };
             let (dst_y, dst_u, dst_v): (&mut [$Pixel], &mut [$Pixel], &mut [$Pixel]) = cur_pic
                 .plane_slices_rows3_mut::<$Pixel>(
                 y_h,
                 uv_h,
                 seq_hdr.layout != crate::headers::PixelLayout::I400,
             );
-            for tr in 0..rows {
-                // Collect per-tile-col MSAC state that must stay live across the sby
-                // loop (each tile-col's symbol decoder advances one sbrow at a time but
-                // we now interleave tile-cols within a sbrow).
-                let ts_base = (tr * cols) as usize;
-                let mut bufs: Vec<Vec<u8>> = Vec::with_capacity(cols as usize);
-                let mut fis: Vec<SbFrameInfo> = Vec::with_capacity(cols as usize);
-                let mut ranges: Vec<(i32, i32)> = Vec::with_capacity(cols as usize); // (rs, re)
-                for tc in 0..cols {
-                    let ts_idx = ts_base + tc as usize;
-                    let (cs, ce, rs, re) = {
-                        let t = &ts[ts_idx].tiling;
-                        (t.col_start, t.col_end, t.row_start, t.row_end)
+            if do_parallel {
+                let n_tiles = (rows as usize) * (cols as usize);
+                let n_dec_workers = (n_tc as usize).min(n_tiles);
+                let n_flt_workers = (n_tc as usize).min(rows as usize);
+                let dst_y_dm = DisjointMut::new(dst_y);
+                let dst_u_dm = DisjointMut::new(dst_u);
+                let dst_v_dm = DisjointMut::new(dst_v);
+                let a_dm = DisjointMut::new(&mut a[..]);
+                let filter_params = &filter_params;
+                let cseg_dm = DisjointMut::new(&mut cur_segmap[..]);
+                let cccso_dm = DisjointMut::new(&mut cur_ccsomap[..]);
+                let cmvs_dm = DisjointMut::new(&mut cur_mvs[..]);
+                let ts_dm = DisjointMut::new(&mut ts[..]);
+                let uv_segmap_stride = lf.uv_segmap_stride;
+                let recon_frame = &recon_frame;
+                let refp_pics = &refp_pics;
+                let svc_v = &svc_v;
+                let rf_imm: &refmvs::Frame = &*rf;
+                let prev_ccsomap_ref = prev_ccsomap_ref;
+                let refdist: &[i8; 7] = refdist;
+                let absrefdist: &[u8; 7] = absrefdist;
+                let got_err = std::sync::atomic::AtomicBool::new(false);
+                let got_err = &got_err;
+
+                // ---- PHASE A: decode, one dynamic work unit per tile. ----
+                {
+                    // `mask`/`lr_mask`/`segmap_uv` live in `lf`; during decode
+                    // they are written at disjoint tile positions, so they are
+                    // shared here via DisjointMut. These borrows of `lf` end with
+                    // this block, before the filter phase reborrows `lf`.
+                    let mask_dm = DisjointMut::new(&mut lf.mask[..]);
+                    let lrmask_dm = DisjointMut::new(&mut lf.lr_mask[..]);
+                    let seguv_dm = DisjointMut::new(&mut lf.segmap_uv[..]);
+                    let mask_dm = &mask_dm;
+                    let lrmask_dm = &lrmask_dm;
+                    let seguv_dm = &seguv_dm;
+                    let next_tile = std::sync::atomic::AtomicUsize::new(0);
+                    let next_tile = &next_tile;
+                    let decode_worker = || {
+                        CF_SCRATCH.with(|cf_cell| {
+                            let mut cf_guard = cf_cell.borrow_mut();
+                            let cf: &mut [i32] = &mut cf_guard[..];
+                            let mut l = BlockContext::default();
+                            let mut rt = refmvs::Tile {
+                                _rp_proj: Vec::new(),
+                                rp_proj_off: 0,
+                                rp_traj_off: 0,
+                                ra: vec![refmvs::Block::default(); rf_rp_stride.max(1) as usize],
+                                ra_off: 0,
+                                ra_tl: refmvs::Block::default(),
+                                r: vec![refmvs::Block::default(); 64 * 128],
+                                tile_col: refmvs::TileRange { start: 0, end: bw },
+                                tile_row: refmvs::TileRange { start: 0, end: bh },
+                                bank: refmvs::MvBank {
+                                    mv: [[[Mv::default(); 2]; 4]; 9],
+                                    cwp_idx: [[0; 4]; 3],
+                                    r#ref: [RefPair::default(); 4],
+                                    size: [0; 9],
+                                    idx: [0; 9],
+                                    hits: [0; 2],
+                                    avail: 0,
+                                },
+                                warp: refmvs::WarpBank {
+                                    mat: [[[0; 6]; 4]; 7],
+                                    warp_type: [[0; 4]; 7],
+                                    hits: 0,
+                                    size: [0; 7],
+                                    idx: [0; 7],
+                                },
+                            };
+                            let mut part_w: Vec<u8> = Vec::new();
+                            let part_r: Vec<u8> = Vec::new();
+                            loop {
+                                let i =
+                                    next_tile.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if i >= n_tiles {
+                                    break;
+                                }
+                                let tr = (i / cols as usize) as i32;
+                                let tc = (i % cols as usize) as i32;
+                                let ts_idx = (tr * cols + tc) as usize;
+                                // SAFETY: this unit only touches tile (tr,tc)'s disjoint
+                                // picture columns / context slices; see DisjointMut.
+                                let a = unsafe { a_dm.whole() };
+                                let cur_segmap = unsafe { cseg_dm.whole() };
+                                let cur_ccsomap = unsafe { cccso_dm.whole() };
+                                let cur_mvs = unsafe { cmvs_dm.whole() };
+                                let ts = unsafe { ts_dm.whole() };
+                                let dst_y = unsafe { dst_y_dm.whole() };
+                                let dst_u = unsafe { dst_u_dm.whole() };
+                                let dst_v = unsafe { dst_v_dm.whole() };
+                                let mask = unsafe { mask_dm.whole() };
+                                let lr_mask = unsafe { lrmask_dm.whole() };
+                                let segmap_uv = unsafe { seguv_dm.whole() };
+                                let (cs, ce, rs, re) = {
+                                    let t = &ts[ts_idx].tiling;
+                                    (t.col_start, t.col_end, t.row_start, t.row_end)
+                                };
+                                let fi = SbFrameInfo::from_frame(
+                                    seq_hdr,
+                                    frame_hdr,
+                                    bw,
+                                    bh,
+                                    root_bs,
+                                    sb_step,
+                                    n_passes,
+                                    refdir,
+                                    refdist,
+                                    absrefdist,
+                                    skip_mode_refs,
+                                    cs,
+                                    ce,
+                                    rs,
+                                    re,
+                                    ffr_idx,
+                                    tip_ref,
+                                );
+                                let buf = std::mem::take(&mut ts[ts_idx].msac_buf);
+                                let mut msac = MsacContext::new(&buf, disable_cdf);
+                                part_w.clear();
+                                let mut by = rs;
+                                while by < re {
+                                    reset_context(&mut l, keyframe, is_tip);
+                                    if decode_tile_sbrow_entropy(
+                                        bd_local,
+                                        &fi,
+                                        frame_hdr,
+                                        &mut ts[ts_idx],
+                                        &mut msac,
+                                        a,
+                                        mask,
+                                        lr_mask,
+                                        &mut l,
+                                        &mut *dst_y,
+                                        &mut *dst_u,
+                                        &mut *dst_v,
+                                        &mut *cf,
+                                        recon_frame,
+                                        &mut cur_segmap[..],
+                                        prev_segmap_ref,
+                                        segmap_uv,
+                                        uv_segmap_stride,
+                                        &mut cur_ccsomap[..],
+                                        prev_ccsomap_ref,
+                                        &mut part_w,
+                                        &part_r,
+                                        by,
+                                        sb256w,
+                                        root_bs,
+                                        c_root_bs,
+                                        &mut rt,
+                                        rf_imm,
+                                        cur_mvs,
+                                        refp_pics,
+                                        svc_v,
+                                        seq_hdr,
+                                        frame_hdr,
+                                        masks,
+                                    )
+                                    .is_err()
+                                    {
+                                        got_err.store(true, std::sync::atomic::Ordering::Relaxed);
+                                        ts[ts_idx].msac_buf = buf;
+                                        cf.fill(0); // leave scratch clean for reuse after an error
+                                        return;
+                                    }
+                                    by += sb_step;
+                                }
+                                ts[ts_idx].msac_buf = buf;
+                            }
+                        });
                     };
-                    fis.push(SbFrameInfo::from_frame(
-                        seq_hdr,
-                        frame_hdr,
-                        bw,
-                        bh,
-                        root_bs,
-                        sb_step,
-                        n_passes,
-                        refdir,
-                        refdist,
-                        absrefdist,
-                        skip_mode_refs,
-                        cs,
-                        ce,
-                        rs,
-                        re,
-                        ffr_idx,
-                        tip_ref,
-                    ));
-                    ranges.push((rs, re));
-                    bufs.push(std::mem::take(&mut ts[ts_idx].msac_buf));
-                }
-                // The buffers Vec now owns the tile data; build the symbol decoders
-                // borrowing from it (read-only) so they persist across the sby loop.
-                let mut msacs: Vec<MsacContext> = bufs
-                    .iter()
-                    .map(|b| MsacContext::new(b, disable_cdf))
-                    .collect();
-                let mut part_ws: Vec<Vec<u8>> = (0..cols).map(|_| Vec::new()).collect();
-                let part_r: Vec<u8> = Vec::new();
-
-                // The tile row spans the same block-row range for every tile-col (only
-                // the column range differs), so derive the sbrow loop from tile-col 0.
-                let (row_rs, row_re) = ranges[0];
-
-                // PHASE A: decode every superblock-row across all tile-cols.
-                let mut by = row_rs;
-                while by < row_re {
-                    // Project reference temporal MVs into the rolling-window `rf.rp_proj`
-                    // Run once per sbrow over the full block-row width, before any
-                    // tile-col reads it, so the inter tmvp candidates and frame_mode=2
-                    // whole-frame TIP recon see this row's projection.
-                    if need_load_tmvs {
-                        let by_end = (by + sb_step) >> 1;
-                        refmvs::load_tmvs(
-                            rf,
-                            tr,
-                            0,
-                            bw >> 1,
-                            by >> 1,
-                            by_end,
-                            seq_hdr.mv_traj,
-                            frame_hdr.tip.frame_mode,
-                            seq_hdr.tip_hole_fill,
-                            frame_hdr.tmvp_sample_step as i32,
-                            frame_hdr.n_ref_frames as i32,
-                        );
+                    // Dispatch on the decoder's pool when present, else a per-call
+                    // scope. The calling thread participates either way.
+                    crate::mtpool::dispatch(active_pool, n_dec_workers, &decode_worker);
+                    if got_err.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err(());
                     }
-                    let rf_ref: &refmvs::Frame = &*rf;
-                    for tc in 0..cols as usize {
-                        let ts_idx = ts_base + tc;
-                        let (rs, re) = ranges[tc];
-                        if by < rs || by >= re {
-                            continue;
+                }
+
+                // ---- PHASE B: filter, one dynamic work unit per tile row. ----
+                {
+                    let lf_ref: &crate::internal::LoopFilterState = &*lf;
+                    let next_row = std::sync::atomic::AtomicUsize::new(0);
+                    let next_row = &next_row;
+                    let filter_worker = || {
+                        // Private filter line scratch + a snapshot of the now
+                        // fully-written masks (decode finished at the barrier).
+                        let mut wlf = lf_ref.clone();
+                        loop {
+                            let tr = next_row.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if tr >= rows as usize {
+                                break;
+                            }
+                            let cur_segmap = unsafe { cseg_dm.whole() };
+                            let dst_y = unsafe { dst_y_dm.whole() };
+                            let dst_u = unsafe { dst_u_dm.whole() };
+                            let dst_v = unsafe { dst_v_dm.whole() };
+                            let ts = unsafe { ts_dm.whole() };
+                            let (row_rs, row_re) = {
+                                let t = &ts[(tr as i32 * cols) as usize].tiling;
+                                (t.row_start, t.row_end)
+                            };
+                            let mut fby = row_rs;
+                            while fby < row_re {
+                                let sby = fby / sb_step;
+                                filter_sbrow(
+                                    bd_local,
+                                    seq_hdr,
+                                    frame_hdr,
+                                    &mut wlf,
+                                    &mut *dst_y,
+                                    &mut *dst_u,
+                                    &mut *dst_v,
+                                    filter_params,
+                                    cur_segmap,
+                                    b4_stride_v,
+                                    hbd_v,
+                                    fc_inloop_filters,
+                                    fc_sbh,
+                                    sb_step,
+                                    sb256w,
+                                    sb128,
+                                    bw,
+                                    bh,
+                                    sby,
+                                );
+                                fby += sb_step;
+                            }
                         }
-                        reset_context(&mut l, keyframe, is_tip);
-                        decode_tile_sbrow_entropy(
-                            bd_local,
-                            &fis[tc],
+                    };
+                    crate::mtpool::dispatch(active_pool, n_flt_workers, &filter_worker);
+                }
+            } else {
+                for tr in 0..rows {
+                    // Collect per-tile-col MSAC state that must stay live across the sby
+                    // loop (each tile-col's symbol decoder advances one sbrow at a time but
+                    // we now interleave tile-cols within a sbrow).
+                    let ts_base = (tr * cols) as usize;
+                    let mut bufs: Vec<Vec<u8>> = Vec::with_capacity(cols as usize);
+                    let mut fis: Vec<SbFrameInfo> = Vec::with_capacity(cols as usize);
+                    let mut ranges: Vec<(i32, i32)> = Vec::with_capacity(cols as usize); // (rs, re)
+                    for tc in 0..cols {
+                        let ts_idx = ts_base + tc as usize;
+                        let (cs, ce, rs, re) = {
+                            let t = &ts[ts_idx].tiling;
+                            (t.col_start, t.col_end, t.row_start, t.row_end)
+                        };
+                        fis.push(SbFrameInfo::from_frame(
+                            seq_hdr,
                             frame_hdr,
-                            &mut ts[ts_idx],
-                            &mut msacs[tc],
-                            a,
-                            &mut lf.mask,
-                            &mut lf.lr_mask,
-                            &mut l,
+                            bw,
+                            bh,
+                            root_bs,
+                            sb_step,
+                            n_passes,
+                            refdir,
+                            refdist,
+                            absrefdist,
+                            skip_mode_refs,
+                            cs,
+                            ce,
+                            rs,
+                            re,
+                            ffr_idx,
+                            tip_ref,
+                        ));
+                        ranges.push((rs, re));
+                        bufs.push(std::mem::take(&mut ts[ts_idx].msac_buf));
+                    }
+                    // The buffers Vec now owns the tile data; build the symbol decoders
+                    // borrowing from it (read-only) so they persist across the sby loop.
+                    let mut msacs: Vec<MsacContext> = bufs
+                        .iter()
+                        .map(|b| MsacContext::new(b, disable_cdf))
+                        .collect();
+                    let mut part_ws: Vec<Vec<u8>> = (0..cols).map(|_| Vec::new()).collect();
+                    let part_r: Vec<u8> = Vec::new();
+
+                    // The tile row spans the same block-row range for every tile-col (only
+                    // the column range differs), so derive the sbrow loop from tile-col 0.
+                    let (row_rs, row_re) = ranges[0];
+
+                    // PHASE A: decode every superblock-row across all tile-cols.
+                    let mut by = row_rs;
+                    while by < row_re {
+                        // Project reference temporal MVs into the rolling-window `rf.rp_proj`
+                        // Run once per sbrow over the full block-row width, before any
+                        // tile-col reads it, so the inter tmvp candidates and frame_mode=2
+                        // whole-frame TIP recon see this row's projection.
+                        if need_load_tmvs {
+                            let by_end = (by + sb_step) >> 1;
+                            refmvs::load_tmvs(
+                                rf,
+                                tr,
+                                0,
+                                bw >> 1,
+                                by >> 1,
+                                by_end,
+                                seq_hdr.mv_traj,
+                                frame_hdr.tip.frame_mode,
+                                seq_hdr.tip_hole_fill,
+                                frame_hdr.tmvp_sample_step as i32,
+                                frame_hdr.n_ref_frames as i32,
+                            );
+                        }
+                        let rf_ref: &refmvs::Frame = &*rf;
+                        for tc in 0..cols as usize {
+                            let ts_idx = ts_base + tc;
+                            let (rs, re) = ranges[tc];
+                            if by < rs || by >= re {
+                                continue;
+                            }
+                            reset_context(&mut l, keyframe, is_tip);
+                            decode_tile_sbrow_entropy(
+                                bd_local,
+                                &fis[tc],
+                                frame_hdr,
+                                &mut ts[ts_idx],
+                                &mut msacs[tc],
+                                a,
+                                &mut lf.mask,
+                                &mut lf.lr_mask,
+                                &mut l,
+                                &mut *dst_y,
+                                &mut *dst_u,
+                                &mut *dst_v,
+                                &mut cf,
+                                &recon_frame,
+                                &mut cur_segmap[..],
+                                prev_segmap_ref,
+                                &mut lf.segmap_uv,
+                                lf.uv_segmap_stride,
+                                &mut cur_ccsomap[..],
+                                prev_ccsomap_ref,
+                                &mut part_ws[tc],
+                                &part_r,
+                                by,
+                                sb256w,
+                                root_bs,
+                                c_root_bs,
+                                &mut rt,
+                                rf_ref,
+                                &mut cur_mvs,
+                                &refp_pics,
+                                &svc_v,
+                                seq_hdr,
+                                frame_hdr,
+                                masks,
+                            )?;
+                        }
+                        by += sb_step;
+                    }
+
+                    // Return the MSAC buffers to the tile states.
+                    drop(msacs);
+                    for (tc, buf) in bufs.into_iter().enumerate() {
+                        ts[ts_base + tc].msac_buf = buf;
+                    }
+
+                    // PHASE B: deferred per-superblock-row filter pass over the whole tile
+                    // row (deblock cols -> deblock rows + copy_db -> CDEF(+CCSO) -> LR).
+                    let mut by = row_rs;
+                    while by < row_re {
+                        let sby = by / sb_step;
+                        filter_sbrow(
+                            bd_local,
+                            seq_hdr,
+                            frame_hdr,
+                            lf,
                             &mut *dst_y,
                             &mut *dst_u,
                             &mut *dst_v,
-                            &mut cf,
-                            &recon_frame,
-                            &mut cur_segmap[..],
-                            prev_segmap_ref,
-                            &mut lf.segmap_uv,
-                            lf.uv_segmap_stride,
-                            &mut cur_ccsomap[..],
-                            prev_ccsomap_ref,
-                            &mut part_ws[tc],
-                            &part_r,
-                            by,
+                            &filter_params,
+                            cur_segmap,
+                            b4_stride_v,
+                            hbd_v,
+                            fc_inloop_filters,
+                            fc_sbh,
+                            sb_step,
                             sb256w,
-                            root_bs,
-                            c_root_bs,
-                            &mut rt,
-                            rf_ref,
-                            &mut cur_mvs,
-                            &refp_pics,
-                            &svc_v,
-                            seq_hdr,
-                            frame_hdr,
-                            masks,
-                        )?;
+                            sb128,
+                            bw,
+                            bh,
+                            sby,
+                        );
+                        by += sb_step;
                     }
-                    by += sb_step;
-                }
-
-                // Return the MSAC buffers to the tile states.
-                drop(msacs);
-                for (tc, buf) in bufs.into_iter().enumerate() {
-                    ts[ts_base + tc].msac_buf = buf;
-                }
-
-                // PHASE B: deferred per-superblock-row filter pass over the whole tile
-                // row (deblock cols -> deblock rows + copy_db -> CDEF(+CCSO) -> LR).
-                let mut by = row_rs;
-                while by < row_re {
-                    let sby = by / sb_step;
-                    filter_sbrow(
-                        bd_local,
-                        seq_hdr,
-                        frame_hdr,
-                        lf,
-                        &mut *dst_y,
-                        &mut *dst_u,
-                        &mut *dst_v,
-                        &filter_params,
-                        cur_segmap,
-                        b4_stride_v,
-                        hbd_v,
-                        fc_inloop_filters,
-                        fc_sbh,
-                        sb_step,
-                        sb256w,
-                        sb128,
-                        bw,
-                        bh,
-                        sby,
-                    );
-                    by += sb_step;
                 }
             }
         }};
@@ -3513,6 +3828,7 @@ pub fn decode_frame(
     n_passes: i32,
     in_cdf: Option<&crate::cdf::CdfContext>,
     qcat: usize,
+    pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
     let frame_hdr = fc.frame_hdr.clone();
     let seq_hdr = fc.seq_hdr.clone();
@@ -3557,7 +3873,7 @@ pub fn decode_frame(
         decode_tip_frame_init(&mut fc.ts, &frame_hdr, fc.sb_shift, fc.bw, fc.bh, n_tc);
     }
 
-    let r = decode_frame_main(fc, n_passes);
+    let r = decode_frame_main(fc, n_passes, n_tc, pool);
     r?;
 
     // path the update tile's adapted CDF becomes `out_cdf` with its symbol counts
@@ -3582,13 +3898,27 @@ pub fn decode_frame(
 /// and dispatch to `decode_frame`. Picture allocation, reference-frame setup and
 /// output queueing are added with reconstruction (M1) and inter support (M3);
 /// this currently exercises the entropy/parse pass end-to-end.
+/// Decodes one frame, reusing the decoder's retained [`FrameContext`].
+///
+/// The context is moved out for the duration of the decode (so it borrows
+/// independently of `c`, e.g. `c.pool`) and always moved back afterward — even on
+/// error — so its scratch allocations survive to the next frame.
 pub fn submit_frame(c: &mut crate::internal::DecoderContext, n_tc: i32) -> Result<(), ()> {
+    let mut fc = std::mem::take(&mut c.fc);
+    let r = submit_frame_inner(c, &mut fc, n_tc);
+    c.fc = fc;
+    r
+}
+
+fn submit_frame_inner(
+    c: &mut crate::internal::DecoderContext,
+    fc: &mut crate::internal::FrameContext,
+    n_tc: i32,
+) -> Result<(), ()> {
     use crate::headers::PixelLayout;
 
     let seq_hdr = c.seq_hdr.clone().ok_or(())?;
     let frame_hdr = c.frame_hdr.clone().ok_or(())?;
-
-    let mut fc = crate::internal::FrameContext::default();
 
     let sb128 = frame_hdr.sb128 as i32;
     let layout = seq_hdr.layout;
@@ -3617,11 +3947,10 @@ pub fn submit_frame(c: &mut crate::internal::DecoderContext, n_tc: i32) -> Resul
     fc.n_tile_data = c.n_tile_data;
     fc.inloop_filters = c.inloop_filters;
 
-    // Allocate the output picture that reconstruction writes into. During
-    // bring-up we use the default allocator; the decoder's configured allocator
-    // is threaded through when output queueing is wired.
-    let allocator: std::sync::Arc<dyn crate::picture::PicAllocator> =
-        std::sync::Arc::new(crate::picture::DefaultPicAllocator::new());
+    // Allocate the output picture that reconstruction writes into, drawing from
+    // the decoder's persistent pool allocator so a freed frame's planes are
+    // recycled rather than re-allocated.
+    let allocator = c.pic_allocator.clone();
     fc.cur_pic = crate::picture::Picture::alloc(
         frame_hdr.width,
         frame_hdr.height,
@@ -3807,7 +4136,20 @@ pub fn submit_frame(c: &mut crate::internal::DecoderContext, n_tc: i32) -> Resul
     };
 
     let in_cdf_ref = fc.in_cdf.take();
-    decode_frame(&mut fc, n_tc, 1, in_cdf_ref.as_ref(), qcat)?;
+    // Create the decoder's worker pool on the first multi-threaded frame, sized
+    // to this decoder's resolved `n_tc`. Reused for every subsequent frame and
+    // dropped with the decoder.
+    if n_tc >= 2 && c.pool.is_none() {
+        c.pool = Some(crate::mtpool::ThreadPool::new(n_tc as usize));
+    }
+    decode_frame(
+        &mut *fc,
+        n_tc,
+        1,
+        in_cdf_ref.as_ref(),
+        qcat,
+        c.pool.as_ref(),
+    )?;
 
     // on failure. Single-thread decode here is synchronous and already succeeded,
     // so we publish after success (equivalent for n_fc == 1). The decoded picture
@@ -3857,24 +4199,46 @@ pub fn submit_frame(c: &mut crate::internal::DecoderContext, n_tc: i32) -> Resul
     // Hand the reconstructed picture to the decoder's output path. (Visibility
     // filtering / POC reordering is wired with full output queueing later.)
     // The output buffer must be independently owned; clone the shared pixels.
-    // The plane copy is parallelised across `c.n_tc` (the recon core stays on
-    // the single-thread path; only this disjoint-output display copy threads).
+    // The plane copy is parallelised across the decoder's worker pool (the recon
+    // core stays on its own path; only this disjoint-output display copy threads).
     let display_threads = c.n_tc;
-    c.frame_out.push(clone_picture_mt(&shared, display_threads));
+    let out = clone_picture_mt(
+        &shared,
+        display_threads,
+        c.pool.as_ref(),
+        c.pic_allocator.clone(),
+    );
+    c.frame_out.push(out);
     Ok(())
 }
 
-/// `clone_picture` with optional per-plane parallelism. The three colour planes
-/// occupy independent allocations and are copied by independent jobs, so the
-/// result is byte-identical regardless of thread count. `n_threads <= 1` runs
-/// the exact sequential copy (single-thread path unchanged).
+/// One colour plane's copy descriptor. `src` is a shared read of the source
+/// plane; `dst` launders the destination plane's `&mut` into a raw `(ptr, len)`
+/// so the disjoint row bands can be written from several threads at once.
+struct PlaneCopy<'a> {
+    src: &'a [u8],
+    dst: DisjointMut<u8>,
+    row_bytes: usize,
+    s_stride: usize,
+    d_stride: usize,
+    ph: usize,
+}
+
+/// Deep-copies `src` into a freshly allocated, independently owned picture,
+/// parallelising the plane copy across the decoder's worker pool.
+///
+/// Each participating thread (the caller plus `pool` helpers) claims an id and
+/// copies a contiguous, disjoint band of rows from every plane, so the result is
+/// byte-identical regardless of thread count. With no pool — or `n_threads <= 1`,
+/// or fewer rows than threads — it runs the sequential copy on the caller with no
+/// thread hand-off at all. The thread count is clamped to the pool's real
+/// capacity so every row is covered exactly once.
 pub(crate) fn clone_picture_mt(
     src: &crate::picture::Picture,
     n_threads: u32,
+    pool: Option<&crate::mtpool::ThreadPool>,
+    allocator: std::sync::Arc<dyn crate::picture::PicAllocator>,
 ) -> crate::picture::Picture {
-    let _ = n_threads;
-    let allocator: std::sync::Arc<dyn crate::picture::PicAllocator> =
-        std::sync::Arc::new(crate::picture::DefaultPicAllocator::new());
     let mut dst = match crate::picture::Picture::alloc(
         src.p.w,
         src.p.h,
@@ -3897,6 +4261,10 @@ pub(crate) fn clone_picture_mt(
     };
     let bytes = src.bytes_per_sample();
 
+    // Gather per-plane descriptors. `DisjointMut::new` captures only a raw
+    // pointer, so taking the three `&mut` plane slices in turn does not hold
+    // overlapping borrows of `dst`.
+    let mut planes: Vec<PlaneCopy> = Vec::with_capacity(n_planes);
     for pl in 0..n_planes {
         let row_bytes = src.plane_w(pl) * bytes;
         let s_stride = src.stride_bytes(pl);
@@ -3908,12 +4276,46 @@ pub(crate) fn clone_picture_mt(
         let Some(dst_plane) = dst.plane_bytes_mut(pl) else {
             continue;
         };
-        for y in 0..ph {
-            let s0 = y * s_stride;
-            let d0 = y * d_stride;
-            dst_plane[d0..d0 + row_bytes].copy_from_slice(&src_plane[s0..s0 + row_bytes]);
-        }
+        planes.push(PlaneCopy {
+            src: src_plane,
+            dst: DisjointMut::new(dst_plane),
+            row_bytes,
+            s_stride,
+            d_stride,
+            ph,
+        });
     }
+
+    // Only engage the pool when one is present and there is real width to
+    // exploit; otherwise n_run == 1 runs everything on the caller, no spawn.
+    let want = (n_threads as usize).max(1);
+    let active = pool.filter(|_| want >= 2);
+    let cap = match active {
+        Some(p) => p.workers() + 1,
+        None => 1,
+    };
+    let n_run = want.min(cap).max(1);
+
+    let seq = std::sync::atomic::AtomicUsize::new(0);
+    let copy_job = || {
+        // One id per participant (exactly `n_run` participants run), so the
+        // bands below partition each plane's rows with no gaps or overlap.
+        let id = seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .min(n_run - 1);
+        for p in &planes {
+            let r0 = p.ph * id / n_run;
+            let r1 = p.ph * (id + 1) / n_run;
+            // SAFETY: every participant writes a disjoint band of rows.
+            let dst = unsafe { p.dst.whole() };
+            for y in r0..r1 {
+                let s0 = y * p.s_stride;
+                let d0 = y * p.d_stride;
+                dst[d0..d0 + p.row_bytes].copy_from_slice(&p.src[s0..s0 + p.row_bytes]);
+            }
+        }
+    };
+    crate::mtpool::dispatch(active, n_run, &copy_job);
     dst
 }
 
@@ -3938,18 +4340,20 @@ pub(crate) fn picture_has_grain(pic: &crate::picture::Picture) -> bool {
 pub(crate) fn apply_grain_to_picture_mt(
     src: &crate::picture::Picture,
     n_threads: u32,
+    pool: Option<&crate::mtpool::ThreadPool>,
+    allocator: std::sync::Arc<dyn crate::picture::PicAllocator>,
 ) -> crate::picture::Picture {
     let fgd = match src.fgm {
         Some(f) => f,
-        None => return clone_picture_mt(src, n_threads),
+        None => return clone_picture_mt(src, n_threads, pool, allocator.clone()),
     };
     if src.p.bpc != 8 {
         // Only 8bpc grain kernels are ported; higher bit depths fall back to a
         // plain copy (no clip corpus exercises >8bpc grain yet).
-        return clone_picture_mt(src, n_threads);
+        return clone_picture_mt(src, n_threads, pool, allocator.clone());
     }
 
-    let mut dst = clone_picture_mt(src, n_threads);
+    let mut dst = clone_picture_mt(src, n_threads, pool, allocator.clone());
     let seed = src
         .frame_hdr
         .as_ref()

@@ -87,6 +87,7 @@ pub(crate) mod looprestoration;
 pub(crate) mod mc;
 pub(crate) mod mc_dispatch;
 pub(crate) mod msac;
+pub(crate) mod mtpool;
 pub(crate) mod obu;
 pub(crate) mod pal;
 pub(crate) mod pixel;
