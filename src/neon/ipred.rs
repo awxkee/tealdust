@@ -38,6 +38,19 @@ fn load_u8x8_i16_fixed(ptr: &[u8; 8]) -> int16x8_t {
     unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(ptr.as_ptr()))) }
 }
 
+/// One 16-byte load split into two i16x8 lanes (low 8, high 8), replacing two
+/// adjacent 8-byte loads of a contiguous `[u8; 16]` chunk.
+#[inline(always)]
+fn load_u8x16_i16x2_neon(a: &[u8; 16]) -> (int16x8_t, int16x8_t) {
+    let v = unsafe { vld1q_u8(a.as_ptr()) };
+    unsafe {
+        (
+            vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v))),
+            vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(v))),
+        )
+    }
+}
+
 #[inline(always)]
 fn store_i16x8_u8_fixed(ptr: &mut [u8; 8], v: int16x8_t) {
     unsafe { vst1_u8(ptr.as_mut_ptr(), vqmovun_s16(v)) };
@@ -183,8 +196,7 @@ pub(crate) fn ipred_smooth_v_8bpc_neon(
             let tl_src = &tl[o + 1..];
             let (c16, r16) = row.as_chunks_mut::<16>();
             for (dst, tl) in c16.iter_mut().zip(tl_src.as_chunks::<16>().0.iter()) {
-                let above0 = load_u8x8_i16_fixed((&tl[..8]).try_into().unwrap());
-                let above1 = load_u8x8_i16_fixed((&tl[8..]).try_into().unwrap());
+                let (above0, above1) = load_u8x16_i16x2_neon(tl);
                 let mul0 = vmulq_s16(vsubq_s16(above0, bottom_v), off_y);
                 let pred0 = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul0, rnd), bhl2));
                 let adj0 = sra_i16(
@@ -263,8 +275,7 @@ pub(crate) fn ipred_smooth_h_8bpc_neon(
                 let x = ci * 16;
                 let d_lo = dist8((w - 1 - x) as i16);
                 let d_hi = dist8((w - 1 - x - 8) as i16);
-                let wx_lo = load_u8x8_i16_fixed((&wxc[..8]).try_into().unwrap());
-                let wx_hi = load_u8x8_i16_fixed((&wxc[8..]).try_into().unwrap());
+                let (wx_lo, wx_hi) = load_u8x16_i16x2_neon(wxc);
                 let pred_lo = vaddq_s16(
                     right_v,
                     sra_i16(vaddq_s16(vmulq_s16(diff, d_lo), rnd), bwl2),
@@ -358,10 +369,8 @@ pub(crate) fn ipred_smooth_8bpc_neon(
                 .enumerate()
             {
                 let x = ci * 16;
-                let above0 = load_u8x8_i16_fixed((&t[..8]).try_into().unwrap());
-                let above1 = load_u8x8_i16_fixed((&t[8..]).try_into().unwrap());
-                let wx0 = load_u8x8_i16_fixed((&wxc[..8]).try_into().unwrap());
-                let wx1 = load_u8x8_i16_fixed((&wxc[8..]).try_into().unwrap());
+                let (above0, above1) = load_u8x16_i16x2_neon(t);
+                let (wx0, wx1) = load_u8x16_i16x2_neon(wxc);
                 let d0 = dist8((w - 1 - x) as i16);
                 let d1 = dist8((w - 1 - x - 8) as i16);
 
@@ -639,8 +648,7 @@ fn ipred_paeth_8bpc_neon_impl(
         let top_src = &tl[o + 1..o + 1 + w];
         let (c16, r16) = dst[off..off + w].as_chunks_mut::<16>();
         for (d, t) in c16.iter_mut().zip(top_src.as_chunks::<16>().0.iter()) {
-            let top0 = load_u8x8_i16_fixed((&t[..8]).try_into().unwrap());
-            let top1 = load_u8x8_i16_fixed((&t[8..]).try_into().unwrap());
+            let (top0, top1) = load_u8x16_i16x2_neon(t);
             let base0 = vsubq_s16(vaddq_s16(left_v, top0), tl_v);
             let cond_l0 = vandq_u16(
                 vceqq_s16(
@@ -765,6 +773,17 @@ fn load8_u8_i32_rev(a: &[u8; 8]) -> (int32x4_t, int32x4_t) {
     }
 }
 
+#[inline(always)]
+fn widen8_at_neon<const OFF: i32>(v: uint8x16_t) -> (int32x4_t, int32x4_t) {
+    let w = unsafe { vmovl_u8(vget_low_u8(vextq_u8::<OFF>(v, v))) };
+    unsafe {
+        (
+            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
+            vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
+        )
+    }
+}
+
 /// `clamp((a*w0 + b*w1 + c*w2 + d*w3 + 64) >> 7, 0, 255)` packed to 8 u8.
 #[inline(always)]
 fn tap4_pack_neon(
@@ -827,28 +846,30 @@ fn z1_luma_row_neon(
     let (c16, r16) = body.as_chunks_mut::<16>();
     for (ci, d) in c16.iter_mut().enumerate() {
         let bi = base_const + ci * 16;
+        let va = unsafe { vld1q_u8(filt[bi - 1..].as_ptr()) };
         let pa = tap4_pack_neon(
             av,
             bv,
             cv,
             dv,
             rnd,
-            load8_u8_i32((&filt[bi - 1..bi - 1 + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bi..bi + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bi + 1..bi + 1 + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bi + 2..bi + 2 + 8]).try_into().unwrap()),
+            widen8_at_neon::<0>(va),
+            widen8_at_neon::<1>(va),
+            widen8_at_neon::<2>(va),
+            widen8_at_neon::<3>(va),
         );
-        let bb = bi + 8;
+        // group B taps bi+7..bi+10 -> byte-offsets 5..8 of a load at bi+2.
+        let vb = unsafe { vld1q_u8(filt[bi + 2..].as_ptr()) };
         let pb = tap4_pack_neon(
             av,
             bv,
             cv,
             dv,
             rnd,
-            load8_u8_i32((&filt[bb - 1..bb - 1 + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bb..bb + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bb + 1..bb + 1 + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bb + 2..bb + 2 + 8]).try_into().unwrap()),
+            widen8_at_neon::<5>(vb),
+            widen8_at_neon::<6>(vb),
+            widen8_at_neon::<7>(vb),
+            widen8_at_neon::<8>(vb),
         );
         store_u8x8x2_fixed(d, pa, pb);
     }
@@ -1016,44 +1037,35 @@ fn z3_luma_col_neon(
     let lob = left_off as i32 - base0; // bi_j at y == 0
     let (body, fill_tail) = col.split_at_mut(n_filter);
     let (c16, r16) = body.as_chunks_mut::<16>();
+    // Full byte-reverse table for vqtbl1q_u8: out[i] = in[15 - i].
+    let rev16 =
+        unsafe { vld1q_u8([15u8, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].as_ptr()) };
     for (ci, d) in c16.iter_mut().enumerate() {
-        // group A covers col[y0..y0+8], group B col[y0+8..y0+16]; bi_j drops by
-        // 8 between them. Reversed windows start at bi_j-6 .. bi_j-9.
         let bij = lob - (ci * 16) as i32;
-        let (sa, sb, sc, sd) = (
-            (bij - 6) as usize,
-            (bij - 7) as usize,
-            (bij - 8) as usize,
-            (bij - 9) as usize,
-        );
+        let ra = unsafe { vqtbl1q_u8(vld1q_u8(filt[(bij - 14) as usize..].as_ptr()), rev16) };
         let pa = tap4_pack_neon(
             av,
             bv,
             cv,
             dv,
             rnd,
-            load8_u8_i32_rev((&filt[sa..sa + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sb..sb + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sc..sc + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sd..sd + 8]).try_into().unwrap()),
+            widen8_at_neon::<0>(ra),
+            widen8_at_neon::<1>(ra),
+            widen8_at_neon::<2>(ra),
+            widen8_at_neon::<3>(ra),
         );
-        let bij2 = bij - 8;
-        let (sa2, sb2, sc2, sd2) = (
-            (bij2 - 6) as usize,
-            (bij2 - 7) as usize,
-            (bij2 - 8) as usize,
-            (bij2 - 9) as usize,
-        );
+        // rb[i] = filt[bij-2 - i]; group B windows = byte-offsets 5..8.
+        let rb = unsafe { vqtbl1q_u8(vld1q_u8(filt[(bij - 17) as usize..].as_ptr()), rev16) };
         let pb = tap4_pack_neon(
             av,
             bv,
             cv,
             dv,
             rnd,
-            load8_u8_i32_rev((&filt[sa2..sa2 + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sb2..sb2 + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sc2..sc2 + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sd2..sd2 + 8]).try_into().unwrap()),
+            widen8_at_neon::<5>(rb),
+            widen8_at_neon::<6>(rb),
+            widen8_at_neon::<7>(rb),
+            widen8_at_neon::<8>(rb),
         );
         store_u8x8x2_fixed(d, pa, pb);
     }

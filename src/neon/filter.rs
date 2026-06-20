@@ -49,6 +49,27 @@ fn load_i8x4_i32(a: &[i8; 4]) -> int32x4_t {
 }
 
 #[inline(always)]
+fn load_u8x8_i32x2(a: &[u8; 8]) -> (int32x4_t, int32x4_t) {
+    let w = unsafe { vmovl_u8(vld1_u8(a.as_ptr())) };
+    unsafe {
+        (
+            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
+            vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
+        )
+    }
+}
+#[inline(always)]
+fn load_i8x8_i32x2(a: &[i8; 8]) -> (int32x4_t, int32x4_t) {
+    let w = unsafe { vmovl_s8(vld1_s8(a.as_ptr())) };
+    unsafe { (vmovl_s16(vget_low_s16(w)), vmovl_s16(vget_high_s16(w))) }
+}
+#[inline(always)]
+fn load_i16x8_i32x2(a: &[i16; 8]) -> (int32x4_t, int32x4_t) {
+    let w = unsafe { vld1q_s16(a.as_ptr()) };
+    unsafe { (vmovl_s16(vget_low_s16(w)), vmovl_s16(vget_high_s16(w))) }
+}
+
+#[inline(always)]
 fn load_i32x4(a: &[i32; 4]) -> int32x4_t {
     unsafe { vld1q_s32(a.as_ptr()) }
 }
@@ -77,6 +98,19 @@ fn store_i32x8_u8(a: &mut [u8; 8], lo: int32x4_t, hi: int32x4_t) {
 #[inline(always)]
 fn load_u8x8_i16(a: &[u8; 8]) -> int16x8_t {
     unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(a.as_ptr()))) }
+}
+
+/// One 16-byte load split into two i16x8 lanes (low 8, high 8), replacing two
+/// adjacent 8-byte loads of a contiguous `[u8; 16]` chunk.
+#[inline(always)]
+fn load_u8x16_i16x2(a: &[u8; 16]) -> (int16x8_t, int16x8_t) {
+    let v = unsafe { vld1q_u8(a.as_ptr()) };
+    unsafe {
+        (
+            vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v))),
+            vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(v))),
+        )
+    }
 }
 
 #[inline(always)]
@@ -116,8 +150,7 @@ pub(crate) fn residual_add_row_8bpc_neon(
             vaddq_s32(load_i32x4((&cv[4..]).try_into().unwrap()), rnd_v),
             nsh,
         );
-        let d_lo = load_u8x4_i32((&d[..4]).try_into().unwrap());
-        let d_hi = load_u8x4_i32((&d[4..]).try_into().unwrap());
+        let (d_lo, d_hi) = load_u8x8_i32x2(&*d);
         store_i32x8_u8(d, vaddq_s32(d_lo, cf_lo), vaddq_s32(d_hi, cf_hi));
     }
     let done = c8.len() * 8;
@@ -140,8 +173,7 @@ pub(crate) fn dc_add_row_8bpc_neon(dst: &mut [u8], dc: i32, n: usize) {
     let dc_v = vdupq_n_s32(dc);
     let (c8, r8) = dst[..n].as_chunks_mut::<8>();
     for d in c8.iter_mut() {
-        let d_lo = load_u8x4_i32((&d[..4]).try_into().unwrap());
-        let d_hi = load_u8x4_i32((&d[4..]).try_into().unwrap());
+        let (d_lo, d_hi) = load_u8x8_i32x2(&*d);
         store_i32x8_u8(d, vaddq_s32(d_lo, dc_v), vaddq_s32(d_hi, dc_v));
     }
     let (c4, r4) = r8.as_chunks_mut::<4>();
@@ -259,14 +291,10 @@ pub(crate) fn avg_row_8bpc_neon(
     let (a8, _) = t1[..n].as_chunks::<8>();
     let (b8, _) = t2[..n].as_chunks::<8>();
     for ((d, a), b) in c8.iter_mut().zip(a8).zip(b8) {
-        let lo = f(
-            load_i16x4_i32((&a[..4]).try_into().unwrap()),
-            load_i16x4_i32((&b[..4]).try_into().unwrap()),
-        );
-        let hi = f(
-            load_i16x4_i32((&a[4..]).try_into().unwrap()),
-            load_i16x4_i32((&b[4..]).try_into().unwrap()),
-        );
+        let (a0, a1) = load_i16x8_i32x2(a);
+        let (b0, b1) = load_i16x8_i32x2(b);
+        let lo = f(a0, b0);
+        let hi = f(a1, b1);
         store_i32x8_u8(d, lo, hi);
     }
     let done = c8.len() * 8;
@@ -308,14 +336,10 @@ pub(crate) fn w_avg_row_8bpc_neon(
     let (a8, _) = t1[..n].as_chunks::<8>();
     let (b8, _) = t2[..n].as_chunks::<8>();
     for ((d, a), b) in c8.iter_mut().zip(a8).zip(b8) {
-        let lo = f(
-            load_i16x4_i32((&a[..4]).try_into().unwrap()),
-            load_i16x4_i32((&b[..4]).try_into().unwrap()),
-        );
-        let hi = f(
-            load_i16x4_i32((&a[4..]).try_into().unwrap()),
-            load_i16x4_i32((&b[4..]).try_into().unwrap()),
-        );
+        let (a0, a1) = load_i16x8_i32x2(a);
+        let (b0, b1) = load_i16x8_i32x2(b);
+        let lo = f(a0, b0);
+        let hi = f(a1, b1);
         store_i32x8_u8(d, lo, hi);
     }
     let done = c8.len() * 8;
@@ -360,16 +384,11 @@ pub(crate) fn mask_row_8bpc_neon(
     let (b8, _) = t2[..n].as_chunks::<8>();
     let (m8, _) = mask[..n].as_chunks::<8>();
     for (((d, a), b), m) in c8.iter_mut().zip(a8).zip(b8).zip(m8) {
-        let lo = f(
-            load_i16x4_i32((&a[..4]).try_into().unwrap()),
-            load_i16x4_i32((&b[..4]).try_into().unwrap()),
-            load_u8x4_i32((&m[..4]).try_into().unwrap()),
-        );
-        let hi = f(
-            load_i16x4_i32((&a[4..]).try_into().unwrap()),
-            load_i16x4_i32((&b[4..]).try_into().unwrap()),
-            load_u8x4_i32((&m[4..]).try_into().unwrap()),
-        );
+        let (a0, a1) = load_i16x8_i32x2(a);
+        let (b0, b1) = load_i16x8_i32x2(b);
+        let (m0, m1) = load_u8x8_i32x2(m);
+        let lo = f(a0, b0, m0);
+        let hi = f(a1, b1, m1);
         store_i32x8_u8(d, lo, hi);
     }
     let done = c8.len() * 8;
@@ -407,16 +426,11 @@ pub(crate) fn blend_row_8bpc_neon(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: us
     let (t16, _) = tmp[..n].as_chunks::<16>();
     let (m16, _) = mask[..n].as_chunks::<16>();
     for ((d, t), m) in c16.iter_mut().zip(t16).zip(m16) {
-        let o0 = f(
-            load_u8x8_i16((&d[..8]).try_into().unwrap()),
-            load_u8x8_i16((&t[..8]).try_into().unwrap()),
-            load_u8x8_i16((&m[..8]).try_into().unwrap()),
-        );
-        let o1 = f(
-            load_u8x8_i16((&d[8..]).try_into().unwrap()),
-            load_u8x8_i16((&t[8..]).try_into().unwrap()),
-            load_u8x8_i16((&m[8..]).try_into().unwrap()),
-        );
+        let (d0, d1) = load_u8x16_i16x2(&*d);
+        let (t0, t1) = load_u8x16_i16x2(t);
+        let (m0, m1) = load_u8x16_i16x2(m);
+        let o0 = f(d0, t0, m0);
+        let o1 = f(d1, t1, m1);
         store_i16x8x2_u8(d, o0, o1);
     }
     let done = c16.len() * 16;
@@ -443,8 +457,9 @@ pub(crate) fn morph_row_8bpc_neon(dst: &mut [u8], alpha: i32, beta: i32, n: usiz
     let f = |d: int32x4_t| vshlq_s32(vaddq_s32(vmulq_s32(d, a_v), b_v), nsh8);
     let (c8, r8) = dst[..n].as_chunks_mut::<8>();
     for d in c8.iter_mut() {
-        let lo = f(load_u8x4_i32((&d[..4]).try_into().unwrap()));
-        let hi = f(load_u8x4_i32((&d[4..]).try_into().unwrap()));
+        let (d0, d1) = load_u8x8_i32x2(&*d);
+        let lo = f(d0);
+        let hi = f(d1);
         store_i32x8_u8(d, lo, hi);
     }
     let (c4, r4) = r8.as_chunks_mut::<4>();
@@ -474,10 +489,10 @@ pub(crate) fn gdf_add_run_8bpc_neon(dst: &mut [u8], err: &[i8], scale: i32, n: u
     let (c8, r8) = dst[..n].as_chunks_mut::<8>();
     let (e8, _) = err[..n].as_chunks::<8>();
     for (d, e) in c8.iter_mut().zip(e8) {
-        let a_lo = adj(load_i8x4_i32((&e[..4]).try_into().unwrap()));
-        let a_hi = adj(load_i8x4_i32((&e[4..]).try_into().unwrap()));
-        let d_lo = load_u8x4_i32((&d[..4]).try_into().unwrap());
-        let d_hi = load_u8x4_i32((&d[4..]).try_into().unwrap());
+        let (e0, e1) = load_i8x8_i32x2(e);
+        let a_lo = adj(e0);
+        let a_hi = adj(e1);
+        let (d_lo, d_hi) = load_u8x8_i32x2(&*d);
         store_i32x8_u8(d, vaddq_s32(d_lo, a_lo), vaddq_s32(d_hi, a_hi));
     }
     let done = c8.len() * 8;

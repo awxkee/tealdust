@@ -1124,7 +1124,7 @@ pub(crate) fn itx_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usize
 
     let mut x = 0usize;
     while x + 4 <= S {
-            itx_1d_x4::<B, S>(tmp, x, second_kind);
+        itx_1d_x4::<B, S>(tmp, x, second_kind);
         x += 4;
     }
     while x < S {
@@ -1814,7 +1814,7 @@ pub(crate) fn itx_dequant_rect_simd4_core<
 
     let mut x = 0usize;
     while x + 4 <= W {
-            itx_1d_x4::<B, H>(tmp, x, second_kind);
+        itx_1d_x4::<B, H>(tmp, x, second_kind);
         x += 4;
     }
     while x < W {

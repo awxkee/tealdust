@@ -151,8 +151,7 @@ fn ipred_smooth_v_8bpc_sse41_impl(
         let add32 = _mm_set1_epi16(32);
         let (c16, r16) = row.as_chunks_mut::<16>();
         for (d, t) in c16.iter_mut().zip(top_src.as_chunks::<16>().0.iter()) {
-            let a0 = load_u8x8_i16_fixed((&t[..8]).try_into().unwrap());
-            let a1 = load_u8x8_i16_fixed((&t[8..]).try_into().unwrap());
+            let (a0, a1) = load_u8x16_i16x2(t);
             let mul0 = _mm_mullo_epi16(_mm_sub_epi16(a0, bottom_v), off_y);
             let pred0 = _mm_add_epi16(bottom_v, sra_i16(_mm_add_epi16(mul0, rnd), sh));
             let adj0 = _mm_srai_epi16::<6>(_mm_add_epi16(
@@ -249,8 +248,7 @@ fn ipred_smooth_h_8bpc_sse41_impl(
                 xhi - 6,
                 xhi - 7,
             );
-            let wx0 = load_u8x8_i16_fixed((&wxc[..8]).try_into().unwrap());
-            let wx1 = load_u8x8_i16_fixed((&wxc[8..]).try_into().unwrap());
+            let (wx0, wx1) = load_u8x16_i16x2(wxc);
             let pred0 = _mm_add_epi16(
                 right_v,
                 sra_i16(_mm_add_epi16(_mm_mullo_epi16(diff, dist0), rnd), bwl2),
@@ -367,10 +365,8 @@ fn ipred_smooth_8bpc_sse41_impl(
                 xhi - 6,
                 xhi - 7,
             );
-            let a0 = load_u8x8_i16_fixed((&t[..8]).try_into().unwrap());
-            let a1 = load_u8x8_i16_fixed((&t[8..]).try_into().unwrap());
-            let wx0 = load_u8x8_i16_fixed((&wxc[..8]).try_into().unwrap());
-            let wx1 = load_u8x8_i16_fixed((&wxc[8..]).try_into().unwrap());
+            let (a0, a1) = load_u8x16_i16x2(t);
+            let (wx0, wx1) = load_u8x16_i16x2(wxc);
 
             let pv0 = _mm_add_epi16(
                 bottom_v,
@@ -719,6 +715,19 @@ fn load_u8x8_i16_fixed(a: &[u8; 8]) -> __m128i {
     unsafe { _mm_cvtepu8_epi16(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
+/// One 16-byte load split into two i16x8 lanes (low 8, high 8), replacing two
+/// adjacent 8-byte loads of a contiguous `[u8; 16]` chunk.
+#[inline(always)]
+fn load_u8x16_i16x2(a: &[u8; 16]) -> (__m128i, __m128i) {
+    let v = unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) };
+    unsafe {
+        (
+            _mm_cvtepu8_epi16(v),
+            _mm_cvtepu8_epi16(_mm_srli_si128(v, 8)),
+        )
+    }
+}
+
 #[inline(always)]
 fn store_i16x8_u8_fixed(a: &mut [u8; 8], v: __m128i) {
     let packed = unsafe { _mm_packus_epi16(v, _mm_setzero_si128()) };
@@ -753,8 +762,7 @@ fn ipred_paeth_8bpc_sse41_impl(
         let top_src = &tl[o + 1..o + 1 + w];
         let (c16, r16) = dst[off..off + w].as_chunks_mut::<16>();
         for (d, t) in c16.iter_mut().zip(top_src.as_chunks::<16>().0.iter()) {
-            let t0 = load_u8x8_i16_fixed((&t[..8]).try_into().unwrap());
-            let t1 = load_u8x8_i16_fixed((&t[8..]).try_into().unwrap());
+            let (t0, t1) = load_u8x16_i16x2(t);
             let base0 = _mm_sub_epi16(_mm_add_epi16(left_v, t0), tl_v);
             let ld0 = _mm_abs_epi16(_mm_sub_epi16(left_v, base0));
             let td0 = _mm_abs_epi16(_mm_sub_epi16(t0, base0));
@@ -923,6 +931,7 @@ fn z1_luma_row_sse41(
     let (c16, r16) = body.as_chunks_mut::<16>();
     for (ci, d) in c16.iter_mut().enumerate() {
         let bi = base_const + ci * 16;
+        let va = _mm_loadu_si128(filt[bi - 1..].as_ptr() as *const __m128i);
         let (alo, ahi) = dr_filter8(
             av,
             bv,
@@ -931,12 +940,13 @@ fn z1_luma_row_sse41(
             rnd,
             zero,
             maxv,
-            load8_u8_i32((&filt[bi - 1..bi - 1 + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bi..bi + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bi + 1..bi + 1 + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bi + 2..bi + 2 + 8]).try_into().unwrap()),
+            widen8_at::<0, 4>(va),
+            widen8_at::<1, 5>(va),
+            widen8_at::<2, 6>(va),
+            widen8_at::<3, 7>(va),
         );
-        let bb = bi + 8;
+        // group B taps bi+7..bi+10 → byte-offsets 5..8 of a load at bi+2.
+        let vb = _mm_loadu_si128(filt[bi + 2..].as_ptr() as *const __m128i);
         let (blo, bhi) = dr_filter8(
             av,
             bv,
@@ -945,10 +955,10 @@ fn z1_luma_row_sse41(
             rnd,
             zero,
             maxv,
-            load8_u8_i32((&filt[bb - 1..bb - 1 + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bb..bb + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bb + 1..bb + 1 + 8]).try_into().unwrap()),
-            load8_u8_i32((&filt[bb + 2..bb + 2 + 8]).try_into().unwrap()),
+            widen8_at::<5, 9>(vb),
+            widen8_at::<6, 10>(vb),
+            widen8_at::<7, 11>(vb),
+            widen8_at::<8, 12>(vb),
         );
         store_i32x16_u8_fixed(d, alo, ahi, blo, bhi);
     }
@@ -1112,6 +1122,20 @@ fn load8_u8_i32_rev(a: &[u8; 8]) -> (__m128i, __m128i) {
     }
 }
 
+/// Zero-extend the 8 bytes at byte-offset `OFF` of `v` to two i32x4 lanes
+/// (low 4, high 4). Used to carve overlapping 8-wide windows out of a single
+/// 16-byte load instead of issuing one narrow load per window.
+#[inline(always)]
+fn widen8_at<const LO: i32, const HI: i32>(v: __m128i) -> (__m128i, __m128i) {
+    // HI must equal LO + 4 (split into two const params: 1.75 rejects `LO + 4`).
+    unsafe {
+        (
+            _mm_cvtepu8_epi32(_mm_srli_si128(v, LO)),
+            _mm_cvtepu8_epi32(_mm_srli_si128(v, HI)),
+        )
+    }
+}
+
 /// Fill `col[0..h]` for one Z3 column: filtered where `base <= max_base_y`,
 /// else `fill`.
 #[inline]
@@ -1138,15 +1162,20 @@ fn z3_luma_col_sse41(
     let lob = left_off as i32 - base0; // bi_j at y == 0
     let (body, fill_tail) = col.split_at_mut(n_filter);
     let (c16, r16) = body.as_chunks_mut::<16>();
+    // Full byte-reverse mask for a 16-byte register: out[i] = in[15 - i].
+    let rev16 = _mm_setr_epi8(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
     for (ci, d) in c16.iter_mut().enumerate() {
         // group A covers col[y0..y0+8], group B col[y0+8..y0+16]; bi_j drops by
-        // 8 between them. Reversed windows start at bi_j-6 .. bi_j-9.
+        // 8 between them. The four reversed 8-wide windows per group span only
+        // 11 bytes, so one 16-byte load + full-reverse + byte-shifted widening
+        // replaces the four narrow reversed loads. Both loads stay inside the
+        // group's existing [bij-17 .. bij+1] read span (bounds-identical to the
+        // 8-load form): group A loads at bij-14, group B at bij-17.
         let bij = lob - (ci * 16) as i32;
-        let (sa, sb, sc, sd) = (
-            (bij - 6) as usize,
-            (bij - 7) as usize,
-            (bij - 8) as usize,
-            (bij - 9) as usize,
+        // ra[i] = filt[bij+1 - i]; windows sa..sd = byte-offsets 0..3.
+        let ra = _mm_shuffle_epi8(
+            _mm_loadu_si128(filt[(bij - 14) as usize..].as_ptr() as *const __m128i),
+            rev16,
         );
         let (alo, ahi) = dr_filter8(
             av,
@@ -1156,17 +1185,15 @@ fn z3_luma_col_sse41(
             rnd,
             zero,
             maxv,
-            load8_u8_i32_rev((&filt[sa..sa + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sb..sb + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sc..sc + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sd..sd + 8]).try_into().unwrap()),
+            widen8_at::<0, 4>(ra),
+            widen8_at::<1, 5>(ra),
+            widen8_at::<2, 6>(ra),
+            widen8_at::<3, 7>(ra),
         );
-        let bij2 = bij - 8;
-        let (sa2, sb2, sc2, sd2) = (
-            (bij2 - 6) as usize,
-            (bij2 - 7) as usize,
-            (bij2 - 8) as usize,
-            (bij2 - 9) as usize,
+        // rb[i] = filt[bij-2 - i]; group B windows = byte-offsets 5..8.
+        let rb = _mm_shuffle_epi8(
+            _mm_loadu_si128(filt[(bij - 17) as usize..].as_ptr() as *const __m128i),
+            rev16,
         );
         let (blo, bhi) = dr_filter8(
             av,
@@ -1176,10 +1203,10 @@ fn z3_luma_col_sse41(
             rnd,
             zero,
             maxv,
-            load8_u8_i32_rev((&filt[sa2..sa2 + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sb2..sb2 + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sc2..sc2 + 8]).try_into().unwrap()),
-            load8_u8_i32_rev((&filt[sd2..sd2 + 8]).try_into().unwrap()),
+            widen8_at::<5, 9>(rb),
+            widen8_at::<6, 10>(rb),
+            widen8_at::<7, 11>(rb),
+            widen8_at::<8, 12>(rb),
         );
         store_i32x16_u8_fixed(d, alo, ahi, blo, bhi);
     }

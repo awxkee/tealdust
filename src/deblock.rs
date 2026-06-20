@@ -590,28 +590,72 @@ fn setup_thr_cols(
     w4: i32,
     h4: i32,
 ) {
-    let mask_idx = (y64 >> ss_ver) as usize;
-    let mask_shift: u32 = if y64 & ss_ver != 0 { 8 } else { 0 };
+    // Use real asserts, not debug_asserts, because they give LLVM facts in release.
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
 
-    for y4 in 0..h4 as usize {
-        let mut prev_q_thr = left_q_thr[y4] as i32;
-        let mut prev_side_thr = left_side_thr[y4] as i32;
-        for x4 in 0..w4 as usize {
-            let seg_id =
-                segmap[(seg_off + x4 as isize + y4 as isize * seg_stride) as usize] as usize;
-            let cur_q_thr = thr_lut[0][seg_id] as i32;
-            let cur_side_thr = thr_lut[1][seg_id] as i32;
-            let subpu =
-                3 * (((mask[bx4_base + x4][4][mask_idx] >> (mask_shift + y4 as u32)) & 1) as i32);
+    let w = w4 as usize;
+    let h = h4 as usize;
+
+    let mask_idx = (y64 >> ss_ver) as usize;
+    assert!(mask_idx < 4);
+    assert!(bx4_base + w <= 64);
+
+    let mask_shift: u32 = if (y64 & ss_ver) != 0 { 8 } else { 0 };
+
+    let q_lut = &thr_lut[0];
+    let side_lut = &thr_lut[1];
+
+    // Removes `bx4_base + x4` bounds checks from the inner loop.
+    let mask_cols = &mask[bx4_base..bx4_base + w];
+
+    for (y4, (left_q, left_side)) in left_q_thr
+        .iter_mut()
+        .zip(left_side_thr.iter_mut())
+        .take(h)
+        .enumerate()
+    {
+        let mut prev_q_thr = i32::from(*left_q);
+        let mut prev_side_thr = i32::from(*left_side);
+
+        // One segmap bounds check per row instead of one per coefficient.
+        let row_start = (seg_off + y4 as isize * seg_stride) as usize;
+        let seg_row = &segmap[row_start..row_start + w];
+
+        // Transposed stores: q_thr_dst[x4 * 16 + y4].
+        // Starting at y4 and stepping by 16 gives exactly that layout.
+        let q_out = q_thr_dst[y4..].iter_mut().step_by(16).take(w);
+        let side_out = side_thr_dst[y4..].iter_mut().step_by(16).take(w);
+
+        for (((&seg, mask_col), q_dst), side_dst) in seg_row
+            .iter()
+            .zip(mask_cols.iter())
+            .zip(q_out)
+            .zip(side_out)
+        {
+            let seg_id = usize::from(seg);
+
+            // This turns two data-dependent array bounds checks into one explicit
+            // range check. If segmap is guaranteed valid, this branch is always cold.
+            assert!(seg_id < 16);
+
+            let cur_q_thr = q_lut[seg_id] as i32;
+            let cur_side_thr = side_lut[seg_id] as i32;
+
+            let subpu = 3 * (((mask_col[4][mask_idx] >> (mask_shift + y4 as u32)) & 1) as i32);
+
             let eq = edge_thr(cur_q_thr, prev_q_thr) >> subpu;
             let es = edge_thr(cur_side_thr, prev_side_thr) >> subpu;
-            q_thr_dst[x4 * 16 + y4] = eq as u8;
-            side_thr_dst[x4 * 16 + y4] = es as u8;
+
+            *q_dst = eq as u8;
+            *side_dst = es as u8;
+
             prev_q_thr = cur_q_thr;
             prev_side_thr = cur_side_thr;
         }
-        left_q_thr[y4] = prev_q_thr as u8;
-        left_side_thr[y4] = prev_side_thr as u8;
+
+        *left_q = prev_q_thr as u8;
+        *left_side = prev_side_thr as u8;
     }
 }
 
@@ -633,35 +677,101 @@ fn setup_thr_rows(
     w4: i32,
     h4: i32,
 ) {
-    let mask_idx = (sb64x >> ss_hor) as usize;
-    let mask_shift: u32 = if sb64x & ss_hor != 0 { 8 } else { 0 };
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
 
-    let mut above_q_thr = [0u8; 16];
-    let mut above_side_thr = [0u8; 16];
+    let w = w4 as usize;
+    let h = h4 as usize;
+
+    let mask_idx = (sb64x >> ss_hor) as usize;
+    assert!(mask_idx < 4);
+    assert!(starty4 + h <= 64);
+
+    let mask_shift: u32 = if (sb64x & ss_hor) != 0 { 8 } else { 0 };
+
+    let mut prev_q_thr = [0i32; 16];
+    let mut prev_side_thr = [0i32; 16];
+
     if let (Some(above_lut), Some((aseg, aoff))) = (above_thr_lut, above_seg) {
-        for x4 in 0..w4 as usize {
-            let seg_id = aseg[(aoff + x4 as isize) as usize] as usize;
-            above_q_thr[x4] = above_lut[0][seg_id] as u8;
-            above_side_thr[x4] = above_lut[1][seg_id] as u8;
+        let aoff = usize::try_from(aoff).expect("negative above segment offset");
+        assert!(aoff + w <= aseg.len());
+
+        let above_q_lut = &above_lut[0];
+        let above_side_lut = &above_lut[1];
+
+        for ((&seg, q_prev), side_prev) in aseg[aoff..aoff + w]
+            .iter()
+            .zip(prev_q_thr[..w].iter_mut())
+            .zip(prev_side_thr[..w].iter_mut())
+        {
+            let seg_id = usize::from(seg);
+            assert!(seg_id < 16);
+
+            // Keep original semantics:
+            //
+            // above_q_thr[x4] = above_lut[0][seg_id] as u8;
+            // prev_q_thr = above_q_thr[x4] as i32;
+            *q_prev = (above_q_lut[seg_id] as u8) as i32;
+            *side_prev = (above_side_lut[seg_id] as u8) as i32;
         }
     }
 
-    for x4 in 0..w4 as usize {
-        let mut prev_q_thr = above_q_thr[x4] as i32;
-        let mut prev_side_thr = above_side_thr[x4] as i32;
-        for y4 in 0..h4 as usize {
-            let seg_id =
-                segmap[(seg_off + x4 as isize + y4 as isize * seg_stride) as usize] as usize;
-            let cur_q_thr = thr_lut[0][seg_id] as i32;
-            let cur_side_thr = thr_lut[1][seg_id] as i32;
-            let subpu =
-                3 * (((mask[starty4 + y4][4][mask_idx] >> (mask_shift + x4 as u32)) & 1) as i32);
-            let eq = edge_thr(cur_q_thr, prev_q_thr) >> subpu;
-            let es = edge_thr(cur_side_thr, prev_side_thr) >> subpu;
-            q_thr_dst[x4 + y4 * 16] = eq as u8;
-            side_thr_dst[x4 + y4 * 16] = es as u8;
-            prev_q_thr = cur_q_thr;
-            prev_side_thr = cur_side_thr;
+    if w == 0 || h == 0 {
+        return;
+    }
+
+    let seg_off = usize::try_from(seg_off).expect("negative segment offset");
+    let seg_stride = usize::try_from(seg_stride).expect("negative segment stride");
+
+    // `seg_stride == 0` is valid: every output row reads the same segmap row.
+    let last_row_start = seg_off + (h - 1) * seg_stride;
+    assert!(last_row_start + w <= segmap.len());
+
+    let q_lut = &thr_lut[0];
+    let side_lut = &thr_lut[1];
+
+    let mask_rows = &mask[starty4..starty4 + h];
+
+    for (y4, ((q_row, side_row), mask_row)) in q_thr_dst
+        .chunks_exact_mut(16)
+        .zip(side_thr_dst.chunks_exact_mut(16))
+        .zip(mask_rows.iter())
+        .take(h)
+        .enumerate()
+    {
+        let row_start = seg_off + y4 * seg_stride;
+        let seg_row = &segmap[row_start..row_start + w];
+
+        let q_row = &mut q_row[..w];
+        let side_row = &mut side_row[..w];
+
+        let prev_q_row = &mut prev_q_thr[..w];
+        let prev_side_row = &mut prev_side_thr[..w];
+
+        for (x4, ((((&seg, q_dst), side_dst), q_prev), side_prev)) in seg_row
+            .iter()
+            .zip(q_row.iter_mut())
+            .zip(side_row.iter_mut())
+            .zip(prev_q_row.iter_mut())
+            .zip(prev_side_row.iter_mut())
+            .enumerate()
+        {
+            let seg_id = usize::from(seg);
+            assert!(seg_id < 16);
+
+            let cur_q_thr = q_lut[seg_id] as i32;
+            let cur_side_thr = side_lut[seg_id] as i32;
+
+            let subpu = 3 * (((mask_row[4][mask_idx] >> (mask_shift + x4 as u32)) & 1) as i32);
+
+            let eq = edge_thr(cur_q_thr, *q_prev) >> subpu;
+            let es = edge_thr(cur_side_thr, *side_prev) >> subpu;
+
+            *q_dst = eq as u8;
+            *side_dst = es as u8;
+
+            *q_prev = cur_q_thr;
+            *side_prev = cur_side_thr;
         }
     }
 }
