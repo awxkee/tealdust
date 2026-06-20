@@ -631,7 +631,6 @@ fn vmulc<B: DctSimd4>(v: B::V, k: i32) -> B::V {
     unsafe { B::mul(v, B::splat(k)) }
 }
 
-#[allow(unsafe_op_in_unsafe_fn)]
 #[inline(always)]
 fn sum_row_simd4<B: DctSimd4, const N: usize>(row: &[i8; N], x: &[B::V; N]) -> B::V {
     unsafe {
@@ -901,7 +900,6 @@ fn inv_dct16_simd4<B: DctSimd4>(v: &mut [B::V; 16]) {
     crate::itx_1d::dct16_flat::<B::V>(|j| s[j], |m, x| v[m] = x);
 }
 
-#[allow(unsafe_op_in_unsafe_fn)]
 #[inline(always)]
 fn inv_dct32_simd4<B: DctSimd4>(v: &mut [B::V; 32]) {
     let s = *v;
@@ -987,9 +985,8 @@ fn apply_tx16_simd4<B: DctSimd4>(v: &mut [B::V; 16], kind: usize) {
     }
 }
 
-#[allow(unsafe_op_in_unsafe_fn)]
 #[inline(always)]
-unsafe fn process_row_group_itx_x4<B: DctSimd4, const S: usize>(
+fn process_row_group_itx_x4<B: DctSimd4, const S: usize>(
     coeff: &[i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,
@@ -1037,9 +1034,7 @@ fn itx_dequant_rows_simd4<B: DctSimd4, const N: usize, const S: usize>(
     let mut y = 0usize;
 
     loop {
-        unsafe {
-            process_row_group_itx_x4::<B, S>(coeff, tmp, y, first_kind);
-        }
+        process_row_group_itx_x4::<B, S>(coeff, tmp, y, first_kind);
         y += 4;
 
         if eob > last_eob[ei] as i32 {
@@ -1062,13 +1057,8 @@ fn itx_dequant_rows_simd4<B: DctSimd4, const N: usize, const S: usize>(
     }
 }
 
-#[allow(unsafe_op_in_unsafe_fn)]
 #[inline(always)]
-unsafe fn itx_1d_x4<B: DctSimd4, const S: usize>(
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    x: usize,
-    kind: usize,
-) {
+fn itx_1d_x4<B: DctSimd4, const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: usize, kind: usize) {
     match S {
         4 => {
             let mut v = load_1d_x4::<B, 4>(tmp, x, ITX_TMP_STRIDE);
@@ -1134,9 +1124,7 @@ pub(crate) fn itx_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usize
 
     let mut x = 0usize;
     while x + 4 <= S {
-        unsafe {
             itx_1d_x4::<B, S>(tmp, x, second_kind);
-        }
         x += 4;
     }
     while x < S {
@@ -1826,9 +1814,7 @@ pub(crate) fn itx_dequant_rect_simd4_core<
 
     let mut x = 0usize;
     while x + 4 <= W {
-        unsafe {
             itx_1d_x4::<B, H>(tmp, x, second_kind);
-        }
         x += 4;
     }
     while x < W {

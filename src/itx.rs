@@ -61,24 +61,16 @@ const WHT_WHT: u32 = 6 | (6 << 5);
 // inv_txfm_add path fully write the used S×S region before reading it (rows
 // 0..last from the row pass, rows last..S zero-filled) and never read columns
 // S..ITX_TMP_STRIDE, so leftover data from a previous transform can never leak
-// into the result. That lets us reuse one persistent, already-initialised
-// buffer per thread instead of zeroing a fresh 4 KB buffer on every call (a
-// memset the compiler can't elide, since the dequant fn is an indirect call).
-// Proven bit-exact by the `tmp_init_proof` tests: arbitrary garbage in the
-// buffer yields identical output to a zeroed buffer.
-std::thread_local! {
-    static ITX_SCRATCH: core::cell::RefCell<[i32; ITX_TMP_PIXELS]> =
-        const { core::cell::RefCell::new([0; ITX_TMP_PIXELS]) };
-}
+// into the result. The buffer is owned by the caller's `ReconScratch` and
+// threaded in explicitly, so there is no thread-local lookup or `RefCell`
+// borrow on the per-transform path. Proven bit-exact by the `tmp_init_proof`
+// tests: arbitrary garbage in the buffer yields identical output to a zeroed one.
 
-/// Run `f` with a `Txfm2d` view over this thread's reusable scratch buffer.
+/// Run `f` with a `Txfm2d` view over the caller-supplied scratch buffer.
 #[inline(always)]
-fn with_itx_scratch<R>(f: impl FnOnce(&mut Txfm2d) -> R) -> R {
-    ITX_SCRATCH.with(|cell| {
-        let mut guard = cell.borrow_mut();
-        let mut tmp = Txfm2d { buf: &mut guard };
-        f(&mut tmp)
-    })
+fn with_itx_scratch<R>(buf: &mut [i32; ITX_TMP_PIXELS], f: impl FnOnce(&mut Txfm2d) -> R) -> R {
+    let mut tmp = Txfm2d { buf };
+    f(&mut tmp)
 }
 
 struct Txfm2d<'a> {
@@ -224,6 +216,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
     txtp: u32,
     eob: i32,
     tx: usize,
+    tmp_buf: &mut [i32; ITX_TMP_PIXELS],
 ) {
     if txtp & 0xFF == WHT_WHT {
         assert!(tx == 0);
@@ -281,7 +274,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
     let shift1 = tx_sh[1] as i32;
 
     if (txtp & 0xFF) == txtp_kind::DCT_DCT as u32 && (txtp >> 8) == 0 && t_dim.lw == t_dim.lh {
-        let handled = with_itx_scratch(|tmp| {
+        let handled = with_itx_scratch(&mut *tmp_buf, |tmp| {
             let mut handled = true;
 
             match tx {
@@ -374,7 +367,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         && t_dim.lw != t_dim.lh
         && !force_generic_itx()
     {
-        let handled = with_itx_scratch(|tmp| {
+        let handled = with_itx_scratch(&mut *tmp_buf, |tmp| {
             let mut handled = true;
 
             match tx {
@@ -661,7 +654,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         && crate::itx_2d::is_dct_adst_kind(second_kind)
         && (first_kind != crate::itx_2d::TX_KIND_DCT || second_kind != crate::itx_2d::TX_KIND_DCT)
     {
-        let handled = with_itx_scratch(|tmp| {
+        let handled = with_itx_scratch(&mut *tmp_buf, |tmp| {
             let mut handled = true;
 
             match tx {
@@ -734,7 +727,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         && (first_kind != crate::itx_2d::TX_KIND_DCT || second_kind != crate::itx_2d::TX_KIND_DCT)
         && !force_generic_itx()
     {
-        let handled = with_itx_scratch(|tmp| {
+        let handled = with_itx_scratch(&mut *tmp_buf, |tmp| {
             let mut handled = true;
 
             match tx {
@@ -842,7 +835,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
         }
     }
 
-    with_itx_scratch(|tmp| {
+    with_itx_scratch(&mut *tmp_buf, |tmp| {
         let mut row = 0usize;
         let tx_class = (txtp >> 3) & 0x3;
 
@@ -958,11 +951,11 @@ mod scratch_reuse_proof {
         }
     }
 
-    fn poison() {
-        ITX_SCRATCH.with(|c| c.borrow_mut().fill(0xDEAD_BEEFu32 as i32));
+    fn poisoned_buf() -> Box<[i32; crate::itx_2d::ITX_TMP_PIXELS]> {
+        Box::new([0xDEAD_BEEFu32 as i32; crate::itx_2d::ITX_TMP_PIXELS])
     }
-    fn zero() {
-        ITX_SCRATCH.with(|c| c.borrow_mut().fill(0));
+    fn zeroed_buf() -> Box<[i32; crate::itx_2d::ITX_TMP_PIXELS]> {
+        Box::new([0i32; crate::itx_2d::ITX_TMP_PIXELS])
     }
 
     fn check(tx: usize, txtp: u32, seed: u64) {
@@ -976,13 +969,17 @@ mod scratch_reuse_proof {
             let eob = ((rng.next() % 64) + 1) as i32;
             let base = vec![100u8; stride * 64 + stride];
 
-            poison();
+            let mut buf1 = poisoned_buf();
             let (mut d1, mut c1) = (base.clone(), coeff);
-            inv_txfm_add(BitDepth8, &mut d1, 0, stride, &mut c1, txtp, eob, tx);
+            inv_txfm_add(
+                BitDepth8, &mut d1, 0, stride, &mut c1, txtp, eob, tx, &mut buf1,
+            );
 
-            zero();
+            let mut buf2 = zeroed_buf();
             let (mut d2, mut c2) = (base.clone(), coeff);
-            inv_txfm_add(BitDepth8, &mut d2, 0, stride, &mut c2, txtp, eob, tx);
+            inv_txfm_add(
+                BitDepth8, &mut d2, 0, stride, &mut c2, txtp, eob, tx, &mut buf2,
+            );
 
             assert_eq!(
                 d1, d2,
@@ -1066,6 +1063,7 @@ mod rect_end_to_end {
             let mut dst_rect = dst_init.clone();
             let mut c_rect = coeff0.clone();
             FORCE_GENERIC_ITX.store(false, Ordering::Relaxed);
+            let mut buf_rect = Box::new([0i32; crate::itx_2d::ITX_TMP_PIXELS]);
             inv_txfm_add::<BitDepth8>(
                 BitDepth8,
                 &mut dst_rect,
@@ -1075,11 +1073,13 @@ mod rect_end_to_end {
                 txtp,
                 eob,
                 tx,
+                &mut buf_rect,
             );
 
             let mut dst_gen = dst_init.clone();
             let mut c_gen = coeff0.clone();
             FORCE_GENERIC_ITX.store(true, Ordering::Relaxed);
+            let mut buf_gen = Box::new([0i32; crate::itx_2d::ITX_TMP_PIXELS]);
             inv_txfm_add::<BitDepth8>(
                 BitDepth8,
                 &mut dst_gen,
@@ -1089,6 +1089,7 @@ mod rect_end_to_end {
                 txtp,
                 eob,
                 tx,
+                &mut buf_gen,
             );
             FORCE_GENERIC_ITX.store(false, Ordering::Relaxed);
 

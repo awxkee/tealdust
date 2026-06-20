@@ -695,6 +695,7 @@ pub(crate) fn decode_coefs(
     cf: &mut [i32],
     txtp: &mut u16,
     res_ctx: &mut u8,
+    levels_scratch: &mut [i8; 1089],
 ) -> i32 {
     let t_dim = &TXFM_DIMENSIONS[p.tx];
     let chroma = p.plane != 0;
@@ -1420,10 +1421,12 @@ pub(crate) fn decode_coefs(
     if p.seq_fsc && (!p.intra || p.fsc) && *txtp as u8 == txtp::IDTX && !chroma {
         *txtp = txtp::IDTX_INV as u16;
         let stride = 1 + (4 << slh);
-        // Worst-case stride*((4<<slw)+1) is 33*33 = 1089; use a fixed stack array
-        // to avoid a per-block heap allocation. Unused tail stays zeroed, matching
-        // the previous fully-zeroed Vec semantics required by the neighbour reads.
-        let mut levels = [0i8; 1089];
+        // Reuse the per-thread scratch buffer and clear only the prefix this
+        // transform actually touches (worst case 33*33 = 1089). Neighbour reads
+        // by `get_*_ctx_idtx` stay within `stride*((4<<slw)+1)`.
+        let level_len = stride * ((4usize << slw) + 1);
+        let levels = &mut levels_scratch[..level_len];
+        levels.fill(0);
         let sz_ctx = imin(t_dim.ctx as i32, 2) as usize;
         let sz = (16 << tx2dszctx) - 1;
         let bob = sz - eob;
@@ -1446,7 +1449,7 @@ pub(crate) fn decode_coefs(
             let y = rc & mask;
             let off = (1 + x) * stride + (1 + y);
             let mut hr_ctx = 0u32;
-            let ctx = get_lo_ctx_idtx(&levels, off, &mut hr_ctx, stride);
+            let ctx = get_lo_ctx_idtx(levels, off, &mut hr_ctx, stride);
             let mut tok =
                 msac.decode_symbol_adapt(coef.base_y_tok_idtx(sz_ctx, ctx as usize), 3) as i32;
             if tok == 3 {
@@ -1468,7 +1471,7 @@ pub(crate) fn decode_coefs(
             let x = rc >> shift;
             let y = rc & mask;
             let off = (1 + x) * stride + (1 + y);
-            let ctx = get_sign_ctx_idtx(&levels, off, stride);
+            let ctx = get_sign_ctx_idtx(levels, off, stride);
             let sign = msac.decode_bool_adapt(coef.sign_idtx(sz_ctx, ctx as usize));
             if i == 0 {
                 dc_sign_level = ((sign as i32 - 1) & (2 << 6)) as u32;
@@ -1499,12 +1502,27 @@ pub(crate) fn decode_coefs(
     }
 
     if eob != 0 {
-        // Stack-allocated scratch buffer. 1089 == 33*33 is the worst-case size
-        // (stride 33 * 33 rows for the largest transform). Allocating this on the
-        // heap per transform block was a significant cost in the decode hot path;
-        // a fixed stack array removes the malloc/free and the Vec indirection on
-        // every `levels[...]` access.
-        let mut levels = [0i8; 1089];
+        // Reuse the per-thread scratch buffer; clear only the prefix the scan
+        // for this `tx_class`/size actually touches (incl. the +2 neighbour
+        // padding the context reads rely on). Worst case is 33*33 = 1089.
+        let level_len = match tx_class {
+            0 => {
+                let w = 4usize << slw;
+                let h = 4usize << slh;
+                (w + 2) * h
+            }
+            2 => {
+                let h = 4usize << slh;
+                (h + 2) * 32
+            }
+            3 => {
+                let w = 4usize << slw;
+                (w + 2) * 32
+            }
+            _ => unreachable!(),
+        };
+        let levels = &mut levels_scratch[..level_len];
+        levels.fill(0);
         let is_stx = stx_type != 0 && tx_class == 0;
 
         macro_rules! decode_coefs_class {
@@ -1644,8 +1662,7 @@ pub(crate) fn decode_coefs(
                     } else {
                         y as u32
                     };
-                    let ctx =
-                        get_lo_ctx(&levels, off, $tx_cl, &mut hr_ctx, xy_val, p.plane, stride);
+                    let ctx = get_lo_ctx(levels, off, $tx_cl, &mut hr_ctx, xy_val, p.plane, stride);
                     let tcq_bit = ((tcq_state & 2) >> 1) as u32;
                     let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
                     let o = lo_base + lo_cdf_idx * lo_stride;
@@ -1663,7 +1680,7 @@ pub(crate) fn decode_coefs(
 
                 // dc token
                 let mut hr_ctx = 0u32;
-                let ctx = get_lo_ctx(&levels, 0, $tx_cl, &mut hr_ctx, 0, p.plane, stride);
+                let ctx = get_lo_ctx(levels, 0, $tx_cl, &mut hr_ctx, 0, p.plane, stride);
                 let tcq_bit = ((tcq_state & 2) >> 1) as u32;
                 let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
                 let o = lo_base + lo_cdf_idx * lo_stride;

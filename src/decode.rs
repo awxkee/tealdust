@@ -2191,6 +2191,13 @@ pub struct ReconScratch {
     /// Current palette block's packed index map (`t->scratch.pal_idx_y`). `pack`
     /// stores two indices per byte; sized for the largest palette block (64x64).
     pub pal_idx_y: Box<[u8; 64 * 64]>,
+    /// Reusable coefficient-level neighbour map for `decode_coefs` (worst case
+    /// 33*33 = 1089). Only the prefix actually used by the current transform is
+    /// cleared per block, so small TUs avoid a full 1089-byte memset.
+    pub coef_levels: [i8; 1089],
+    /// Reusable inverse-transform scratch (`Txfm2d` buffer). Threaded into
+    /// `inv_txfm_add` so the transform path needs no thread-local / `RefCell`.
+    pub itx_tmp: Box<[i32; crate::itx_2d::ITX_TMP_PIXELS]>,
 }
 
 impl Default for ReconScratch {
@@ -2208,6 +2215,8 @@ impl Default for ReconScratch {
             al_pal: [[[0u16; 8]; 64]; 2],
             pal: [0u16; 8],
             pal_idx_y: Box::new([0u8; 64 * 64]),
+            coef_levels: [0i8; 1089],
+            itx_tmp: Box::new([0i32; crate::itx_2d::ITX_TMP_PIXELS]),
         }
     }
 }
@@ -9378,8 +9387,9 @@ fn inter_residual_tx_8bpc<BD: crate::pixel::BitDepth>(
     let bx4 = ((bx & 63) >> ss_hor) as usize;
     let by4 = ((by & 63) >> ss_ver) as usize;
 
-    let cf_n = tw * th;
-    recon.cf[..cf_n].fill(0);
+    // No pre-clear: every inverse-transform path clears cf[..S*S] after use
+    // (itx_2d dequant cores + itx.rs WHT/DC/generic), and cf starts zeroed, so
+    // cf is already zero on entry here. Verified bit-exact + via prefill poison.
 
     let mut txtp: u16 = txtp_seed;
     let mut res_ctx: u8 = 0;
@@ -9432,6 +9442,7 @@ fn inter_residual_tx_8bpc<BD: crate::pixel::BitDepth>(
             recon.cf,
             &mut txtp,
             &mut res_ctx,
+            &mut recon.scratch.coef_levels,
         );
         if eob == i32::MIN {
             return Err(());
@@ -9578,7 +9589,17 @@ fn inter_residual_tx_8bpc<BD: crate::pixel::BitDepth>(
     let _ = IntraPredMode::DcPred;
 
     let _ = (tw, th);
-    crate::itx::inv_txfm_add(bd, dst, dst_off, stride, recon.cf, txtp, eob, tx);
+    crate::itx::inv_txfm_add(
+        bd,
+        dst,
+        dst_off,
+        stride,
+        recon.cf,
+        txtp,
+        eob,
+        tx,
+        &mut *recon.scratch.itx_tmp,
+    );
     Ok(())
 }
 
@@ -9588,7 +9609,7 @@ fn inter_residual_tx_8bpc<BD: crate::pixel::BitDepth>(
 /// U and V coefficients together, so it cannot be done in the per-plane
 /// `inter_residual_tx_8bpc`. The chroma prediction is already in dst_u/dst_v.
 #[allow(clippy::too_many_arguments)]
-fn inter_chroma_residual_8bpc<BD: crate::pixel::BitDepth>(
+fn inter_chroma_residual_8bpc<BD: BitDepth>(
     recon: &mut ReconCtx<BD>,
     msac: &mut MsacContext,
     cdf_m: &mut CdfModeContext,
@@ -9710,6 +9731,7 @@ fn inter_chroma_residual_8bpc<BD: crate::pixel::BitDepth>(
                             cf_slot,
                             &mut txtp,
                             &mut res_ctx,
+                            &mut recon.scratch.coef_levels,
                         );
                         if e == i32::MIN {
                             return Err(());
@@ -9826,6 +9848,7 @@ fn inter_chroma_residual_8bpc<BD: crate::pixel::BitDepth>(
                     txtp,
                     tu_eob[i][pl],
                     uvtx,
+                    &mut *recon.scratch.itx_tmp,
                 );
             }
             x += txw;
@@ -14346,6 +14369,7 @@ fn recon_b_intra_chroma_phase<BD: BitDepth>(
                         cf_slot,
                         &mut txtp,
                         &mut res_ctx,
+                        &mut recon.scratch.coef_levels,
                     );
                     if eob == i32::MIN {
                         return Err(());
@@ -14583,6 +14607,7 @@ fn recon_b_intra_chroma_phase<BD: BitDepth>(
                         txtp,
                         tu_eob[i][pl] as i32,
                         uvtx,
+                        &mut *recon.scratch.itx_tmp,
                     );
                 }
             }
@@ -14933,8 +14958,9 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
     let mut txtp: u16 = 0;
     let mut res_ctx: u8 = 0;
     // Zero the tx coefficient region; decode_coefs may not fully initialise it.
-    let cf_n = tw * th;
-    recon.cf[..cf_n].fill(0);
+    // No pre-clear: every inverse-transform path clears cf[..S*S] after use
+    // (itx_2d dequant cores + itx.rs WHT/DC/generic), and cf starts zeroed, so
+    // cf is already zero on entry here. Verified bit-exact + via prefill poison.
 
     // IntraBC blocks may set skip_txfm (intra/non-IntraBC blocks force it to 0).
     // When set, no coefficients are coded: eob=-1, txtp=DCT_DCT, stx=0, and the
@@ -14985,6 +15011,7 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
             recon.cf,
             &mut txtp,
             &mut res_ctx,
+            &mut recon.scratch.coef_levels,
         );
         if eob == i32::MIN {
             return Err(());
@@ -15233,7 +15260,17 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
             txtp += txtp & crate::tables::TX_DDT_MASK[tx] as u32;
         }
 
-        crate::itx::inv_txfm_add(bd, recon.dst_y, dst_off, stride, recon.cf, txtp, eob, tx);
+        crate::itx::inv_txfm_add(
+            bd,
+            recon.dst_y,
+            dst_off,
+            stride,
+            recon.cf,
+            txtp,
+            eob,
+            tx,
+            &mut *recon.scratch.itx_tmp,
+        );
     }
 
     let coded_w = imin(tw4, 64 - bx4 as i32).max(0) as u32;

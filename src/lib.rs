@@ -61,7 +61,6 @@
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::doc_lazy_continuation)]
-#![warn(unsafe_op_in_unsafe_fn)]
 
 pub(crate) mod ccso;
 pub(crate) mod cdef;
