@@ -881,7 +881,6 @@ fn dr_filter8(
     (res_lo, res_hi)
 }
 
-/// Pack two i32x4 lanes (already clamped to 0..=255) to 8 `u8` and store.
 #[inline(always)]
 fn store_i32x8_u8_fixed(a: &mut [u8; 8], lo: __m128i, hi: __m128i) {
     let packed = unsafe { _mm_packus_epi16(_mm_packus_epi32(lo, hi), _mm_setzero_si128()) };
@@ -1122,9 +1121,6 @@ fn load8_u8_i32_rev(a: &[u8; 8]) -> (__m128i, __m128i) {
     }
 }
 
-/// Zero-extend the 8 bytes at byte-offset `OFF` of `v` to two i32x4 lanes
-/// (low 4, high 4). Used to carve overlapping 8-wide windows out of a single
-/// 16-byte load instead of issuing one narrow load per window.
 #[inline(always)]
 fn widen8_at<const LO: i32, const HI: i32>(v: __m128i) -> (__m128i, __m128i) {
     // HI must equal LO + 4 (split into two const params: 1.75 rejects `LO + 4`).
