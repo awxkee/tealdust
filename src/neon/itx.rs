@@ -36,6 +36,35 @@ use std::arch::aarch64::*;
 #[derive(Clone, Copy)]
 pub(crate) struct NeonI32x4(int32x4_t);
 
+impl crate::itx_1d::DctLane for NeonI32x4 {
+    #[inline(always)]
+    fn zero() -> Self {
+        NeonI32x4(unsafe { vdupq_n_s32(0) })
+    }
+    #[inline(always)]
+    fn add(self, o: Self) -> Self {
+        NeonI32x4(unsafe { vaddq_s32(self.0, o.0) })
+    }
+    #[inline(always)]
+    fn sub(self, o: Self) -> Self {
+        NeonI32x4(unsafe { vsubq_s32(self.0, o.0) })
+    }
+    #[inline(always)]
+    fn mul(self, k: Self) -> Self {
+        NeonI32x4(unsafe { vmulq_s32(self.0, k.0) })
+    }
+    #[inline(always)]
+    fn dup_load(table: &[i32], idx: usize) -> Self {
+        // SAFETY: callers index within the kernel tables.
+        NeonI32x4(unsafe { vld1q_dup_s32(table.as_ptr().add(idx)) })
+    }
+    #[inline(always)]
+    fn mul_add(self, x: Self, k: Self) -> Self {
+        // Single fused multiply-accumulate (MLA): self + x*k.
+        NeonI32x4(unsafe { vmlaq_s32(self.0, x.0, k.0) })
+    }
+}
+
 pub(crate) struct NeonDct2d;
 
 impl DctSimd4 for NeonDct2d {

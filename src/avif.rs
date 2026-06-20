@@ -2186,9 +2186,10 @@ impl<'a> AvifDecoder<'a> {
         // Honor the host's parallelism for the tile-row-parallel frame decode;
         // callers wanting determinism or a fixed budget can cap this. Falls back
         // to single-threaded if the platform can't report a thread count.
-        settings.n_threads = std::thread::available_parallelism()
-            .map(|n| n.get() as u32)
-            .unwrap_or(1);
+        // settings.n_threads = std::thread::available_parallelism()
+        //     .map(|n| n.get() as u32)
+        //     .unwrap_or(1);
+        settings.n_threads = 1;
         settings.run_decode = true;
 
         let mut decoder = Decoder::open(&settings).map_err(AvifError::DecodeError)?;

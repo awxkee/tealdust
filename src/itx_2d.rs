@@ -28,9 +28,9 @@
  */
 
 use crate::itx_1d::{
-    ADST4_KERNEL_ROWS, ADST8_KERNEL_ROWS, ADST16_KERNEL_ROWS, DCT8_ODD_KERNEL, DCT16_ODD_KERNEL,
-    DCT32_ODD_KERNEL, FLIPADST4_KERNEL_ROWS, FLIPADST16_KERNEL_ROWS, TX1D_FNS, TX1D_FNS_X8,
-    inv_dct4_1d, inv_dct8_1d, inv_dct16_1d, inv_dct32_1d,
+    ADST4_KERNEL_ROWS, ADST8_KERNEL_ROWS, ADST16_KERNEL_ROWS, DCT8_ODD_KERNEL,
+    FLIPADST4_KERNEL_ROWS, FLIPADST16_KERNEL_ROWS, TX1D_FNS, TX1D_FNS_X8, inv_dct4_1d, inv_dct8_1d,
+    inv_dct16_1d, inv_dct32_1d,
 };
 use crate::scan::LAST_EOB_PER_COL;
 use std::convert::TryInto;
@@ -613,7 +613,7 @@ pub(crate) fn idct_dequant_rows_dct<const N: usize, const S: usize>(
 }
 
 pub(crate) trait DctSimd4 {
-    type V: Copy;
+    type V: Copy + crate::itx_1d::DctLane;
 
     unsafe fn zero() -> Self::V;
     unsafe fn splat(v: i32) -> Self::V;
@@ -722,14 +722,26 @@ fn process_row_group_x4<B: DctSimd4, const S: usize>(
             store_row_group_x4::<B, 8>(tmp, y, &v);
         }
         16 => {
-            let mut v = load_coeff_rows_x4::<B, 16>(coeff, y);
-            inv_dct16_simd4::<B>(&mut v);
-            store_row_group_x4::<B, 16>(tmp, y, &v);
+            let load = |j: usize| unsafe { B::load_slice(coeff, y + j * 16) };
+            let store = |m: usize, v: B::V| {
+                let l = unsafe { B::to_array(v) };
+                tmp[y * ITX_TMP_STRIDE + m] = l[0];
+                tmp[(y + 1) * ITX_TMP_STRIDE + m] = l[1];
+                tmp[(y + 2) * ITX_TMP_STRIDE + m] = l[2];
+                tmp[(y + 3) * ITX_TMP_STRIDE + m] = l[3];
+            };
+            crate::itx_1d::dct16_flat::<B::V>(load, store);
         }
         32 => {
-            let mut v = load_coeff_rows_x4::<B, 32>(coeff, y);
-            inv_dct32_simd4::<B>(&mut v);
-            store_row_group_x4::<B, 32>(tmp, y, &v);
+            let load = |j: usize| unsafe { B::load_slice(coeff, y + j * 32) };
+            let store = |m: usize, v: B::V| {
+                let l = unsafe { B::to_array(v) };
+                tmp[y * ITX_TMP_STRIDE + m] = l[0];
+                tmp[(y + 1) * ITX_TMP_STRIDE + m] = l[1];
+                tmp[(y + 2) * ITX_TMP_STRIDE + m] = l[2];
+                tmp[(y + 3) * ITX_TMP_STRIDE + m] = l[3];
+            };
+            crate::itx_1d::dct32_flat::<B::V>(load, store);
         }
         _ => unreachable!(),
     }
@@ -789,32 +801,6 @@ fn odd4<T: Copy>(v: &[T; 8]) -> [T; 4] {
 }
 
 #[inline(always)]
-fn even8<T: Copy>(v: &[T; 16]) -> [T; 8] {
-    [v[0], v[2], v[4], v[6], v[8], v[10], v[12], v[14]]
-}
-
-#[inline(always)]
-fn odd8<T: Copy>(v: &[T; 16]) -> [T; 8] {
-    [v[1], v[3], v[5], v[7], v[9], v[11], v[13], v[15]]
-}
-
-#[inline(always)]
-fn even16<T: Copy>(v: &[T; 32]) -> [T; 16] {
-    [
-        v[0], v[2], v[4], v[6], v[8], v[10], v[12], v[14], v[16], v[18], v[20], v[22], v[24],
-        v[26], v[28], v[30],
-    ]
-}
-
-#[inline(always)]
-fn odd16<T: Copy>(v: &[T; 32]) -> [T; 16] {
-    [
-        v[1], v[3], v[5], v[7], v[9], v[11], v[13], v[15], v[17], v[19], v[21], v[23], v[25],
-        v[27], v[29], v[31],
-    ]
-}
-
-#[inline(always)]
 fn inv_dct4_simd4<B: DctSimd4>(v: &mut [B::V; 4]) {
     unsafe {
         let a0 = B::add(vmulc::<B>(v[0], 64), vmulc::<B>(v[2], 64));
@@ -851,98 +837,75 @@ fn inv_dct8_simd4<B: DctSimd4>(v: &mut [B::V; 8]) {
     }
 }
 
-#[allow(unsafe_op_in_unsafe_fn)]
+/// Full size-16 inverse DCT-II kernel `K16[in*16 + out]` for the flat butterfly.
+#[rustfmt::skip]
+pub(crate) static DCT16_DENSE_KERNEL: [i32; 256] = [
+      64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,
+      90,  87,  80,  70,  57,  43,  26,   9,  -9, -26, -43, -57, -70, -80, -87, -90,
+      89,  75,  50,  18, -18, -50, -75, -89, -89, -75, -50, -18,  18,  50,  75,  89,
+      87,  57,   9, -43, -80, -90, -70, -26,  26,  70,  90,  80,  43,  -9, -57, -87,
+      83,  35, -35, -83, -83, -35,  35,  83,  83,  35, -35, -83, -83, -35,  35,  83,
+      80,   9, -70, -87, -26,  57,  90,  43, -43, -90, -57,  26,  87,  70,  -9, -80,
+      75, -18, -89, -50,  50,  89,  18, -75, -75,  18,  89,  50, -50, -89, -18,  75,
+      70, -43, -87,   9,  90,  26, -80, -57,  57,  80, -26, -90,  -9,  87,  43, -70,
+      64, -64, -64,  64,  64, -64, -64,  64,  64, -64, -64,  64,  64, -64, -64,  64,
+      57, -80, -26,  90,  -9, -87,  43,  70, -70, -43,  87,   9, -90,  26,  80, -57,
+      50, -89,  18,  75, -75, -18,  89, -50, -50,  89, -18, -75,  75,  18, -89,  50,
+      43, -90,  57,  26, -87,  70,   9, -80,  80,  -9, -70,  87, -26, -57,  90, -43,
+      35, -83,  83, -35, -35,  83, -83,  35,  35, -83,  83, -35, -35,  83, -83,  35,
+      26, -70,  90, -80,  43,   9, -57,  87, -87,  57,  -9, -43,  80, -90,  70, -26,
+      18, -50,  75, -89,  89, -75,  50, -18, -18,  50, -75,  89, -89,  75, -50,  18,
+       9, -26,  43, -57,  70, -80,  87, -90,  90, -87,  80, -70,  57, -43,  26,  -9,
+];
+
+/// Full size-32 inverse DCT-II kernel `K32[in*32 + out]` for the flat butterfly.
+#[rustfmt::skip]
+pub(crate) static DCT32_DENSE_KERNEL: [i32; 1024] = [
+      64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,  64,
+      90,  90,  88,  85,  82,  78,  73,  67,  61,  54,  47,  39,  30,  22,  13,   4,  -4, -13, -22, -30, -39, -47, -54, -61, -67, -73, -78, -82, -85, -88, -90, -90,
+      90,  87,  80,  70,  57,  43,  26,   9,  -9, -26, -43, -57, -70, -80, -87, -90, -90, -87, -80, -70, -57, -43, -26,  -9,   9,  26,  43,  57,  70,  80,  87,  90,
+      90,  82,  67,  47,  22,  -4, -30, -54, -73, -85, -90, -88, -78, -61, -39, -13,  13,  39,  61,  78,  88,  90,  85,  73,  54,  30,   4, -22, -47, -67, -82, -90,
+      89,  75,  50,  18, -18, -50, -75, -89, -89, -75, -50, -18,  18,  50,  75,  89,  89,  75,  50,  18, -18, -50, -75, -89, -89, -75, -50, -18,  18,  50,  75,  89,
+      88,  67,  30, -13, -54, -82, -90, -78, -47,  -4,  39,  73,  90,  85,  61,  22, -22, -61, -85, -90, -73, -39,   4,  47,  78,  90,  82,  54,  13, -30, -67, -88,
+      87,  57,   9, -43, -80, -90, -70, -26,  26,  70,  90,  80,  43,  -9, -57, -87, -87, -57,  -9,  43,  80,  90,  70,  26, -26, -70, -90, -80, -43,   9,  57,  87,
+      85,  47, -13, -67, -90, -73, -22,  39,  82,  88,  54,  -4, -61, -90, -78, -30,  30,  78,  90,  61,   4, -54, -88, -82, -39,  22,  73,  90,  67,  13, -47, -85,
+      83,  35, -35, -83, -83, -35,  35,  83,  83,  35, -35, -83, -83, -35,  35,  83,  83,  35, -35, -83, -83, -35,  35,  83,  83,  35, -35, -83, -83, -35,  35,  83,
+      82,  22, -54, -90, -61,  13,  78,  85,  30, -47, -90, -67,   4,  73,  88,  39, -39, -88, -73,  -4,  67,  90,  47, -30, -85, -78, -13,  61,  90,  54, -22, -82,
+      80,   9, -70, -87, -26,  57,  90,  43, -43, -90, -57,  26,  87,  70,  -9, -80, -80,  -9,  70,  87,  26, -57, -90, -43,  43,  90,  57, -26, -87, -70,   9,  80,
+      78,  -4, -82, -73,  13,  85,  67, -22, -88, -61,  30,  90,  54, -39, -90, -47,  47,  90,  39, -54, -90, -30,  61,  88,  22, -67, -85, -13,  73,  82,   4, -78,
+      75, -18, -89, -50,  50,  89,  18, -75, -75,  18,  89,  50, -50, -89, -18,  75,  75, -18, -89, -50,  50,  89,  18, -75, -75,  18,  89,  50, -50, -89, -18,  75,
+      73, -30, -90, -22,  78,  67, -39, -90, -13,  82,  61, -47, -88,  -4,  85,  54, -54, -85,   4,  88,  47, -61, -82,  13,  90,  39, -67, -78,  22,  90,  30, -73,
+      70, -43, -87,   9,  90,  26, -80, -57,  57,  80, -26, -90,  -9,  87,  43, -70, -70,  43,  87,  -9, -90, -26,  80,  57, -57, -80,  26,  90,   9, -87, -43,  70,
+      67, -54, -78,  39,  85, -22, -90,   4,  90,  13, -88, -30,  82,  47, -73, -61,  61,  73, -47, -82,  30,  88, -13, -90,  -4,  90,  22, -85, -39,  78,  54, -67,
+      64, -64, -64,  64,  64, -64, -64,  64,  64, -64, -64,  64,  64, -64, -64,  64,  64, -64, -64,  64,  64, -64, -64,  64,  64, -64, -64,  64,  64, -64, -64,  64,
+      61, -73, -47,  82,  30, -88, -13,  90,  -4, -90,  22,  85, -39, -78,  54,  67, -67, -54,  78,  39, -85, -22,  90,   4, -90,  13,  88, -30, -82,  47,  73, -61,
+      57, -80, -26,  90,  -9, -87,  43,  70, -70, -43,  87,   9, -90,  26,  80, -57, -57,  80,  26, -90,   9,  87, -43, -70,  70,  43, -87,  -9,  90, -26, -80,  57,
+      54, -85,  -4,  88, -47, -61,  82,  13, -90,  39,  67, -78, -22,  90, -30, -73,  73,  30, -90,  22,  78, -67, -39,  90, -13, -82,  61,  47, -88,   4,  85, -54,
+      50, -89,  18,  75, -75, -18,  89, -50, -50,  89, -18, -75,  75,  18, -89,  50,  50, -89,  18,  75, -75, -18,  89, -50, -50,  89, -18, -75,  75,  18, -89,  50,
+      47, -90,  39,  54, -90,  30,  61, -88,  22,  67, -85,  13,  73, -82,   4,  78, -78,  -4,  82, -73, -13,  85, -67, -22,  88, -61, -30,  90, -54, -39,  90, -47,
+      43, -90,  57,  26, -87,  70,   9, -80,  80,  -9, -70,  87, -26, -57,  90, -43, -43,  90, -57, -26,  87, -70,  -9,  80, -80,   9,  70, -87,  26,  57, -90,  43,
+      39, -88,  73,  -4, -67,  90, -47, -30,  85, -78,  13,  61, -90,  54,  22, -82,  82, -22, -54,  90, -61, -13,  78, -85,  30,  47, -90,  67,   4, -73,  88, -39,
+      35, -83,  83, -35, -35,  83, -83,  35,  35, -83,  83, -35, -35,  83, -83,  35,  35, -83,  83, -35, -35,  83, -83,  35,  35, -83,  83, -35, -35,  83, -83,  35,
+      30, -78,  90, -61,   4,  54, -88,  82, -39, -22,  73, -90,  67, -13, -47,  85, -85,  47,  13, -67,  90, -73,  22,  39, -82,  88, -54,  -4,  61, -90,  78, -30,
+      26, -70,  90, -80,  43,   9, -57,  87, -87,  57,  -9, -43,  80, -90,  70, -26, -26,  70, -90,  80, -43,  -9,  57, -87,  87, -57,   9,  43, -80,  90, -70,  26,
+      22, -61,  85, -90,  73, -39,  -4,  47, -78,  90, -82,  54, -13, -30,  67, -88,  88, -67,  30,  13, -54,  82, -90,  78, -47,   4,  39, -73,  90, -85,  61, -22,
+      18, -50,  75, -89,  89, -75,  50, -18, -18,  50, -75,  89, -89,  75, -50,  18,  18, -50,  75, -89,  89, -75,  50, -18, -18,  50, -75,  89, -89,  75, -50,  18,
+      13, -39,  61, -78,  88, -90,  85, -73,  54, -30,   4,  22, -47,  67, -82,  90, -90,  82, -67,  47, -22,  -4,  30, -54,  73, -85,  90, -88,  78, -61,  39, -13,
+       9, -26,  43, -57,  70, -80,  87, -90,  90, -87,  80, -70,  57, -43,  26,  -9,  -9,  26, -43,  57, -70,  80, -87,  90, -90,  87, -80,  70, -57,  43, -26,   9,
+       4, -13,  22, -30,  39, -47,  54, -61,  67, -73,  78, -82,  85, -88,  90, -90,  90, -90,  88, -85,  82, -78,  73, -67,  61, -54,  47, -39,  30, -22,  13,  -4,
+];
+
 #[inline(always)]
 fn inv_dct16_simd4<B: DctSimd4>(v: &mut [B::V; 16]) {
-    unsafe {
-        let mut e = even8(v);
-        inv_dct8_simd4::<B>(&mut e);
-        let odd = odd8(v);
-        let b0 = sum_row_simd4::<B, 8>(&DCT16_ODD_KERNEL[0], &odd);
-        let b1 = sum_row_simd4::<B, 8>(&DCT16_ODD_KERNEL[1], &odd);
-        let b2 = sum_row_simd4::<B, 8>(&DCT16_ODD_KERNEL[2], &odd);
-        let b3 = sum_row_simd4::<B, 8>(&DCT16_ODD_KERNEL[3], &odd);
-        let b4 = sum_row_simd4::<B, 8>(&DCT16_ODD_KERNEL[4], &odd);
-        let b5 = sum_row_simd4::<B, 8>(&DCT16_ODD_KERNEL[5], &odd);
-        let b6 = sum_row_simd4::<B, 8>(&DCT16_ODD_KERNEL[6], &odd);
-        let b7 = sum_row_simd4::<B, 8>(&DCT16_ODD_KERNEL[7], &odd);
-
-        v[0] = B::add(e[0], b0);
-        v[15] = B::sub(e[0], b0);
-        v[1] = B::add(e[1], b1);
-        v[14] = B::sub(e[1], b1);
-        v[2] = B::add(e[2], b2);
-        v[13] = B::sub(e[2], b2);
-        v[3] = B::add(e[3], b3);
-        v[12] = B::sub(e[3], b3);
-        v[4] = B::add(e[4], b4);
-        v[11] = B::sub(e[4], b4);
-        v[5] = B::add(e[5], b5);
-        v[10] = B::sub(e[5], b5);
-        v[6] = B::add(e[6], b6);
-        v[9] = B::sub(e[6], b6);
-        v[7] = B::add(e[7], b7);
-        v[8] = B::sub(e[7], b7);
-    }
+    let s = *v;
+    crate::itx_1d::dct16_flat::<B::V>(|j| s[j], |m, x| v[m] = x);
 }
 
 #[allow(unsafe_op_in_unsafe_fn)]
 #[inline(always)]
 fn inv_dct32_simd4<B: DctSimd4>(v: &mut [B::V; 32]) {
-    unsafe {
-        let mut e = even16(v);
-        inv_dct16_simd4::<B>(&mut e);
-        let odd = odd16(v);
-        let b0 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[0], &odd);
-        let b1 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[1], &odd);
-        let b2 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[2], &odd);
-        let b3 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[3], &odd);
-        let b4 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[4], &odd);
-        let b5 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[5], &odd);
-        let b6 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[6], &odd);
-        let b7 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[7], &odd);
-        let b8 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[8], &odd);
-        let b9 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[9], &odd);
-        let b10 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[10], &odd);
-        let b11 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[11], &odd);
-        let b12 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[12], &odd);
-        let b13 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[13], &odd);
-        let b14 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[14], &odd);
-        let b15 = sum_row_simd4::<B, 16>(&DCT32_ODD_KERNEL[15], &odd);
-
-        v[0] = B::add(e[0], b0);
-        v[31] = B::sub(e[0], b0);
-        v[1] = B::add(e[1], b1);
-        v[30] = B::sub(e[1], b1);
-        v[2] = B::add(e[2], b2);
-        v[29] = B::sub(e[2], b2);
-        v[3] = B::add(e[3], b3);
-        v[28] = B::sub(e[3], b3);
-        v[4] = B::add(e[4], b4);
-        v[27] = B::sub(e[4], b4);
-        v[5] = B::add(e[5], b5);
-        v[26] = B::sub(e[5], b5);
-        v[6] = B::add(e[6], b6);
-        v[25] = B::sub(e[6], b6);
-        v[7] = B::add(e[7], b7);
-        v[24] = B::sub(e[7], b7);
-        v[8] = B::add(e[8], b8);
-        v[23] = B::sub(e[8], b8);
-        v[9] = B::add(e[9], b9);
-        v[22] = B::sub(e[9], b9);
-        v[10] = B::add(e[10], b10);
-        v[21] = B::sub(e[10], b10);
-        v[11] = B::add(e[11], b11);
-        v[20] = B::sub(e[11], b11);
-        v[12] = B::add(e[12], b12);
-        v[19] = B::sub(e[12], b12);
-        v[13] = B::add(e[13], b13);
-        v[18] = B::sub(e[13], b13);
-        v[14] = B::add(e[14], b14);
-        v[17] = B::sub(e[14], b14);
-        v[15] = B::add(e[15], b15);
-        v[16] = B::sub(e[15], b15);
-    }
+    let s = *v;
+    crate::itx_1d::dct32_flat::<B::V>(|j| s[j], |m, x| v[m] = x);
 }
 
 #[inline(always)]
@@ -1196,19 +1159,24 @@ fn dct_1d_x4<B: DctSimd4, const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: us
             store_1d_x4::<B, 8>(tmp, x, ITX_TMP_STRIDE, &v);
         }
         16 => {
-            let mut v = load_1d_x4::<B, 16>(tmp, x, ITX_TMP_STRIDE);
-            inv_dct16_simd4::<B>(&mut v);
-            store_1d_x4::<B, 16>(tmp, x, ITX_TMP_STRIDE, &v);
+            let s = load_1d_x4::<B, 16>(tmp, x, ITX_TMP_STRIDE);
+            crate::itx_1d::dct16_flat::<B::V>(
+                |j| s[j],
+                |m, v| unsafe { B::store(tmp, x + m * ITX_TMP_STRIDE, v) },
+            );
         }
         32 => {
-            let mut v = load_1d_x4::<B, 32>(tmp, x, ITX_TMP_STRIDE);
-            inv_dct32_simd4::<B>(&mut v);
-            store_1d_x4::<B, 32>(tmp, x, ITX_TMP_STRIDE, &v);
+            let s = load_1d_x4::<B, 32>(tmp, x, ITX_TMP_STRIDE);
+            crate::itx_1d::dct32_flat::<B::V>(
+                |j| s[j],
+                |m, v| unsafe { B::store(tmp, x + m * ITX_TMP_STRIDE, v) },
+            );
         }
         _ => unreachable!(),
     }
 }
 
+#[inline(always)]
 pub(crate) fn idct_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],

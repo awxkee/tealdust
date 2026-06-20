@@ -39,6 +39,35 @@ use crate::itx_2d::{
 #[derive(Clone, Copy)]
 pub(crate) struct SseI32x4(__m128i);
 
+impl crate::itx_1d::DctLane for SseI32x4 {
+    #[inline(always)]
+    fn zero() -> Self {
+        SseI32x4(unsafe { _mm_setzero_si128() })
+    }
+    #[inline(always)]
+    fn add(self, o: Self) -> Self {
+        SseI32x4(unsafe { _mm_add_epi32(self.0, o.0) })
+    }
+    #[inline(always)]
+    fn sub(self, o: Self) -> Self {
+        SseI32x4(unsafe { _mm_sub_epi32(self.0, o.0) })
+    }
+    #[inline(always)]
+    fn mul(self, k: Self) -> Self {
+        SseI32x4(unsafe { _mm_mullo_epi32(self.0, k.0) })
+    }
+    #[inline(always)]
+    fn dup_load(table: &[i32], idx: usize) -> Self {
+        // SAFETY: callers index within the kernel tables.
+        SseI32x4(unsafe { _mm_set1_epi32(*table.get_unchecked(idx)) })
+    }
+    #[inline(always)]
+    fn mul_add(self, x: Self, k: Self) -> Self {
+        // SSE has no integer FMA: multiply-low then add.
+        SseI32x4(unsafe { _mm_add_epi32(self.0, _mm_mullo_epi32(x.0, k.0)) })
+    }
+}
+
 pub(crate) struct SseDct2d;
 
 impl DctSimd4 for SseDct2d {
