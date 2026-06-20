@@ -336,13 +336,16 @@ pub fn decode_frame_init(
         let stride = (sb256w * (64 >> ss_hor)) as isize;
         let size = stride as usize * sb256h as usize * (64 >> ss_ver) as usize;
         lf.uv_segmap_stride = stride;
-        if lf.segmap_uv.len() != size {
-            lf.segmap_uv.resize(size, 0);
+        {
+            let seg = std::sync::Arc::make_mut(&mut lf.segmap_uv);
+            if seg.len() != size {
+                seg.resize(size, 0);
+            }
+            seg.fill(0);
         }
-        lf.segmap_uv.fill(0);
     } else {
         lf.uv_segmap_stride = 0;
-        lf.segmap_uv.clear();
+        std::sync::Arc::make_mut(&mut lf.segmap_uv).clear();
     }
 
     if frame_hdr.gdf.enabled != AdaptiveBoolean::Off {
@@ -2142,6 +2145,15 @@ std::thread_local! {
     /// `MaybeUninit`: it is value-initialized to zero once per thread.
     static CF_SCRATCH: core::cell::RefCell<[i32; 64 * 64]> =
         const { core::cell::RefCell::new([0; 64 * 64]) };
+
+    /// Per-thread reusable buffer for the pre-luma-LR luma snapshot read by the
+    /// chroma single-Wiener cross-component refine. Sized to the full luma plane
+    /// (so the kernel keeps indexing it by absolute offset), but only the band
+    /// around the current superblock row is refreshed each row — see
+    /// `filter_sbrow`. This replaces a full-plane `dst_y.to_vec()` per sbrow,
+    /// which was the dominant memory-traffic cost of the filter phase.
+    static LUMA_SNAP: core::cell::RefCell<Vec<u8>> =
+        const { core::cell::RefCell::new(Vec::new()) };
 }
 /// `Dav2dTaskContext` used by the luma recon leaf). `is_coded[0]` tracks the
 /// 64x64 grid of decoded luma tx blocks for top-right / bottom-left availability.
@@ -3015,6 +3027,23 @@ pub fn decode_frame_main(
                 seq_hdr.layout != crate::headers::PixelLayout::I400,
             );
             if do_parallel {
+                // PARALLEL, DYNAMICALLY LOAD-BALANCED.
+                //
+                // This previously mapped one tile *row* to one worker via static
+                // round-robin (`tr = w; tr += n_workers`). With as many rows as
+                // threads, each worker got exactly one row, so on heterogeneous
+                // cores (Apple P/E) the fast cores finished and parked on the
+                // join while the single slowest core set the wall-clock time.
+                //
+                // Instead we run two phases, each scheduled dynamically over an
+                // atomic work cursor so a fast core simply claims the next unit:
+                //   PHASE A (decode): one unit per *tile* (rows*cols units).
+                //     Tiles are independent (own MSAC/CDF, disjoint picture
+                //     columns + context), so any claim order is valid; decoding
+                //     a tile's sbrows in order preserves the in-tile dependency.
+                //   barrier (the decode scope's join)
+                //   PHASE B (filter): one unit per tile *row* at full width,
+                //     since the cross-tile filters need the whole row decoded.
                 let n_tiles = (rows as usize) * (cols as usize);
                 let n_dec_workers = (n_tc as usize).min(n_tiles);
                 let n_flt_workers = (n_tc as usize).min(rows as usize);
@@ -3046,7 +3075,9 @@ pub fn decode_frame_main(
                     // this block, before the filter phase reborrows `lf`.
                     let mask_dm = DisjointMut::new(&mut lf.mask[..]);
                     let lrmask_dm = DisjointMut::new(&mut lf.lr_mask[..]);
-                    let seguv_dm = DisjointMut::new(&mut lf.segmap_uv[..]);
+                    let seguv_dm = DisjointMut::new(
+                        std::sync::Arc::make_mut(&mut lf.segmap_uv).as_mut_slice(),
+                    );
                     let mask_dm = &mask_dm;
                     let lrmask_dm = &lrmask_dm;
                     let seguv_dm = &seguv_dm;
@@ -3345,7 +3376,7 @@ pub fn decode_frame_main(
                                 &recon_frame,
                                 &mut cur_segmap[..],
                                 prev_segmap_ref,
-                                &mut lf.segmap_uv,
+                                std::sync::Arc::make_mut(&mut lf.segmap_uv).as_mut_slice(),
                                 lf.uv_segmap_stride,
                                 &mut cur_ccsomap[..],
                                 prev_ccsomap_ref,
@@ -3731,54 +3762,90 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
     // dispatch calls the Rust-native slice kernels directly (the asm dsp_lr
     // pointers are unavailable).
     if lf.restore_planes != 0 && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0 {
-        // Snapshot the (pre-luma-LR) luma plane: the LR pass processes chroma
-        // before luma, and the chroma single-Wiener reads luma cross-component
-        let luma_snapshot = dst_y.to_vec();
-        // PC/NS wiener tables, selected by the qidx bucket computed in init_wiener
-        // is unused; the kernels only index them for their own filter family.
-        let widx = lf.wiener_idx;
-        let pc_subclass_lut: &[u8] = &crate::tables::PC_WIENER_SUB_CLASSIFY[widx];
-        let pc_filters: &[[i16; 13]] = &crate::tables::PC_WIENER_FILTERS[widx];
-        let ns_subclass_lut: &[u8] = match lf.ns_subclass_class_idx {
-            // `ci` is derived from num_classes_idx (parsed get_bits(3) → 0..7), so
-            // ci = num_classes_idx - 1 ∈ 0..6; clamp defensively to the table bound.
-            Some(ci) => &crate::tables::PC_WIENER_SUB_CLASSIFY_NS[widx][ci.min(6)],
-            // For valid streams the multi-class NS path only runs when this is Some
-            // (plane 0 num_classes_idx > 0). A malformed stream can still select the
-            // NsMulti per-unit path; fall back to a valid (non-empty) LUT bucket so
-            // classification never indexes an empty slice. No-op for valid input.
-            None => &crate::tables::PC_WIENER_SUB_CLASSIFY_NS[widx][0],
-        };
-        let ctx = crate::looprestoration::LrContext {
-            restoration_p: &frame_hdr.restoration.p,
-            gdf_qp_idx: frame_hdr.gdf.qp_idx as i32,
-            gdf_scale: frame_hdr.gdf.scale as i32,
-            sb128: frame_hdr.sb128 != 0,
-            cfl_ds_filter_index: seq_hdr.cfl_ds_filter_index as i32,
-            layout: seq_hdr.layout,
-            bw,
-            bh,
-            sb256w,
-            sbh,
-            mask: &lf.mask,
-            lr_mask: &lf.lr_mask,
-            lr_db_line: &lf.lr_db_line,
-            lr_cdef_line: &lf.lr_cdef_line,
-            lf_p_luma: &luma_snapshot,
-            base_q: lf.base_q,
-            gdf_ref_dst_idx: lf.gdf_ref_dst_idx,
-            start_of_tile_row: &lf.start_of_tile_row,
-            ns_subclass_lut,
-            pc_subclass_lut,
-            pc_filters,
-            n_tc: 1,
-            inloop_filters: inloop,
-            cur_stride: [fp.y_stride, fp.uv_stride],
-            unit_size: frame_hdr.restoration.unit_size,
-            restore_planes: lf.restore_planes,
-        };
-        let mut dst: [&mut [u8]; 3] = [dst_y, dst_u, dst_v];
-        crate::looprestoration::lr_sbrow_8bpc(&ctx, &mut dst, sby);
+        LUMA_SNAP.with(|snap_cell| {
+            let mut snap = snap_cell.borrow_mut();
+            // The luma snapshot is read only by the chroma single-Wiener cross-
+            // component refine, which runs only when chroma restoration is enabled.
+            // For luma-only restoration the snapshot is never read, so skip the copy
+            // entirely (pass an empty slice). When it is needed, refresh only the
+            // band the kernel touches: this superblock row's luma rows plus a 64-row
+            // halo (well over the Wiener vertical reach of ~12 — the sole reader is
+            // `ns_wiener_single_uv_8bpc`). The buffer keeps the full plane size so the
+            // kernel still indexes it by absolute offset; rows outside the band are
+            // not read for this `sby`. This replaces a full-plane `dst_y.to_vec()`
+            // per row.
+            let chroma_lr = {
+                // The luma snapshot is read only by the chroma single-Wiener cross-
+                // component refine, which a chroma unit selects only when its
+                // restoration type is NsWiener (or Switchable, where a unit may pick
+                // it). Any other chroma type (None/PcWiener) never reads luma, so the
+                // copy is pure waste — skip it.
+                let nsw = crate::headers::RestorationType::NsWiener as u8;
+                let sw = crate::headers::RestorationType::Switchable as u8;
+                let u = frame_hdr.restoration.p[1].restoration_type;
+                let v = frame_hdr.restoration.p[2].restoration_type;
+                u == nsw || u == sw || v == nsw || v == sw
+            };
+            let luma_snapshot: &[u8] = if chroma_lr {
+                if snap.len() != dst_y.len() {
+                    snap.resize(dst_y.len(), 0);
+                }
+                let sb_luma_h = sb_step * 4;
+                let ystride = fp.y_stride.unsigned_abs() as usize;
+                let band_lo = (((sby * sb_luma_h - 64).max(0)) as usize * ystride).min(dst_y.len());
+                let band_hi =
+                    ((((sby + 1) * sb_luma_h + 64).max(0)) as usize * ystride).min(dst_y.len());
+                snap[band_lo..band_hi].copy_from_slice(&dst_y[band_lo..band_hi]);
+                &snap[..]
+            } else {
+                &[]
+            };
+            // PC/NS wiener tables, selected by the qidx bucket computed in init_wiener
+            // is unused; the kernels only index them for their own filter family.
+            let widx = lf.wiener_idx;
+            let pc_subclass_lut: &[u8] = &crate::tables::PC_WIENER_SUB_CLASSIFY[widx];
+            let pc_filters: &[[i16; 13]] = &crate::tables::PC_WIENER_FILTERS[widx];
+            let ns_subclass_lut: &[u8] = match lf.ns_subclass_class_idx {
+                // `ci` is derived from num_classes_idx (parsed get_bits(3) → 0..7), so
+                // ci = num_classes_idx - 1 ∈ 0..6; clamp defensively to the table bound.
+                Some(ci) => &crate::tables::PC_WIENER_SUB_CLASSIFY_NS[widx][ci.min(6)],
+                // For valid streams the multi-class NS path only runs when this is Some
+                // (plane 0 num_classes_idx > 0). A malformed stream can still select the
+                // NsMulti per-unit path; fall back to a valid (non-empty) LUT bucket so
+                // classification never indexes an empty slice. No-op for valid input.
+                None => &crate::tables::PC_WIENER_SUB_CLASSIFY_NS[widx][0],
+            };
+            let ctx = crate::looprestoration::LrContext {
+                restoration_p: &frame_hdr.restoration.p,
+                gdf_qp_idx: frame_hdr.gdf.qp_idx as i32,
+                gdf_scale: frame_hdr.gdf.scale as i32,
+                sb128: frame_hdr.sb128 != 0,
+                cfl_ds_filter_index: seq_hdr.cfl_ds_filter_index as i32,
+                layout: seq_hdr.layout,
+                bw,
+                bh,
+                sb256w,
+                sbh,
+                mask: &lf.mask,
+                lr_mask: &lf.lr_mask,
+                lr_db_line: &lf.lr_db_line,
+                lr_cdef_line: &lf.lr_cdef_line,
+                lf_p_luma: luma_snapshot,
+                base_q: lf.base_q,
+                gdf_ref_dst_idx: lf.gdf_ref_dst_idx,
+                start_of_tile_row: &lf.start_of_tile_row,
+                ns_subclass_lut,
+                pc_subclass_lut,
+                pc_filters,
+                n_tc: 1,
+                inloop_filters: inloop,
+                cur_stride: [fp.y_stride, fp.uv_stride],
+                unit_size: frame_hdr.restoration.unit_size,
+                restore_planes: lf.restore_planes,
+            };
+            let mut dst: [&mut [u8]; 3] = [dst_y, dst_u, dst_v];
+            crate::looprestoration::lr_sbrow_8bpc(&ctx, &mut dst, sby);
+        });
     }
 }
 
@@ -4198,16 +4265,12 @@ fn submit_frame_inner(
 
     // Hand the reconstructed picture to the decoder's output path. (Visibility
     // filtering / POC reordering is wired with full output queueing later.)
-    // The output buffer must be independently owned; clone the shared pixels.
-    // The plane copy is parallelised across the decoder's worker pool (the recon
-    // core stays on its own path; only this disjoint-output display copy threads).
-    let display_threads = c.n_tc;
-    let out = clone_picture_mt(
-        &shared,
-        display_threads,
-        c.pool.as_ref(),
-        c.pic_allocator.clone(),
-    );
+    // The frame is read-only once decoded, so the output shares the ref slots'
+    // plane buffers by reference count rather than deep-copying ~megabytes of
+    // pixels. Film grain (applied at output time) writes to a fresh picture, and
+    // any other mutation copies on write, so the shared storage is never
+    // observed changing.
+    let out = shared.shallow_clone();
     c.frame_out.push(out);
     Ok(())
 }

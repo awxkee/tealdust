@@ -102,7 +102,7 @@ impl Pixel for u8 {
         storage: &mut crate::picture::PlaneStorage,
     ) -> Option<&mut [Self]> {
         match storage {
-            crate::picture::PlaneStorage::U8(v) => Some(v.as_mut_slice()),
+            crate::picture::PlaneStorage::U8(v) => Some(std::sync::Arc::make_mut(v).as_mut_slice()),
             _ => None,
         }
     }
@@ -161,7 +161,9 @@ impl Pixel for u16 {
         storage: &mut crate::picture::PlaneStorage,
     ) -> Option<&mut [Self]> {
         match storage {
-            crate::picture::PlaneStorage::U16(v) => Some(v.as_mut_slice()),
+            crate::picture::PlaneStorage::U16(v) => {
+                Some(std::sync::Arc::make_mut(v).as_mut_slice())
+            }
             _ => None,
         }
     }

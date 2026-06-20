@@ -48,12 +48,12 @@ pub struct PictureParameters {
 /// This replaces the old opaque pointer/address storage. The active variant is
 /// selected from the picture bit depth, so typed plane views can be returned by
 /// matching the enum rather than by reinterpreting pointer provenance.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub enum PlaneStorage {
     #[default]
     Empty,
-    U8(Vec<u8>),
-    U16(Vec<u16>),
+    U8(Arc<Vec<u8>>),
+    U16(Arc<Vec<u16>>),
 }
 
 impl PlaneStorage {
@@ -93,8 +93,21 @@ impl PlaneStorage {
     fn zero_fill(&mut self) {
         match self {
             PlaneStorage::Empty => {}
-            PlaneStorage::U8(v) => v.fill(0),
-            PlaneStorage::U16(v) => v.fill(0),
+            PlaneStorage::U8(v) => Arc::make_mut(v).fill(0),
+            PlaneStorage::U16(v) => Arc::make_mut(v).fill(0),
+        }
+    }
+
+    /// True when this plane's buffer is uniquely owned (not shared with any
+    /// other live picture). The pool only recycles uniquely-owned buffers — a
+    /// plane still referenced by a ref slot or an emitted output picture must
+    /// not be handed back out.
+    #[inline]
+    fn is_unique(&self) -> bool {
+        match self {
+            PlaneStorage::Empty => false,
+            PlaneStorage::U8(v) => Arc::strong_count(v) == 1,
+            PlaneStorage::U16(v) => Arc::strong_count(v) == 1,
         }
     }
 
@@ -111,9 +124,9 @@ impl PlaneStorage {
     pub fn bytes_mut(&mut self) -> &mut [u8] {
         match self {
             PlaneStorage::Empty => &mut [],
-            PlaneStorage::U8(v) => v.as_mut_slice(),
+            PlaneStorage::U8(v) => Arc::make_mut(v).as_mut_slice(),
             PlaneStorage::U16(v) => {
-                <u16 as crate::pixel::Pixel>::slice_as_ne_bytes_mut(v.as_mut_slice())
+                <u16 as crate::pixel::Pixel>::slice_as_ne_bytes_mut(Arc::make_mut(v).as_mut_slice())
             }
         }
     }
@@ -124,9 +137,9 @@ impl PlaneStorage {
             PlaneStorage::Empty
         } else if hbd {
             debug_assert_eq!(byte_len % core::mem::size_of::<u16>(), 0);
-            PlaneStorage::U16(vec![0u16; byte_len / core::mem::size_of::<u16>()])
+            PlaneStorage::U16(Arc::new(vec![0u16; byte_len / core::mem::size_of::<u16>()]))
         } else {
-            PlaneStorage::U8(vec![0u8; byte_len])
+            PlaneStorage::U8(Arc::new(vec![0u8; byte_len]))
         }
     }
 }
@@ -279,7 +292,12 @@ impl PicAllocator for PoolPicAllocator {
     fn release_picture(&self, alloc: PictureAllocation) {
         if let Ok(mut free) = self.free.lock() {
             for s in alloc.data {
-                if s.is_some() && free.len() < self.cap {
+                // Recycle only buffers no other live picture still shares. A
+                // plane handed to a ref slot or an emitted output picture has
+                // strong_count > 1 here and is dropped (decrementing the count)
+                // rather than recycled; it becomes reclaimable when its last
+                // holder is released.
+                if s.is_some() && s.is_unique() && free.len() < self.cap {
                     free.push(s);
                 }
             }
@@ -349,6 +367,30 @@ impl Picture {
 
     pub fn has_data(&self) -> bool {
         self.data[0].is_some()
+    }
+
+    /// A new picture that shares this one's plane buffers by reference count
+    /// instead of deep-copying them. Used to emit a display picture without
+    /// duplicating ~megabytes of pixels: the reconstructed frame is read-only
+    /// once decoded, so the ref slots and the output can share the same storage.
+    /// Any later mutation through `bytes_mut` copies on write (see `make_mut`),
+    /// so the shared buffers can never be observed changing.
+    pub fn shallow_clone(&self) -> Self {
+        Self {
+            p: self.p,
+            data: [
+                self.data[0].clone(),
+                self.data[1].clone(),
+                self.data[2].clone(),
+            ],
+            stride: self.stride,
+            seq_hdr: self.seq_hdr.clone(),
+            frame_hdr: self.frame_hdr.clone(),
+            fgm: self.fgm,
+            content_light_level: self.content_light_level,
+            props: self.props.clone(),
+            allocator: self.allocator.clone(),
+        }
     }
 
     /// True when this picture stores samples as 16-bit (`bpc > 8`). The plane

@@ -158,7 +158,7 @@ impl Default for FrameThread {
 pub(crate) struct LoopFilterState {
     pub(crate) mask: Vec<Av2Filter>,
     pub(crate) lr_mask: Vec<Av2Restoration>,
-    pub(crate) segmap_uv: Vec<u8>,
+    pub(crate) segmap_uv: std::sync::Arc<Vec<u8>>,
     pub(crate) uv_segmap_stride: isize,
     pub(crate) _cdef_buf_plane_sz: [i32; 2],
     pub(crate) _cdef_buf_sbh: i32,

@@ -61,6 +61,7 @@ impl ThreadPool {
             let (tx, rx) = channel::<Msg>();
             let done_tx = done_tx.clone();
             let handle = std::thread::spawn(move || {
+                #[allow(clippy::while_let_loop)]
                 loop {
                     match rx.recv() {
                         Ok(Msg::Run(JobPtr(job))) => {
@@ -115,7 +116,9 @@ impl ThreadPool {
         job();
         let mut panicked = false;
         for _ in 0..helpers {
-            if let Ok(false) = inner.done_rx.recv() { panicked = true }
+            if let Ok(false) = inner.done_rx.recv() {
+                panicked = true
+            }
         }
         if panicked {
             panic!("a tealdust pool worker panicked");
