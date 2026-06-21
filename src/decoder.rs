@@ -193,7 +193,11 @@ impl Decoder {
             run_decode: s.run_decode,
             frame_out: Vec::new(),
             n_tc,
-            pool: None,
+            pool: if n_tc >= 2 {
+                Some(crate::mtpool::ThreadPool::new((n_tc - 1) as usize))
+            } else {
+                None
+            },
             pic_allocator: std::sync::Arc::new(crate::picture::PoolPicAllocator::new()),
             fc: crate::internal::FrameContext::default(),
         };

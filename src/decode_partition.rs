@@ -262,7 +262,12 @@ pub(crate) fn decode_partition(
             }
         }
         if fi.n_passes > 1 {
-            part_w[*part_w_idx] = bp as u8 | ((unmix_bit as u8) << 7);
+            let val = bp as u8 | ((unmix_bit as u8) << 7);
+            if *part_w_idx == part_w.len() {
+                part_w.push(val);
+            } else {
+                part_w[*part_w_idx] = val;
+            }
             *part_w_idx += 1;
         }
     } else {

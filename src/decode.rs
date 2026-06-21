@@ -2204,6 +2204,142 @@ std::thread_local! {
     static LUMA_SNAP: core::cell::RefCell<Vec<u8>> =
         const { core::cell::RefCell::new(Vec::new()) };
 }
+/// One deferred luma transform unit.  This is the first piece needed for a
+/// dav2d-style entropy/MV/recon split: the entropy pass can read coefficients
+/// and neighbour coefficient contexts, then the recon pass can replay prediction
+/// and inverse transform without touching the symbol decoder.
+#[derive(Clone, Copy, Default)]
+struct LumaTxRecord {
+    tx: u8,
+    bx: i16,
+    by: i16,
+    pb_col_start: i16,
+    pb_row_start: i16,
+    eob: i16,
+    stx: i8,
+    txtp: u16,
+    cf_off: u32,
+    cf_len: u16,
+    lossless: bool,
+}
+
+/// One deferred chroma residual block.  The old split path kept a single
+/// chroma block in `chroma_cf/chroma_txtp/chroma_eob`; that works only for
+/// the local large-block read/recon pair.  A real dav2d-style entropy/recon
+/// split needs multiple chroma blocks to be queued and replayed in decode order.
+#[derive(Clone, Copy)]
+struct ChromaTxRecord {
+    cbx: i16,
+    cby: i16,
+    cbs: u8,
+    sdp_active: bool,
+    n_tu: u16,
+    cf_off: u32,
+    cf_len: u32,
+    u_has_cf: i32,
+    txtp: [[u16; 2]; 256],
+    eob: [[i16; 2]; 256],
+}
+
+impl Default for ChromaTxRecord {
+    fn default() -> Self {
+        Self {
+            cbx: 0,
+            cby: 0,
+            cbs: BlockSize::Invalid as u8,
+            sdp_active: false,
+            n_tu: 0,
+            cf_off: 0,
+            cf_len: 0,
+            u_has_cf: 0,
+            txtp: [[0u16; 2]; 256],
+            eob: [[-1i16; 2]; 256],
+        }
+    }
+}
+
+/// One parsed leaf block.  This is enough for partition/block replay once the
+/// residual readers have queued their coefficient payloads.
+#[derive(Clone, Copy, Default)]
+struct BlockRecord {
+    b: Av2Block,
+    bx: i16,
+    by: i16,
+    cbx: i16,
+    cby: i16,
+    lbs: i8,
+    cbs: i8,
+}
+
+/// A complete replay payload for one root superblock.
+///
+/// This is the next step toward dav2d's `ENTROPY -> MVRES -> RECON` task split:
+/// entropy workers can fill this structure, then a later reconstruction worker
+/// can load it into its local `ReconScratch` and run the same partition/block
+/// replay without touching MSAC.  It deliberately owns the partition stream too,
+/// because partition replay and block/coefficient replay must stay in lockstep.
+#[derive(Clone, Default)]
+struct SbReplayStore {
+    part: Vec<u8>,
+    block_rec: Vec<BlockRecord>,
+    luma_tx: Vec<LumaTxRecord>,
+    luma_tx_cf: Vec<i32>,
+    chroma_tx: Vec<ChromaTxRecord>,
+    chroma_tx_cf: Vec<i32>,
+}
+
+impl SbReplayStore {
+    #[inline]
+    fn clear(&mut self) {
+        self.part.clear();
+        self.block_rec.clear();
+        self.luma_tx.clear();
+        self.luma_tx_cf.clear();
+        self.chroma_tx.clear();
+        self.chroma_tx_cf.clear();
+    }
+
+    /// Move the just-parsed replay payload out of the worker-local scratch.
+    /// Heap allocations are preserved on the destination between calls.
+    #[inline]
+    fn capture_from(&mut self, part_w: &[u8], scratch: &mut ReconScratch) {
+        self.clear();
+        self.part.extend_from_slice(part_w);
+
+        self.block_rec.append(&mut scratch.block_rec);
+        self.luma_tx.append(&mut scratch.luma_tx);
+        self.luma_tx_cf.append(&mut scratch.luma_tx_cf);
+        self.chroma_tx.append(&mut scratch.chroma_tx);
+        self.chroma_tx_cf.append(&mut scratch.chroma_tx_cf);
+
+        scratch.block_rpos = 0;
+        scratch.luma_tx_rpos = 0;
+        scratch.chroma_tx_rpos = 0;
+    }
+
+    /// Prepare a worker-local scratch for a reconstruction replay.  This clones
+    /// the compact metadata/coefficient payload for now; the scheduler-facing
+    /// version can replace this with a move once each `SbReplayStore` is owned by
+    /// exactly one recon task.
+    #[inline]
+    fn load_into(&self, scratch: &mut ReconScratch) {
+        scratch.block_rec.clear();
+        scratch.block_rec.extend_from_slice(&self.block_rec);
+
+        scratch.luma_tx.clear();
+        scratch.luma_tx.extend_from_slice(&self.luma_tx);
+        scratch.luma_tx_cf.clear();
+        scratch.luma_tx_cf.extend_from_slice(&self.luma_tx_cf);
+
+        scratch.chroma_tx.clear();
+        scratch.chroma_tx.extend_from_slice(&self.chroma_tx);
+        scratch.chroma_tx_cf.clear();
+        scratch.chroma_tx_cf.extend_from_slice(&self.chroma_tx_cf);
+
+        scratch.reset_replay_cursors();
+    }
+}
+
 /// `Dav2dTaskContext` used by the luma recon leaf). `is_coded[0]` tracks the
 /// 64x64 grid of decoded luma tx blocks for top-right / bottom-left availability.
 pub struct ReconScratch {
@@ -2220,6 +2356,19 @@ pub struct ReconScratch {
     pub chroma_txtp: [[u16; 2]; 256],
     pub chroma_eob: [[i16; 2]; 256],
     pub chroma_u_has_cf: i32,
+    /// Deferred chroma residual payloads for entropy/recon replay.
+    chroma_tx: Vec<ChromaTxRecord>,
+    chroma_tx_cf: Vec<i32>,
+    chroma_tx_rpos: usize,
+    /// Parsed block replay stream.
+    block_rec: Vec<BlockRecord>,
+    block_rpos: usize,
+    /// Deferred luma transform payloads for future entropy/recon split.
+    /// `luma_tx` records order; `luma_tx_cf` owns the corresponding coefficient
+    /// slices. `luma_tx_rpos` is the replay cursor used by ReconOnly.
+    luma_tx: Vec<LumaTxRecord>,
+    luma_tx_cf: Vec<i32>,
+    luma_tx_rpos: usize,
     /// Per-4x4 luma transform type map (full txtp incl. secondary-tx bits),
     /// indexed `(by & 15) * 16 + (bx & 15)`. Written by the luma residual walk
     pub txtp_map: [u16; 256],
@@ -2259,6 +2408,14 @@ impl Default for ReconScratch {
             chroma_txtp: [[0u16; 2]; 256],
             chroma_eob: [[-1i16; 2]; 256],
             chroma_u_has_cf: 0,
+            chroma_tx: Vec::new(),
+            chroma_tx_cf: Vec::new(),
+            chroma_tx_rpos: 0,
+            block_rec: Vec::new(),
+            block_rpos: 0,
+            luma_tx: Vec::new(),
+            luma_tx_cf: Vec::new(),
+            luma_tx_rpos: 0,
             txtp_map: [0u16; 256],
             rmv: [[[Mv::default(); 2]; 2]; 256],
             al_pal: [[[0u16; 8]; 64]; 2],
@@ -2270,6 +2427,49 @@ impl Default for ReconScratch {
     }
 }
 
+impl ReconScratch {
+    #[inline]
+    fn reset_for_sbrow(&mut self) {
+        // Preserve the old `ReconScratch::default()`-per-sbrow behaviour without
+        // freeing/reallocating the heap-backed members. Most of these arrays are
+        // either rewritten inside the superblock or are gated by parsed block
+        // state, but keeping the reset here makes the allocation-removal patch
+        // mechanically safe and easy to A/B.
+        self.is_coded = [[0u64; 64]; 2];
+        self.luma_intra_dir_mode_map = [0u8; 256];
+        self.luma_fsc_map = [0u8; 256];
+        self.chroma_txtp = [[0u16; 2]; 256];
+        self.chroma_eob = [[-1i16; 2]; 256];
+        self.chroma_u_has_cf = 0;
+        self.chroma_tx.clear();
+        self.chroma_tx_cf.clear();
+        self.chroma_tx_rpos = 0;
+        self.block_rec.clear();
+        self.block_rpos = 0;
+        self.luma_tx.clear();
+        self.luma_tx_cf.clear();
+        self.luma_tx_rpos = 0;
+        self.txtp_map = [0u16; 256];
+        self.rmv = [[[Mv::default(); 2]; 2]; 256];
+        self.al_pal = [[[0u16; 8]; 64]; 2];
+        self.pal = [0u16; 8];
+        self.coef_levels = [0i8; 1089];
+        self.chroma_cf.clear();
+        self.pal_idx_y.fill(0);
+        // `itx_tmp` is fully overwritten by the row/column transform pipeline.
+    }
+
+    #[inline]
+    fn reset_replay_cursors(&mut self) {
+        self.block_rpos = 0;
+        self.luma_tx_rpos = 0;
+        self.chroma_tx_rpos = 0;
+        // `is_coded` must start empty for the recon replay pass: intra edge
+        // availability is based on already-reconstructed transform blocks, not
+        // on blocks that were merely entropy-decoded earlier.
+        self.is_coded = [[0u64; 64]; 2];
+    }
+}
 /// Mutable reconstruction borrows bundled so only one new param threads through
 /// decode_sb's recursion (Rust auto-reborrows &mut ReconCtx at each call).
 pub struct ReconCtx<'a, 'f, BD: crate::pixel::BitDepth> {
@@ -2382,6 +2582,8 @@ pub fn decode_tile_sbrow_entropy<BD: crate::pixel::BitDepth>(
     dst_u: &mut [BD::Pixel],
     dst_v: &mut [BD::Pixel],
     cf: &mut [i32],
+    recon_scratch: &mut ReconScratch,
+    recon_edge: &mut Vec<BD::Pixel>,
     recon_frame: &ReconFrameCtx,
     cur_segmap: &mut [u8],
     prev_segmap: Option<&[u8]>,
@@ -2393,6 +2595,7 @@ pub fn decode_tile_sbrow_entropy<BD: crate::pixel::BitDepth>(
     part_r: &[u8],
     by: i32,
     sb256w: i32,
+    pass: u8,
     root_bs: BlockSize,
     c_root_bs: BlockSize,
     rt: &mut crate::refmvs::Tile,
@@ -2412,11 +2615,14 @@ pub fn decode_tile_sbrow_entropy<BD: crate::pixel::BitDepth>(
     let row_start = ts.tiling.row_start;
     let row_end = ts.tiling.row_end;
 
-    // Per-superblock reconstruction scratch. `is_coded` is reset at each SB
-    // boundary (mirrors C `memset(t->is_coded, 0, ...)`); `edge` is the working
-    // buffer for prepare_intra_edges (origin in the middle of the slab).
-    let mut recon_scratch = ReconScratch::default();
-    let mut recon_edge = vec![BD::Pixel::default(); 2048];
+    // Per-worker reusable reconstruction scratch. The caller keeps the heap
+    // allocations (`pal_idx_y`, `itx_tmp`, `chroma_cf`, edge slab) alive across
+    // sbrows, so the MT path does not allocate on every tile-sbrow. Reset the
+    // non-heap state here to preserve the previous per-call `Default` semantics.
+    recon_scratch.reset_for_sbrow();
+    if recon_edge.len() < 2048 {
+        recon_edge.resize(2048, BD::Pixel::default());
+    }
 
     // Running per-tile delta-q state (`ts->last_qidx`/`ts->dqmem`/`ts->dq`).
     // Seeded by the caller from `frame_hdr.quant.yac` at tile entry; carried
@@ -2606,8 +2812,8 @@ pub fn decode_tile_sbrow_entropy<BD: crate::pixel::BitDepth>(
             cf: &mut *cf,
             frame: recon_frame,
             masks,
-            scratch: &mut recon_scratch,
-            edge: &mut recon_edge,
+            scratch: &mut *recon_scratch,
+            edge: &mut recon_edge[..],
             cur_segmap: &mut *cur_segmap,
             prev_segmap,
             b4_stride: fi.b4_stride,
@@ -2669,32 +2875,147 @@ pub fn decode_tile_sbrow_entropy<BD: crate::pixel::BitDepth>(
                 fi,
             )?;
         } else {
-            let mut sb_ctx = SbCtx {
-                fi,
-                bx: &mut bx_m,
-                by: &mut by_m,
-                cbx: &mut cbx,
-                cby: &mut cby,
-                intra_region: &mut intra_region,
-                sdp_cfl_disallowed: &mut sdp_cfl_disallowed,
-                a: &mut a_arr[a_idx],
-                l: &mut *l,
-                msac: &mut *msac,
-                cdf_m: &mut ts.cdf.m,
-                cdf_dmv: &mut ts.cdf.dmv,
-                part_w: &mut *part_w,
-                part_w_idx: &mut part_w_idx,
-                part_r,
-                part_r_idx: &mut part_r_idx,
-            };
-            decode_sb(
-                &mut sb_ctx,
-                &mut recon,
-                crate::internal::PASS_ALL,
-                root_bs,
-                c_root_bs,
-                &mut dir,
-            )?;
+            // First safe dav2d-style replay step: intra/key frames can be split
+            // into syntax+coefficient read followed by pixel reconstruction.
+            // Inter/IntraBC still require the MVRES replay path, so they stay on
+            // the old PASS_ALL path for now.
+            let intra_split_capable = !fi.is_inter_or_switch && !fi.allow_intrabc;
+            let wants_split =
+                intra_split_capable && (fi.n_passes > 1 || pass != crate::internal::PASS_ALL);
+
+            if wants_split {
+                let do_entropy = (pass & crate::internal::Pass::Entropy as u8) != 0;
+                let do_recon = (pass & crate::internal::Pass::Recon as u8) != 0;
+
+                // External split tasks will call this function once with
+                // `pass=Entropy` and later with `pass=Recon`.  The old local
+                // scaffold (`pass=PASS_ALL`, `n_passes>1`) still uses the same
+                // owned store so both paths exercise identical replay payloads.
+                let mut local_replay = SbReplayStore::default();
+
+                if do_entropy {
+                    {
+                        let mut sb_ctx = SbCtx {
+                            fi,
+                            bx: &mut bx_m,
+                            by: &mut by_m,
+                            cbx: &mut cbx,
+                            cby: &mut cby,
+                            intra_region: &mut intra_region,
+                            sdp_cfl_disallowed: &mut sdp_cfl_disallowed,
+                            a: &mut a_arr[a_idx],
+                            l: &mut *l,
+                            msac: &mut *msac,
+                            cdf_m: &mut ts.cdf.m,
+                            cdf_dmv: &mut ts.cdf.dmv,
+                            part_w: &mut *part_w,
+                            part_w_idx: &mut part_w_idx,
+                            part_r,
+                            part_r_idx: &mut part_r_idx,
+                        };
+                        decode_sb(
+                            &mut sb_ctx,
+                            &mut recon,
+                            crate::internal::Pass::Entropy as u8,
+                            root_bs,
+                            c_root_bs,
+                            &mut dir,
+                        )?;
+                    }
+
+                    if do_recon {
+                        local_replay.capture_from(part_w, recon.scratch);
+                    }
+                }
+
+                if do_recon {
+                    if do_entropy {
+                        local_replay.load_into(recon.scratch);
+                    } else {
+                        // A real scheduler replay will have preloaded the scratch
+                        // from its tile/sbrow-owned `SbReplayStore` before entering
+                        // this pass.  Keep the cursor reset here so replay-only
+                        // unit tests can call the pass directly after filling
+                        // `recon.scratch`.
+                        recon.scratch.reset_replay_cursors();
+                    }
+
+                    bx_m = bx;
+                    by_m = by;
+                    cbx = bx;
+                    cby = by;
+                    intra_region = 0;
+                    sdp_cfl_disallowed = 0;
+                    part_r_idx = 0;
+                    let mut replay_part_w: Vec<u8> = Vec::new();
+                    let mut replay_part_w_idx = 0usize;
+                    let mut recon_dir = 0i32;
+                    let replay_part_r: &[u8] = if do_entropy {
+                        &local_replay.part[..]
+                    } else {
+                        part_r
+                    };
+                    let mut sb_ctx = SbCtx {
+                        fi,
+                        bx: &mut bx_m,
+                        by: &mut by_m,
+                        cbx: &mut cbx,
+                        cby: &mut cby,
+                        intra_region: &mut intra_region,
+                        sdp_cfl_disallowed: &mut sdp_cfl_disallowed,
+                        a: &mut a_arr[a_idx],
+                        l: &mut *l,
+                        msac: &mut *msac,
+                        cdf_m: &mut ts.cdf.m,
+                        cdf_dmv: &mut ts.cdf.dmv,
+                        part_w: &mut replay_part_w,
+                        part_w_idx: &mut replay_part_w_idx,
+                        part_r: replay_part_r,
+                        part_r_idx: &mut part_r_idx,
+                    };
+                    decode_sb(
+                        &mut sb_ctx,
+                        &mut recon,
+                        crate::internal::Pass::Recon as u8,
+                        root_bs,
+                        c_root_bs,
+                        &mut recon_dir,
+                    )?;
+                }
+            } else {
+                if pass != crate::internal::PASS_ALL {
+                    // Partial passes for inter/IntraBC are not safe until the MVRES
+                    // replay path is wired.  Fail loudly rather than re-reading
+                    // entropy or reconstructing with unresolved motion state.
+                    return Err(());
+                }
+                let mut sb_ctx = SbCtx {
+                    fi,
+                    bx: &mut bx_m,
+                    by: &mut by_m,
+                    cbx: &mut cbx,
+                    cby: &mut cby,
+                    intra_region: &mut intra_region,
+                    sdp_cfl_disallowed: &mut sdp_cfl_disallowed,
+                    a: &mut a_arr[a_idx],
+                    l: &mut *l,
+                    msac: &mut *msac,
+                    cdf_m: &mut ts.cdf.m,
+                    cdf_dmv: &mut ts.cdf.dmv,
+                    part_w: &mut *part_w,
+                    part_w_idx: &mut part_w_idx,
+                    part_r,
+                    part_r_idx: &mut part_r_idx,
+                };
+                decode_sb(
+                    &mut sb_ctx,
+                    &mut recon,
+                    crate::internal::PASS_ALL,
+                    root_bs,
+                    c_root_bs,
+                    &mut dir,
+                )?;
+            }
         }
 
         // Persist running delta-q state for the next superblock / sbrow.
@@ -3104,7 +3425,7 @@ pub fn decode_frame_main(
                 // guaranteed to see the decoded pixels/masks it then reads.
                 let n_tiles = (rows as usize) * (cols as usize);
                 let rows_us = rows as usize;
-                let n_workers = (n_tc as usize).max(1);
+                let max_workers = (n_tc as usize).max(1);
                 let dst_y_dm = DisjointMut::new(dst_y);
                 let dst_u_dm = DisjointMut::new(dst_u);
                 let dst_v_dm = DisjointMut::new(dst_v);
@@ -3161,6 +3482,30 @@ pub fn decode_frame_main(
                         .collect()
                 };
                 let tile_nsb = &tile_nsb[..];
+                let sb64h_us = ((bh + 15) >> 4).max(0) as usize;
+                let by64_tile_row: Vec<usize> = {
+                    let ts_ref = unsafe { ts_dm.whole() };
+                    let mut map = vec![0usize; sb64h_us];
+                    for tr in 0..rows_us {
+                        let tb = &ts_ref[tr * cols_us].tiling;
+                        let by64_start = ((tb.row_start + 15) >> 4).max(0) as usize;
+                        let by64_end = ((tb.row_end + 15) >> 4).max(0) as usize;
+                        for slot in map
+                            .iter_mut()
+                            .take(by64_end.min(sb64h_us))
+                            .skip(by64_start.min(sb64h_us))
+                        {
+                            *slot = tr;
+                        }
+                    }
+                    map
+                };
+                let by64_tile_row = &by64_tile_row[..];
+                let n_decode_units = tile_nsb.iter().copied().sum::<usize>();
+                let n_filter_units = sb64h_us;
+                let n_workers = max_workers
+                    .min(n_decode_units.max(n_filter_units).max(1))
+                    .max(1);
                 let tile_sbrow: Vec<std::sync::atomic::AtomicUsize> = (0..n_tiles)
                     .map(|_| std::sync::atomic::AtomicUsize::new(0))
                     .collect();
@@ -3173,7 +3518,18 @@ pub fn decode_frame_main(
                     .map(|_| std::sync::atomic::AtomicUsize::new(cols as usize))
                     .collect();
                 let dec_remaining = &dec_remaining[..];
-                let flt_claimed: Vec<std::sync::atomic::AtomicBool> = (0..rows_us)
+                // Dav2d-style fine-grained decode progress for filter pipelining.
+                // `dec_remaining` above is still kept for the conservative IntraBC
+                // path, where an entire tile-row must remain unfiltered until all
+                // possible intra-block-copy users in that tile-row have decoded.
+                // When IntraBC is off, a filter sb64 band only needs the current
+                // band and its top neighbour decoded across every tile column.
+                let sb64_dec_remaining: Vec<std::sync::atomic::AtomicUsize> = (0..n_filter_units)
+                    .map(|_| std::sync::atomic::AtomicUsize::new(cols_us))
+                    .collect();
+                let sb64_dec_remaining = &sb64_dec_remaining[..];
+                let granular_filter_ready = !allow_intrabc;
+                let flt_claimed: Vec<std::sync::atomic::AtomicBool> = (0..n_filter_units)
                     .map(|_| std::sync::atomic::AtomicBool::new(false))
                     .collect();
                 let flt_claimed = &flt_claimed[..];
@@ -3183,21 +3539,63 @@ pub fn decode_frame_main(
                 let park_mx = &park_mx;
                 let park_cv = std::sync::Condvar::new();
                 let park_cv = &park_cv;
+                let park_waiters = std::sync::atomic::AtomicUsize::new(0);
+                let park_waiters = &park_waiters;
+                let wake_one = || {
+                    // Avoid the pthread mutex/condvar path when all workers are
+                    // currently running. A waiter increments `park_waiters` before
+                    // its final predicate recheck under `park_mx`, so skipping here
+                    // cannot lose a wakeup: either the waiter will see the freshly
+                    // published atomic state during that final recheck, or it will
+                    // have become visible in `park_waiters` before this notify.
+                    if park_waiters.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+                        let _guard = park_mx.lock().unwrap_or_else(|e| e.into_inner());
+                        park_cv.notify_one();
+                    }
+                };
+                let wake_one = &wake_one;
                 let wake_all = || {
-                    let _g = park_mx.lock().unwrap_or_else(|e| e.into_inner());
-                    drop(_g);
-                    park_cv.notify_all();
+                    if park_waiters.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+                        let _guard = park_mx.lock().unwrap_or_else(|e| e.into_inner());
+                        park_cv.notify_all();
+                    }
                 };
                 let wake_all = &wake_all;
+                let worker_seq = std::sync::atomic::AtomicUsize::new(0);
+                let worker_seq = &worker_seq;
 
                 let worker = || {
                     use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
-                    // A filter tile-row is ready when it and its vertical neighbours
-                    // are fully decoded (Acquire pairs with the decode Release).
-                    let row_ready = |tr: usize| -> bool {
+                    let worker_id = worker_seq.fetch_add(1, Relaxed);
+                    // A filter sb64 row is ready when the owning tile-row and its
+                    // vertical neighbour tile-rows are fully decoded (Acquire pairs
+                    // with the decode Release). This keeps the old conservative
+                    // anti-IntraBC dependency while exposing dav2d-sized sb64 tasks.
+                    let tile_row_ready = |tr: usize| -> bool {
                         let lo = tr.saturating_sub(1);
                         let hi = (tr + 1).min(rows_us - 1);
                         (lo..=hi).all(|r| dec_remaining[r].load(Acquire) == 0)
+                    };
+                    let sb64_decoded = |by64: usize| -> bool {
+                        sb64_dec_remaining
+                            .get(by64)
+                            .map(|r| r.load(Acquire) == 0)
+                            .unwrap_or(true)
+                    };
+                    let filter_ready = |by64: usize| -> bool {
+                        if granular_filter_ready {
+                            // Deblock rows and the root-SB CDEF seam read the top
+                            // neighbour. They do not need the next band: CDEF's
+                            // normal by64 slice deliberately leaves the bottom two
+                            // 4x4 rows for the following task, matching dav2d's
+                            // by64 pipeline.
+                            sb64_decoded(by64) && (by64 == 0 || sb64_decoded(by64 - 1))
+                        } else {
+                            by64_tile_row
+                                .get(by64)
+                                .map(|&tr| tile_row_ready(tr))
+                                .unwrap_or(false)
+                        }
                     };
                     CF_SCRATCH.with(|cf_cell| {
                         let mut cf_guard = cf_cell.borrow_mut();
@@ -3232,6 +3630,9 @@ pub fn decode_frame_main(
                         let mut part_w: Vec<u8> = Vec::new();
                         let part_r: Vec<u8> = Vec::new();
                         let mut sc = FilterScratch::default();
+                        let mut recon_scratch = ReconScratch::default();
+                        use crate::pixel::Pixel;
+                        let mut recon_edge = vec![<$Pixel as Default>::default(); 2048];
                         // Cache the per-tile `SbFrameInfo` across that tile's sbrows so
                         // it's rebuilt once per tile (as before the sbrow split) rather
                         // than once per sbrow; a cross-worker handoff just rebuilds it.
@@ -3250,7 +3651,9 @@ pub fn decode_frame_main(
                             // so whoever picks up a tile's next sbrow need not be the
                             // worker that decoded the previous one (dav2d's model).
                             let mut claimed = None;
-                            for t in 0..n_tiles {
+                            let start_t = if n_tiles != 0 { worker_id % n_tiles } else { 0 };
+                            for ti in 0..n_tiles {
+                                let t = (start_t + ti) % n_tiles;
                                 if tile_sbrow[t].load(Acquire) >= tile_nsb[t] {
                                     continue;
                                 }
@@ -3267,7 +3670,6 @@ pub fn decode_frame_main(
                             if let Some(t) = claimed {
                                 let tr = t / cols_us;
                                 let ts_idx = t;
-                                let s = tile_sbrow[t].load(Relaxed);
                                 let a = unsafe { a_dm.whole() };
                                 let cur_segmap = unsafe { cseg_dm.whole() };
                                 let cur_ccsomap = unsafe { cccso_dm.whole() };
@@ -3283,7 +3685,6 @@ pub fn decode_frame_main(
                                     let tb = &ts[ts_idx].tiling;
                                     (tb.col_start, tb.col_end, tb.row_start, tb.row_end)
                                 };
-                                let by = rs + (s as i32) * sb_step;
                                 if cached_fi.as_ref().map_or(true, |(ct, _)| *ct != t) {
                                     cached_fi = Some((
                                         t,
@@ -3309,151 +3710,182 @@ pub fn decode_frame_main(
                                     ));
                                 }
                                 let fi = &cached_fi.as_ref().unwrap().1;
-                                let buf = std::mem::take(&mut ts[ts_idx].msac_buf);
-                                part_w.clear();
-                                reset_context(&mut l, keyframe, is_tip);
-                                // Resume this tile's parked entropy state for sbrow `s`.
-                                let mut msac = MsacContext::resume(&buf, ts[ts_idx].msac_state);
-                                let sbrow_res = decode_tile_sbrow_entropy(
-                                    bd_local,
-                                    fi,
-                                    frame_hdr,
-                                    &mut ts[ts_idx],
-                                    &mut msac,
-                                    a,
-                                    mask,
-                                    lr_mask,
-                                    &mut l,
-                                    &mut *dst_y,
-                                    &mut *dst_u,
-                                    &mut *dst_v,
-                                    &mut *cf,
-                                    recon_frame,
-                                    &mut cur_segmap[..],
-                                    prev_segmap_ref,
-                                    segmap_uv,
-                                    uv_segmap_stride,
-                                    &mut cur_ccsomap[..],
-                                    prev_ccsomap_ref,
-                                    &mut part_w,
-                                    &part_r,
-                                    by,
-                                    sb256w,
-                                    root_bs,
-                                    c_root_bs,
-                                    &mut rt,
-                                    rf_imm,
-                                    cur_mvs,
-                                    refp_pics,
-                                    svc_v,
-                                    seq_hdr,
-                                    frame_hdr,
-                                    masks,
-                                );
-                                // Park the advanced entropy state + buffer back.
-                                ts[ts_idx].msac_state = msac.save();
-                                ts[ts_idx].msac_buf = buf;
-                                if sbrow_res.is_err() {
-                                    got_err.store(true, Relaxed);
-                                    cf.fill(0);
-                                    tile_busy[t].store(false, Release);
-                                    wake_all();
-                                    return;
+
+                                // Keep advancing the same tile while it remains ready.
+                                // dav2d does this in its worker loop (`goto found_unlocked`):
+                                // the same worker continues the next sbrow of a tile if no
+                                // dependency blocks it. That avoids handing the tile's entropy
+                                // state between workers and removes one wake/scan round-trip per
+                                // sbrow. The tile is still serialized by `tile_busy`, so this
+                                // does not reduce available parallelism; different tiles continue
+                                // to run on other workers.
+                                loop {
+                                    let s = tile_sbrow[t].load(Relaxed);
+                                    if s >= tile_nsb[t] {
+                                        tile_busy[t].store(false, Release);
+                                        wake_one();
+                                        break;
+                                    }
+
+                                    let by = rs + (s as i32) * sb_step;
+                                    let buf = std::mem::take(&mut ts[ts_idx].msac_buf);
+                                    part_w.clear();
+                                    reset_context(&mut l, keyframe, is_tip);
+                                    // Resume this tile's parked entropy state for sbrow `s`.
+                                    let mut msac = MsacContext::resume(&buf, ts[ts_idx].msac_state);
+                                    let sbrow_res = decode_tile_sbrow_entropy(
+                                        bd_local,
+                                        fi,
+                                        frame_hdr,
+                                        &mut ts[ts_idx],
+                                        &mut msac,
+                                        a,
+                                        mask,
+                                        lr_mask,
+                                        &mut l,
+                                        &mut *dst_y,
+                                        &mut *dst_u,
+                                        &mut *dst_v,
+                                        &mut *cf,
+                                        &mut recon_scratch,
+                                        &mut recon_edge,
+                                        recon_frame,
+                                        &mut cur_segmap[..],
+                                        prev_segmap_ref,
+                                        segmap_uv,
+                                        uv_segmap_stride,
+                                        &mut cur_ccsomap[..],
+                                        prev_ccsomap_ref,
+                                        &mut part_w,
+                                        &part_r,
+                                        by,
+                                        sb256w,
+                                        crate::internal::PASS_ALL,
+                                        root_bs,
+                                        c_root_bs,
+                                        &mut rt,
+                                        rf_imm,
+                                        cur_mvs,
+                                        refp_pics,
+                                        svc_v,
+                                        seq_hdr,
+                                        frame_hdr,
+                                        masks,
+                                    );
+                                    // Park the advanced entropy state + buffer back.
+                                    ts[ts_idx].msac_state = msac.save();
+                                    ts[ts_idx].msac_buf = buf;
+                                    if sbrow_res.is_err() {
+                                        got_err.store(true, Relaxed);
+                                        cf.fill(0);
+                                        tile_busy[t].store(false, Release);
+                                        wake_all();
+                                        return;
+                                    }
+
+                                    let new_s = s + 1;
+                                    tile_sbrow[t].store(new_s, Release);
+
+                                    // Publish the exact sb64 bands covered by this
+                                    // decoded root-sbrow. This is what lets the
+                                    // filter side trail decode at sb64 granularity
+                                    // instead of waiting for the whole tile-row.
+                                    let row_start = by.max(0) as usize;
+                                    let row_end = (by + sb_step).min(re).min(bh).max(by) as usize;
+                                    let by64_start = (row_start >> 4).min(n_filter_units);
+                                    let by64_end = ((row_end + 15) >> 4).min(n_filter_units);
+                                    let mut made_filter_ready = false;
+                                    for by64 in by64_start..by64_end {
+                                        if sb64_dec_remaining[by64].fetch_sub(1, AcqRel) == 1 {
+                                            made_filter_ready = true;
+                                        }
+                                    }
+
+                                    if new_s >= tile_nsb[t] {
+                                        tile_busy[t].store(false, Release);
+                                        dec_remaining[tr].fetch_sub(1, AcqRel);
+                                        wake_one();
+                                        break;
+                                    }
+                                    if made_filter_ready {
+                                        wake_one();
+                                    }
                                 }
-                                // Advance the tile. The Release on `tile_sbrow` /
-                                // `tile_busy` publishes the entropy snapshot, the `a`
-                                // above-context and the pixel writes to whichever
-                                // worker takes the tile's next sbrow (or, on the last
-                                // sbrow, to the filter via `dec_remaining`).
-                                let new_s = s + 1;
-                                tile_sbrow[t].store(new_s, Release);
-                                let tile_done = new_s >= tile_nsb[t];
-                                tile_busy[t].store(false, Release);
-                                if tile_done {
-                                    dec_remaining[tr].fetch_sub(1, AcqRel);
-                                }
-                                // Wake parked workers: the tile is claimable again for
-                                // its next sbrow, or (if done) a filter row may unblock.
-                                wake_all();
                                 continue;
                             }
 
-                            // (2) No decode sbrow claimable -> take a ready filter row.
+                            // (2) No decode sbrow claimable -> take a ready sb64 filter slice.
                             let mut did_work = false;
-                            for tr in 0..rows_us {
-                                if flt_claimed[tr].load(Relaxed) || !row_ready(tr) {
+                            let start_by64 = if n_filter_units != 0 {
+                                worker_id % n_filter_units
+                            } else {
+                                0
+                            };
+                            for byi in 0..n_filter_units {
+                                let by64_us = (start_by64 + byi) % n_filter_units;
+                                if flt_claimed[by64_us].load(Relaxed) || !filter_ready(by64_us) {
                                     continue;
                                 }
-                                if flt_claimed[tr]
+                                if flt_claimed[by64_us]
                                     .compare_exchange(false, true, AcqRel, Relaxed)
                                     .is_err()
                                 {
                                     continue;
                                 }
+                                let by64 = by64_us as i32;
                                 let cur_segmap = unsafe { cseg_dm.whole() };
                                 let dst_y = unsafe { dst_y_dm.whole() };
                                 let dst_u = unsafe { dst_u_dm.whole() };
                                 let dst_v = unsafe { dst_v_dm.whole() };
-                                let ts = unsafe { ts_dm.whole() };
-                                let (row_rs, row_re) = {
-                                    let t = &ts[(tr as i32 * cols) as usize].tiling;
-                                    (t.row_start, t.row_end)
+
+                                // Idempotent bottom-edge tx crop for this exact sb64 band.
+                                let mr = ((by64 >> 2) * sb256w) as usize;
+                                crate::deblock::deblock_crop_bottom_edge(
+                                    unsafe { mask_dm.whole() },
+                                    mr,
+                                    sb256w,
+                                    bw,
+                                    bh,
+                                    0,
+                                    by64,
+                                );
+                                let sh = FilterShared {
+                                    mask: unsafe { &*mask_dm.whole() },
+                                    lr_mask: unsafe { &*lrmask_dm.whole() },
+                                    segmap_uv: unsafe { &*seguv_dm.whole() },
+                                    start_of_tile_row: lf_start_of_tile_row,
+                                    lr_cdef_line: lf_lr_cdef_line,
+                                    uv_segmap_stride,
+                                    base_q,
+                                    gdf_ref_dst_idx,
+                                    wiener_idx,
+                                    ns_subclass_class_idx,
+                                    restore_planes,
                                 };
-                                let mut fby = row_rs;
-                                while fby < row_re {
-                                    let sby = fby / sb_step;
-                                    // Idempotent bottom-edge tx crop; a no-op except
-                                    // on the frame-bottom sb-row, which only this unit
-                                    // (the last tile-row) ever touches.
-                                    let mr = ((sby >> (2 - sb128)) * sb256w) as usize;
-                                    crate::deblock::deblock_crop_bottom_edge(
-                                        unsafe { mask_dm.whole() },
-                                        mr,
-                                        sb256w,
-                                        bw,
-                                        bh,
-                                        sb128,
-                                        sby,
-                                    );
-                                    let sh = FilterShared {
-                                        mask: unsafe { &*mask_dm.whole() },
-                                        lr_mask: unsafe { &*lrmask_dm.whole() },
-                                        segmap_uv: unsafe { &*seguv_dm.whole() },
-                                        start_of_tile_row: lf_start_of_tile_row,
-                                        lr_cdef_line: lf_lr_cdef_line,
-                                        uv_segmap_stride,
-                                        base_q,
-                                        gdf_ref_dst_idx,
-                                        wiener_idx,
-                                        ns_subclass_class_idx,
-                                        restore_planes,
-                                    };
-                                    filter_sbrow(
-                                        bd_local,
-                                        seq_hdr,
-                                        frame_hdr,
-                                        &sh,
-                                        &mut sc,
-                                        &mut *dst_y,
-                                        &mut *dst_u,
-                                        &mut *dst_v,
-                                        filter_params,
-                                        cur_segmap,
-                                        b4_stride_v,
-                                        hbd_v,
-                                        fc_inloop_filters,
-                                        fc_sbh,
-                                        sb_step,
-                                        sb256w,
-                                        sb128,
-                                        bw,
-                                        bh,
-                                        sby,
-                                    );
-                                    fby += sb_step;
-                                }
+                                filter_sb64(
+                                    bd_local,
+                                    seq_hdr,
+                                    frame_hdr,
+                                    &sh,
+                                    &mut sc,
+                                    &mut *dst_y,
+                                    &mut *dst_u,
+                                    &mut *dst_v,
+                                    filter_params,
+                                    cur_segmap,
+                                    b4_stride_v,
+                                    hbd_v,
+                                    fc_inloop_filters,
+                                    fc_sbh,
+                                    sb_step,
+                                    sb256w,
+                                    sb128,
+                                    bw,
+                                    bh,
+                                    by64,
+                                );
                                 let done_now = flt_done.fetch_add(1, AcqRel) + 1;
-                                if done_now >= rows_us {
+                                if done_now >= n_filter_units {
                                     wake_all();
                                 }
                                 did_work = true;
@@ -3464,24 +3896,80 @@ pub fn decode_frame_main(
                             }
 
                             // (3) Nothing claimable now.
-                            if flt_done.load(Relaxed) >= rows_us {
+                            if flt_done.load(Relaxed) >= n_filter_units {
                                 return;
                             }
+
+                            // The frame tasks are short and often publish the next
+                            // ready sb64 within a few hundred cycles. Going straight
+                            // into pthread_cond_wait makes the MT path noisy on these
+                            // ~4 ms frames, so first do a tiny dav2d-style optimistic
+                            // poll/yield window. This only runs after a full failed
+                            // work scan, and it still falls back to the condvar.
+                            let mut should_park = true;
+                            for _ in 0..96 {
+                                if got_err.load(Relaxed) || flt_done.load(Relaxed) >= n_filter_units
+                                {
+                                    return;
+                                }
+                                let more_decode = (0..n_tiles).any(|t| {
+                                    tile_sbrow[t].load(Relaxed) < tile_nsb[t]
+                                        && !tile_busy[t].load(Relaxed)
+                                });
+                                let ready_filter = (0..n_filter_units).any(|by64| {
+                                    !flt_claimed[by64].load(Relaxed) && filter_ready(by64)
+                                });
+                                if more_decode || ready_filter {
+                                    should_park = false;
+                                    break;
+                                }
+                                std::hint::spin_loop();
+                            }
+                            if should_park {
+                                for _ in 0..2 {
+                                    std::thread::yield_now();
+                                    if got_err.load(Relaxed)
+                                        || flt_done.load(Relaxed) >= n_filter_units
+                                    {
+                                        return;
+                                    }
+                                    let more_decode = (0..n_tiles).any(|t| {
+                                        tile_sbrow[t].load(Relaxed) < tile_nsb[t]
+                                            && !tile_busy[t].load(Relaxed)
+                                    });
+                                    let ready_filter = (0..n_filter_units).any(|by64| {
+                                        !flt_claimed[by64].load(Relaxed) && filter_ready(by64)
+                                    });
+                                    if more_decode || ready_filter {
+                                        should_park = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !should_park {
+                                continue;
+                            }
+
                             let guard = park_mx.lock().unwrap_or_else(|e| e.into_inner());
-                            if got_err.load(Relaxed) || flt_done.load(Relaxed) >= rows_us {
+                            park_waiters.fetch_add(1, Relaxed);
+                            if got_err.load(Relaxed) || flt_done.load(Relaxed) >= n_filter_units {
+                                park_waiters.fetch_sub(1, Relaxed);
                                 return;
                             }
                             let more_decode = (0..n_tiles).any(|t| {
                                 tile_sbrow[t].load(Relaxed) < tile_nsb[t]
                                     && !tile_busy[t].load(Relaxed)
                             });
-                            let ready_filter = (0..rows_us)
-                                .any(|tr| !flt_claimed[tr].load(Relaxed) && row_ready(tr));
+                            let ready_filter = (0..n_filter_units)
+                                .any(|by64| !flt_claimed[by64].load(Relaxed) && filter_ready(by64));
                             if more_decode || ready_filter {
+                                park_waiters.fetch_sub(1, Relaxed);
                                 drop(guard);
                                 continue;
                             }
-                            drop(park_cv.wait(guard));
+                            let guard = park_cv.wait(guard).unwrap_or_else(|e| e.into_inner());
+                            park_waiters.fetch_sub(1, Relaxed);
+                            drop(guard);
                         }
                     });
                 };
@@ -3494,10 +3982,9 @@ pub fn decode_frame_main(
                 // tile rows (mirrors the old single `lf` scratch, now split out so
                 // the masks can be borrowed read-only by the filter).
                 let mut serial_sc = FilterScratch::default();
+                let mut recon_scratch = ReconScratch::default();
+                let mut recon_edge = vec![<$Pixel as Default>::default(); 2048];
                 for tr in 0..rows {
-                    // Collect per-tile-col MSAC state that must stay live across the sby
-                    // loop (each tile-col's symbol decoder advances one sbrow at a time but
-                    // we now interleave tile-cols within a sbrow).
                     let ts_base = (tr * cols) as usize;
                     let mut bufs: Vec<Vec<u8>> = Vec::with_capacity(cols as usize);
                     let mut fis: Vec<SbFrameInfo> = Vec::with_capacity(cols as usize);
@@ -3588,6 +4075,8 @@ pub fn decode_frame_main(
                                 &mut *dst_u,
                                 &mut *dst_v,
                                 &mut cf,
+                                &mut recon_scratch,
+                                &mut recon_edge,
                                 &recon_frame,
                                 &mut cur_segmap[..],
                                 prev_segmap_ref,
@@ -3599,6 +4088,7 @@ pub fn decode_frame_main(
                                 &part_r,
                                 by,
                                 sb256w,
+                                crate::internal::PASS_ALL,
                                 root_bs,
                                 c_root_bs,
                                 &mut rt,
@@ -3620,23 +4110,25 @@ pub fn decode_frame_main(
                         ts[ts_base + tc].msac_buf = buf;
                     }
 
-                    // PHASE B: deferred per-superblock-row filter pass over the whole tile
-                    // row (deblock cols -> deblock rows + copy_db -> CDEF(+CCSO) -> LR).
-                    let mut by = row_rs;
-                    while by < row_re {
-                        let sby = by / sb_step;
-                        // Crop this sb-row's bottom tx edge (idempotent; no-op
+                    // PHASE B: dav2d-shaped deferred filter pass over sb64 slices
+                    // within this tile row. For 128x128 superblock frames this exposes
+                    // two post-filter tasks per root-SB row instead of one large lump.
+                    let sb64h = (bh + 15) >> 4;
+                    let by64_start = (row_rs >> 4).max(0);
+                    let by64_end = (row_re >> 4).min(sb64h);
+                    for by64 in by64_start..by64_end {
+                        // Crop this sb64 band's bottom tx edge (idempotent; no-op
                         // except at the frame bottom) before borrowing the mask
                         // read-only for the filter.
-                        let mask_row = ((sby >> (2 - sb128)) * sb256w) as usize;
+                        let mask_row = ((by64 >> 2) * sb256w) as usize;
                         crate::deblock::deblock_crop_bottom_edge(
                             &mut lf.mask,
                             mask_row,
                             sb256w,
                             bw,
                             bh,
-                            sb128,
-                            sby,
+                            0,
+                            by64,
                         );
                         let sh = FilterShared {
                             mask: &lf.mask[..],
@@ -3651,7 +4143,7 @@ pub fn decode_frame_main(
                             ns_subclass_class_idx: lf.ns_subclass_class_idx,
                             restore_planes: lf.restore_planes,
                         };
-                        filter_sbrow(
+                        filter_sb64(
                             bd_local,
                             seq_hdr,
                             frame_hdr,
@@ -3671,9 +4163,8 @@ pub fn decode_frame_main(
                             sb128,
                             bw,
                             bh,
-                            sby,
+                            by64,
                         );
-                        by += sb_step;
                     }
                 }
             }
@@ -4098,6 +4589,322 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
     }
 }
 
+/// Dav2d-shaped post-filter slice for one 64px-high band (`by64`).
+///
+/// The old multithreaded path claimed one whole root-SB row (`sby`). For 128x128
+/// superblock frames that bundled two 64px filter bands into one task and made
+/// the tail very lumpy. Dav2d exposes filter work at sb64 granularity; this
+/// function mirrors that shape for the stages that are naturally sb64-based
+/// (deblock and CDEF/CCSO). Loop restoration is still driven through the
+/// existing root-sbrow implementation, so it runs once on the last sb64 band of
+/// each root-SB row.
+fn filter_sb64<BD: crate::pixel::BitDepth>(
+    bd: BD,
+    seq_hdr: &crate::headers::SequenceHeader,
+    frame_hdr: &crate::headers::FrameHeader,
+    sh: &FilterShared,
+    sc: &mut FilterScratch,
+    dst_y: &mut [BD::Pixel],
+    dst_u: &mut [BD::Pixel],
+    dst_v: &mut [BD::Pixel],
+    fp: &FilterFrameParams,
+    cur_segmap: &[u8],
+    b4_stride: isize,
+    hbd: i32,
+    inloop: u32,
+    sbh: i32,
+    sb_step: i32,
+    sb256w: i32,
+    sb128: i32,
+    bw: i32,
+    bh: i32,
+    by64: i32,
+) {
+    use crate::looprestoration::{
+        INLOOPFILTER_CCSO, INLOOPFILTER_CDEF, INLOOPFILTER_DEBLOCK, INLOOPFILTER_GDF,
+        INLOOPFILTER_WIENER,
+    };
+
+    let _ = bd;
+    if BD::BPC != 8 {
+        return;
+    }
+
+    let dst_y: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst_y);
+    let dst_u: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst_u);
+    let dst_v: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst_v);
+
+    let sb64h = (bh + 15) >> 4;
+    let root_sby = by64 >> sb128;
+    let last_sb64_in_root =
+        sb128 == 0 || (by64 & ((1 << sb128) - 1)) == ((1 << sb128) - 1) || by64 + 1 >= sb64h;
+
+    let deblock_on = inloop & INLOOPFILTER_DEBLOCK != 0
+        && (fp.deblock.level_y[0] != 0 || fp.deblock.level_y[1] != 0);
+
+    let mask_row = ((by64 >> 2) * sb256w) as usize;
+    let y_off0 = (by64 * 64) as isize * fp.y_stride;
+    let uv_off0 = ((by64 * 64) as isize * fp.uv_stride) >> fp.ss_ver as i32;
+
+    if deblock_on {
+        let start_of_tile_row = (sh
+            .start_of_tile_row
+            .get(root_sby as usize)
+            .copied()
+            .unwrap_or(0)
+            & 1)
+            != 0;
+        let mut dctx = crate::deblock::DeblockCtx {
+            frame_hdr,
+            mask: sh.mask,
+            mask_row,
+            sb256w,
+            cur_segmap,
+            b4_stride,
+            segmap_uv: sh.segmap_uv,
+            uv_segmap_stride: sh.uv_segmap_stride,
+            hbd,
+            ss_hor: fp.ss_hor as i32,
+            ss_ver: fp.ss_ver as i32,
+            bw,
+            bh,
+            sb128,
+            y_stride: fp.y_stride,
+            uv_stride: fp.uv_stride,
+            layout: seq_hdr.layout,
+        };
+        let _ = start_of_tile_row;
+        crate::deblock::deblock_sb64_cols(
+            crate::pixel::BitDepth8,
+            &dctx,
+            dst_y,
+            y_off0 as usize,
+            dst_u,
+            dst_v,
+            uv_off0 as usize,
+            by64,
+        );
+        crate::deblock::deblock_sb64_rows(
+            crate::pixel::BitDepth8,
+            &dctx,
+            dst_y,
+            y_off0 as usize,
+            dst_u,
+            dst_v,
+            uv_off0 as usize,
+            by64,
+        );
+    }
+
+    // Keep the existing LR backup contract: the current LR implementation is
+    // root-sbrow based, so refresh its DB backup immediately before the root row
+    // is restored. CDEF/CCSO do not consume `lr_db_line` in this Rust path.
+    let copy_db_on = sh.restore_planes != 0
+        && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
+        && last_sb64_in_root;
+    if copy_db_on {
+        let num_lines = 20usize;
+        let y_ls = fp.y_stride.unsigned_abs();
+        let uv_ls = fp.uv_stride.unsigned_abs();
+        if sc.lr_db_line[0].len() != y_ls * num_lines {
+            sc.lr_db_line[0] = vec![0u8; y_ls * num_lines];
+        }
+        if seq_hdr.layout != crate::headers::PixelLayout::I400 {
+            for b in sc.lr_db_line.iter_mut().skip(1) {
+                if b.len() != uv_ls * num_lines {
+                    *b = vec![0u8; uv_ls * num_lines];
+                }
+            }
+        }
+        let src: [&[u8]; 3] = [&*dst_y, &*dst_u, &*dst_v];
+        crate::deblock::copy_db_8bpc(
+            &mut sc.lr_db_line,
+            &src,
+            &[fp.y_stride, fp.uv_stride],
+            bw as usize,
+            bh as usize,
+            root_sby,
+            frame_hdr.sb128 != 0,
+            fp.ss_hor,
+            fp.ss_ver,
+            sh.restore_planes != 0,
+        );
+    }
+
+    if seq_hdr.cdef && inloop & (INLOOPFILTER_CDEF | INLOOPFILTER_CCSO) != 0 {
+        let ccso_on = inloop & INLOOPFILTER_CCSO != 0
+            && (frame_hdr.ccso.p[0].enabled != 0
+                || frame_hdr.ccso.p[1].enabled != 0
+                || frame_hdr.ccso.p[2].enabled != 0);
+        let ccso_pcfg = [
+            build_ccso_plane_cfg(&frame_hdr, 0),
+            build_ccso_plane_cfg(&frame_hdr, 1),
+            build_ccso_plane_cfg(&frame_hdr, 2),
+        ];
+        let any_lossless = frame_hdr.segmentation.enabled != 0
+            && (0..crate::headers::MAX_SEGMENTS).any(|i| frame_hdr.segmentation.lossless[i] != 0);
+
+        let y_ls = fp.y_stride.unsigned_abs();
+        let uv_ls = fp.uv_stride.unsigned_abs();
+        let need_y = 2 * y_ls;
+        let need_uv = 2 * uv_ls;
+        for bank in sc.cdef_line.iter_mut() {
+            if bank[0].len() != need_y {
+                bank[0] = vec![0u8; need_y];
+            }
+            if seq_hdr.layout != crate::headers::PixelLayout::I400 {
+                for b in bank.iter_mut().skip(1) {
+                    if b.len() != need_uv {
+                        *b = vec![0u8; need_uv];
+                    }
+                }
+            }
+        }
+
+        // Match dav2d_filter_slice_cdef(): by64 is the public unit. Inside a
+        // 128x128 superblock, the second 64 band starts two 4x4 rows early so
+        // the CDEF seam is processed as part of the current sb64 task. At a
+        // root-SB/tile-row boundary, process the two-row seam against the
+        // previous mask row first, then the normal current slice.
+        let mut start = by64 * 16;
+        let mut n_blks = 16 - 2 * ((by64 + 1 < sb64h) as i32);
+        if by64 > 0 {
+            if (start & (sb_step - 1)) == 0 {
+                let prev_mask_row = (((by64 - 1) >> 2) * sb256w) as usize;
+                let bp = crate::cdef::CdefBrowParams {
+                    bw,
+                    bh,
+                    damping: fp.cdef_damping,
+                    layout: fp.layout,
+                    on_skip_tx: fp.cdef_on_skiptx,
+                    cdef_on: inloop & INLOOPFILTER_CDEF != 0,
+                    mask: filter_mask_row(sh.mask, prev_mask_row, sb256w),
+                    y_strength: &fp.cdef_y_strength,
+                    uv_strength: &fp.cdef_uv_strength,
+                    any_lossless,
+                    ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
+                };
+                crate::cdef::cdef_brow_8bpc(
+                    dst_y,
+                    dst_u,
+                    dst_v,
+                    &bp,
+                    fp.y_stride,
+                    fp.uv_stride,
+                    &mut sc.cdef_line,
+                    &mut sc.cdef_line_toggle,
+                    start - 2,
+                    start,
+                    root_sby,
+                    true,
+                );
+            } else {
+                start -= 2;
+                n_blks += 2;
+            }
+        }
+
+        let end = (start + n_blks).min(bh);
+        if start < end {
+            let bp = crate::cdef::CdefBrowParams {
+                bw,
+                bh,
+                damping: fp.cdef_damping,
+                layout: fp.layout,
+                on_skip_tx: fp.cdef_on_skiptx,
+                cdef_on: inloop & INLOOPFILTER_CDEF != 0,
+                mask: filter_mask_row(sh.mask, mask_row, sb256w),
+                y_strength: &fp.cdef_y_strength,
+                uv_strength: &fp.cdef_uv_strength,
+                any_lossless,
+                ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
+            };
+            crate::cdef::cdef_brow_8bpc(
+                dst_y,
+                dst_u,
+                dst_v,
+                &bp,
+                fp.y_stride,
+                fp.uv_stride,
+                &mut sc.cdef_line,
+                &mut sc.cdef_line_toggle,
+                start,
+                end,
+                root_sby,
+                false,
+            );
+        }
+    }
+
+    if last_sb64_in_root
+        && sh.restore_planes != 0
+        && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
+    {
+        LUMA_SNAP.with(|snap_cell| {
+            let mut snap = snap_cell.borrow_mut();
+            let chroma_lr = {
+                let nsw = crate::headers::RestorationType::NsWiener as u8;
+                let sw = crate::headers::RestorationType::Switchable as u8;
+                let u = frame_hdr.restoration.p[1].restoration_type;
+                let v = frame_hdr.restoration.p[2].restoration_type;
+                u == nsw || u == sw || v == nsw || v == sw
+            };
+            let luma_snapshot: &[u8] = if chroma_lr {
+                if snap.len() != dst_y.len() {
+                    snap.resize(dst_y.len(), 0);
+                }
+                let sb_luma_h = sb_step * 4;
+                let ystride = fp.y_stride.unsigned_abs() as usize;
+                let band_lo =
+                    (((root_sby * sb_luma_h - 64).max(0)) as usize * ystride).min(dst_y.len());
+                let band_hi = ((((root_sby + 1) * sb_luma_h + 64).max(0)) as usize * ystride)
+                    .min(dst_y.len());
+                snap[band_lo..band_hi].copy_from_slice(&dst_y[band_lo..band_hi]);
+                &snap[..]
+            } else {
+                &[]
+            };
+            let widx = sh.wiener_idx;
+            let pc_subclass_lut: &[u8] = &crate::tables::PC_WIENER_SUB_CLASSIFY[widx];
+            let pc_filters: &[[i16; 13]] = &crate::tables::PC_WIENER_FILTERS[widx];
+            let ns_subclass_lut: &[u8] = match sh.ns_subclass_class_idx {
+                Some(ci) => &crate::tables::PC_WIENER_SUB_CLASSIFY_NS[widx][ci.min(6)],
+                None => &crate::tables::PC_WIENER_SUB_CLASSIFY_NS[widx][0],
+            };
+            let ctx = crate::looprestoration::LrContext {
+                restoration_p: &frame_hdr.restoration.p,
+                gdf_qp_idx: frame_hdr.gdf.qp_idx as i32,
+                gdf_scale: frame_hdr.gdf.scale as i32,
+                sb128: frame_hdr.sb128 != 0,
+                cfl_ds_filter_index: seq_hdr.cfl_ds_filter_index as i32,
+                layout: seq_hdr.layout,
+                bw,
+                bh,
+                sb256w,
+                sbh,
+                mask: sh.mask,
+                lr_mask: sh.lr_mask,
+                lr_db_line: &sc.lr_db_line,
+                lr_cdef_line: &sh.lr_cdef_line,
+                lf_p_luma: luma_snapshot,
+                base_q: sh.base_q,
+                gdf_ref_dst_idx: sh.gdf_ref_dst_idx,
+                start_of_tile_row: sh.start_of_tile_row,
+                ns_subclass_lut,
+                pc_subclass_lut,
+                pc_filters,
+                n_tc: 1,
+                inloop_filters: inloop,
+                cur_stride: [fp.y_stride, fp.uv_stride],
+                unit_size: frame_hdr.restoration.unit_size,
+                restore_planes: sh.restore_planes,
+            };
+            let mut dst: [&mut [u8]; 3] = [dst_y, dst_u, dst_v];
+            crate::looprestoration::lr_sbrow_8bpc(&ctx, &mut dst, root_sby);
+        });
+    }
+}
+
 /// Borrow the per-SB256 filter-mask row directly. Out-of-range columns are
 /// handled by CDEF accessors as zero / disabled masks, so a short tail slice is
 /// valid for malformed or cropped mask rows without allocating per-field Vecs.
@@ -4449,11 +5256,11 @@ fn submit_frame_inner(
     };
 
     let in_cdf_ref = fc.in_cdf.take();
-    // Create the decoder's worker pool on the first multi-threaded frame, sized
-    // to this decoder's resolved `n_tc`. Reused for every subsequent frame and
-    // dropped with the decoder.
+    // The decoder's worker pool is created in `Decoder::open()`, sized as
+    // `n_tc - 1` helper threads because the caller participates in each dispatch.
+    // Keep this fallback for contexts constructed directly in tests.
     if n_tc >= 2 && c.pool.is_none() {
-        c.pool = Some(crate::mtpool::ThreadPool::new(n_tc as usize));
+        c.pool = Some(crate::mtpool::ThreadPool::new((n_tc - 1) as usize));
     }
     decode_frame(
         &mut *fc,
@@ -4807,6 +5614,57 @@ fn decode_b<BD: crate::pixel::BitDepth>(
     }
     if has_chroma {
         b.cbs = cbs as i8;
+    }
+
+    // Replay-only entry used by the dav2d-style split scaffold.  Partition
+    // replay has already positioned bx/by/cbx/cby at this leaf; the entropy
+    // pass stored the parsed Av2Block and coefficient payloads in order.
+    if (pass & crate::internal::Pass::Entropy as u8) == 0 {
+        let rec = recon
+            .scratch
+            .block_rec
+            .get(recon.scratch.block_rpos)
+            .copied()
+            .ok_or(())?;
+        recon.scratch.block_rpos += 1;
+        debug_assert_eq!(rec.bx as i32, bx);
+        debug_assert_eq!(rec.by as i32, by);
+        debug_assert_eq!(rec.cbx as i32, cbx);
+        debug_assert_eq!(rec.cby as i32, cby);
+        debug_assert_eq!(rec.lbs, lbs as i8);
+        debug_assert_eq!(rec.cbs, cbs as i8);
+        let b = rec.b;
+
+        // This first replay step is intentionally intra-only.  Inter needs the
+        // separate MV-resolution replay path before it can be enabled safely.
+        if b.is_intra == 0 || b.intrabc != 0 {
+            return Err(());
+        }
+
+        if (pass & crate::internal::Pass::Recon as u8) != 0 {
+            recon_b_intra_phase(
+                &mut ReconBCtx {
+                    recon: &mut *recon,
+                    msac: &mut *msac,
+                    cdf_m: &mut *cdf_m,
+                    a: &mut *a,
+                    l: &mut *l,
+                    b: &b,
+                    fi,
+                },
+                bx,
+                by,
+                cbx,
+                cby,
+                lbs,
+                cbs,
+                has_luma,
+                has_chroma,
+                TxPhase::ReconOnly,
+                ChromaPhase::ReconOnly,
+            )?;
+        }
+        return Ok(b);
     }
 
     // Pre-compute cross-SB boundary neighbour context values.
@@ -7204,6 +8062,18 @@ fn decode_b<BD: crate::pixel::BitDepth>(
         }
     }
 
+    if (pass & crate::internal::Pass::Entropy as u8) != 0 {
+        recon.scratch.block_rec.push(BlockRecord {
+            b,
+            bx: bx as i16,
+            by: by as i16,
+            cbx: cbx as i16,
+            cby: cby as i16,
+            lbs: lbs as i8,
+            cbs: cbs as i8,
+        });
+    }
+
     // Builds the per-4px deblock edge masks (filter_y/filter_uv), the lossless
     // and chroma-seg maps, and the LR no-skip mask. These feed the deferred
     // deblock/LR filter pass. Chroma masks only when chroma deblock is enabled.
@@ -7353,6 +8223,37 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 y += 2;
             }
         }
+    }
+
+    // Entropy-only replay scaffold for intra/key frames: syntax + filter masks
+    // have been produced above; consume and store residual coefficients here,
+    // then leave pixel prediction / inverse transforms to PASS_RECON.
+    if (pass & crate::internal::Pass::Recon as u8) == 0 {
+        if b.is_intra == 0 || b.intrabc != 0 {
+            return Err(());
+        }
+        recon_b_intra_phase(
+            &mut ReconBCtx {
+                recon: &mut *recon,
+                msac: &mut *msac,
+                cdf_m: &mut *cdf_m,
+                a: &mut *a,
+                l: &mut *l,
+                b: &b,
+                fi,
+            },
+            bx,
+            by,
+            cbx,
+            cby,
+            lbs,
+            cbs,
+            has_luma,
+            has_chroma,
+            TxPhase::ReadOnly,
+            ChromaPhase::ReadOnly,
+        )?;
+        return Ok(b);
     }
 
     // For IntraBC blocks: resolve the block vector by adding the parsed residual
@@ -8265,6 +9166,35 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
     has_luma: bool,
     has_chroma: bool,
 ) -> Result<(), ()> {
+    recon_b_intra_phase(
+        rb,
+        bx,
+        by,
+        cbx,
+        cby,
+        lbs,
+        cbs,
+        has_luma,
+        has_chroma,
+        TxPhase::Both,
+        ChromaPhase::Both,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recon_b_intra_phase<BD: crate::pixel::BitDepth>(
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
+    bx: i32,
+    by: i32,
+    cbx: i32,
+    cby: i32,
+    lbs: BlockSize,
+    cbs: BlockSize,
+    has_luma: bool,
+    has_chroma: bool,
+    luma_phase: TxPhase,
+    chroma_outer_phase: ChromaPhase,
+) -> Result<(), ()> {
     let recon = &mut *rb.recon;
     let msac = &mut *rb.msac;
     let cdf_m = &mut *rb.cdf_m;
@@ -8359,7 +9289,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                 ) > 16
                 {
                     // 256px case: recurse one more level (lbs2 == 128x128).
-                    recon_b_intra(
+                    recon_b_intra_phase(
                         &mut ReconBCtx {
                             recon: &mut *recon,
                             msac: &mut *msac,
@@ -8381,12 +9311,14 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                         },
                         lbs2 != BlockSize::Invalid,
                         read_cbs != BlockSize::Invalid || recon_cbs != BlockSize::Invalid,
+                        luma_phase,
+                        chroma_outer_phase,
                     )?;
                 } else {
                     // Luma 64x64 sub-block: the tx walk uses the sub-block size,
                     // but `b.bs` (passed to coef decode) stays the full block.
                     if lbs2 != BlockSize::Invalid {
-                        recon_b_intra_luma_geom(
+                        recon_b_intra_luma_geom_phase(
                             &mut ReconBCtx {
                                 recon: &mut *recon,
                                 msac: &mut *msac,
@@ -8399,6 +9331,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                             sub_bx,
                             sub_by,
                             lbs2 as usize,
+                            luma_phase,
                         )?;
                     }
                     // Chroma: read phase with the first sub-block, recon with the last.
@@ -8411,7 +9344,9 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                         (false, true) => Some(ChromaPhase::ReconOnly),
                         (false, false) => None,
                     };
-                    if let Some(ph) = phase {
+                    if let Some(ph) =
+                        phase.and_then(|ph| chroma_phase_intersect(ph, chroma_outer_phase))
+                    {
                         let ccbs = if read_cbs != BlockSize::Invalid {
                             read_cbs
                         } else {
@@ -8480,7 +9415,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
                 fi.bh * 4,
             );
         }
-        recon_b_intra_luma(
+        recon_b_intra_luma_phase(
             &mut ReconBCtx {
                 recon: &mut *recon,
                 msac: &mut *msac,
@@ -8495,6 +9430,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
             bx4,
             by4,
             intrabc,
+            luma_phase,
         )?;
     }
     if has_chroma {
@@ -8524,7 +9460,7 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
             }
         }
         let sdp_active = lbs == BlockSize::Invalid;
-        recon_b_intra_chroma(
+        recon_b_intra_chroma_phase(
             &mut ReconBCtx {
                 recon: &mut *recon,
                 msac: &mut *msac,
@@ -8537,8 +9473,8 @@ fn recon_b_intra<BD: crate::pixel::BitDepth>(
             cbx,
             cby,
             cbs,
-            intrabc,
             sdp_active,
+            chroma_outer_phase,
         )?;
     }
     Ok(())
@@ -10005,29 +10941,53 @@ fn inter_chroma_residual_8bpc<BD: BitDepth>(
     } // end coef-read phase
 
     // Stash the decoded coefficients for the deferred recon phase, or restore
-    // the residual with the last).
+    // them.  This is now a FIFO, so future whole-SB entropy/recon splitting can
+    // read several chroma blocks before replaying them.
     if phase == ChromaPhase::ReadOnly {
         let need = n_tu * 16 * 2;
-        if recon.scratch.chroma_cf.len() < need {
-            recon.scratch.chroma_cf.resize(need, 0);
-        }
-        recon.scratch.chroma_cf[..n_tu * 16].copy_from_slice(cf_u);
-        recon.scratch.chroma_cf[n_tu * 16..need].copy_from_slice(cf_v);
+        let cf_off = recon.scratch.chroma_tx_cf.len();
+        recon.scratch.chroma_tx_cf.extend_from_slice(cf_u);
+        recon.scratch.chroma_tx_cf.extend_from_slice(cf_v);
+        let mut eob16 = [[-1i16; 2]; 256];
         for i in 0..256 {
-            recon.scratch.chroma_txtp[i] = tu_txtp[i];
-            recon.scratch.chroma_eob[i] = [tu_eob[i][0] as i16, tu_eob[i][1] as i16];
+            eob16[i] = [tu_eob[i][0] as i16, tu_eob[i][1] as i16];
         }
+        recon.scratch.chroma_tx.push(ChromaTxRecord {
+            cbx: cbx as i16,
+            cby: cby as i16,
+            cbs: b.cbs as u8,
+            sdp_active: false,
+            n_tu: n_tu as u16,
+            cf_off: cf_off as u32,
+            cf_len: need as u32,
+            u_has_cf: recon.scratch_u_has_cf,
+            txtp: tu_txtp,
+            eob: eob16,
+        });
         return Ok(());
     } else if phase == ChromaPhase::ReconOnly {
-        cf_u.copy_from_slice(&recon.scratch.chroma_cf[..n_tu * 16]);
-        cf_v.copy_from_slice(&recon.scratch.chroma_cf[n_tu * 16..n_tu * 16 * 2]);
+        let rec = recon
+            .scratch
+            .chroma_tx
+            .get(recon.scratch.chroma_tx_rpos)
+            .copied()
+            .ok_or(())?;
+        recon.scratch.chroma_tx_rpos += 1;
+        debug_assert_eq!(rec.cbx as i32, cbx);
+        debug_assert_eq!(rec.cby as i32, cby);
+        debug_assert_eq!(rec.n_tu as usize, n_tu);
+        let cf_off = rec.cf_off as usize;
+        let cf_len = rec.cf_len as usize;
+        debug_assert_eq!(cf_len, n_tu * 16 * 2);
+        cf_u.copy_from_slice(&recon.scratch.chroma_tx_cf[cf_off..cf_off + n_tu * 16]);
+        cf_v.copy_from_slice(
+            &recon.scratch.chroma_tx_cf[cf_off + n_tu * 16..cf_off + n_tu * 16 * 2],
+        );
+        tu_txtp = rec.txtp;
         for i in 0..256 {
-            tu_txtp[i] = recon.scratch.chroma_txtp[i];
-            tu_eob[i] = [
-                recon.scratch.chroma_eob[i][0] as i32,
-                recon.scratch.chroma_eob[i][1] as i32,
-            ];
+            tu_eob[i] = [rec.eob[i][0] as i32, rec.eob[i][1] as i32];
         }
+        recon.scratch_u_has_cf = rec.u_has_cf;
     }
 
     let cctx_enabled = recon.frame.seq_cctx
@@ -13832,6 +14792,19 @@ fn recon_b_intra_luma<BD: crate::pixel::BitDepth>(
     _by4: usize,
     _intrabc: bool,
 ) -> Result<(), ()> {
+    recon_b_intra_luma_phase(rb, bx, by, _bx4, _by4, _intrabc, TxPhase::Both)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recon_b_intra_luma_phase<BD: crate::pixel::BitDepth>(
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
+    bx: i32,
+    by: i32,
+    _bx4: usize,
+    _by4: usize,
+    _intrabc: bool,
+    phase: TxPhase,
+) -> Result<(), ()> {
     let recon = &mut *rb.recon;
     let msac = &mut *rb.msac;
     let cdf_m = &mut *rb.cdf_m;
@@ -13839,7 +14812,7 @@ fn recon_b_intra_luma<BD: crate::pixel::BitDepth>(
     let l = &mut *rb.l;
     let b = rb.b;
     let fi = rb.fi;
-    recon_b_intra_luma_geom(
+    recon_b_intra_luma_geom_phase(
         &mut ReconBCtx {
             recon: &mut *recon,
             msac: &mut *msac,
@@ -13852,6 +14825,7 @@ fn recon_b_intra_luma<BD: crate::pixel::BitDepth>(
         bx,
         by,
         b.bs as usize,
+        phase,
     )
 }
 
@@ -13864,6 +14838,17 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
     bx: i32,
     by: i32,
     geom_bs: usize,
+) -> Result<(), ()> {
+    recon_b_intra_luma_geom_phase(rb, bx, by, geom_bs, TxPhase::Both)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recon_b_intra_luma_geom_phase<BD: crate::pixel::BitDepth>(
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
+    bx: i32,
+    by: i32,
+    geom_bs: usize,
+    phase: TxPhase,
 ) -> Result<(), ()> {
     let recon = &mut *rb.recon;
     let msac = &mut *rb.msac;
@@ -13886,7 +14871,8 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
     // the residual transform walk; the per-tx intra prediction is skipped (gated
     // by `pal_sz == 0` inside recon_b_luma_tx). Palette blocks are <=16 4x4 units
     // so they are never split, hence `geom_bs == b.bs`.
-    if b.is_intra != 0 && b.intrabc == 0 && b.intra_data().pal_sz != 0 {
+    if phase != TxPhase::ReadOnly && b.is_intra != 0 && b.intrabc == 0 && b.intra_data().pal_sz != 0
+    {
         let bw = BLOCK_DIMENSIONS[bs][0] as usize * 4;
         let bh = BLOCK_DIMENSIONS[bs][1] as usize * 4;
         let stride = recon.frame.y_stride_px;
@@ -13918,7 +14904,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
         while y < h4 {
             let mut x = 0;
             while x < w4 {
-                recon_b_luma_tx(
+                recon_b_luma_tx_phase(
                     &mut ReconBCtx {
                         recon: &mut *recon,
                         msac: &mut *msac,
@@ -13934,6 +14920,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     pb_col_start,
                     pb_row_start,
                     lossless,
+                    phase,
                 )?;
                 x += tw4;
             }
@@ -13947,7 +14934,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
 
     match TxPartition::from_raw(b.tx_part) {
         TxPartition::None => {
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -13963,13 +14950,14 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
         }
         TxPartition::Split => {
             let t_dim = &TXFM_DIMENSIONS[tx];
             let tw4 = t_dim.w as i32;
             let th4 = t_dim.h as i32;
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -13985,10 +14973,11 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             let have_v_split = bx + tw4 < fi.bw;
             if have_v_split {
-                recon_b_luma_tx(
+                recon_b_luma_tx_phase(
                     &mut ReconBCtx {
                         recon: &mut *recon,
                         msac: &mut *msac,
@@ -14004,12 +14993,13 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     pb_col_start,
                     pb_row_start,
                     lossless,
+                    phase,
                 )?;
             }
             if by + th4 >= fi.bh {
                 return Ok(());
             }
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14025,9 +15015,10 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             if have_v_split {
-                recon_b_luma_tx(
+                recon_b_luma_tx_phase(
                     &mut ReconBCtx {
                         recon: &mut *recon,
                         msac: &mut *msac,
@@ -14043,12 +15034,13 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     pb_col_start,
                     pb_row_start,
                     lossless,
+                    phase,
                 )?;
             }
         }
         TxPartition::H => {
             let th4 = TXFM_DIMENSIONS[tx].h as i32;
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14064,11 +15056,12 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             if by + th4 >= fi.bh {
                 return Ok(());
             }
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14084,11 +15077,12 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
         }
         TxPartition::V => {
             let tw4 = TXFM_DIMENSIONS[tx].w as i32;
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14104,11 +15098,12 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             if bx + tw4 >= fi.bw {
                 return Ok(());
             }
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14124,6 +15119,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
         }
         TxPartition::H4 => {
@@ -14131,7 +15127,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             let th4 = TXFM_DIMENSIONS[tx].h as i32;
             for i in 0..4 {
                 let yy = by + i * th4;
-                recon_b_luma_tx(
+                recon_b_luma_tx_phase(
                     &mut ReconBCtx {
                         recon: &mut *recon,
                         msac: &mut *msac,
@@ -14147,6 +15143,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     pb_col_start,
                     pb_row_start,
                     lossless,
+                    phase,
                 )?;
                 if yy + th4 >= fi.bh {
                     break;
@@ -14157,7 +15154,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             let tw4 = TXFM_DIMENSIONS[tx].w as i32;
             for i in 0..4 {
                 let xx = bx + i * tw4;
-                recon_b_luma_tx(
+                recon_b_luma_tx_phase(
                     &mut ReconBCtx {
                         recon: &mut *recon,
                         msac: &mut *msac,
@@ -14173,6 +15170,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     pb_col_start,
                     pb_row_start,
                     lossless,
+                    phase,
                 )?;
                 if xx + tw4 >= fi.bw {
                     break;
@@ -14185,7 +15183,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             let tw4_small = t_dim_small.w as i32;
             let th4_small = t_dim_small.h as i32;
             let th4_big = TXFM_DIMENSIONS[tx_big].h as i32;
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14201,10 +15199,11 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             let have_v_split = bx + tw4_small < fi.bw;
             if have_v_split {
-                recon_b_luma_tx(
+                recon_b_luma_tx_phase(
                     &mut ReconBCtx {
                         recon: &mut *recon,
                         msac: &mut *msac,
@@ -14220,12 +15219,13 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     pb_col_start,
                     pb_row_start,
                     lossless,
+                    phase,
                 )?;
             }
             if by + th4_small >= fi.bh {
                 return Ok(());
             }
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14241,12 +15241,13 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             if by + th4_small + th4_big >= fi.bh {
                 return Ok(());
             }
             let yb = by + th4_small + th4_big;
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14262,9 +15263,10 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             if have_v_split {
-                recon_b_luma_tx(
+                recon_b_luma_tx_phase(
                     &mut ReconBCtx {
                         recon: &mut *recon,
                         msac: &mut *msac,
@@ -14280,6 +15282,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     pb_col_start,
                     pb_row_start,
                     lossless,
+                    phase,
                 )?;
             }
         }
@@ -14289,7 +15292,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
             let tw4_small = t_dim_small.w as i32;
             let th4_small = t_dim_small.h as i32;
             let tw4_big = TXFM_DIMENSIONS[tx_big].w as i32;
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14305,10 +15308,11 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             let have_h_split = by + th4_small < fi.bh;
             if have_h_split {
-                recon_b_luma_tx(
+                recon_b_luma_tx_phase(
                     &mut ReconBCtx {
                         recon: &mut *recon,
                         msac: &mut *msac,
@@ -14324,12 +15328,13 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     pb_col_start,
                     pb_row_start,
                     lossless,
+                    phase,
                 )?;
             }
             if bx + tw4_small >= fi.bw {
                 return Ok(());
             }
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14345,12 +15350,13 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             if bx + tw4_small + tw4_big >= fi.bw {
                 return Ok(());
             }
             let xb = bx + tw4_small + tw4_big;
-            recon_b_luma_tx(
+            recon_b_luma_tx_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
                     msac: &mut *msac,
@@ -14366,9 +15372,10 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                 pb_col_start,
                 pb_row_start,
                 lossless,
+                phase,
             )?;
             if have_h_split {
-                recon_b_luma_tx(
+                recon_b_luma_tx_phase(
                     &mut ReconBCtx {
                         recon: &mut *recon,
                         msac: &mut *msac,
@@ -14384,6 +15391,7 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
                     pb_col_start,
                     pb_row_start,
                     lossless,
+                    phase,
                 )?;
             }
         }
@@ -14403,10 +15411,56 @@ fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
 /// with the first sub-block and the pixel reconstruction with the last, so the
 /// (<=64px) blocks both phases run in a single `Both` call.
 #[derive(Clone, Copy, PartialEq, Eq)]
+enum TxPhase {
+    Both,
+    ReadOnly,
+    ReconOnly,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum ChromaPhase {
     Both,
     ReadOnly,
     ReconOnly,
+}
+
+#[inline(always)]
+fn tx_phase_for_pass(pass: u8) -> TxPhase {
+    let has_entropy = (pass & crate::internal::Pass::Entropy as u8) != 0;
+    let has_recon = (pass & crate::internal::Pass::Recon as u8) != 0;
+    match (has_entropy, has_recon) {
+        (true, true) => TxPhase::Both,
+        (true, false) => TxPhase::ReadOnly,
+        (false, true) => TxPhase::ReconOnly,
+        (false, false) => TxPhase::Both,
+    }
+}
+
+#[inline(always)]
+fn chroma_phase_for_pass(pass: u8) -> ChromaPhase {
+    let has_entropy = (pass & crate::internal::Pass::Entropy as u8) != 0;
+    let has_recon = (pass & crate::internal::Pass::Recon as u8) != 0;
+    match (has_entropy, has_recon) {
+        (true, true) => ChromaPhase::Both,
+        (true, false) => ChromaPhase::ReadOnly,
+        (false, true) => ChromaPhase::ReconOnly,
+        (false, false) => ChromaPhase::Both,
+    }
+}
+
+#[inline(always)]
+fn chroma_phase_intersect(local: ChromaPhase, outer: ChromaPhase) -> Option<ChromaPhase> {
+    match outer {
+        ChromaPhase::Both => Some(local),
+        ChromaPhase::ReadOnly => match local {
+            ChromaPhase::Both | ChromaPhase::ReadOnly => Some(ChromaPhase::ReadOnly),
+            ChromaPhase::ReconOnly => None,
+        },
+        ChromaPhase::ReconOnly => match local {
+            ChromaPhase::Both | ChromaPhase::ReconOnly => Some(ChromaPhase::ReconOnly),
+            ChromaPhase::ReadOnly => None,
+        },
+    }
 }
 
 fn recon_b_intra_chroma<BD: BitDepth>(
@@ -14632,21 +15686,45 @@ fn recon_b_intra_chroma_phase<BD: BitDepth>(
     // Stash decoded coefficients for the deferred recon phase, or restore them.
     if phase == ChromaPhase::ReadOnly {
         let need = n_tu * 16 * 2;
-        if recon.scratch.chroma_cf.len() < need {
-            recon.scratch.chroma_cf.resize(need, 0);
-        }
-        recon.scratch.chroma_cf[..n_tu * 16].copy_from_slice(cf_u);
-        recon.scratch.chroma_cf[n_tu * 16..need].copy_from_slice(cf_v);
-        recon.scratch.chroma_txtp = tu_txtp;
-        recon.scratch.chroma_eob = tu_eob;
-        recon.scratch.chroma_u_has_cf = u_has_cf;
+        let cf_off = recon.scratch.chroma_tx_cf.len();
+        recon.scratch.chroma_tx_cf.extend_from_slice(cf_u);
+        recon.scratch.chroma_tx_cf.extend_from_slice(cf_v);
+        recon.scratch.chroma_tx.push(ChromaTxRecord {
+            cbx: cbx as i16,
+            cby: cby as i16,
+            cbs: cbs as u8,
+            sdp_active,
+            n_tu: n_tu as u16,
+            cf_off: cf_off as u32,
+            cf_len: need as u32,
+            u_has_cf,
+            txtp: tu_txtp,
+            eob: tu_eob,
+        });
         return Ok(());
     } else if phase == ChromaPhase::ReconOnly {
-        cf_u.copy_from_slice(&recon.scratch.chroma_cf[..n_tu * 16]);
-        cf_v.copy_from_slice(&recon.scratch.chroma_cf[n_tu * 16..n_tu * 16 * 2]);
-        tu_txtp = recon.scratch.chroma_txtp;
-        tu_eob = recon.scratch.chroma_eob;
-        u_has_cf = recon.scratch.chroma_u_has_cf;
+        let rec = recon
+            .scratch
+            .chroma_tx
+            .get(recon.scratch.chroma_tx_rpos)
+            .copied()
+            .ok_or(())?;
+        recon.scratch.chroma_tx_rpos += 1;
+        debug_assert_eq!(rec.cbx as i32, cbx);
+        debug_assert_eq!(rec.cby as i32, cby);
+        debug_assert_eq!(rec.cbs, cbs as u8);
+        debug_assert_eq!(rec.sdp_active, sdp_active);
+        debug_assert_eq!(rec.n_tu as usize, n_tu);
+        let cf_off = rec.cf_off as usize;
+        let cf_len = rec.cf_len as usize;
+        debug_assert_eq!(cf_len, n_tu * 16 * 2);
+        cf_u.copy_from_slice(&recon.scratch.chroma_tx_cf[cf_off..cf_off + n_tu * 16]);
+        cf_v.copy_from_slice(
+            &recon.scratch.chroma_tx_cf[cf_off + n_tu * 16..cf_off + n_tu * 16 * 2],
+        );
+        tu_txtp = rec.txtp;
+        tu_eob = rec.eob;
+        u_has_cf = rec.u_has_cf;
     }
     let _ = u_has_cf;
 
@@ -15147,6 +16225,29 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
     pb_row_start: i32,
     lossless: bool,
 ) -> Result<(), ()> {
+    recon_b_luma_tx_phase(
+        rb,
+        tx,
+        bx,
+        by,
+        pb_col_start,
+        pb_row_start,
+        lossless,
+        TxPhase::Both,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recon_b_luma_tx_phase<BD: crate::pixel::BitDepth>(
+    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
+    tx: usize,
+    bx: i32,
+    by: i32,
+    pb_col_start: i32,
+    pb_row_start: i32,
+    lossless: bool,
+    phase: TxPhase,
+) -> Result<(), ()> {
     let recon = &mut *rb.recon;
     let msac = &mut *rb.msac;
     let cdf_m = &mut *rb.cdf_m;
@@ -15189,16 +16290,37 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
         orig_y_mode
     };
 
+    let tu_n = tw * th;
     let mut txtp: u16 = 0;
     let mut res_ctx: u8 = 0;
-    // Zero the tx coefficient region; decode_coefs may not fully initialise it.
     // No pre-clear: every inverse-transform path clears cf[..S*S] after use
     // (itx_2d dequant cores + itx.rs WHT/DC/generic), and cf starts zeroed, so
     // cf is already zero on entry here. Verified bit-exact + via prefill poison.
 
     // IntraBC blocks may set skip_txfm (intra/non-IntraBC blocks force it to 0).
     // When set, no coefficients are coded: eob=-1, txtp=DCT_DCT, stx=0, and the
-    let (mut eob, stx, mut txtp) = if b.skip_txfm != 0 {
+    // coefficient contexts are updated as skipped.
+    let (mut eob, stx, mut txtp) = if phase == TxPhase::ReconOnly {
+        let rec = recon
+            .scratch
+            .luma_tx
+            .get(recon.scratch.luma_tx_rpos)
+            .copied()
+            .ok_or(())?;
+        recon.scratch.luma_tx_rpos += 1;
+        debug_assert_eq!(rec.tx as usize, tx);
+        debug_assert_eq!(rec.bx as i32, bx);
+        debug_assert_eq!(rec.by as i32, by);
+        debug_assert_eq!(rec.pb_col_start as i32, pb_col_start);
+        debug_assert_eq!(rec.pb_row_start as i32, pb_row_start);
+        debug_assert_eq!(rec.lossless, lossless);
+        let cf_off = rec.cf_off as usize;
+        let cf_len = rec.cf_len as usize;
+        if cf_len != 0 {
+            recon.cf[..cf_len].copy_from_slice(&recon.scratch.luma_tx_cf[cf_off..cf_off + cf_len]);
+        }
+        (rec.eob as i32, rec.stx as i32, rec.txtp as u32)
+    } else if b.skip_txfm != 0 {
         res_ctx = 0x40;
         (-1i32, 0i32, crate::levels::txtp::DCT_DCT as u32)
     } else {
@@ -15255,11 +16377,42 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
 
     let aw = imin(tw4, fi.bw - bx).max(0) as usize;
     let lh = imin(th4, fi.bh - by).max(0) as usize;
-    if aw > 0 {
-        a.lcoef[bx4..bx4 + aw].fill(res_ctx);
+    if phase != TxPhase::ReconOnly {
+        if aw > 0 {
+            a.lcoef[bx4..bx4 + aw].fill(res_ctx);
+        }
+        if lh > 0 {
+            l.lcoef[by4..by4 + lh].fill(res_ctx);
+        }
     }
-    if lh > 0 {
-        l.lcoef[by4..by4 + lh].fill(res_ctx);
+
+    if phase == TxPhase::ReadOnly {
+        let cf_len = if eob != -1 { tu_n } else { 0 };
+        let cf_off = recon.scratch.luma_tx_cf.len();
+        if cf_len != 0 {
+            recon
+                .scratch
+                .luma_tx_cf
+                .extend_from_slice(&recon.cf[..cf_len]);
+            // In the normal path `inv_txfm_add` clears the consumed coefficient
+            // region.  ReadOnly returns before the inverse transform, so preserve
+            // the same zero-on-entry invariant for the next coefficient block.
+            recon.cf[..cf_len].fill(0);
+        }
+        recon.scratch.luma_tx.push(LumaTxRecord {
+            tx: tx as u8,
+            bx: bx as i16,
+            by: by as i16,
+            pb_col_start: pb_col_start as i16,
+            pb_row_start: pb_row_start as i16,
+            eob: eob as i16,
+            stx: stx as i8,
+            txtp: txtp as u16,
+            cf_off: cf_off as u32,
+            cf_len: cf_len as u16,
+            lossless,
+        });
+        return Ok(());
     }
 
     // dst origin for this tx block.

@@ -708,12 +708,9 @@ fn store_row_group_x4_clip<B: DctSimd4, const S: usize>(
         for (x, &vx) in v.iter().enumerate() {
             let lanes = B::to_array(vx);
             tmp[y * ITX_TMP_STRIDE + x] = clip_row_value(lanes[0], rnd, shift, min, max);
-            tmp[(y + 1) * ITX_TMP_STRIDE + x] =
-                clip_row_value(lanes[1], rnd, shift, min, max);
-            tmp[(y + 2) * ITX_TMP_STRIDE + x] =
-                clip_row_value(lanes[2], rnd, shift, min, max);
-            tmp[(y + 3) * ITX_TMP_STRIDE + x] =
-                clip_row_value(lanes[3], rnd, shift, min, max);
+            tmp[(y + 1) * ITX_TMP_STRIDE + x] = clip_row_value(lanes[1], rnd, shift, min, max);
+            tmp[(y + 2) * ITX_TMP_STRIDE + x] = clip_row_value(lanes[2], rnd, shift, min, max);
+            tmp[(y + 3) * ITX_TMP_STRIDE + x] = clip_row_value(lanes[3], rnd, shift, min, max);
         }
     }
 }
@@ -836,15 +833,7 @@ fn idct_dequant_rows_dct_simd4<B: DctSimd4, const N: usize, const S: usize>(
         }
     }
     while y + 4 <= ncols {
-        process_row_group_x4::<B, S>(
-            coeff,
-            tmp,
-            y,
-            rnd0,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
+        process_row_group_x4::<B, S>(coeff, tmp, y, rnd0, shift0, row_clip_min, row_clip_max);
         y += 4;
     }
 
@@ -1206,12 +1195,7 @@ fn process_row_group_itx_x4<B: DctSimd4, const S: usize>(
 }
 
 #[inline(always)]
-fn process_row_group_itx_wide_x8<
-    B: DctSimd4,
-    const W: usize,
-    const H: usize,
-    const RECT2: bool,
->(
+fn process_row_group_itx_wide_x8<B: DctSimd4, const W: usize, const H: usize, const RECT2: bool>(
     coeff: &[i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,

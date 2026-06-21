@@ -393,13 +393,9 @@ impl<'a> MsacContext<'a> {
                 }
 
                 // Safe compile-time sized array conversion (Zero-cost)
-                let cdf_all: &mut [u16; $n + 1] = (&mut cdf[..=$n])
-                    .try_into()
-                    .unwrap();
+                let cdf_all: &mut [u16; $n + 1] = (&mut cdf[..=$n]).try_into().unwrap();
 
-                let min_prob: &[u16; $n + 1] = (&MSAC_MIN_PROB[$n - 1][..=$n])
-                    .try_into()
-                    .unwrap();
+                let min_prob: &[u16; $n + 1] = (&MSAC_MIN_PROB[$n - 1][..=$n]).try_into().unwrap();
 
                 let c = (self.dif >> 48) as u32;
                 let r = self.rng >> 8;
@@ -443,13 +439,17 @@ impl<'a> MsacContext<'a> {
                     let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize]
                         + if $n > 2 { 1 } else { 0 };
 
-                    for (i, cdf_i) in cdf_syms.iter_mut().enumerate() {
-                        let mask = ((i < val_usize) as u16).wrapping_neg(); // 0xFFFF if true, 0x0000 if false
-                        let v_true = (32768 - *cdf_i) >> rate;
-                        let v_false = (*cdf_i >> rate).wrapping_neg();
-
-                        let shift_val = (v_true & mask) | (v_false & !mask);
-                        *cdf_i = cdf_i.wrapping_add(shift_val);
+                    // This used to compute both the increment and decrement for
+                    // every CDF entry and select with a mask. On Apple cores the
+                    // branchy split is faster for this entropy hot path: it does
+                    // roughly half the shifts/adds, and `val_usize` is not
+                    // adversarial random noise. Semantics are identical to the
+                    // branchless update above.
+                    for cdf_i in cdf_syms[..val_usize].iter_mut() {
+                        *cdf_i = cdf_i.wrapping_add((32768u16 - *cdf_i) >> rate);
+                    }
+                    for cdf_i in cdf_syms[val_usize..].iter_mut() {
+                        *cdf_i = cdf_i.wrapping_sub(*cdf_i >> rate);
                     }
 
                     cdf_count[0] = pc + u16::from(count < 32);

@@ -1306,25 +1306,133 @@ macro_rules! iadst_rect_rdm_fn {
     };
 }
 
-idct_rect_rdm_fn!(idct_dequant_4x8_neon_rdm, idct_dequant_4x8_neon_rdm_impl, 32, 4, 8);
-idct_rect_rdm_fn!(idct_dequant_8x4_neon_rdm, idct_dequant_8x4_neon_rdm_impl, 32, 8, 4);
-idct_rect_rdm_fn!(idct_dequant_8x16_neon_rdm, idct_dequant_8x16_neon_rdm_impl, 128, 8, 16);
-idct_rect_rdm_fn!(idct_dequant_16x8_neon_rdm, idct_dequant_16x8_neon_rdm_impl, 128, 16, 8);
-idct_rect_rdm_fn!(idct_dequant_16x32_neon_rdm, idct_dequant_16x32_neon_rdm_impl, 512, 16, 32);
-idct_rect_rdm_fn!(idct_dequant_32x16_neon_rdm, idct_dequant_32x16_neon_rdm_impl, 512, 32, 16);
-idct_rect_rdm_fn!(idct_dequant_4x16_neon_rdm, idct_dequant_4x16_neon_rdm_impl, 64, 4, 16);
-idct_rect_rdm_fn!(idct_dequant_16x4_neon_rdm, idct_dequant_16x4_neon_rdm_impl, 64, 16, 4);
-idct_rect_rdm_fn!(idct_dequant_8x32_neon_rdm, idct_dequant_8x32_neon_rdm_impl, 256, 8, 32);
-idct_rect_rdm_fn!(idct_dequant_32x8_neon_rdm, idct_dequant_32x8_neon_rdm_impl, 256, 32, 8);
-idct_rect_rdm_fn!(idct_dequant_4x32_neon_rdm, idct_dequant_4x32_neon_rdm_impl, 128, 4, 32);
-idct_rect_rdm_fn!(idct_dequant_32x4_neon_rdm, idct_dequant_32x4_neon_rdm_impl, 128, 32, 4);
+idct_rect_rdm_fn!(
+    idct_dequant_4x8_neon_rdm,
+    idct_dequant_4x8_neon_rdm_impl,
+    32,
+    4,
+    8
+);
+idct_rect_rdm_fn!(
+    idct_dequant_8x4_neon_rdm,
+    idct_dequant_8x4_neon_rdm_impl,
+    32,
+    8,
+    4
+);
+idct_rect_rdm_fn!(
+    idct_dequant_8x16_neon_rdm,
+    idct_dequant_8x16_neon_rdm_impl,
+    128,
+    8,
+    16
+);
+idct_rect_rdm_fn!(
+    idct_dequant_16x8_neon_rdm,
+    idct_dequant_16x8_neon_rdm_impl,
+    128,
+    16,
+    8
+);
+idct_rect_rdm_fn!(
+    idct_dequant_16x32_neon_rdm,
+    idct_dequant_16x32_neon_rdm_impl,
+    512,
+    16,
+    32
+);
+idct_rect_rdm_fn!(
+    idct_dequant_32x16_neon_rdm,
+    idct_dequant_32x16_neon_rdm_impl,
+    512,
+    32,
+    16
+);
+idct_rect_rdm_fn!(
+    idct_dequant_4x16_neon_rdm,
+    idct_dequant_4x16_neon_rdm_impl,
+    64,
+    4,
+    16
+);
+idct_rect_rdm_fn!(
+    idct_dequant_16x4_neon_rdm,
+    idct_dequant_16x4_neon_rdm_impl,
+    64,
+    16,
+    4
+);
+idct_rect_rdm_fn!(
+    idct_dequant_8x32_neon_rdm,
+    idct_dequant_8x32_neon_rdm_impl,
+    256,
+    8,
+    32
+);
+idct_rect_rdm_fn!(
+    idct_dequant_32x8_neon_rdm,
+    idct_dequant_32x8_neon_rdm_impl,
+    256,
+    32,
+    8
+);
+idct_rect_rdm_fn!(
+    idct_dequant_4x32_neon_rdm,
+    idct_dequant_4x32_neon_rdm_impl,
+    128,
+    4,
+    32
+);
+idct_rect_rdm_fn!(
+    idct_dequant_32x4_neon_rdm,
+    idct_dequant_32x4_neon_rdm_impl,
+    128,
+    32,
+    4
+);
 
-iadst_rect_rdm_fn!(iadst_dequant_4x8_neon_rdm, iadst_dequant_4x8_neon_rdm_impl, 32, 4, 8);
-iadst_rect_rdm_fn!(iadst_dequant_8x4_neon_rdm, iadst_dequant_8x4_neon_rdm_impl, 32, 8, 4);
-iadst_rect_rdm_fn!(iadst_dequant_8x16_neon_rdm, iadst_dequant_8x16_neon_rdm_impl, 128, 8, 16);
-iadst_rect_rdm_fn!(iadst_dequant_16x8_neon_rdm, iadst_dequant_16x8_neon_rdm_impl, 128, 16, 8);
-iadst_rect_rdm_fn!(iadst_dequant_4x16_neon_rdm, iadst_dequant_4x16_neon_rdm_impl, 64, 4, 16);
-iadst_rect_rdm_fn!(iadst_dequant_16x4_neon_rdm, iadst_dequant_16x4_neon_rdm_impl, 64, 16, 4);
+iadst_rect_rdm_fn!(
+    iadst_dequant_4x8_neon_rdm,
+    iadst_dequant_4x8_neon_rdm_impl,
+    32,
+    4,
+    8
+);
+iadst_rect_rdm_fn!(
+    iadst_dequant_8x4_neon_rdm,
+    iadst_dequant_8x4_neon_rdm_impl,
+    32,
+    8,
+    4
+);
+iadst_rect_rdm_fn!(
+    iadst_dequant_8x16_neon_rdm,
+    iadst_dequant_8x16_neon_rdm_impl,
+    128,
+    8,
+    16
+);
+iadst_rect_rdm_fn!(
+    iadst_dequant_16x8_neon_rdm,
+    iadst_dequant_16x8_neon_rdm_impl,
+    128,
+    16,
+    8
+);
+iadst_rect_rdm_fn!(
+    iadst_dequant_4x16_neon_rdm,
+    iadst_dequant_4x16_neon_rdm_impl,
+    64,
+    4,
+    16
+);
+iadst_rect_rdm_fn!(
+    iadst_dequant_16x4_neon_rdm,
+    iadst_dequant_16x4_neon_rdm_impl,
+    64,
+    16,
+    4
+);
 
 pub(crate) fn idct_dequant_32x32_neon_rdm(
     coeff: &mut [i32],

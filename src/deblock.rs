@@ -1381,6 +1381,40 @@ pub(crate) fn deblock_sbrow_rows<BD: BitDepth>(
     }
 }
 
+/// Deblock exactly one 64px-high band. This mirrors dav2d's
+/// `filter_slice_deblock_cols(f, by64)` entry point and is used by the
+/// multithreaded scheduler to expose one filter task per sb64 row even for
+/// 128x128 superblock frames.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn deblock_sb64_cols<BD: BitDepth>(
+    bd: BD,
+    ctx: &DeblockCtx,
+    p_y: &mut [BD::Pixel],
+    y_off: usize,
+    p_u: &mut [BD::Pixel],
+    p_v: &mut [BD::Pixel],
+    uv_off: usize,
+    by64: i32,
+) {
+    deblock64_cols(bd, ctx, p_y, y_off, p_u, p_v, uv_off, by64);
+}
+
+/// Deblock exactly one 64px-high band. This mirrors dav2d's
+/// `filter_slice_deblock_rows(f, by64)` entry point.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn deblock_sb64_rows<BD: BitDepth>(
+    bd: BD,
+    ctx: &DeblockCtx,
+    p_y: &mut [BD::Pixel],
+    y_off: usize,
+    p_u: &mut [BD::Pixel],
+    p_v: &mut [BD::Pixel],
+    uv_off: usize,
+    by64: i32,
+) {
+    deblock64_rows(bd, ctx, p_y, y_off, p_u, p_v, uv_off, by64);
+}
+
 pub(crate) fn copy_db_8bpc(
     lr_db: &mut [Vec<u8>; 3],
     src: &[&[u8]; 3],

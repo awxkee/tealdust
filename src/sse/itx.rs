@@ -173,8 +173,14 @@ impl crate::itx_1d::DctWide for SseWide {
     ) {
         unsafe {
             let (rnd, sh, minv, maxv) = clip;
-            let lo = _mm_min_epi32(_mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(acc.0, rnd), sh), minv), maxv);
-            let hi = _mm_min_epi32(_mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(acc.1, rnd), sh), minv), maxv);
+            let lo = _mm_min_epi32(
+                _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(acc.0, rnd), sh), minv),
+                maxv,
+            );
+            let hi = _mm_min_epi32(
+                _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(acc.1, rnd), sh), minv),
+                maxv,
+            );
             let p = dst.as_mut_ptr().add(off);
             *p.add(0 * stride) = _mm_extract_epi32::<0>(lo);
             *p.add(1 * stride) = _mm_extract_epi32::<1>(lo);
@@ -238,7 +244,10 @@ impl DctSimd4 for SseDct2d {
     #[inline(always)]
     unsafe fn rect2_scale(a: Self::V) -> Self::V {
         unsafe {
-            let scaled = _mm_add_epi32(_mm_mullo_epi32(a.0, _mm_set1_epi32(181)), _mm_set1_epi32(128));
+            let scaled = _mm_add_epi32(
+                _mm_mullo_epi32(a.0, _mm_set1_epi32(181)),
+                _mm_set1_epi32(128),
+            );
             SseI32x4(_mm_srai_epi32::<8>(scaled))
         }
     }
