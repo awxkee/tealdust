@@ -275,7 +275,6 @@ pub fn decode_frame_init(
     frame_hdr: &FrameHeader,
     seq_hdr: &crate::headers::SequenceHeader,
     lf: &mut LoopFilterState,
-    frame_thread: &mut crate::internal::FrameThread,
     ts: &mut Vec<crate::internal::TileState>,
     n_ts: &mut i32,
     a: &mut Vec<BlockContext>,
@@ -289,7 +288,6 @@ pub fn decode_frame_init(
     _bw: i32,
     _bh: i32,
     n_tc: i32,
-    n_passes: i32,
 ) {
     init_start_of_tile_row(
         &mut lf.start_of_tile_row,
@@ -300,9 +298,6 @@ pub fn decode_frame_init(
 
     let new_n_ts = frame_hdr.tiling.t.cols as i32 * frame_hdr.tiling.t.rows as i32;
     if new_n_ts != *n_ts {
-        if n_passes > 1 {
-            frame_thread._tile_start_off.resize(new_n_ts as usize, 0);
-        }
         *n_ts = new_n_ts;
     }
     ts.resize_with(new_n_ts as usize, Default::default);
@@ -468,8 +463,6 @@ pub fn decode_frame_init_cdf(
     bw: i32,
     bh: i32,
     n_tc: i32,
-    n_passes: i32,
-    tile_start_off: &mut [u32],
     pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
     let ti = &frame_hdr.tiling.t;
@@ -516,11 +509,7 @@ pub fn decode_frame_init_cdf(
             }
 
             let tile_data = &tg.data[data_off..data_off + tile_sz];
-            let start_off = if n_passes > 1 {
-                tile_start_off[j as usize]
-            } else {
-                0
-            };
+            let start_off = 0u32;
 
             inits.push(TileInit {
                 j: j as usize,
@@ -1954,7 +1943,6 @@ pub struct SbFrameInfo {
     pub seg_globalmv_mask: u16,
     pub seg_skip_mask: u16,
     pub seg_lossless: [u8; crate::headers::MAX_SEGMENTS],
-    pub _has_prev_segmap: bool,
     // Delta-q (per-superblock)
     pub delta_q_present: bool,
     pub delta_q_res_log2: u8,
@@ -2085,7 +2073,6 @@ impl SbFrameInfo {
             seg_globalmv_mask: frame_hdr.segmentation.d.globalmv_mask,
             seg_skip_mask: frame_hdr.segmentation.d.skip_mask,
             seg_lossless: frame_hdr.segmentation.lossless,
-            _has_prev_segmap: frame_hdr.primary_ref_frame != crate::headers::PRIMARY_REF_NONE,
             delta_q_present: frame_hdr.delta.q.present != 0,
             delta_q_res_log2: frame_hdr.delta.q.res_log2,
             quant_yac: frame_hdr.quant.yac as i32,
@@ -2168,8 +2155,6 @@ pub struct ReconFrameCtx<'a> {
     pub qm: &'a [[Option<Vec<u8>>; 3]; crate::levels::N_RECT_TX_SIZES],
     pub y_stride_px: usize,
     pub uv_stride_px: usize,
-    pub _y_h: usize,
-    pub _uv_h: usize,
     pub ss_hor: i32,
     pub ss_ver: i32,
     pub bitdepth_max: i32,
@@ -2935,8 +2920,6 @@ pub fn decode_frame_main(
         qm: &*qm,
         y_stride_px,
         uv_stride_px,
-        _y_h: y_h,
-        _uv_h: uv_h,
         ss_hor: ss_hor_v,
         ss_ver: ss_ver_v,
         bitdepth_max: bitdepth_max_v,
@@ -3028,7 +3011,6 @@ pub fn decode_frame_main(
     let tip_ref = rf.tip.r#ref;
     let rf_rp_stride = rf.rp_stride;
     let mut rt = refmvs::Tile {
-        _rp_proj: Vec::new(),
         rp_proj_off: 0,
         rp_traj_off: 0,
         ra: vec![refmvs::Block::default(); rf_rp_stride.max(1) as usize],
@@ -3061,8 +3043,6 @@ pub fn decode_frame_main(
     let filter_params = FilterFrameParams::new(
         seq_hdr,
         frame_hdr,
-        bw,
-        bh,
         ss_hor_v,
         ss_ver_v,
         cur_pic.stride[0],
@@ -3224,7 +3204,6 @@ pub fn decode_frame_main(
                         let cf: &mut [i32] = &mut cf_guard[..];
                         let mut l = BlockContext::default();
                         let mut rt = refmvs::Tile {
-                            _rp_proj: Vec::new(),
                             rp_proj_off: 0,
                             rp_traj_off: 0,
                             ra: vec![refmvs::Block::default(); rf_rp_stride.max(1) as usize],
@@ -3720,12 +3699,8 @@ struct FilterFrameParams {
     /// Deblock thresholds (stubbed: zeroed; deblock is only correct for the
     /// level==0 no-op case until the per-4px segmentation/delta-q thresholds are
     /// connected — see the M2 risks).
-    _thr_lut_y: [[u8; 16]; 2],
-    _thr_lut_uv: [[[u8; 16]; 2]; 2],
     y_stride: isize,
     uv_stride: isize,
-    _bw: i32,
-    _bh: i32,
     ss_hor: bool,
     ss_ver: bool,
     layout: crate::headers::PixelLayout,
@@ -3741,8 +3716,6 @@ impl FilterFrameParams {
     fn new(
         seq_hdr: &crate::headers::SequenceHeader,
         frame_hdr: &crate::headers::FrameHeader,
-        bw: i32,
-        bh: i32,
         ss_hor: i32,
         ss_ver: i32,
         y_stride: isize,
@@ -3752,26 +3725,12 @@ impl FilterFrameParams {
     ) -> Self {
         let db = &frame_hdr.deblock;
         let deblock = crate::deblock::DeblockApplyParams {
-            _y_stride: y_stride,
-            _uv_stride: uv_stride,
-            _bw: bw as usize,
-            _bh: bh as usize,
-            _sb128: frame_hdr.sb128 != 0,
-            _ss_hor: ss_hor != 0,
-            _ss_ver: ss_ver != 0,
             level_y: [db.level_y[0] as i32, db.level_y[1] as i32],
-            _level_u: db.level_u as i32,
-            _level_v: db.level_v as i32,
-            _have_chroma: seq_hdr.layout != crate::headers::PixelLayout::I400,
         };
         FilterFrameParams {
             deblock,
-            _thr_lut_y: [[0u8; 16]; 2],
-            _thr_lut_uv: [[[0u8; 16]; 2]; 2],
             y_stride,
             uv_stride,
-            _bw: bw,
-            _bh: bh,
             ss_hor: ss_hor != 0,
             ss_ver: ss_ver != 0,
             layout: seq_hdr.layout,
@@ -4194,7 +4153,6 @@ pub fn decode_frame(
         &frame_hdr,
         &seq_hdr,
         &mut fc.lf,
-        &mut fc.frame_thread,
         &mut fc.ts,
         &mut fc.n_ts,
         &mut fc.a,
@@ -4208,7 +4166,6 @@ pub fn decode_frame(
         fc.bw,
         fc.bh,
         n_tc,
-        n_passes,
     );
 
     if frame_hdr.tip.frame_mode != 2 {
@@ -4222,8 +4179,6 @@ pub fn decode_frame(
             fc.bw,
             fc.bh,
             n_tc,
-            n_passes,
-            &mut fc.frame_thread._tile_start_off,
             pool,
         );
         r?;
@@ -9691,7 +9646,6 @@ fn inter_residual_tx_8bpc<BD: crate::pixel::BitDepth>(
             sdp_active: false,
             y_mode: 0,
             uv_mode: 0,
-            _seg_id: seg_id,
             seq_fsc: recon.frame.seq_fsc,
             seq_ist: recon.frame.seq_ist,
             seq_cctx: recon.frame.seq_cctx,
@@ -9983,7 +9937,6 @@ fn inter_chroma_residual_8bpc<BD: BitDepth>(
                             sdp_active: false,
                             y_mode: 0,
                             uv_mode: 0,
-                            _seg_id: seg_id,
                             seq_fsc: recon.frame.seq_fsc,
                             seq_ist: recon.frame.seq_ist,
                             seq_cctx: recon.frame.seq_cctx,
@@ -14622,7 +14575,6 @@ fn recon_b_intra_chroma_phase<BD: BitDepth>(
                         sdp_active,
                         y_mode: 0,
                         uv_mode: uv_mode as usize,
-                        _seg_id: seg_id,
                         seq_fsc: recon.frame.seq_fsc,
                         seq_ist: recon.frame.seq_ist,
                         seq_cctx: recon.frame.seq_cctx,
@@ -15264,7 +15216,6 @@ fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
             sdp_active: false,
             y_mode: y_mode as usize,
             uv_mode: 0,
-            _seg_id: dq_seg,
             seq_fsc: recon.frame.seq_fsc,
             seq_ist: recon.frame.seq_ist,
             seq_cctx: recon.frame.seq_cctx,

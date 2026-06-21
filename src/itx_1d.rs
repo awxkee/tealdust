@@ -586,11 +586,6 @@ pub(crate) fn dct16_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl 
     }
 }
 
-/// Bi-typed lane abstraction for the s16 8-wide widening-MAC DCT path
-/// (dav2d-style): inputs are s16 (8 columns), accumulators s32, coefficients
-/// i16 loaded 8 at a time and consumed by-lane. On NEON this maps to
-/// `vmlal_laneq_s16`/`vmlal_high_laneq_s16`; SSE/scalar widen to i32 and match
-/// bit-for-bit (inputs fit s16, the 32-tap sum fits s32 — proven).
 pub(crate) trait DctWide {
     type In: Copy;
     type Acc: Copy;

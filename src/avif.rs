@@ -867,8 +867,6 @@ struct BoxHeader {
     /// Header byte size (8 for normal, 16 for extended).
     #[allow(dead_code)]
     header_size: u64,
-    /// Payload byte size (total size minus header_size).
-    _payload_size: u64,
 }
 
 /// Read the next ISOBMFF box header from `r`, returning header + a sub-reader
@@ -940,7 +938,6 @@ fn read_box_header<'a>(r: &mut Reader<'a>) -> Result<(BoxHeader, Reader<'a>)> {
         BoxHeader {
             fourcc,
             header_size,
-            _payload_size: payload_size,
         },
         payload,
     ))
@@ -1782,18 +1779,10 @@ fn read_sized_int(r: &mut Reader<'_>, size: u8) -> Result<u64> {
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Helper: brand check
-// ────────────────────────────────────────────────────────────────────────────
-
 #[inline]
 fn is_avif_brand(b: &[u8; 4]) -> bool {
     matches!(b, b"avif" | b"avis" | b"av02")
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Alpha plane
-// ────────────────────────────────────────────────────────────────────────────
 
 /// Decoded alpha (transparency) plane from the auxiliary alpha item.
 ///

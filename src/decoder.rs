@@ -135,8 +135,6 @@ struct OutputQueue {
 /// Feed compressed OBU data with [`send_data`](Self::send_data), then
 /// pull decoded frames with [`get_picture`](Self::get_picture).
 pub struct Decoder {
-    _decode_frame_type: DecodeFrameType,
-
     n_tc: u32,
     n_fc: u32,
 
@@ -182,20 +180,15 @@ impl Decoder {
             n_tile_data: 0,
             n_tiles: 0,
             refs: Default::default(),
-            _cdf: Vec::new(),
             content_light: None,
             mastering_display: None,
             ci: None,
             fgm: Default::default(),
             apply_grain: s.apply_grain,
-            _operating_point: s.operating_point as i32,
             operating_point_idc: 0,
-            _all_layers: s.all_layers,
             max_spatial_id: 0,
             frame_size_limit: s.frame_size_limit,
             strict_std_compliance: s.strict_std_compliance,
-            _output_invisible_frames: s.output_invisible_frames,
-            _n_passes: 1,
             inloop_filters: s.inloop_filters.to_flags(),
             run_decode: s.run_decode,
             frame_out: Vec::new(),
@@ -206,7 +199,6 @@ impl Decoder {
         };
 
         Ok(Self {
-            _decode_frame_type: s.decode_frame_type,
             n_tc,
             n_fc,
             ctx,

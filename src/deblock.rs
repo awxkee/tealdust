@@ -523,17 +523,7 @@ pub(crate) fn backup_db(
 }
 
 pub(crate) struct DeblockApplyParams {
-    pub(crate) _y_stride: isize,
-    pub(crate) _uv_stride: isize,
-    pub(crate) _bw: usize,
-    pub(crate) _bh: usize,
-    pub(crate) _sb128: bool,
-    pub(crate) _ss_hor: bool,
-    pub(crate) _ss_ver: bool,
     pub(crate) level_y: [i32; 2],
-    pub(crate) _level_u: i32,
-    pub(crate) _level_v: i32,
-    pub(crate) _have_chroma: bool,
 }
 
 use crate::headers::PixelLayout;
@@ -571,8 +561,6 @@ fn edge_thr(cur: i32, prev: i32) -> i32 {
     }
 }
 
-/// Port of `setup_thr_cols_sb64`: builds the transposed per-4px q_thr/side_thr
-/// arrays for one 64-wide column (dst_stride = 16, stored transposed).
 #[allow(clippy::too_many_arguments)]
 fn setup_thr_cols(
     q_thr_dst: &mut [u8; 256],

@@ -2250,7 +2250,6 @@ pub fn get_ref_frames(
         pocdiff: i8,
         qidx: u16,
         mlayer: u8,
-        _res_ratio_log2: i8,
     }
     let mut ref_info: [Score; 8] = std::array::from_fn(|_| Score {
         score: 0,
@@ -2258,7 +2257,6 @@ pub fn get_ref_frames(
         pocdiff: 0,
         qidx: 0,
         mlayer: 0,
-        _res_ratio_log2: 0,
     });
     let mut sort_idx = [0u8; 8];
     let mut n_refs = 0i32;
@@ -2338,7 +2336,6 @@ pub fn get_ref_frames(
             pocdiff,
             qidx: ref_qidx,
             mlayer: ref_mlayer,
-            _res_ratio_log2: res_ratio,
         };
 
         let mut m = 0usize;

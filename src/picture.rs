@@ -637,20 +637,14 @@ impl std::fmt::Debug for Picture {
 
 pub struct ThreadPicture {
     pub p: Picture,
-    pub _visible: bool,
-    pub _showable: bool,
     pub progress: Option<[AtomicI32; 3]>,
-    pub _flags: u32,
 }
 
 impl ThreadPicture {
     pub fn new() -> Self {
         Self {
             p: Picture::new(),
-            _visible: false,
-            _showable: false,
             progress: None,
-            _flags: 0,
         }
     }
 

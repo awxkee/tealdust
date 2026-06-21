@@ -28,7 +28,7 @@
  */
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, AtomicU32};
+use std::sync::atomic::AtomicI32;
 
 use crate::cdf::CdfContext;
 use crate::env::BlockContext;
@@ -36,8 +36,8 @@ use crate::headers::{
     ContentInterpretation, ContentLightLevel, FilmGrainData, FrameHeader, MAX_SEGMENTS,
     MasteringDisplay, SequenceHeader,
 };
-use crate::levels::{Av2Block, BlockSize, N_RECT_TX_SIZES, RefPair};
-use crate::lf_mask::{Av2Filter, Av2Restoration, Av2RestorationUnit};
+use crate::levels::{BlockSize, N_RECT_TX_SIZES, RefPair};
+use crate::lf_mask::{Av2Filter, Av2Restoration};
 use crate::refmvs;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -48,12 +48,6 @@ pub(crate) enum Pass {
 }
 
 pub(crate) const PASS_ALL: u8 = Pass::Entropy as u8 | Pass::MvRes as u8 | Pass::Recon as u8;
-
-#[derive(Clone, Copy, Default)]
-pub(crate) struct CodedBlockInfo {
-    pub(crate) _eob: [i16; 3],
-    pub(crate) _txtp: [u16; 3],
-}
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ScalableMotionParams {
@@ -78,12 +72,9 @@ pub(crate) struct TileState {
     pub(crate) tiling: TileBounds,
 
     pub(crate) progress: [AtomicI32; 3],
-    pub(crate) _frame_thread: [TileStateFrameThread; 2],
 
     pub(crate) dqmem: [[[u32; 2]; 3]; MAX_SEGMENTS],
     pub(crate) last_qidx: i32,
-
-    pub(crate) _lr_ref: [Vec<Av2RestorationUnit>; 3],
 
     pub(crate) ns_wiener_bank: [NsWienerBank; 3],
 
@@ -98,10 +89,8 @@ impl Default for TileState {
             msac_state: Default::default(),
             tiling: Default::default(),
             progress: [AtomicI32::new(0), AtomicI32::new(0), AtomicI32::new(0)],
-            _frame_thread: Default::default(),
             dqmem: [[[0; 2]; 3]; MAX_SEGMENTS],
             last_qidx: 0,
-            _lr_ref: Default::default(),
             ns_wiener_bank: Default::default(),
             tile_start_off: 0,
         }
@@ -119,54 +108,11 @@ pub(crate) struct TileBounds {
 }
 
 #[derive(Default)]
-pub(crate) struct TileStateFrameThread {
-    pub(crate) _pal_idx: Vec<u8>,
-    pub(crate) _cbi: Vec<CodedBlockInfo>,
-    pub(crate) _cf: Vec<i32>,
-    pub(crate) _partition: [Vec<u8>; 2],
-}
-
-pub(crate) struct FrameThread {
-    pub(crate) _next_tile_row: [i32; 2],
-    pub(crate) _entropy_progress: AtomicI32,
-    pub(crate) _deblock_progress: AtomicI32,
-    pub(crate) _b: Vec<Av2Block>,
-    pub(crate) _cbi: Vec<CodedBlockInfo>,
-    pub(crate) _pal_idx: Vec<u8>,
-    pub(crate) _cf: Vec<i32>,
-    pub(crate) _partition: Vec<u8>,
-    pub(crate) _prog_sz: i32,
-    pub(crate) _tile_start_off: Vec<u32>,
-    pub(crate) _scheduled: i32,
-}
-
-impl Default for FrameThread {
-    fn default() -> Self {
-        Self {
-            _next_tile_row: [0; 2],
-            _entropy_progress: AtomicI32::new(0),
-            _deblock_progress: AtomicI32::new(0),
-            _b: Vec::new(),
-            _cbi: Vec::new(),
-            _pal_idx: Vec::new(),
-            _cf: Vec::new(),
-            _partition: Vec::new(),
-            _prog_sz: 0,
-            _tile_start_off: Vec::new(),
-            _scheduled: 0,
-        }
-    }
-}
-
-#[derive(Default)]
 pub(crate) struct LoopFilterState {
     pub(crate) mask: Vec<Av2Filter>,
     pub(crate) lr_mask: Vec<Av2Restoration>,
     pub(crate) segmap_uv: std::sync::Arc<Vec<u8>>,
     pub(crate) uv_segmap_stride: isize,
-    pub(crate) _cdef_buf_plane_sz: [i32; 2],
-    pub(crate) _cdef_buf_sbh: i32,
-    pub(crate) _lr_buf_plane_sz: [i32; 4],
     pub(crate) re_sz: i32,
     pub(crate) base_q: i32,
     pub(crate) gdf_ref_dst_idx: i32,
@@ -175,10 +121,6 @@ pub(crate) struct LoopFilterState {
     pub(crate) wiener_idx: usize,
     pub(crate) ns_subclass_class_idx: Option<usize>,
     pub(crate) lr_cdef_line: [Vec<u8>; 3],
-    pub(crate) _p: [Vec<u8>; 3],
-    pub(crate) _ns_subclass_lut: Vec<u8>,
-    pub(crate) _pc_subclass_lut: Vec<u8>,
-    pub(crate) _pc_filters: Vec<[i16; 13]>,
 }
 
 #[derive(Default)]
@@ -186,7 +128,6 @@ pub(crate) struct FrameContext {
     pub(crate) seq_hdr: Arc<SequenceHeader>,
     pub(crate) frame_hdr: Arc<FrameHeader>,
 
-    pub(crate) _cur: ThreadPicture,
     pub(crate) refp: [ThreadPicture; 7],
 
     pub(crate) mvs: Vec<refmvs::TemporalBlock>,
@@ -238,7 +179,6 @@ pub(crate) struct FrameContext {
     pub(crate) bitdepth_max: i32,
     pub(crate) root_bs: BlockSize,
 
-    pub(crate) frame_thread: FrameThread,
     pub(crate) lf: LoopFilterState,
 
     /// In-loop filter flag word (DAV2D_INLOOPFILTER_* bits) threaded from the
@@ -259,10 +199,8 @@ pub(crate) struct FrameContext {
 
 #[derive(Clone, Default)]
 pub(crate) struct ThreadPicture {
-    pub(crate) _visible: bool,
     pub(crate) showable: bool,
     pub(crate) frame_hdr: Option<Arc<FrameHeader>>,
-    pub(crate) _progress: [Arc<AtomicU32>; 2],
     /// Shared decoded picture pixels. Set when this slot references a fully
     /// reconstructed frame (inter reference setup / ref-list update). `None` for
     pub(crate) pic: Option<Arc<crate::picture::Picture>>,
@@ -274,11 +212,6 @@ pub(crate) struct TileGroup {
     pub(crate) end: i32,
 }
 
-pub(crate) struct CdfThreadContext {
-    pub(crate) _cdf: CdfContext,
-    pub(crate) _progress: AtomicI32,
-}
-
 pub(crate) struct DecoderContext {
     pub(crate) seq_hdr: Option<Arc<SequenceHeader>>,
     pub(crate) frame_hdr: Option<Arc<FrameHeader>>,
@@ -288,7 +221,6 @@ pub(crate) struct DecoderContext {
     pub(crate) n_tiles: i32,
 
     pub(crate) refs: [RefState; 8],
-    pub(crate) _cdf: Vec<CdfThreadContext>,
 
     pub(crate) content_light: Option<ContentLightLevel>,
     pub(crate) mastering_display: Option<MasteringDisplay>,
@@ -296,14 +228,10 @@ pub(crate) struct DecoderContext {
     pub(crate) fgm: [Option<FilmGrainData>; 8],
 
     pub(crate) apply_grain: bool,
-    pub(crate) _operating_point: i32,
     pub(crate) operating_point_idc: u32,
-    pub(crate) _all_layers: bool,
     pub(crate) max_spatial_id: i32,
     pub(crate) frame_size_limit: u32,
     pub(crate) strict_std_compliance: bool,
-    pub(crate) _output_invisible_frames: bool,
-    pub(crate) _n_passes: i32,
 
     /// In-loop filter flag word (DAV2D_INLOOPFILTER_* bits) from the configured
     /// `Settings.inloop_filters`. Threaded onto each `FrameContext` in

@@ -422,7 +422,6 @@ pub(crate) struct Candidate {
 }
 
 pub(crate) struct Tile {
-    pub(crate) _rp_proj: Vec<SnglMvBlock>,
     pub(crate) rp_proj_off: usize,
     pub(crate) rp_traj_off: usize,
     pub(crate) ra: Vec<Block>,

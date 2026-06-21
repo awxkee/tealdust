@@ -664,7 +664,6 @@ pub(crate) struct DecodeCoefParams<'a> {
     pub(crate) sdp_active: bool,
     pub(crate) y_mode: usize,
     pub(crate) uv_mode: usize,
-    pub(crate) _seg_id: usize,
     pub(crate) seq_fsc: bool,
     pub(crate) seq_ist: [bool; 2],
     pub(crate) seq_cctx: bool,
