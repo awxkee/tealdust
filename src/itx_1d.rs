@@ -590,12 +590,22 @@ pub(crate) trait DctWide {
     type In: Copy;
     type Acc: Copy;
     type Coeffs: Copy;
+    type Clip: Copy;
     fn zero() -> Self::Acc;
     fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc;
     fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc;
     fn load_coeffs(table: &[i16], idx: usize) -> Self::Coeffs;
     fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: Self::In, c: Self::Coeffs) -> Self::Acc;
     unsafe fn load8_narrow(src: &[i32], off: usize) -> Self::In;
+    unsafe fn load8_rect2_narrow(src: &[i32], off: usize) -> Self::In;
+    fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip;
+    unsafe fn store8_strided_clip(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: Self::Acc,
+        clip: Self::Clip,
+    );
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc);
     unsafe fn to_array8(acc: Self::Acc) -> [i32; 8];
 }

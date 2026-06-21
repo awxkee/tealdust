@@ -622,6 +622,7 @@ pub(crate) trait DctSimd4 {
     unsafe fn add(a: Self::V, b: Self::V) -> Self::V;
     unsafe fn sub(a: Self::V, b: Self::V) -> Self::V;
     unsafe fn mul(a: Self::V, b: Self::V) -> Self::V;
+    unsafe fn rect2_scale(a: Self::V) -> Self::V;
     unsafe fn load(tmp: &[i32; ITX_TMP_PIXELS], off: usize) -> Self::V;
     unsafe fn store(tmp: &mut [i32; ITX_TMP_PIXELS], off: usize, v: Self::V);
     unsafe fn load_slice(src: &[i32], off: usize) -> Self::V;
@@ -631,6 +632,11 @@ pub(crate) trait DctSimd4 {
 #[inline(always)]
 fn vmulc<B: DctSimd4>(v: B::V, k: i32) -> B::V {
     unsafe { B::mul(v, B::splat(k)) }
+}
+
+#[inline(always)]
+fn clip_row_value(v: i32, rnd: i32, shift: i32, min: i32, max: i32) -> i32 {
+    ((v + rnd) >> shift).max(min).min(max)
 }
 
 #[inline(always)]
@@ -689,18 +695,25 @@ fn load_coeff_rows_x4<B: DctSimd4, const S: usize>(coeff: &[i32], y: usize) -> [
 }
 
 #[inline(always)]
-fn store_row_group_x4<B: DctSimd4, const S: usize>(
+fn store_row_group_x4_clip<B: DctSimd4, const S: usize>(
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,
     v: &[B::V; S],
+    rnd: i32,
+    shift: i32,
+    min: i32,
+    max: i32,
 ) {
     unsafe {
         for (x, &vx) in v.iter().enumerate() {
             let lanes = B::to_array(vx);
-            tmp[y * ITX_TMP_STRIDE + x] = lanes[0];
-            tmp[(y + 1) * ITX_TMP_STRIDE + x] = lanes[1];
-            tmp[(y + 2) * ITX_TMP_STRIDE + x] = lanes[2];
-            tmp[(y + 3) * ITX_TMP_STRIDE + x] = lanes[3];
+            tmp[y * ITX_TMP_STRIDE + x] = clip_row_value(lanes[0], rnd, shift, min, max);
+            tmp[(y + 1) * ITX_TMP_STRIDE + x] =
+                clip_row_value(lanes[1], rnd, shift, min, max);
+            tmp[(y + 2) * ITX_TMP_STRIDE + x] =
+                clip_row_value(lanes[2], rnd, shift, min, max);
+            tmp[(y + 3) * ITX_TMP_STRIDE + x] =
+                clip_row_value(lanes[3], rnd, shift, min, max);
         }
     }
 }
@@ -710,26 +723,30 @@ fn process_row_group_x4<B: DctSimd4, const S: usize>(
     coeff: &[i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,
+    rnd: i32,
+    shift: i32,
+    min: i32,
+    max: i32,
 ) {
     match S {
         4 => {
             let mut v = load_coeff_rows_x4::<B, 4>(coeff, y);
             inv_dct4_simd4::<B>(&mut v);
-            store_row_group_x4::<B, 4>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 4>(tmp, y, &v, rnd, shift, min, max);
         }
         8 => {
             let mut v = load_coeff_rows_x4::<B, 8>(coeff, y);
             inv_dct8_simd4::<B>(&mut v);
-            store_row_group_x4::<B, 8>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 8>(tmp, y, &v, rnd, shift, min, max);
         }
         16 => {
             let load = |j: usize| unsafe { B::load_slice(coeff, y + j * 16) };
             let store = |m: usize, v: B::V| {
                 let l = unsafe { B::to_array(v) };
-                tmp[y * ITX_TMP_STRIDE + m] = l[0];
-                tmp[(y + 1) * ITX_TMP_STRIDE + m] = l[1];
-                tmp[(y + 2) * ITX_TMP_STRIDE + m] = l[2];
-                tmp[(y + 3) * ITX_TMP_STRIDE + m] = l[3];
+                tmp[y * ITX_TMP_STRIDE + m] = clip_row_value(l[0], rnd, shift, min, max);
+                tmp[(y + 1) * ITX_TMP_STRIDE + m] = clip_row_value(l[1], rnd, shift, min, max);
+                tmp[(y + 2) * ITX_TMP_STRIDE + m] = clip_row_value(l[2], rnd, shift, min, max);
+                tmp[(y + 3) * ITX_TMP_STRIDE + m] = clip_row_value(l[3], rnd, shift, min, max);
             };
             crate::itx_1d::dct16_flat_bylane::<B::V>(load, store);
         }
@@ -737,10 +754,10 @@ fn process_row_group_x4<B: DctSimd4, const S: usize>(
             let load = |j: usize| unsafe { B::load_slice(coeff, y + j * 32) };
             let store = |m: usize, v: B::V| {
                 let l = unsafe { B::to_array(v) };
-                tmp[y * ITX_TMP_STRIDE + m] = l[0];
-                tmp[(y + 1) * ITX_TMP_STRIDE + m] = l[1];
-                tmp[(y + 2) * ITX_TMP_STRIDE + m] = l[2];
-                tmp[(y + 3) * ITX_TMP_STRIDE + m] = l[3];
+                tmp[y * ITX_TMP_STRIDE + m] = clip_row_value(l[0], rnd, shift, min, max);
+                tmp[(y + 1) * ITX_TMP_STRIDE + m] = clip_row_value(l[1], rnd, shift, min, max);
+                tmp[(y + 2) * ITX_TMP_STRIDE + m] = clip_row_value(l[2], rnd, shift, min, max);
+                tmp[(y + 3) * ITX_TMP_STRIDE + m] = clip_row_value(l[3], rnd, shift, min, max);
             };
             crate::itx_1d::dct32_flat::<B::V>(load, store);
         }
@@ -753,15 +770,17 @@ fn process_row_group_wide_x8<B: DctSimd4, const S: usize>(
     coeff: &[i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,
+    rnd: i32,
+    shift: i32,
+    min: i32,
+    max: i32,
 ) {
     use crate::itx_1d::DctWide;
     let s: [<B::Wide as DctWide>::In; S] =
         core::array::from_fn(|j| unsafe { B::Wide::load8_narrow(coeff, y + j * S) });
-    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| {
-        let l = unsafe { B::Wide::to_array8(acc) };
-        for k in 0..8 {
-            tmp[(y + k) * ITX_TMP_STRIDE + m] = l[k];
-        }
+    let clip = B::Wide::make_clip(rnd, shift, min, max);
+    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
+        B::Wide::store8_strided_clip(tmp, y * ITX_TMP_STRIDE + m, ITX_TMP_STRIDE, acc, clip);
     };
     match S {
         16 => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], store),
@@ -799,16 +818,33 @@ fn idct_dequant_rows_dct_simd4<B: DctSimd4, const N: usize, const S: usize>(
         }
     }
     let ncols = ngrp * 4;
+    let rnd0 = (1 << shift0) >> 1;
 
     let mut y = 0usize;
     if S == 16 || S == 32 {
         while y + 8 <= ncols {
-            process_row_group_wide_x8::<B, S>(coeff, tmp, y);
+            process_row_group_wide_x8::<B, S>(
+                coeff,
+                tmp,
+                y,
+                rnd0,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+            );
             y += 8;
         }
     }
     while y + 4 <= ncols {
-        process_row_group_x4::<B, S>(coeff, tmp, y);
+        process_row_group_x4::<B, S>(
+            coeff,
+            tmp,
+            y,
+            rnd0,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
         y += 4;
     }
 
@@ -818,11 +854,6 @@ fn idct_dequant_rows_dct_simd4<B: DctSimd4, const N: usize, const S: usize>(
     }
 
     coeff[..S * S].fill(0);
-
-    let rnd0 = (1 << shift0) >> 1;
-    for y in 0..S {
-        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
-    }
 }
 
 #[inline(always)]
@@ -1149,42 +1180,58 @@ fn process_row_group_itx_x4<B: DctSimd4, const S: usize>(
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,
     kind: usize,
+    rnd: i32,
+    shift: i32,
+    min: i32,
+    max: i32,
 ) {
     match S {
         4 => {
             let mut v = load_coeff_rows_x4::<B, 4>(coeff, y);
             apply_tx4_simd4::<B>(&mut v, kind);
-            store_row_group_x4::<B, 4>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 4>(tmp, y, &v, rnd, shift, min, max);
         }
         8 => {
             let mut v = load_coeff_rows_x4::<B, 8>(coeff, y);
             apply_tx8_simd4::<B>(&mut v, kind);
-            store_row_group_x4::<B, 8>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 8>(tmp, y, &v, rnd, shift, min, max);
         }
         16 => {
             let mut v = load_coeff_rows_x4::<B, 16>(coeff, y);
             apply_tx16_simd4::<B>(&mut v, kind);
-            store_row_group_x4::<B, 16>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 16>(tmp, y, &v, rnd, shift, min, max);
         }
         _ => unreachable!(),
     }
 }
 
 #[inline(always)]
-fn process_row_group_itx_wide_x8<B: DctSimd4, const W: usize, const H: usize>(
+fn process_row_group_itx_wide_x8<
+    B: DctSimd4,
+    const W: usize,
+    const H: usize,
+    const RECT2: bool,
+>(
     coeff: &[i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,
     kind: usize,
+    rnd: i32,
+    shift: i32,
+    min: i32,
+    max: i32,
 ) {
     use crate::itx_1d::DctWide;
-    let s: [<B::Wide as DctWide>::In; W] =
-        core::array::from_fn(|x| unsafe { B::Wide::load8_narrow(coeff, y + x * H) });
-    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| {
-        let l = unsafe { B::Wide::to_array8(acc) };
-        for k in 0..8 {
-            tmp[(y + k) * ITX_TMP_STRIDE + m] = l[k];
+    let s: [<B::Wide as DctWide>::In; W] = core::array::from_fn(|x| unsafe {
+        if RECT2 {
+            B::Wide::load8_rect2_narrow(coeff, y + x * H)
+        } else {
+            B::Wide::load8_narrow(coeff, y + x * H)
         }
+    });
+    let clip = B::Wide::make_clip(rnd, shift, min, max);
+    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
+        B::Wide::store8_strided_clip(tmp, y * ITX_TMP_STRIDE + m, ITX_TMP_STRIDE, acc, clip);
     };
     match (W, kind) {
         (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], store),
@@ -1236,16 +1283,35 @@ fn itx_dequant_rows_simd4<B: DctSimd4, const N: usize, const S: usize>(
         }
     }
     let ncols = ngrp * 4;
+    let rnd0 = (1 << shift0) >> 1;
 
     let mut y = 0usize;
     if S == 16 || S == 8 {
         while y + 8 <= ncols {
-            process_row_group_itx_wide_x8::<B, S, S>(coeff, tmp, y, first_kind);
+            process_row_group_itx_wide_x8::<B, S, S, false>(
+                coeff,
+                tmp,
+                y,
+                first_kind,
+                rnd0,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+            );
             y += 8;
         }
     }
     while y + 4 <= ncols {
-        process_row_group_itx_x4::<B, S>(coeff, tmp, y, first_kind);
+        process_row_group_itx_x4::<B, S>(
+            coeff,
+            tmp,
+            y,
+            first_kind,
+            rnd0,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
         y += 4;
     }
 
@@ -1255,11 +1321,6 @@ fn itx_dequant_rows_simd4<B: DctSimd4, const N: usize, const S: usize>(
     }
 
     coeff[..S * S].fill(0);
-
-    let rnd0 = (1 << shift0) >> 1;
-    for y in 0..S {
-        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
-    }
 }
 
 #[inline(always)]
@@ -1448,7 +1509,11 @@ pub(crate) fn idct_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usiz
     row_clip_max: i32,
 ) {
     if is_rect2 {
-        idct_dequant_rows_dct::<N, S>(
+        // This only occurs for the clamped rectangular 64-involving DCT_DCT
+        // cases that reuse the square 32x32 core. Keep them on the same
+        // SIMD row pipeline as true rectangular transforms instead of falling
+        // back to scalar rows.
+        idct_dequant_rows_rect_dct_simd4::<B, N, S, S>(
             coeff,
             tmp,
             eob,
@@ -1697,27 +1762,52 @@ fn process_row_group_rect_x4<B: DctSimd4, const W: usize, const H: usize>(
     coeff: &[i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,
+    is_rect2: bool,
+    rnd: i32,
+    shift: i32,
+    min: i32,
+    max: i32,
 ) {
     match W {
         4 => {
             let mut v = load_coeff_rows_rect_x4::<B, 4, H>(coeff, y);
+            if is_rect2 {
+                for v in &mut v {
+                    *v = unsafe { B::rect2_scale(*v) };
+                }
+            }
             inv_dct4_simd4::<B>(&mut v);
-            store_row_group_x4::<B, 4>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 4>(tmp, y, &v, rnd, shift, min, max);
         }
         8 => {
             let mut v = load_coeff_rows_rect_x4::<B, 8, H>(coeff, y);
+            if is_rect2 {
+                for v in &mut v {
+                    *v = unsafe { B::rect2_scale(*v) };
+                }
+            }
             inv_dct8_simd4::<B>(&mut v);
-            store_row_group_x4::<B, 8>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 8>(tmp, y, &v, rnd, shift, min, max);
         }
         16 => {
             let mut v = load_coeff_rows_rect_x4::<B, 16, H>(coeff, y);
+            if is_rect2 {
+                for v in &mut v {
+                    *v = unsafe { B::rect2_scale(*v) };
+                }
+            }
             inv_dct16_simd4::<B>(&mut v);
-            store_row_group_x4::<B, 16>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 16>(tmp, y, &v, rnd, shift, min, max);
         }
         32 => {
             let mut v = load_coeff_rows_rect_x4::<B, 32, H>(coeff, y);
+            if is_rect2 {
+                for v in &mut v {
+                    *v = unsafe { B::rect2_scale(*v) };
+                }
+            }
             inv_dct32_simd4::<B>(&mut v);
-            store_row_group_x4::<B, 32>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 32>(tmp, y, &v, rnd, shift, min, max);
         }
         _ => unreachable!(),
     }
@@ -1731,6 +1821,7 @@ fn idct_dequant_rows_rect_dct_simd4<B: DctSimd4, const N: usize, const W: usize,
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
     tx: usize,
+    is_rect2: bool,
     shift0: i32,
     row_clip_min: i32,
     row_clip_max: i32,
@@ -1751,16 +1842,51 @@ fn idct_dequant_rows_rect_dct_simd4<B: DctSimd4, const N: usize, const W: usize,
         }
     }
     let nrows = ngrp * 4;
+    let rnd0 = (1 << shift0) >> 1;
 
     let mut y = 0usize;
     if W == 8 || W == 16 || W == 32 {
-        while y + 8 <= nrows {
-            process_row_group_itx_wide_x8::<B, W, H>(coeff, tmp, y, TX_KIND_DCT);
-            y += 8;
+        if is_rect2 {
+            while y + 8 <= nrows {
+                process_row_group_itx_wide_x8::<B, W, H, true>(
+                    coeff,
+                    tmp,
+                    y,
+                    TX_KIND_DCT,
+                    rnd0,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                );
+                y += 8;
+            }
+        } else {
+            while y + 8 <= nrows {
+                process_row_group_itx_wide_x8::<B, W, H, false>(
+                    coeff,
+                    tmp,
+                    y,
+                    TX_KIND_DCT,
+                    rnd0,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                );
+                y += 8;
+            }
         }
     }
     while y + 4 <= nrows {
-        process_row_group_rect_x4::<B, W, H>(coeff, tmp, y);
+        process_row_group_rect_x4::<B, W, H>(
+            coeff,
+            tmp,
+            y,
+            is_rect2,
+            rnd0,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
         y += 4;
     }
 
@@ -1770,11 +1896,6 @@ fn idct_dequant_rows_rect_dct_simd4<B: DctSimd4, const N: usize, const W: usize,
     }
 
     coeff[..W * H].fill(0);
-
-    let rnd0 = (1 << shift0) >> 1;
-    for y in 0..H {
-        crate::filter::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
-    }
 }
 
 /// Scalar row pass (used for the rect2 sizes, mirroring the generic path's
@@ -1866,18 +1987,12 @@ pub(crate) fn idct_dequant_rect_simd4_core<
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    if is_rect2 {
-        // Prescale in place so the SIMD row pass serves rect2 too (the column
-        // pass was already SIMD). Bit-exact to the scalar gather-prescale.
-        for v in coeff[..W * H].iter_mut() {
-            *v = (*v * 181 + 128) >> 8;
-        }
-    }
     idct_dequant_rows_rect_dct_simd4::<B, N, W, H>(
         coeff,
         tmp,
         eob,
         tx,
+        is_rect2,
         shift0,
         row_clip_min,
         row_clip_max,
@@ -1918,22 +2033,42 @@ fn process_row_group_itx_rect_x4<B: DctSimd4, const W: usize, const H: usize>(
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,
     kind: usize,
+    is_rect2: bool,
+    rnd: i32,
+    shift: i32,
+    min: i32,
+    max: i32,
 ) {
     match W {
         4 => {
             let mut v = load_coeff_rows_rect_x4::<B, 4, H>(coeff, y);
+            if is_rect2 {
+                for v in &mut v {
+                    *v = unsafe { B::rect2_scale(*v) };
+                }
+            }
             apply_tx4_simd4::<B>(&mut v, kind);
-            store_row_group_x4::<B, 4>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 4>(tmp, y, &v, rnd, shift, min, max);
         }
         8 => {
             let mut v = load_coeff_rows_rect_x4::<B, 8, H>(coeff, y);
+            if is_rect2 {
+                for v in &mut v {
+                    *v = unsafe { B::rect2_scale(*v) };
+                }
+            }
             apply_tx8_simd4::<B>(&mut v, kind);
-            store_row_group_x4::<B, 8>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 8>(tmp, y, &v, rnd, shift, min, max);
         }
         16 => {
             let mut v = load_coeff_rows_rect_x4::<B, 16, H>(coeff, y);
+            if is_rect2 {
+                for v in &mut v {
+                    *v = unsafe { B::rect2_scale(*v) };
+                }
+            }
             apply_tx16_simd4::<B>(&mut v, kind);
-            store_row_group_x4::<B, 16>(tmp, y, &v);
+            store_row_group_x4_clip::<B, 16>(tmp, y, &v, rnd, shift, min, max);
         }
         _ => unreachable!(),
     }
@@ -1946,6 +2081,7 @@ fn itx_dequant_rows_rect_simd4<B: DctSimd4, const N: usize, const W: usize, cons
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
     tx: usize,
+    is_rect2: bool,
     shift0: i32,
     row_clip_min: i32,
     row_clip_max: i32,
@@ -1970,16 +2106,52 @@ fn itx_dequant_rows_rect_simd4<B: DctSimd4, const N: usize, const W: usize, cons
         }
     }
     let nrows = ngrp * 4;
+    let rnd0 = (1 << shift0) >> 1;
 
     let mut y = 0usize;
     if W == 8 || W == 16 {
-        while y + 8 <= nrows {
-            process_row_group_itx_wide_x8::<B, W, H>(coeff, tmp, y, first_kind);
-            y += 8;
+        if is_rect2 {
+            while y + 8 <= nrows {
+                process_row_group_itx_wide_x8::<B, W, H, true>(
+                    coeff,
+                    tmp,
+                    y,
+                    first_kind,
+                    rnd0,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                );
+                y += 8;
+            }
+        } else {
+            while y + 8 <= nrows {
+                process_row_group_itx_wide_x8::<B, W, H, false>(
+                    coeff,
+                    tmp,
+                    y,
+                    first_kind,
+                    rnd0,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                );
+                y += 8;
+            }
         }
     }
     while y + 4 <= nrows {
-        process_row_group_itx_rect_x4::<B, W, H>(coeff, tmp, y, first_kind);
+        process_row_group_itx_rect_x4::<B, W, H>(
+            coeff,
+            tmp,
+            y,
+            first_kind,
+            is_rect2,
+            rnd0,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
         y += 4;
     }
 
@@ -1989,11 +2161,6 @@ fn itx_dequant_rows_rect_simd4<B: DctSimd4, const N: usize, const W: usize, cons
     }
 
     coeff[..W * H].fill(0);
-
-    let rnd0 = (1 << shift0) >> 1;
-    for y in 0..H {
-        crate::filter::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
-    }
 }
 
 /// Pure-scalar kind-aware rectangular core (rect2 sizes + universal fallback).
@@ -2076,21 +2243,12 @@ pub(crate) fn itx_dequant_rect_simd4_core<
     debug_assert!(W == 4 || W == 8 || W == 16);
     debug_assert!(H == 4 || H == 8 || H == 16);
 
-    // rect2 (2:1) blocks apply a 181/256 prescale to every coefficient before
-    // the row transform. Doing it in place lets the same SIMD row/column passes
-    // serve both cases (the scalar reference folds it into the row gather; the
-    // result is identical, and the prescaled value still fits s16).
-    if is_rect2 {
-        for v in coeff[..W * H].iter_mut() {
-            *v = (*v * 181 + 128) >> 8;
-        }
-    }
-
     itx_dequant_rows_rect_simd4::<B, N, W, H>(
         coeff,
         tmp,
         eob,
         tx,
+        is_rect2,
         shift0,
         row_clip_min,
         row_clip_max,
@@ -2194,7 +2352,11 @@ pub(crate) fn idct_dequant_32x32() -> IdctDequantFn<1024> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_32x32_neon as IdctDequantFn<1024>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_32x32_neon_rdm as IdctDequantFn<1024>;
+                } else {
+                    f = crate::neon::idct_dequant_32x32_neon as IdctDequantFn<1024>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2307,7 +2469,11 @@ pub(crate) fn idct_dequant_4x8() -> IdctDequantFn<32> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_4x8_neon as IdctDequantFn<32>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_4x8_neon_rdm as IdctDequantFn<32>;
+                } else {
+                    f = crate::neon::idct_dequant_4x8_neon as IdctDequantFn<32>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2327,7 +2493,11 @@ pub(crate) fn idct_dequant_8x4() -> IdctDequantFn<32> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_8x4_neon as IdctDequantFn<32>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_8x4_neon_rdm as IdctDequantFn<32>;
+                } else {
+                    f = crate::neon::idct_dequant_8x4_neon as IdctDequantFn<32>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2347,7 +2517,11 @@ pub(crate) fn idct_dequant_8x16() -> IdctDequantFn<128> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_8x16_neon as IdctDequantFn<128>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_8x16_neon_rdm as IdctDequantFn<128>;
+                } else {
+                    f = crate::neon::idct_dequant_8x16_neon as IdctDequantFn<128>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2367,7 +2541,11 @@ pub(crate) fn idct_dequant_16x8() -> IdctDequantFn<128> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_16x8_neon as IdctDequantFn<128>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_16x8_neon_rdm as IdctDequantFn<128>;
+                } else {
+                    f = crate::neon::idct_dequant_16x8_neon as IdctDequantFn<128>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2387,7 +2565,11 @@ pub(crate) fn idct_dequant_16x32() -> IdctDequantFn<512> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_16x32_neon as IdctDequantFn<512>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_16x32_neon_rdm as IdctDequantFn<512>;
+                } else {
+                    f = crate::neon::idct_dequant_16x32_neon as IdctDequantFn<512>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2407,7 +2589,11 @@ pub(crate) fn idct_dequant_32x16() -> IdctDequantFn<512> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_32x16_neon as IdctDequantFn<512>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_32x16_neon_rdm as IdctDequantFn<512>;
+                } else {
+                    f = crate::neon::idct_dequant_32x16_neon as IdctDequantFn<512>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2427,7 +2613,11 @@ pub(crate) fn idct_dequant_4x16() -> IdctDequantFn<64> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_4x16_neon as IdctDequantFn<64>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_4x16_neon_rdm as IdctDequantFn<64>;
+                } else {
+                    f = crate::neon::idct_dequant_4x16_neon as IdctDequantFn<64>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2447,7 +2637,11 @@ pub(crate) fn idct_dequant_16x4() -> IdctDequantFn<64> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_16x4_neon as IdctDequantFn<64>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_16x4_neon_rdm as IdctDequantFn<64>;
+                } else {
+                    f = crate::neon::idct_dequant_16x4_neon as IdctDequantFn<64>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2467,7 +2661,11 @@ pub(crate) fn idct_dequant_8x32() -> IdctDequantFn<256> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_8x32_neon as IdctDequantFn<256>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_8x32_neon_rdm as IdctDequantFn<256>;
+                } else {
+                    f = crate::neon::idct_dequant_8x32_neon as IdctDequantFn<256>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2487,7 +2685,11 @@ pub(crate) fn idct_dequant_32x8() -> IdctDequantFn<256> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_32x8_neon as IdctDequantFn<256>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_32x8_neon_rdm as IdctDequantFn<256>;
+                } else {
+                    f = crate::neon::idct_dequant_32x8_neon as IdctDequantFn<256>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2507,7 +2709,11 @@ pub(crate) fn idct_dequant_4x32() -> IdctDequantFn<128> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_4x32_neon as IdctDequantFn<128>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_4x32_neon_rdm as IdctDequantFn<128>;
+                } else {
+                    f = crate::neon::idct_dequant_4x32_neon as IdctDequantFn<128>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2527,7 +2733,11 @@ pub(crate) fn idct_dequant_32x4() -> IdctDequantFn<128> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::idct_dequant_32x4_neon as IdctDequantFn<128>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::idct_dequant_32x4_neon_rdm as IdctDequantFn<128>;
+                } else {
+                    f = crate::neon::idct_dequant_32x4_neon as IdctDequantFn<128>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2554,7 +2764,11 @@ pub(crate) fn iadst_dequant_4x8() -> IadstDequantFn<32> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::iadst_dequant_4x8_neon as IadstDequantFn<32>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::iadst_dequant_4x8_neon_rdm as IadstDequantFn<32>;
+                } else {
+                    f = crate::neon::iadst_dequant_4x8_neon as IadstDequantFn<32>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2574,7 +2788,11 @@ pub(crate) fn iadst_dequant_8x4() -> IadstDequantFn<32> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::iadst_dequant_8x4_neon as IadstDequantFn<32>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::iadst_dequant_8x4_neon_rdm as IadstDequantFn<32>;
+                } else {
+                    f = crate::neon::iadst_dequant_8x4_neon as IadstDequantFn<32>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2594,7 +2812,11 @@ pub(crate) fn iadst_dequant_8x16() -> IadstDequantFn<128> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::iadst_dequant_8x16_neon as IadstDequantFn<128>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::iadst_dequant_8x16_neon_rdm as IadstDequantFn<128>;
+                } else {
+                    f = crate::neon::iadst_dequant_8x16_neon as IadstDequantFn<128>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2614,7 +2836,11 @@ pub(crate) fn iadst_dequant_16x8() -> IadstDequantFn<128> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::iadst_dequant_16x8_neon as IadstDequantFn<128>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::iadst_dequant_16x8_neon_rdm as IadstDequantFn<128>;
+                } else {
+                    f = crate::neon::iadst_dequant_16x8_neon as IadstDequantFn<128>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2634,7 +2860,11 @@ pub(crate) fn iadst_dequant_4x16() -> IadstDequantFn<64> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::iadst_dequant_4x16_neon as IadstDequantFn<64>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::iadst_dequant_4x16_neon_rdm as IadstDequantFn<64>;
+                } else {
+                    f = crate::neon::iadst_dequant_4x16_neon as IadstDequantFn<64>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -2654,7 +2884,11 @@ pub(crate) fn iadst_dequant_16x4() -> IadstDequantFn<64> {
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::iadst_dequant_16x4_neon as IadstDequantFn<64>;
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::iadst_dequant_16x4_neon_rdm as IadstDequantFn<64>;
+                } else {
+                    f = crate::neon::iadst_dequant_16x4_neon as IadstDequantFn<64>;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]

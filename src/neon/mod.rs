@@ -44,14 +44,25 @@ pub(crate) use filter::{
 };
 pub(crate) use ipred::*;
 pub(crate) use itx::{
-    iadst_dequant_4x4_neon, iadst_dequant_4x8_neon, iadst_dequant_4x16_neon,
-    iadst_dequant_8x4_neon, iadst_dequant_8x8_neon, iadst_dequant_8x16_neon,
-    iadst_dequant_16x4_neon, iadst_dequant_16x8_neon, iadst_dequant_16x16_neon,
-    idct_dequant_4x4_neon, idct_dequant_4x8_neon, idct_dequant_4x16_neon, idct_dequant_4x32_neon,
-    idct_dequant_8x4_neon, idct_dequant_8x8_neon, idct_dequant_8x16_neon, idct_dequant_8x32_neon,
-    idct_dequant_16x4_neon, idct_dequant_16x8_neon, idct_dequant_16x16_neon,
-    idct_dequant_16x32_neon, idct_dequant_32x4_neon, idct_dequant_32x8_neon,
-    idct_dequant_32x16_neon, idct_dequant_32x32_neon, idct_dequant_64x64_neon,
+    iadst_dequant_4x4_neon, iadst_dequant_4x8_neon, iadst_dequant_4x8_neon_rdm,
+    iadst_dequant_4x16_neon, iadst_dequant_4x16_neon_rdm,
+    iadst_dequant_8x4_neon, iadst_dequant_8x4_neon_rdm, iadst_dequant_8x8_neon,
+    iadst_dequant_8x16_neon, iadst_dequant_8x16_neon_rdm,
+    iadst_dequant_16x4_neon, iadst_dequant_16x4_neon_rdm,
+    iadst_dequant_16x8_neon, iadst_dequant_16x8_neon_rdm, iadst_dequant_16x16_neon,
+    idct_dequant_4x4_neon, idct_dequant_4x8_neon, idct_dequant_4x8_neon_rdm,
+    idct_dequant_4x16_neon, idct_dequant_4x16_neon_rdm,
+    idct_dequant_4x32_neon, idct_dequant_4x32_neon_rdm,
+    idct_dequant_8x4_neon, idct_dequant_8x4_neon_rdm, idct_dequant_8x8_neon,
+    idct_dequant_8x16_neon, idct_dequant_8x16_neon_rdm,
+    idct_dequant_8x32_neon, idct_dequant_8x32_neon_rdm,
+    idct_dequant_16x4_neon, idct_dequant_16x4_neon_rdm,
+    idct_dequant_16x8_neon, idct_dequant_16x8_neon_rdm, idct_dequant_16x16_neon,
+    idct_dequant_16x32_neon, idct_dequant_16x32_neon_rdm,
+    idct_dequant_32x4_neon, idct_dequant_32x4_neon_rdm,
+    idct_dequant_32x8_neon, idct_dequant_32x8_neon_rdm,
+    idct_dequant_32x16_neon, idct_dequant_32x16_neon_rdm,
+    idct_dequant_32x32_neon, idct_dequant_32x32_neon_rdm, idct_dequant_64x64_neon,
 };
 pub(crate) use looprestoration::{
     ns_wiener_fir_run_neon, ns_wiener_uv_fir_run_neon, pc_wiener_fir_run_neon,

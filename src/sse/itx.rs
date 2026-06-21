@@ -93,6 +93,7 @@ impl crate::itx_1d::DctWide for SseWide {
     type In = __m128i;
     type Acc = (__m128i, __m128i);
     type Coeffs = __m128i;
+    type Clip = (__m128i, __m128i, __m128i, __m128i);
     #[inline(always)]
     fn zero() -> Self::Acc {
         unsafe { (_mm_setzero_si128(), _mm_setzero_si128()) }
@@ -138,6 +139,51 @@ impl crate::itx_1d::DctWide for SseWide {
             let lo = _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i);
             let hi = _mm_loadu_si128(src.as_ptr().add(off + 4) as *const __m128i);
             _mm_packs_epi32(lo, hi)
+        }
+    }
+    #[inline(always)]
+    unsafe fn load8_rect2_narrow(src: &[i32], off: usize) -> __m128i {
+        unsafe {
+            // Same normalization as dav2d's s16 path: narrow first, then
+            // rounded high multiply by 0x5a80. For s16 inputs this equals
+            // `(v * 181 + 128) >> 8`.
+            let lo = _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i);
+            let hi = _mm_loadu_si128(src.as_ptr().add(off + 4) as *const __m128i);
+            _mm_mulhrs_epi16(_mm_packs_epi32(lo, hi), _mm_set1_epi16(0x5a80))
+        }
+    }
+    #[inline(always)]
+    fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
+        unsafe {
+            (
+                _mm_set1_epi32(rnd),
+                _mm_cvtsi32_si128(shift),
+                _mm_set1_epi32(min),
+                _mm_set1_epi32(max),
+            )
+        }
+    }
+    #[inline(always)]
+    unsafe fn store8_strided_clip(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: Self::Acc,
+        clip: Self::Clip,
+    ) {
+        unsafe {
+            let (rnd, sh, minv, maxv) = clip;
+            let lo = _mm_min_epi32(_mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(acc.0, rnd), sh), minv), maxv);
+            let hi = _mm_min_epi32(_mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(acc.1, rnd), sh), minv), maxv);
+            let p = dst.as_mut_ptr().add(off);
+            *p.add(0 * stride) = _mm_extract_epi32::<0>(lo);
+            *p.add(1 * stride) = _mm_extract_epi32::<1>(lo);
+            *p.add(2 * stride) = _mm_extract_epi32::<2>(lo);
+            *p.add(3 * stride) = _mm_extract_epi32::<3>(lo);
+            *p.add(4 * stride) = _mm_extract_epi32::<0>(hi);
+            *p.add(5 * stride) = _mm_extract_epi32::<1>(hi);
+            *p.add(6 * stride) = _mm_extract_epi32::<2>(hi);
+            *p.add(7 * stride) = _mm_extract_epi32::<3>(hi);
         }
     }
     #[inline(always)]
@@ -187,6 +233,14 @@ impl DctSimd4 for SseDct2d {
     #[inline(always)]
     unsafe fn mul(a: Self::V, b: Self::V) -> Self::V {
         SseI32x4(unsafe { _mm_mullo_epi32(a.0, b.0) })
+    }
+
+    #[inline(always)]
+    unsafe fn rect2_scale(a: Self::V) -> Self::V {
+        unsafe {
+            let scaled = _mm_add_epi32(_mm_mullo_epi32(a.0, _mm_set1_epi32(181)), _mm_set1_epi32(128));
+            SseI32x4(_mm_srai_epi32::<8>(scaled))
+        }
     }
 
     #[inline(always)]

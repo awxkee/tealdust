@@ -82,6 +82,7 @@ impl crate::itx_1d::DctWide for NeonWide {
     type In = int16x8_t;
     type Acc = (int32x4_t, int32x4_t);
     type Coeffs = int16x8_t;
+    type Clip = (int32x4_t, int32x4_t, int32x4_t, int32x4_t);
     #[inline(always)]
     fn zero() -> Self::Acc {
         unsafe { (vdupq_n_s32(0), vdupq_n_s32(0)) }
@@ -116,6 +117,53 @@ impl crate::itx_1d::DctWide for NeonWide {
         }
     }
     #[inline(always)]
+    unsafe fn load8_rect2_narrow(src: &[i32], off: usize) -> int16x8_t {
+        unsafe {
+            // Exact NEON fallback for CPUs without FEAT_RDM: keep the rect2
+            // normalization in i32, then narrow exactly like `load8_narrow`.
+            let lo = vld1q_s32(src.as_ptr().add(off));
+            let hi = vld1q_s32(src.as_ptr().add(off + 4));
+            let r = vdupq_n_s32(128);
+            let lo = vshrq_n_s32::<8>(vmlaq_n_s32(r, lo, 181));
+            let hi = vshrq_n_s32::<8>(vmlaq_n_s32(r, hi, 181));
+            vcombine_s16(vmovn_s32(lo), vmovn_s32(hi))
+        }
+    }
+    #[inline(always)]
+    fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
+        unsafe {
+            (
+                vdupq_n_s32(rnd),
+                vdupq_n_s32(-shift),
+                vdupq_n_s32(min),
+                vdupq_n_s32(max),
+            )
+        }
+    }
+    #[inline(always)]
+    unsafe fn store8_strided_clip(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: Self::Acc,
+        clip: Self::Clip,
+    ) {
+        unsafe {
+            let (rnd, nsh, minv, maxv) = clip;
+            let lo = vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32(acc.0, rnd), nsh), minv), maxv);
+            let hi = vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32(acc.1, rnd), nsh), minv), maxv);
+            let p = dst.as_mut_ptr().add(off);
+            vst1q_lane_s32::<0>(p.add(0 * stride), lo);
+            vst1q_lane_s32::<1>(p.add(1 * stride), lo);
+            vst1q_lane_s32::<2>(p.add(2 * stride), lo);
+            vst1q_lane_s32::<3>(p.add(3 * stride), lo);
+            vst1q_lane_s32::<0>(p.add(4 * stride), hi);
+            vst1q_lane_s32::<1>(p.add(5 * stride), hi);
+            vst1q_lane_s32::<2>(p.add(6 * stride), hi);
+            vst1q_lane_s32::<3>(p.add(7 * stride), hi);
+        }
+    }
+    #[inline(always)]
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
         unsafe {
             vst1q_s32(dst.as_mut_ptr().add(off), acc.0);
@@ -130,6 +178,89 @@ impl crate::itx_1d::DctWide for NeonWide {
             vst1q_s32(a.as_mut_ptr().add(4), acc.1);
             a
         }
+    }
+}
+
+#[target_feature(enable = "rdm")]
+unsafe fn load8_rect2_narrow_rdm(src: &[i32], off: usize) -> int16x8_t {
+    unsafe {
+        // dav2d-style rect2 normalization. SQRDMULH by 0x5a80 is exactly
+        // `(v * 181 + 128) >> 8` for valid s16 lanes, and avoids widening the
+        // row-pipeline input twice.
+        let lo = vld1q_s32(src.as_ptr().add(off));
+        let hi = vld1q_s32(src.as_ptr().add(off + 4));
+        let v = vcombine_s16(vmovn_s32(lo), vmovn_s32(hi));
+        vqrdmulhq_s16(v, vdupq_n_s16(0x5a80))
+    }
+}
+
+pub(crate) struct NeonWideRdm;
+
+impl crate::itx_1d::DctWide for NeonWideRdm {
+    type In = int16x8_t;
+    type Acc = (int32x4_t, int32x4_t);
+    type Coeffs = int16x8_t;
+    type Clip = (int32x4_t, int32x4_t, int32x4_t, int32x4_t);
+
+    #[inline(always)]
+    fn zero() -> Self::Acc {
+        NeonWide::zero()
+    }
+
+    #[inline(always)]
+    fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+        NeonWide::add(a, b)
+    }
+
+    #[inline(always)]
+    fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+        NeonWide::sub(a, b)
+    }
+
+    #[inline(always)]
+    fn load_coeffs(table: &[i16], idx: usize) -> Self::Coeffs {
+        NeonWide::load_coeffs(table, idx)
+    }
+
+    #[inline(always)]
+    fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: Self::In, c: Self::Coeffs) -> Self::Acc {
+        NeonWide::mul_add_lane::<LANE>(acc, x, c)
+    }
+
+    #[inline(always)]
+    unsafe fn load8_narrow(src: &[i32], off: usize) -> Self::In {
+        unsafe { NeonWide::load8_narrow(src, off) }
+    }
+
+    #[inline(always)]
+    unsafe fn load8_rect2_narrow(src: &[i32], off: usize) -> Self::In {
+        unsafe { load8_rect2_narrow_rdm(src, off) }
+    }
+
+    #[inline(always)]
+    fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
+        NeonWide::make_clip(rnd, shift, min, max)
+    }
+
+    #[inline(always)]
+    unsafe fn store8_strided_clip(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: Self::Acc,
+        clip: Self::Clip,
+    ) {
+        unsafe { NeonWide::store8_strided_clip(dst, off, stride, acc, clip) }
+    }
+
+    #[inline(always)]
+    unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
+        unsafe { NeonWide::store8(dst, off, acc) }
+    }
+
+    #[inline(always)]
+    unsafe fn to_array8(acc: Self::Acc) -> [i32; 8] {
+        unsafe { NeonWide::to_array8(acc) }
     }
 }
 
@@ -164,6 +295,14 @@ impl DctSimd4 for NeonDct2d {
     }
 
     #[inline(always)]
+    unsafe fn rect2_scale(a: Self::V) -> Self::V {
+        unsafe {
+            let scaled = vmlaq_n_s32(vdupq_n_s32(128), a.0, 181);
+            NeonI32x4(vshrq_n_s32::<8>(scaled))
+        }
+    }
+
+    #[inline(always)]
     unsafe fn load(tmp: &[i32; ITX_TMP_PIXELS], off: usize) -> Self::V {
         debug_assert!(off + 4 <= ITX_TMP_PIXELS);
         let p = unsafe { tmp.as_ptr().add(off) };
@@ -189,6 +328,63 @@ impl DctSimd4 for NeonDct2d {
         let mut out = [0i32; 4];
         unsafe { vst1q_s32(out.as_mut_ptr(), v.0) };
         out
+    }
+}
+
+pub(crate) struct NeonDct2dRdm;
+
+impl DctSimd4 for NeonDct2dRdm {
+    type V = NeonI32x4;
+    type Wide = NeonWideRdm;
+
+    #[inline(always)]
+    unsafe fn zero() -> Self::V {
+        unsafe { NeonDct2d::zero() }
+    }
+
+    #[inline(always)]
+    unsafe fn splat(v: i32) -> Self::V {
+        unsafe { NeonDct2d::splat(v) }
+    }
+
+    #[inline(always)]
+    unsafe fn add(a: Self::V, b: Self::V) -> Self::V {
+        unsafe { NeonDct2d::add(a, b) }
+    }
+
+    #[inline(always)]
+    unsafe fn sub(a: Self::V, b: Self::V) -> Self::V {
+        unsafe { NeonDct2d::sub(a, b) }
+    }
+
+    #[inline(always)]
+    unsafe fn mul(a: Self::V, b: Self::V) -> Self::V {
+        unsafe { NeonDct2d::mul(a, b) }
+    }
+
+    #[inline(always)]
+    unsafe fn rect2_scale(a: Self::V) -> Self::V {
+        unsafe { NeonDct2d::rect2_scale(a) }
+    }
+
+    #[inline(always)]
+    unsafe fn load(tmp: &[i32; ITX_TMP_PIXELS], off: usize) -> Self::V {
+        unsafe { NeonDct2d::load(tmp, off) }
+    }
+
+    #[inline(always)]
+    unsafe fn store(tmp: &mut [i32; ITX_TMP_PIXELS], off: usize, v: Self::V) {
+        unsafe { NeonDct2d::store(tmp, off, v) }
+    }
+
+    #[inline(always)]
+    unsafe fn load_slice(src: &[i32], off: usize) -> Self::V {
+        unsafe { NeonDct2d::load_slice(src, off) }
+    }
+
+    #[inline(always)]
+    unsafe fn to_array(v: Self::V) -> [i32; 4] {
+        unsafe { NeonDct2d::to_array(v) }
     }
 }
 
@@ -997,5 +1193,182 @@ pub(crate) fn iadst_dequant_16x4_neon(
         row_clip_max,
         first_kind,
         second_kind,
+    );
+}
+
+macro_rules! idct_rect_rdm_fn {
+    ($pub_name:ident, $impl_name:ident, $n:expr, $w:expr, $h:expr) => {
+        pub(crate) fn $pub_name(
+            coeff: &mut [i32],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+        ) {
+            unsafe {
+                $impl_name(
+                    coeff,
+                    tmp,
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                )
+            }
+        }
+
+        #[target_feature(enable = "rdm")]
+        unsafe fn $impl_name(
+            coeff: &mut [i32],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+        ) {
+            crate::itx_2d::idct_dequant_rect_simd4_core::<NeonDct2dRdm, $n, $w, $h>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+            );
+        }
+    };
+}
+
+macro_rules! iadst_rect_rdm_fn {
+    ($pub_name:ident, $impl_name:ident, $n:expr, $w:expr, $h:expr) => {
+        pub(crate) fn $pub_name(
+            coeff: &mut [i32],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+            first_kind: usize,
+            second_kind: usize,
+        ) {
+            unsafe {
+                $impl_name(
+                    coeff,
+                    tmp,
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    first_kind,
+                    second_kind,
+                )
+            }
+        }
+
+        #[target_feature(enable = "rdm")]
+        unsafe fn $impl_name(
+            coeff: &mut [i32],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+            first_kind: usize,
+            second_kind: usize,
+        ) {
+            crate::itx_2d::itx_dequant_rect_simd4_core::<NeonDct2dRdm, $n, $w, $h>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+                first_kind,
+                second_kind,
+            );
+        }
+    };
+}
+
+idct_rect_rdm_fn!(idct_dequant_4x8_neon_rdm, idct_dequant_4x8_neon_rdm_impl, 32, 4, 8);
+idct_rect_rdm_fn!(idct_dequant_8x4_neon_rdm, idct_dequant_8x4_neon_rdm_impl, 32, 8, 4);
+idct_rect_rdm_fn!(idct_dequant_8x16_neon_rdm, idct_dequant_8x16_neon_rdm_impl, 128, 8, 16);
+idct_rect_rdm_fn!(idct_dequant_16x8_neon_rdm, idct_dequant_16x8_neon_rdm_impl, 128, 16, 8);
+idct_rect_rdm_fn!(idct_dequant_16x32_neon_rdm, idct_dequant_16x32_neon_rdm_impl, 512, 16, 32);
+idct_rect_rdm_fn!(idct_dequant_32x16_neon_rdm, idct_dequant_32x16_neon_rdm_impl, 512, 32, 16);
+idct_rect_rdm_fn!(idct_dequant_4x16_neon_rdm, idct_dequant_4x16_neon_rdm_impl, 64, 4, 16);
+idct_rect_rdm_fn!(idct_dequant_16x4_neon_rdm, idct_dequant_16x4_neon_rdm_impl, 64, 16, 4);
+idct_rect_rdm_fn!(idct_dequant_8x32_neon_rdm, idct_dequant_8x32_neon_rdm_impl, 256, 8, 32);
+idct_rect_rdm_fn!(idct_dequant_32x8_neon_rdm, idct_dequant_32x8_neon_rdm_impl, 256, 32, 8);
+idct_rect_rdm_fn!(idct_dequant_4x32_neon_rdm, idct_dequant_4x32_neon_rdm_impl, 128, 4, 32);
+idct_rect_rdm_fn!(idct_dequant_32x4_neon_rdm, idct_dequant_32x4_neon_rdm_impl, 128, 32, 4);
+
+iadst_rect_rdm_fn!(iadst_dequant_4x8_neon_rdm, iadst_dequant_4x8_neon_rdm_impl, 32, 4, 8);
+iadst_rect_rdm_fn!(iadst_dequant_8x4_neon_rdm, iadst_dequant_8x4_neon_rdm_impl, 32, 8, 4);
+iadst_rect_rdm_fn!(iadst_dequant_8x16_neon_rdm, iadst_dequant_8x16_neon_rdm_impl, 128, 8, 16);
+iadst_rect_rdm_fn!(iadst_dequant_16x8_neon_rdm, iadst_dequant_16x8_neon_rdm_impl, 128, 16, 8);
+iadst_rect_rdm_fn!(iadst_dequant_4x16_neon_rdm, iadst_dequant_4x16_neon_rdm_impl, 64, 4, 16);
+iadst_rect_rdm_fn!(iadst_dequant_16x4_neon_rdm, iadst_dequant_16x4_neon_rdm_impl, 64, 16, 4);
+
+pub(crate) fn idct_dequant_32x32_neon_rdm(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    unsafe {
+        idct_dequant_32x32_neon_rdm_impl(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        )
+    }
+}
+
+#[target_feature(enable = "rdm")]
+unsafe fn idct_dequant_32x32_neon_rdm_impl(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    crate::itx_2d::idct_dequant_simd4_core::<NeonDct2dRdm, 1024, 32>(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
     );
 }
