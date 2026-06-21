@@ -58,6 +58,17 @@ impl crate::itx_1d::DctLane for NeonI32x4 {
         // SAFETY: callers index within the kernel tables.
         NeonI32x4(unsafe { vld1q_dup_s32(table.as_ptr().add(idx)) })
     }
+    type Coeffs = int32x4_t;
+    #[inline(always)]
+    fn load_coeffs(table: &[i32], idx: usize) -> int32x4_t {
+        // SAFETY: callers index a 4-wide group within the kernel tables.
+        unsafe { vld1q_s32(table.as_ptr().add(idx)) }
+    }
+    #[inline(always)]
+    fn mul_add_lane<const LANE: i32>(self, x: Self, c: int32x4_t) -> Self {
+        // self + x * c[LANE] in one fused by-lane MLA; no per-coefficient load.
+        NeonI32x4(unsafe { vmlaq_laneq_s32::<LANE>(self.0, x.0, c) })
+    }
     #[inline(always)]
     fn mul_add(self, x: Self, k: Self) -> Self {
         // Single fused multiply-accumulate (MLA): self + x*k.
@@ -65,10 +76,68 @@ impl crate::itx_1d::DctLane for NeonI32x4 {
     }
 }
 
+pub(crate) struct NeonWide;
+
+impl crate::itx_1d::DctWide for NeonWide {
+    type In = int16x8_t;
+    type Acc = (int32x4_t, int32x4_t);
+    type Coeffs = int16x8_t;
+    #[inline(always)]
+    fn zero() -> Self::Acc {
+        unsafe { (vdupq_n_s32(0), vdupq_n_s32(0)) }
+    }
+    #[inline(always)]
+    fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+        unsafe { (vaddq_s32(a.0, b.0), vaddq_s32(a.1, b.1)) }
+    }
+    #[inline(always)]
+    fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+        unsafe { (vsubq_s32(a.0, b.0), vsubq_s32(a.1, b.1)) }
+    }
+    #[inline(always)]
+    fn load_coeffs(table: &[i16], idx: usize) -> int16x8_t {
+        unsafe { vld1q_s16(table.as_ptr().add(idx)) }
+    }
+    #[inline(always)]
+    fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: int16x8_t, c: int16x8_t) -> Self::Acc {
+        unsafe {
+            (
+                vmlal_laneq_s16::<LANE>(acc.0, vget_low_s16(x), c),
+                vmlal_high_laneq_s16::<LANE>(acc.1, x, c),
+            )
+        }
+    }
+    #[inline(always)]
+    unsafe fn load8_narrow(src: &[i32], off: usize) -> int16x8_t {
+        unsafe {
+            let lo = vld1q_s32(src.as_ptr().add(off));
+            let hi = vld1q_s32(src.as_ptr().add(off + 4));
+            vcombine_s16(vmovn_s32(lo), vmovn_s32(hi))
+        }
+    }
+    #[inline(always)]
+    unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
+        unsafe {
+            vst1q_s32(dst.as_mut_ptr().add(off), acc.0);
+            vst1q_s32(dst.as_mut_ptr().add(off + 4), acc.1);
+        }
+    }
+    #[inline(always)]
+    unsafe fn to_array8(acc: Self::Acc) -> [i32; 8] {
+        unsafe {
+            let mut a = [0i32; 8];
+            vst1q_s32(a.as_mut_ptr(), acc.0);
+            vst1q_s32(a.as_mut_ptr().add(4), acc.1);
+            a
+        }
+    }
+}
+
 pub(crate) struct NeonDct2d;
 
 impl DctSimd4 for NeonDct2d {
     type V = NeonI32x4;
+    type Wide = NeonWide;
     #[inline(always)]
     unsafe fn zero() -> Self::V {
         NeonI32x4(unsafe { vdupq_n_s32(0) })

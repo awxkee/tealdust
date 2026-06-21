@@ -2211,7 +2211,7 @@ impl Default for ReconScratch {
             chroma_eob: [[-1i16; 2]; 256],
             chroma_u_has_cf: 0,
             txtp_map: [0u16; 256],
-            rmv: [[[crate::levels::Mv::default(); 2]; 2]; 256],
+            rmv: [[[Mv::default(); 2]; 2]; 256],
             al_pal: [[[0u16; 8]; 64]; 2],
             pal: [0u16; 8],
             pal_idx_y: Box::new([0u8; 64 * 64]),

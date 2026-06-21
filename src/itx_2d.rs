@@ -614,6 +614,8 @@ pub(crate) fn idct_dequant_rows_dct<const N: usize, const S: usize>(
 
 pub(crate) trait DctSimd4 {
     type V: Copy + crate::itx_1d::DctLane;
+    /// s16 8-wide widening-MAC backend used by `dct_1d_x8` for the 16/32 sizes.
+    type Wide: crate::itx_1d::DctWide;
 
     unsafe fn zero() -> Self::V;
     unsafe fn splat(v: i32) -> Self::V;
@@ -729,7 +731,7 @@ fn process_row_group_x4<B: DctSimd4, const S: usize>(
                 tmp[(y + 2) * ITX_TMP_STRIDE + m] = l[2];
                 tmp[(y + 3) * ITX_TMP_STRIDE + m] = l[3];
             };
-            crate::itx_1d::dct16_flat::<B::V>(load, store);
+            crate::itx_1d::dct16_flat_bylane::<B::V>(load, store);
         }
         32 => {
             let load = |j: usize| unsafe { B::load_slice(coeff, y + j * 32) };
@@ -746,6 +748,29 @@ fn process_row_group_x4<B: DctSimd4, const S: usize>(
     }
 }
 
+#[inline(always)]
+fn process_row_group_wide_x8<B: DctSimd4, const S: usize>(
+    coeff: &[i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    y: usize,
+) {
+    use crate::itx_1d::DctWide;
+    let s: [<B::Wide as DctWide>::In; S] =
+        core::array::from_fn(|j| unsafe { B::Wide::load8_narrow(coeff, y + j * S) });
+    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| {
+        let l = unsafe { B::Wide::to_array8(acc) };
+        for k in 0..8 {
+            tmp[(y + k) * ITX_TMP_STRIDE + m] = l[k];
+        }
+    };
+    match S {
+        16 => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], store),
+        32 => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], store),
+        _ => unreachable!(),
+    }
+}
+
+#[inline(always)]
 fn idct_dequant_rows_dct_simd4<B: DctSimd4, const N: usize, const S: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -762,18 +787,29 @@ fn idct_dequant_rows_dct_simd4<B: DctSimd4, const N: usize, const S: usize>(
     let coeff = &mut coeff[..N];
     let off = LAST_EOB_PER_COL.offset[tx] as usize;
     let last_eob = &LAST_EOB_PER_COL.table[off..];
-    let mut ei = 0usize;
-    let mut y = 0usize;
 
-    loop {
-        process_row_group_x4::<B, S>(coeff, tmp, y);
-        y += 4;
-
-        if eob > last_eob[ei] as i32 {
-            ei += 1;
-        } else {
+    // Leading 4-column groups that may be non-zero (eob early-out). The check
+    // only reads constants, so it can be hoisted ahead of the transform, which
+    // lets the column pass run 8 columns at a time where possible.
+    let mut ngrp = 0usize;
+    while ngrp < S / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
             break;
         }
+    }
+    let ncols = ngrp * 4;
+
+    let mut y = 0usize;
+    if S == 16 || S == 32 {
+        while y + 8 <= ncols {
+            process_row_group_wide_x8::<B, S>(coeff, tmp, y);
+            y += 8;
+        }
+    }
+    while y + 4 <= ncols {
+        process_row_group_x4::<B, S>(coeff, tmp, y);
+        y += 4;
     }
 
     while y < S {
@@ -857,6 +893,99 @@ pub(crate) static DCT16_DENSE_KERNEL: [i32; 256] = [
        9, -26,  43, -57,  70, -80,  87, -90,  90, -87,  80, -70,  57, -43,  26,  -9,
 ];
 
+// Output-major re-layout of DCT16_DENSE_KERNEL for dct16_flat_bylane (cf. DCT32_K*).
+pub(crate) static DCT16_KB: [i32; 64] = [
+    90, 87, 80, 70, 57, 43, 26, 9, 87, 57, 9, -43, -80, -90, -70, -26, 80, 9, -70, -87, -26, 57,
+    90, 43, 70, -43, -87, 9, 90, 26, -80, -57, 57, -80, -26, 90, -9, -87, 43, 70, 43, -90, 57, 26,
+    -87, 70, 9, -80, 26, -70, 90, -80, 43, 9, -57, 87, 9, -26, 43, -57, 70, -80, 87, -90,
+];
+pub(crate) static DCT16_KD: [i32; 16] = [
+    89, 75, 50, 18, 75, -18, -89, -50, 50, -89, 18, 75, 18, -50, 75, -89,
+];
+pub(crate) static DCT16_KF: [i32; 4] = [83, 35, 35, -83];
+pub(crate) static DCT16_KG: [i32; 4] = [64, 64, 64, -64];
+
+// i16 wide tables (s16 8-wide widening-MAC). 8-lane groups, small leaves zero-padded.
+pub(crate) static DCT32_KBW: [i16; 256] = [
+    90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 47, 39, 30, 22, 13, 4, 90, 82, 67, 47, 22, -4, -30,
+    -54, -73, -85, -90, -88, -78, -61, -39, -13, 88, 67, 30, -13, -54, -82, -90, -78, -47, -4, 39,
+    73, 90, 85, 61, 22, 85, 47, -13, -67, -90, -73, -22, 39, 82, 88, 54, -4, -61, -90, -78, -30,
+    82, 22, -54, -90, -61, 13, 78, 85, 30, -47, -90, -67, 4, 73, 88, 39, 78, -4, -82, -73, 13, 85,
+    67, -22, -88, -61, 30, 90, 54, -39, -90, -47, 73, -30, -90, -22, 78, 67, -39, -90, -13, 82, 61,
+    -47, -88, -4, 85, 54, 67, -54, -78, 39, 85, -22, -90, 4, 90, 13, -88, -30, 82, 47, -73, -61,
+    61, -73, -47, 82, 30, -88, -13, 90, -4, -90, 22, 85, -39, -78, 54, 67, 54, -85, -4, 88, -47,
+    -61, 82, 13, -90, 39, 67, -78, -22, 90, -30, -73, 47, -90, 39, 54, -90, 30, 61, -88, 22, 67,
+    -85, 13, 73, -82, 4, 78, 39, -88, 73, -4, -67, 90, -47, -30, 85, -78, 13, 61, -90, 54, 22, -82,
+    30, -78, 90, -61, 4, 54, -88, 82, -39, -22, 73, -90, 67, -13, -47, 85, 22, -61, 85, -90, 73,
+    -39, -4, 47, -78, 90, -82, 54, -13, -30, 67, -88, 13, -39, 61, -78, 88, -90, 85, -73, 54, -30,
+    4, 22, -47, 67, -82, 90, 4, -13, 22, -30, 39, -47, 54, -61, 67, -73, 78, -82, 85, -88, 90, -90,
+];
+pub(crate) static DCT32_KDW: [i16; 64] = [
+    90, 87, 80, 70, 57, 43, 26, 9, 87, 57, 9, -43, -80, -90, -70, -26, 80, 9, -70, -87, -26, 57,
+    90, 43, 70, -43, -87, 9, 90, 26, -80, -57, 57, -80, -26, 90, -9, -87, 43, 70, 43, -90, 57, 26,
+    -87, 70, 9, -80, 26, -70, 90, -80, 43, 9, -57, 87, 9, -26, 43, -57, 70, -80, 87, -90,
+];
+pub(crate) static DCT32_KFW: [i16; 32] = [
+    89, 75, 50, 18, 0, 0, 0, 0, 75, -18, -89, -50, 0, 0, 0, 0, 50, -89, 18, 75, 0, 0, 0, 0, 18,
+    -50, 75, -89, 0, 0, 0, 0,
+];
+pub(crate) static DCT32_KHW: [i16; 8] = [83, 35, 35, -83, 0, 0, 0, 0];
+pub(crate) static DCT32_KGW: [i16; 8] = [64, 64, 64, -64, 0, 0, 0, 0];
+pub(crate) static DCT16_KBW: [i16; 64] = [
+    90, 87, 80, 70, 57, 43, 26, 9, 87, 57, 9, -43, -80, -90, -70, -26, 80, 9, -70, -87, -26, 57,
+    90, 43, 70, -43, -87, 9, 90, 26, -80, -57, 57, -80, -26, 90, -9, -87, 43, 70, 43, -90, 57, 26,
+    -87, 70, 9, -80, 26, -70, 90, -80, 43, 9, -57, 87, 9, -26, 43, -57, 70, -80, 87, -90,
+];
+pub(crate) static DCT16_KDW: [i16; 32] = [
+    89, 75, 50, 18, 0, 0, 0, 0, 75, -18, -89, -50, 0, 0, 0, 0, 50, -89, 18, 75, 0, 0, 0, 0, 18,
+    -50, 75, -89, 0, 0, 0, 0,
+];
+pub(crate) static DCT16_KFW: [i16; 8] = [83, 35, 35, -83, 0, 0, 0, 0];
+pub(crate) static DCT16_KGW: [i16; 8] = [64, 64, 64, -64, 0, 0, 0, 0];
+
+// i16 ADST/FLIPADST kernels for the s16 8-wide widening-MAC dense matmul.
+// Output-major; n=4 rows zero-padded to an 8-lane group.
+// Dense DCT8 matrix (output-major), bit-exact to the factored `inv_dct8`;
+// lets the 8-point DCT dimension of an ADST block use the wide path.
+pub(crate) static DCT8_KW: [i16; 64] = [
+    64, 89, 83, 75, 64, 50, 35, 18, 64, 75, 35, -18, -64, -89, -83, -50, 64, 50, -35, -89, -64, 18,
+    83, 75, 64, 18, -83, -50, 64, 75, -35, -89, 64, -18, -83, 50, 64, -75, -35, 89, 64, -50, -35,
+    89, -64, -18, 83, -75, 64, -75, 35, 18, -64, 89, -83, 50, 64, -89, 83, -75, 64, -50, 35, -18,
+];
+pub(crate) static ADST8_KW: [i16; 64] = [
+    11, 34, 54, 71, 84, 88, 79, 50, 28, 74, 89, 68, 17, -44, -83, -69, 44, 89, 48, -41, -89, -44,
+    50, 81, 58, 76, -34, -86, 10, 88, 6, -84, 70, 39, -87, 1, 86, -44, -59, 78, 79, -12, -66, 87,
+    -35, -44, 86, -62, 86, -58, 12, 38, -75, 88, -74, 40, 89, -86, 79, -70, 58, -44, 29, -14,
+];
+pub(crate) static ADST16_KW: [i16; 256] = [
+    8, 25, 41, 55, 67, 77, 84, 88, 89, 87, 81, 73, 62, 48, 33, 17, 17, 48, 73, 87, 88, 77, 55, 25,
+    -8, -41, -67, -84, -89, -81, -62, -33, 25, 67, 88, 81, 48, 0, -48, -81, -88, -67, -25, 25, 67,
+    88, 81, 48, 33, 81, 84, 41, -25, -77, -87, -48, 17, 73, 88, 55, -8, -67, -89, -62, 41, 88, 62,
+    -17, -81, -77, -8, 67, 87, 33, -48, -89, -55, 25, 84, 73, 48, 88, 25, -67, -81, 0, 81, 67, -25,
+    -88, -48, 48, 88, 25, -67, -81, 55, 81, -17, -89, -25, 77, 62, -48, -84, 8, 88, 33, -73, -67,
+    41, 87, 62, 67, -55, -73, 48, 77, -41, -81, 33, 84, -25, -87, 17, 88, -8, -89, 67, 48, -81,
+    -25, 88, 0, -88, 25, 81, -48, -67, 67, 48, -81, -25, 88, 73, 25, -89, 33, 67, -77, -17, 88,
+    -41, -62, 81, 8, -87, 48, 55, -84, 77, 0, -77, 77, 0, -77, 77, 0, -77, 77, 0, -77, 77, 0, -77,
+    77, 81, -25, -48, 88, -67, 0, 67, -88, 48, 25, -81, 81, -25, -48, 88, -67, 84, -48, -8, 62,
+    -88, 77, -33, -25, 73, -89, 67, -17, -41, 81, -87, 55, 87, -67, 33, 8, -48, 77, -89, 81, -55,
+    17, 25, -62, 84, -88, 73, -41, 88, -81, 67, -48, 25, 0, -25, 48, -67, 81, -88, 88, -81, 67,
+    -48, 25, 89, -88, 87, -84, 81, -77, 73, -67, 62, -55, 48, -41, 33, -25, 17, -8,
+];
+pub(crate) static FLIPADST16_KW: [i16; 256] = [
+    89, 88, 87, 84, 81, 77, 73, 67, 62, 55, 48, 41, 33, 25, 17, 8, 88, 81, 67, 48, 25, 0, -25, -48,
+    -67, -81, -88, -88, -81, -67, -48, -25, 87, 67, 33, -8, -48, -77, -89, -81, -55, -17, 25, 62,
+    84, 88, 73, 41, 84, 48, -8, -62, -88, -77, -33, 25, 73, 89, 67, 17, -41, -81, -87, -55, 81, 25,
+    -48, -88, -67, 0, 67, 88, 48, -25, -81, -81, -25, 48, 88, 67, 77, 0, -77, -77, 0, 77, 77, 0,
+    -77, -77, 0, 77, 77, 0, -77, -77, 73, -25, -89, -33, 67, 77, -17, -88, -41, 62, 81, -8, -87,
+    -48, 55, 84, 67, -48, -81, 25, 88, 0, -88, -25, 81, 48, -67, -67, 48, 81, -25, -88, 62, -67,
+    -55, 73, 48, -77, -41, 81, 33, -84, -25, 87, 17, -88, -8, 89, 55, -81, -17, 89, -25, -77, 62,
+    48, -84, -8, 88, -33, -73, 67, 41, -87, 48, -88, 25, 67, -81, 0, 81, -67, -25, 88, -48, -48,
+    88, -25, -67, 81, 41, -88, 62, 17, -81, 77, -8, -67, 87, -33, -48, 89, -55, -25, 84, -73, 33,
+    -81, 84, -41, -25, 77, -87, 48, 17, -73, 88, -55, -8, 67, -89, 62, 25, -67, 88, -81, 48, 0,
+    -48, 81, -88, 67, -25, -25, 67, -88, 81, -48, 17, -48, 73, -87, 88, -77, 55, -25, -8, 41, -67,
+    84, -89, 81, -62, 33, 8, -25, 41, -55, 67, -77, 84, -88, 89, -87, 81, -73, 62, -48, 33, -17,
+];
+
 /// Full size-32 inverse DCT-II kernel `K32[in*32 + out]` for the flat butterfly.
 #[rustfmt::skip]
 pub(crate) static DCT32_DENSE_KERNEL: [i32; 1024] = [
@@ -894,10 +1023,39 @@ pub(crate) static DCT32_DENSE_KERNEL: [i32; 1024] = [
        4, -13,  22, -30,  39, -47,  54, -61,  67, -73,  78, -82,  85, -88,  90, -90,  90, -90,  88, -85,  82, -78,  73, -67,  61, -54,  47, -39,  30, -22,  13,  -4,
 ];
 
+// Output-major, parity-grouped re-layout of DCT32_DENSE_KERNEL so the
+// coefficients consumed together by `dct32_flat_bylane` (fixed output m, the
+// taps for that radix-2 leaf) are contiguous -> one bulk load + by-lane MAC
+// instead of a broadcast load per coefficient. Same values as the dense kernel.
+pub(crate) static DCT32_KB: [i32; 256] = [
+    90, 90, 88, 85, 82, 78, 73, 67, 61, 54, 47, 39, 30, 22, 13, 4, 90, 82, 67, 47, 22, -4, -30,
+    -54, -73, -85, -90, -88, -78, -61, -39, -13, 88, 67, 30, -13, -54, -82, -90, -78, -47, -4, 39,
+    73, 90, 85, 61, 22, 85, 47, -13, -67, -90, -73, -22, 39, 82, 88, 54, -4, -61, -90, -78, -30,
+    82, 22, -54, -90, -61, 13, 78, 85, 30, -47, -90, -67, 4, 73, 88, 39, 78, -4, -82, -73, 13, 85,
+    67, -22, -88, -61, 30, 90, 54, -39, -90, -47, 73, -30, -90, -22, 78, 67, -39, -90, -13, 82, 61,
+    -47, -88, -4, 85, 54, 67, -54, -78, 39, 85, -22, -90, 4, 90, 13, -88, -30, 82, 47, -73, -61,
+    61, -73, -47, 82, 30, -88, -13, 90, -4, -90, 22, 85, -39, -78, 54, 67, 54, -85, -4, 88, -47,
+    -61, 82, 13, -90, 39, 67, -78, -22, 90, -30, -73, 47, -90, 39, 54, -90, 30, 61, -88, 22, 67,
+    -85, 13, 73, -82, 4, 78, 39, -88, 73, -4, -67, 90, -47, -30, 85, -78, 13, 61, -90, 54, 22, -82,
+    30, -78, 90, -61, 4, 54, -88, 82, -39, -22, 73, -90, 67, -13, -47, 85, 22, -61, 85, -90, 73,
+    -39, -4, 47, -78, 90, -82, 54, -13, -30, 67, -88, 13, -39, 61, -78, 88, -90, 85, -73, 54, -30,
+    4, 22, -47, 67, -82, 90, 4, -13, 22, -30, 39, -47, 54, -61, 67, -73, 78, -82, 85, -88, 90, -90,
+];
+pub(crate) static DCT32_KD: [i32; 64] = [
+    90, 87, 80, 70, 57, 43, 26, 9, 87, 57, 9, -43, -80, -90, -70, -26, 80, 9, -70, -87, -26, 57,
+    90, 43, 70, -43, -87, 9, 90, 26, -80, -57, 57, -80, -26, 90, -9, -87, 43, 70, 43, -90, 57, 26,
+    -87, 70, 9, -80, 26, -70, 90, -80, 43, 9, -57, 87, 9, -26, 43, -57, 70, -80, 87, -90,
+];
+pub(crate) static DCT32_KF: [i32; 16] = [
+    89, 75, 50, 18, 75, -18, -89, -50, 50, -89, 18, 75, 18, -50, 75, -89,
+];
+pub(crate) static DCT32_KH: [i32; 4] = [83, 35, 35, -83];
+pub(crate) static DCT32_KG: [i32; 4] = [64, 64, 64, -64];
+
 #[inline(always)]
 fn inv_dct16_simd4<B: DctSimd4>(v: &mut [B::V; 16]) {
     let s = *v;
-    crate::itx_1d::dct16_flat::<B::V>(|j| s[j], |m, x| v[m] = x);
+    crate::itx_1d::dct16_flat_bylane::<B::V>(|j| s[j], |m, x| v[m] = x);
 }
 
 #[inline(always)]
@@ -1012,6 +1170,43 @@ fn process_row_group_itx_x4<B: DctSimd4, const S: usize>(
     }
 }
 
+#[inline(always)]
+fn process_row_group_itx_wide_x8<B: DctSimd4, const W: usize, const H: usize>(
+    coeff: &[i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    y: usize,
+    kind: usize,
+) {
+    use crate::itx_1d::DctWide;
+    let s: [<B::Wide as DctWide>::In; W] =
+        core::array::from_fn(|x| unsafe { B::Wide::load8_narrow(coeff, y + x * H) });
+    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| {
+        let l = unsafe { B::Wide::to_array8(acc) };
+        for k in 0..8 {
+            tmp[(y + k) * ITX_TMP_STRIDE + m] = l[k];
+        }
+    };
+    match (W, kind) {
+        (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], store),
+        (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], store),
+        (16, TX_KIND_ADST) => {
+            crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], store, &ADST16_KW, false)
+        }
+        (16, TX_KIND_FLIPADST) => {
+            crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], store, &FLIPADST16_KW, false)
+        }
+        (8, TX_KIND_DCT) => crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &DCT8_KW, false),
+        (8, TX_KIND_ADST) => {
+            crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &ADST8_KW, false)
+        }
+        (8, TX_KIND_FLIPADST) => {
+            crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &ADST8_KW, true)
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[inline(always)]
 fn itx_dequant_rows_simd4<B: DctSimd4, const N: usize, const S: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1030,18 +1225,28 @@ fn itx_dequant_rows_simd4<B: DctSimd4, const N: usize, const S: usize>(
     let coeff = &mut coeff[..N];
     let off = LAST_EOB_PER_COL.offset[tx] as usize;
     let last_eob = &LAST_EOB_PER_COL.table[off..];
-    let mut ei = 0usize;
-    let mut y = 0usize;
 
-    loop {
-        process_row_group_itx_x4::<B, S>(coeff, tmp, y, first_kind);
-        y += 4;
-
-        if eob > last_eob[ei] as i32 {
-            ei += 1;
-        } else {
+    // Active 4-column groups (eob early-out), hoisted ahead of the transform so
+    // the row pass can run 8 columns at a time where a wide kernel exists.
+    let mut ngrp = 0usize;
+    while ngrp < S / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
             break;
         }
+    }
+    let ncols = ngrp * 4;
+
+    let mut y = 0usize;
+    if S == 16 || S == 8 {
+        while y + 8 <= ncols {
+            process_row_group_itx_wide_x8::<B, S, S>(coeff, tmp, y, first_kind);
+            y += 8;
+        }
+    }
+    while y + 4 <= ncols {
+        process_row_group_itx_x4::<B, S>(coeff, tmp, y, first_kind);
+        y += 4;
     }
 
     while y < S {
@@ -1079,6 +1284,44 @@ fn itx_1d_x4<B: DctSimd4, const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: us
     }
 }
 
+#[inline(always)]
+fn itx_1d_wide_x8<B: DctSimd4, const S: usize>(
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    x: usize,
+    kind: usize,
+) -> bool {
+    use crate::itx_1d::DctWide;
+    if !(S == 16 || S == 8) {
+        return false;
+    }
+    let s: [<B::Wide as DctWide>::In; S] = {
+        let src: &[i32] = &tmp[..];
+        core::array::from_fn(|j| unsafe { B::Wide::load8_narrow(src, x + j * ITX_TMP_STRIDE) })
+    };
+    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
+        B::Wide::store8(tmp, x + m * ITX_TMP_STRIDE, acc)
+    };
+    match (S, kind) {
+        (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], store),
+        (16, TX_KIND_ADST) => {
+            crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], store, &ADST16_KW, false)
+        }
+        (16, TX_KIND_FLIPADST) => {
+            crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], store, &FLIPADST16_KW, false)
+        }
+        (8, TX_KIND_DCT) => crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &DCT8_KW, false),
+        (8, TX_KIND_ADST) => {
+            crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &ADST8_KW, false)
+        }
+        (8, TX_KIND_FLIPADST) => {
+            crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &ADST8_KW, true)
+        }
+        _ => return false,
+    }
+    true
+}
+
+#[inline(always)]
 pub(crate) fn itx_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1123,6 +1366,14 @@ pub(crate) fn itx_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usize
     );
 
     let mut x = 0usize;
+    if S == 8 || S == 16 {
+        while x + 8 <= S {
+            if !itx_1d_wide_x8::<B, S>(tmp, x, second_kind) {
+                break;
+            }
+            x += 8;
+        }
+    }
     while x + 4 <= S {
         itx_1d_x4::<B, S>(tmp, x, second_kind);
         x += 4;
@@ -1148,18 +1399,39 @@ fn dct_1d_x4<B: DctSimd4, const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: us
         }
         16 => {
             let s = load_1d_x4::<B, 16>(tmp, x, ITX_TMP_STRIDE);
-            crate::itx_1d::dct16_flat::<B::V>(
+            crate::itx_1d::dct16_flat_bylane::<B::V>(
                 |j| s[j],
                 |m, v| unsafe { B::store(tmp, x + m * ITX_TMP_STRIDE, v) },
             );
         }
         32 => {
             let s = load_1d_x4::<B, 32>(tmp, x, ITX_TMP_STRIDE);
-            crate::itx_1d::dct32_flat::<B::V>(
+            crate::itx_1d::dct32_flat_bylane::<B::V>(
                 |j| s[j],
                 |m, v| unsafe { B::store(tmp, x + m * ITX_TMP_STRIDE, v) },
             );
         }
+        _ => unreachable!(),
+    }
+}
+
+/// s16 8-wide second-pass column transform for the 16/32 sizes: loads 8 columns
+/// per row from the i32 scratch (narrowing to s16), runs the widening-MAC DCT,
+/// stores the s32 results back. Bit-exact to `dct_1d_x4`.
+#[inline(always)]
+fn dct_1d_wide_x8<W: crate::itx_1d::DctWide, const S: usize>(
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    x: usize,
+) {
+    let stride = ITX_TMP_STRIDE;
+    let s: [W::In; S] = {
+        let src: &[i32] = &tmp[..];
+        core::array::from_fn(|j| unsafe { W::load8_narrow(src, x + j * stride) })
+    };
+    let store = |m: usize, acc: W::Acc| unsafe { W::store8(tmp, x + m * stride, acc) };
+    match S {
+        16 => crate::itx_1d::dct16_wide::<W>(|j| s[j], store),
+        32 => crate::itx_1d::dct32_wide::<W>(|j| s[j], store),
         _ => unreachable!(),
     }
 }
@@ -1199,6 +1471,12 @@ pub(crate) fn idct_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usiz
     }
 
     let mut x = 0usize;
+    if S == 16 || S == 32 {
+        while x + 8 <= S {
+            dct_1d_wide_x8::<B::Wide, S>(tmp, x);
+            x += 8;
+        }
+    }
     while x + 4 <= S {
         dct_1d_x4::<B, S>(tmp, x);
         x += 4;
@@ -1447,6 +1725,7 @@ fn process_row_group_rect_x4<B: DctSimd4, const W: usize, const H: usize>(
 
 /// SIMD row pass for the non-rect2 case (mirrors `idct_dequant_rows_dct_simd4`
 /// with separate `W`/`H`).
+#[inline(always)]
 fn idct_dequant_rows_rect_dct_simd4<B: DctSimd4, const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1463,17 +1742,26 @@ fn idct_dequant_rows_rect_dct_simd4<B: DctSimd4, const N: usize, const W: usize,
     let coeff = &mut coeff[..N];
     let off = LAST_EOB_PER_COL.offset[tx] as usize;
     let last_eob = &LAST_EOB_PER_COL.table[off..];
-    let mut ei = 0usize;
-    let mut y = 0usize;
 
-    loop {
-        process_row_group_rect_x4::<B, W, H>(coeff, tmp, y);
-        y += 4;
-        if eob > last_eob[ei] as i32 {
-            ei += 1;
-        } else {
+    let mut ngrp = 0usize;
+    while ngrp < H / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
             break;
         }
+    }
+    let nrows = ngrp * 4;
+
+    let mut y = 0usize;
+    if W == 8 || W == 16 || W == 32 {
+        while y + 8 <= nrows {
+            process_row_group_itx_wide_x8::<B, W, H>(coeff, tmp, y, TX_KIND_DCT);
+            y += 8;
+        }
+    }
+    while y + 4 <= nrows {
+        process_row_group_rect_x4::<B, W, H>(coeff, tmp, y);
+        y += 4;
     }
 
     while y < H {
@@ -1542,6 +1830,15 @@ fn idct_dequant_rows_rect_dct_scalar<const N: usize, const W: usize, const H: us
 #[inline(always)]
 fn rect_col_pass<B: DctSimd4, const W: usize, const H: usize>(tmp: &mut [i32; ITX_TMP_PIXELS]) {
     let mut x = 0usize;
+    // Reuses the same widening-MAC column transform validated in the square
+    // path (`dct_1d_wide_x8::<_, H>` is identical codegen); only the column
+    // count W differs.
+    if H == 16 || H == 32 {
+        while x + 8 <= W {
+            dct_1d_wide_x8::<B::Wide, H>(tmp, x);
+            x += 8;
+        }
+    }
     while x + 4 <= W {
         dct_1d_x4::<B, H>(tmp, x);
         x += 4;
@@ -1553,6 +1850,7 @@ fn rect_col_pass<B: DctSimd4, const W: usize, const H: usize>(tmp: &mut [i32; IT
 }
 
 /// SIMD-structured rectangular DCT_DCT core (used by the NEON/SSE backends).
+#[inline(always)]
 pub(crate) fn idct_dequant_rect_simd4_core<
     B: DctSimd4,
     const N: usize,
@@ -1569,27 +1867,21 @@ pub(crate) fn idct_dequant_rect_simd4_core<
     row_clip_max: i32,
 ) {
     if is_rect2 {
-        idct_dequant_rows_rect_dct_scalar::<N, W, H>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    } else {
-        idct_dequant_rows_rect_dct_simd4::<B, N, W, H>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
+        // Prescale in place so the SIMD row pass serves rect2 too (the column
+        // pass was already SIMD). Bit-exact to the scalar gather-prescale.
+        for v in coeff[..W * H].iter_mut() {
+            *v = (*v * 181 + 128) >> 8;
+        }
     }
+    idct_dequant_rows_rect_dct_simd4::<B, N, W, H>(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+    );
     rect_col_pass::<B, W, H>(tmp);
 }
 
@@ -1620,20 +1912,8 @@ pub(crate) fn idct_dequant_rect_scalar_core<const N: usize, const W: usize, cons
     }
 }
 
-// ===========================================================================
-// Non-square (rectangular) ADST / mixed-type cores (DCT / ADST / FLIPADST in
-// either dimension). These mirror the square `itx_dequant_simd4_core`,
-// generalized to independent row width `W` and column height `H`. As in the
-// square case, the rect2 sizes go fully scalar; the non-rect2 sizes use
-// kind-aware SIMD rows and an `H`-point 4-wide column pass. ADST/FLIPADST are
-// only defined for dims <= 16, so `W` and `H` are always in {4, 8, 16} here
-// (which is exactly what `apply_tx*_simd4` and `itx_1d_x4` support).
-// ===========================================================================
-
-/// One group of 4 rows: a kind-aware `W`-point transform across the gathered
-/// lanes (column-major gather at stride `H`).
 #[inline(always)]
-unsafe fn process_row_group_itx_rect_x4<B: DctSimd4, const W: usize, const H: usize>(
+fn process_row_group_itx_rect_x4<B: DctSimd4, const W: usize, const H: usize>(
     coeff: &[i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     y: usize,
@@ -1660,6 +1940,7 @@ unsafe fn process_row_group_itx_rect_x4<B: DctSimd4, const W: usize, const H: us
 }
 
 /// Kind-aware SIMD row pass (non-rect2), generalized to `W`/`H`.
+#[inline(always)]
 fn itx_dequant_rows_rect_simd4<B: DctSimd4, const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1678,19 +1959,28 @@ fn itx_dequant_rows_rect_simd4<B: DctSimd4, const N: usize, const W: usize, cons
     let coeff = &mut coeff[..N];
     let off = LAST_EOB_PER_COL.offset[tx] as usize;
     let last_eob = &LAST_EOB_PER_COL.table[off..];
-    let mut ei = 0usize;
-    let mut y = 0usize;
 
-    loop {
-        unsafe {
-            process_row_group_itx_rect_x4::<B, W, H>(coeff, tmp, y, first_kind);
-        }
-        y += 4;
-        if eob > last_eob[ei] as i32 {
-            ei += 1;
-        } else {
+    // Active 4-row groups (eob early-out), hoisted so the row pass can run a
+    // `W`-point transform across 8 rows at a time where a wide kernel exists.
+    let mut ngrp = 0usize;
+    while ngrp < H / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
             break;
         }
+    }
+    let nrows = ngrp * 4;
+
+    let mut y = 0usize;
+    if W == 8 || W == 16 {
+        while y + 8 <= nrows {
+            process_row_group_itx_wide_x8::<B, W, H>(coeff, tmp, y, first_kind);
+            y += 8;
+        }
+    }
+    while y + 4 <= nrows {
+        process_row_group_itx_rect_x4::<B, W, H>(coeff, tmp, y, first_kind);
+        y += 4;
     }
 
     while y < H {
@@ -1765,6 +2055,7 @@ pub(crate) fn itx_dequant_rect_scalar_core<const N: usize, const W: usize, const
 
 /// SIMD-structured kind-aware rectangular core (used by NEON/SSE). Rect2 goes
 /// fully scalar, exactly as the square `itx_dequant_simd4_core` does.
+#[inline(always)]
 pub(crate) fn itx_dequant_rect_simd4_core<
     B: DctSimd4,
     const N: usize,
@@ -1785,20 +2076,14 @@ pub(crate) fn itx_dequant_rect_simd4_core<
     debug_assert!(W == 4 || W == 8 || W == 16);
     debug_assert!(H == 4 || H == 8 || H == 16);
 
+    // rect2 (2:1) blocks apply a 181/256 prescale to every coefficient before
+    // the row transform. Doing it in place lets the same SIMD row/column passes
+    // serve both cases (the scalar reference folds it into the row gather; the
+    // result is identical, and the prescaled value still fits s16).
     if is_rect2 {
-        itx_dequant_rect_scalar_core::<N, W, H>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        );
-        return;
+        for v in coeff[..W * H].iter_mut() {
+            *v = (*v * 181 + 128) >> 8;
+        }
     }
 
     itx_dequant_rows_rect_simd4::<B, N, W, H>(
@@ -1813,6 +2098,16 @@ pub(crate) fn itx_dequant_rect_simd4_core<
     );
 
     let mut x = 0usize;
+    // Column pass: H-point transform down each of the W columns. Reuses the same
+    // widening kernels as the square path (only the column count W differs).
+    if H == 8 || H == 16 {
+        while x + 8 <= W {
+            if !itx_1d_wide_x8::<B, H>(tmp, x, second_kind) {
+                break;
+            }
+            x += 8;
+        }
+    }
     while x + 4 <= W {
         itx_1d_x4::<B, H>(tmp, x, second_kind);
         x += 4;

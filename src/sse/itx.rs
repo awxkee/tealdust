@@ -66,12 +66,103 @@ impl crate::itx_1d::DctLane for SseI32x4 {
         // SSE has no integer FMA: multiply-low then add.
         SseI32x4(unsafe { _mm_add_epi32(self.0, _mm_mullo_epi32(x.0, k.0)) })
     }
+    type Coeffs = __m128i;
+    #[inline(always)]
+    fn load_coeffs(table: &[i32], idx: usize) -> __m128i {
+        // SAFETY: callers index a 4-wide group within the kernel tables.
+        unsafe { _mm_loadu_si128(table.as_ptr().add(idx) as *const __m128i) }
+    }
+    #[inline(always)]
+    fn mul_add_lane<const LANE: i32>(self, x: Self, c: __m128i) -> Self {
+        // SSE has no by-lane multiply: broadcast lane LANE, then mul-add.
+        let bc = unsafe {
+            match LANE {
+                0 => _mm_shuffle_epi32(c, 0x00),
+                1 => _mm_shuffle_epi32(c, 0x55),
+                2 => _mm_shuffle_epi32(c, 0xAA),
+                _ => _mm_shuffle_epi32(c, 0xFF),
+            }
+        };
+        SseI32x4(unsafe { _mm_add_epi32(self.0, _mm_mullo_epi32(x.0, bc)) })
+    }
+}
+
+pub(crate) struct SseWide;
+
+impl crate::itx_1d::DctWide for SseWide {
+    type In = __m128i;
+    type Acc = (__m128i, __m128i);
+    type Coeffs = __m128i;
+    #[inline(always)]
+    fn zero() -> Self::Acc {
+        unsafe { (_mm_setzero_si128(), _mm_setzero_si128()) }
+    }
+    #[inline(always)]
+    fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+        unsafe { (_mm_add_epi32(a.0, b.0), _mm_add_epi32(a.1, b.1)) }
+    }
+    #[inline(always)]
+    fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+        unsafe { (_mm_sub_epi32(a.0, b.0), _mm_sub_epi32(a.1, b.1)) }
+    }
+    #[inline(always)]
+    fn load_coeffs(table: &[i16], idx: usize) -> __m128i {
+        unsafe { _mm_loadu_si128(table.as_ptr().add(idx) as *const __m128i) }
+    }
+    #[inline(always)]
+    fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: __m128i, c: __m128i) -> Self::Acc {
+        unsafe {
+            // broadcast coefficient lane LANE (i16) to i32x4, sign-extended
+            let raw = match LANE {
+                0 => _mm_extract_epi16(c, 0),
+                1 => _mm_extract_epi16(c, 1),
+                2 => _mm_extract_epi16(c, 2),
+                3 => _mm_extract_epi16(c, 3),
+                4 => _mm_extract_epi16(c, 4),
+                5 => _mm_extract_epi16(c, 5),
+                6 => _mm_extract_epi16(c, 6),
+                _ => _mm_extract_epi16(c, 7),
+            };
+            let k = _mm_set1_epi32((raw as i16) as i32);
+            let xlo = _mm_unpacklo_epi16(x, _mm_setzero_si128());
+            let xhi = _mm_unpackhi_epi16(x, _mm_setzero_si128());
+            (
+                _mm_add_epi32(acc.0, _mm_madd_epi16(xlo, k)),
+                _mm_add_epi32(acc.1, _mm_madd_epi16(xhi, k)),
+            )
+        }
+    }
+    #[inline(always)]
+    unsafe fn load8_narrow(src: &[i32], off: usize) -> __m128i {
+        unsafe {
+            let lo = _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i);
+            let hi = _mm_loadu_si128(src.as_ptr().add(off + 4) as *const __m128i);
+            _mm_packs_epi32(lo, hi)
+        }
+    }
+    #[inline(always)]
+    unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
+        unsafe {
+            _mm_storeu_si128(dst.as_mut_ptr().add(off) as *mut __m128i, acc.0);
+            _mm_storeu_si128(dst.as_mut_ptr().add(off + 4) as *mut __m128i, acc.1);
+        }
+    }
+    #[inline(always)]
+    unsafe fn to_array8(acc: Self::Acc) -> [i32; 8] {
+        unsafe {
+            let mut a = [0i32; 8];
+            _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, acc.0);
+            _mm_storeu_si128(a.as_mut_ptr().add(4) as *mut __m128i, acc.1);
+            a
+        }
+    }
 }
 
 pub(crate) struct SseDct2d;
 
 impl DctSimd4 for SseDct2d {
     type V = SseI32x4;
+    type Wide = SseWide;
 
     #[inline(always)]
     unsafe fn zero() -> Self::V {
