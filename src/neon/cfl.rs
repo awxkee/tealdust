@@ -18,10 +18,6 @@ fn store_u8x8(a: &mut [u8; 8], v: uint8x8_t) {
     unsafe { vst1_u8(a.as_mut_ptr(), v) };
 }
 
-/// Form 8 mean-removed AC lanes:
-///
-///     ac = (sum2x2 << 1) - dc0
-///
 /// For 8-bit this fits comfortably in i16.
 #[inline]
 #[target_feature(enable = "neon")]
