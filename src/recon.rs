@@ -268,8 +268,14 @@ pub(crate) fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
 }
 
 #[inline(always)]
-fn cap<const N: u32>(x: i8) -> u32 {
-    (x as u8 as u32).min(N)
+fn lvl5(x: i8) -> u32 {
+    debug_assert!((0..=5).contains(&x));
+    x as u8 as u32
+}
+
+#[inline(always)]
+fn lvl3(x: i8) -> u32 {
+    (x as u8 as u32).min(3)
 }
 
 #[inline(always)]
@@ -305,7 +311,10 @@ fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
     let d = base[2];
     let e = base[2 * stride];
 
-    let hi = cap::<5>(a) + cap::<5>(b) + cap::<5>(c);
+    // Regular coefficient context stores levels capped to 5. That makes the
+    // common cap::<5>() path free; only the cap-to-3 low-frequency path still
+    // needs min(3).
+    let hi = lvl5(a) + lvl5(b) + lvl5(c);
 
     let lo_freq = xy < 4;
 
@@ -314,7 +323,7 @@ fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
     let lim;
 
     if lo_freq {
-        lo = cap::<5>(a) + cap::<5>(b) + cap::<5>(c) + cap::<5>(d) + cap::<5>(e);
+        lo = lvl5(a) + lvl5(b) + lvl5(c) + lvl5(d) + lvl5(e);
 
         if xy == 0 {
             offset = 0;
@@ -329,7 +338,7 @@ fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
 
         *hi_mag = if xy > 0 { 7 } else { 0 } + ((hi + 1) >> 1).min(6);
     } else {
-        lo = cap::<3>(a) + cap::<3>(b) + cap::<3>(c) + cap::<3>(d) + cap::<3>(e);
+        lo = lvl3(a) + lvl3(b) + lvl3(c) + lvl3(d) + lvl3(e);
 
         offset = if xy < 6 {
             0
@@ -354,14 +363,14 @@ fn get_lo_ctx_luma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
     let c = base[2];
     let d = base[3];
 
-    let hi = cap::<5>(a) + cap::<5>(b) + cap::<5>(c);
+    let hi = lvl5(a) + lvl5(b) + lvl5(c);
 
     let lo;
     let offset;
     let lim;
 
     if xy < 2 {
-        lo = cap::<5>(a) + cap::<5>(b) + cap::<3>(c) + cap::<3>(d) + cap::<3>(e);
+        lo = lvl5(a) + lvl5(b) + lvl3(c) + lvl3(d) + lvl3(e);
 
         if xy == 0 {
             offset = 21;
@@ -373,7 +382,7 @@ fn get_lo_ctx_luma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
 
         *hi_mag = 7 + ((hi + 1) >> 1).min(6);
     } else {
-        lo = cap::<3>(a) + cap::<3>(b) + cap::<3>(c) + cap::<3>(d) + cap::<3>(e);
+        lo = lvl3(a) + lvl3(b) + lvl3(c) + lvl3(d) + lvl3(e);
 
         offset = 15;
         lim = 4;
@@ -390,12 +399,12 @@ fn get_lo_ctx_chroma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, plane: i32, stri
     let b = base[stride];
     let c = base[stride + 1];
 
-    let hi = cap::<5>(a) + cap::<5>(b) + cap::<5>(c);
+    let hi = lvl5(a) + lvl5(b) + lvl5(c);
 
     let lo = if xy == 0 {
         hi
     } else {
-        cap::<3>(a) + cap::<3>(b) + cap::<3>(c)
+        lvl3(a) + lvl3(b) + lvl3(c)
     };
 
     *hi_mag = ((hi + 1) >> 1).min(3);
@@ -410,13 +419,9 @@ fn get_lo_ctx_chroma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -
     let a = base[1];
     let b = base[stride];
 
-    let hi = cap::<5>(a) + cap::<5>(b);
+    let hi = lvl5(a) + lvl5(b);
 
-    let lo = if xy == 0 {
-        hi
-    } else {
-        cap::<3>(a) + cap::<3>(b)
-    };
+    let lo = if xy == 0 { hi } else { lvl3(a) + lvl3(b) };
 
     *hi_mag = ((hi + 1) >> 1).min(3);
 
@@ -731,19 +736,19 @@ pub(crate) fn decode_coefs(
     let eob_ctx = if chroma { 2 } else { (!p.intra) as usize };
 
     let mut eob: i32 = match tx2dszctx {
-        0 => msac.decode_symbol_adapt(coef.eob_bin_16(eob_ctx), 4) as i32,
-        1 => msac.decode_symbol_adapt(coef.eob_bin_32(eob_ctx), 5) as i32,
-        2 => msac.decode_symbol_adapt(coef.eob_bin_64(eob_ctx), 6) as i32,
-        3 => msac.decode_symbol_adapt(coef.eob_bin_128(eob_ctx), 7) as i32,
+        0 => msac.decode_symbol_adapt_n::<4>(coef.eob_bin_16(eob_ctx)) as i32,
+        1 => msac.decode_symbol_adapt_n::<5>(coef.eob_bin_32(eob_ctx)) as i32,
+        2 => msac.decode_symbol_adapt_n::<6>(coef.eob_bin_64(eob_ctx)) as i32,
+        3 => msac.decode_symbol_adapt_n::<7>(coef.eob_bin_128(eob_ctx)) as i32,
         4 => {
-            let mut e = msac.decode_symbol_adapt(coef.eob_bin_256(eob_ctx), 7) as i32;
+            let mut e = msac.decode_symbol_adapt_n::<7>(coef.eob_bin_256(eob_ctx)) as i32;
             if e == 7 {
                 e += msac.decode_bool_bypass() as i32;
             }
             e
         }
         5 => {
-            let mut e = msac.decode_symbol_adapt(coef.eob_bin_512(eob_ctx), 7) as i32;
+            let mut e = msac.decode_symbol_adapt_n::<7>(coef.eob_bin_512(eob_ctx)) as i32;
             if e == 7 {
                 e += msac.decode_bools_bypass(2) as i32;
                 if e == 10 {
@@ -753,7 +758,7 @@ pub(crate) fn decode_coefs(
             e
         }
         _ => {
-            let mut e = msac.decode_symbol_adapt(coef.eob_bin_1024(eob_ctx), 7) as i32;
+            let mut e = msac.decode_symbol_adapt_n::<7>(coef.eob_bin_1024(eob_ctx)) as i32;
             if e == 7 {
                 e += msac.decode_bools_bypass(2) as i32;
             }
@@ -1400,7 +1405,7 @@ pub(crate) fn decode_coefs(
         && !p.lossless
         && (p.layout == PixelLayout::I420 || t_dim.max < 8)
     {
-        let cctx = msac.decode_symbol_adapt(mode.cctx(), 6);
+        let cctx = msac.decode_symbol_adapt_n::<6>(mode.cctx());
         *txtp |= (cctx << 8) as u16;
     }
 
@@ -1430,9 +1435,9 @@ pub(crate) fn decode_coefs(
         let sz = (16 << tx2dszctx) - 1;
         let bob = sz - eob;
         let ctx = ((bob > 2 << tx2dszctx) as usize) + ((bob > 4 << tx2dszctx) as usize);
-        let mut tok = 1 + msac.decode_symbol_adapt(coef.bob_base_y_tok(sz_ctx, ctx), 2) as i32;
+        let mut tok = 1 + msac.decode_symbol_adapt_n::<2>(coef.bob_base_y_tok(sz_ctx, ctx)) as i32;
         if tok == 3 {
-            tok += msac.decode_symbol_adapt(coef.br_y_tok_idtx(sz_ctx, 0), 3) as i32;
+            tok += msac.decode_symbol_adapt_n::<3>(coef.br_y_tok_idtx(sz_ctx, 0)) as i32;
         }
         let shift = slh + 2;
         let mask = (4 << slh) - 1;
@@ -1450,10 +1455,10 @@ pub(crate) fn decode_coefs(
             let mut hr_ctx = 0u32;
             let ctx = get_lo_ctx_idtx(levels, off, &mut hr_ctx, stride);
             let mut tok =
-                msac.decode_symbol_adapt(coef.base_y_tok_idtx(sz_ctx, ctx as usize), 3) as i32;
+                msac.decode_symbol_adapt_n::<3>(coef.base_y_tok_idtx(sz_ctx, ctx as usize)) as i32;
             if tok == 3 {
-                tok +=
-                    msac.decode_symbol_adapt(coef.br_y_tok_idtx(sz_ctx, hr_ctx as usize), 3) as i32;
+                tok += msac.decode_symbol_adapt_n::<3>(coef.br_y_tok_idtx(sz_ctx, hr_ctx as usize))
+                    as i32;
             }
             cf[rc] = tok;
             levels[off] = tok as i8;
@@ -1542,9 +1547,8 @@ pub(crate) fn decode_coefs(
                 if eob >= hi_to_low_tx {
                     lim = 3;
                     if !chroma {
-                        tok = 1 + msac.decode_symbol_adapt(
+                        tok = 1 + msac.decode_symbol_adapt_n::<2>(
                             coef.eob_base_y_tok_hf(t_dim.ctx as usize, ctx_init as usize),
-                            2,
                         ) as i32;
                         hi_base = 1252;
                         hi_stride = 4;
@@ -1553,7 +1557,7 @@ pub(crate) fn decode_coefs(
                         lo_nsym = 3;
                     } else {
                         tok = 1 + msac
-                            .decode_symbol_adapt(coef.eob_base_uv_tok_hf(ctx_init as usize), 2)
+                            .decode_symbol_adapt_n::<2>(coef.eob_base_uv_tok_hf(ctx_init as usize))
                             as i32;
                         hi_base = 4508;
                         hi_stride = 4;
@@ -1565,9 +1569,8 @@ pub(crate) fn decode_coefs(
                 } else {
                     lim = 5;
                     if !chroma {
-                        tok = 1 + msac.decode_symbol_adapt(
+                        tok = 1 + msac.decode_symbol_adapt_n::<4>(
                             coef.eob_base_y_tok_lf(t_dim.ctx as usize, ctx_init as usize),
-                            4,
                         ) as i32;
                         hi_base = 4080;
                         hi_stride = 4;
@@ -1576,7 +1579,7 @@ pub(crate) fn decode_coefs(
                         lo_nsym = 5;
                     } else {
                         tok = 1 + msac
-                            .decode_symbol_adapt(coef.eob_base_uv_tok_lf(ctx_init as usize), 4)
+                            .decode_symbol_adapt_n::<4>(coef.eob_base_uv_tok_lf(ctx_init as usize))
                             as i32;
                         hi_base = 0;
                         hi_stride = 0;
@@ -1607,14 +1610,15 @@ pub(crate) fn decode_coefs(
                 if tok == lim && hi_cdf_valid {
                     let hi_idx = if lim == 5 { 7 } else { 0 };
                     let o = hi_base + hi_idx * hi_stride;
-                    tok += msac.decode_symbol_adapt(&mut coef.data[o..o + 4], 3) as i32;
+                    tok += msac.decode_symbol_adapt_n::<3>(&mut coef.data[o..o + 4]) as i32;
                 }
                 tcq_state = tcq_next_state(tcq_state, tok);
                 cf[if is_stx { eob as usize } else { rc }] = tok;
+                let level_tok = tok.min(5) as i8;
                 if $tx_cl == 0 {
-                    levels[rc] = tok as i8;
+                    levels[rc] = level_tok;
                 } else {
-                    levels[x * stride + y] = tok as i8;
+                    levels[x * stride + y] = level_tok;
                 }
 
                 // ac tokens (eob-1 down to 1)
@@ -1661,32 +1665,62 @@ pub(crate) fn decode_coefs(
                     } else {
                         y as u32
                     };
-                    let ctx = get_lo_ctx(levels, off, $tx_cl, &mut hr_ctx, xy_val, p.plane, stride);
+                    let base = &levels[off..];
+                    let ctx = if !chroma {
+                        if $tx_cl == 0 {
+                            get_lo_ctx_luma_2d(base, &mut hr_ctx, xy_val, stride)
+                        } else {
+                            get_lo_ctx_luma_1d(base, &mut hr_ctx, xy_val, stride)
+                        }
+                    } else if $tx_cl == 0 {
+                        get_lo_ctx_chroma_2d(base, &mut hr_ctx, xy_val, p.plane, stride)
+                    } else {
+                        get_lo_ctx_chroma_1d(base, &mut hr_ctx, xy_val, stride)
+                    };
                     let tcq_bit = ((tcq_state & 2) >> 1) as u32;
                     let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
                     let o = lo_base + lo_cdf_idx * lo_stride;
-                    let mut tok =
-                        msac.decode_symbol_adapt(&mut coef.data[o..o + lo_stride], lo_nsym) as i32;
+                    let mut tok = if lo_nsym == 3 {
+                        msac.decode_symbol_adapt_n::<3>(&mut coef.data[o..o + 4]) as i32
+                    } else {
+                        debug_assert_eq!(lo_nsym, 5);
+                        msac.decode_symbol_adapt_n::<5>(&mut coef.data[o..o + 8]) as i32
+                    };
                     if tok == lim && hi_cdf_valid {
                         let o2 = hi_base + hr_ctx as usize * hi_stride;
-                        tok += msac.decode_symbol_adapt(&mut coef.data[o2..o2 + 4], 3) as i32;
+                        tok += msac.decode_symbol_adapt_n::<3>(&mut coef.data[o2..o2 + 4]) as i32;
                     }
                     tcq_state = tcq_next_state(tcq_state, tok);
-                    levels[off] = tok as i8;
+                    levels[off] = tok.min(5) as i8;
                     cf[if is_stx { i as usize } else { rc }] = tok;
                     i -= 1;
                 }
 
                 // dc token
                 let mut hr_ctx = 0u32;
-                let ctx = get_lo_ctx(levels, 0, $tx_cl, &mut hr_ctx, 0, p.plane, stride);
+                let ctx = if !chroma {
+                    if $tx_cl == 0 {
+                        get_lo_ctx_luma_2d(levels, &mut hr_ctx, 0, stride)
+                    } else {
+                        get_lo_ctx_luma_1d(levels, &mut hr_ctx, 0, stride)
+                    }
+                } else if $tx_cl == 0 {
+                    get_lo_ctx_chroma_2d(levels, &mut hr_ctx, 0, p.plane, stride)
+                } else {
+                    get_lo_ctx_chroma_1d(levels, &mut hr_ctx, 0, stride)
+                };
                 let tcq_bit = ((tcq_state & 2) >> 1) as u32;
                 let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
                 let o = lo_base + lo_cdf_idx * lo_stride;
-                dc_tok = msac.decode_symbol_adapt(&mut coef.data[o..o + lo_stride], lo_nsym) as i32;
+                dc_tok = if lo_nsym == 3 {
+                    msac.decode_symbol_adapt_n::<3>(&mut coef.data[o..o + 4]) as i32
+                } else {
+                    debug_assert_eq!(lo_nsym, 5);
+                    msac.decode_symbol_adapt_n::<5>(&mut coef.data[o..o + 8]) as i32
+                };
                 if dc_tok == lim && hi_cdf_valid {
                     let o2 = hi_base + hr_ctx as usize * hi_stride;
-                    dc_tok += msac.decode_symbol_adapt(&mut coef.data[o2..o2 + 4], 3) as i32;
+                    dc_tok += msac.decode_symbol_adapt_n::<3>(&mut coef.data[o2..o2 + 4]) as i32;
                 }
 
                 // sign & dequant for AC
@@ -1781,13 +1815,13 @@ pub(crate) fn decode_coefs(
             _ => unreachable!(),
         }
     } else if chroma {
-        dc_tok = 1 + msac.decode_symbol_adapt(coef.eob_base_uv_tok_lf(0), 4) as i32;
+        dc_tok = 1 + msac.decode_symbol_adapt_n::<4>(coef.eob_base_uv_tok_lf(0)) as i32;
     } else {
-        dc_tok =
-            1 + msac.decode_symbol_adapt(coef.eob_base_y_tok_lf(t_dim.ctx as usize, 0), 4) as i32;
+        dc_tok = 1 + msac.decode_symbol_adapt_n::<4>(coef.eob_base_y_tok_lf(t_dim.ctx as usize, 0))
+            as i32;
         if dc_tok == 5 {
             let hi_idx = if tx_class == 0 { 0 } else { 7 };
-            dc_tok += msac.decode_symbol_adapt(coef.br_y_tok_lf(hi_idx), 3) as i32;
+            dc_tok += msac.decode_symbol_adapt_n::<3>(coef.br_y_tok_lf(hi_idx)) as i32;
         }
     }
 

@@ -472,6 +472,70 @@ impl<'a> MsacContext<'a> {
         }
     }
 
+    /// Fixed-symbol-count variant of [`decode_symbol_adapt`].
+    ///
+    /// This keeps the public safe slice interface, but removes the hot runtime
+    /// `match n_symbols`/`try_into` scaffolding at call sites where the symbol
+    /// count is known statically. The generated code is intentionally written
+    /// with a fixed maximum stack array instead of `[T; N + k]`, so it stays on
+    /// stable Rust without generic-const-expr requirements.
+    #[inline(always)]
+    pub(crate) fn decode_symbol_adapt_n<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
+        debug_assert!((1..=7).contains(&N));
+
+        if cdf.len() <= N {
+            return 0;
+        }
+
+        let min_prob = &MSAC_MIN_PROB[N - 1];
+        let c = (self.dif >> 48) as u32;
+        let r = self.rng >> 8;
+
+        let mut v_arr = [0u32; 9];
+        v_arr[0] = self.rng;
+
+        for i in 0..=N {
+            let p_raw = (cdf[i] | 127) as i32 - min_prob[i] as i32;
+            let p = p_raw.max(0) as u32;
+            v_arr[i + 1] = ((r * p) >> 10) << 3;
+        }
+
+        let mut mask = 0u32;
+        for i in 0..=N {
+            mask |= ((c < v_arr[i + 1]) as u32) << i;
+        }
+
+        let val_usize = (mask.trailing_ones() as usize).min(N);
+        let val = val_usize as u32;
+
+        let u = v_arr[val_usize];
+        let v = v_arr[val_usize + 1];
+
+        debug_assert!(u <= self.rng);
+        self.ctx_norm(self.dif - ((v as u64) << 48), u - v);
+
+        if self.allow_update_cdf {
+            let pc = cdf[N];
+            let count = (pc & 0xFF) as u8;
+
+            debug_assert!(count <= 32);
+
+            let rate =
+                MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
+
+            for cdf_i in cdf[..val_usize].iter_mut() {
+                *cdf_i = cdf_i.wrapping_add((32768u16 - *cdf_i) >> rate);
+            }
+            for cdf_i in cdf[val_usize..N].iter_mut() {
+                *cdf_i = cdf_i.wrapping_sub(*cdf_i >> rate);
+            }
+
+            cdf[N] = pc + u16::from(count < 32);
+        }
+
+        val
+    }
+
     #[inline]
     pub(crate) fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
         let bit = self.decode_bool_raw(cdf[0] as u32);
