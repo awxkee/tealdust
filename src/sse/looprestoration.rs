@@ -372,11 +372,9 @@ mod uv_fir_sse_tests {
             ns_wiener_uv_fir_run_scalar(
                 &mut a, &c_rows[2], co, &ctaps, &l_rows[2], lo, &ltaps, lstep, n,
             );
-            unsafe {
-                super::ns_wiener_uv_fir_run_sse41(
-                    &mut b, &c_rows[2], co, &ctaps, &l_rows[2], lo, &ltaps, lstep, n,
-                );
-            }
+            super::ns_wiener_uv_fir_run_sse41(
+                &mut b, &c_rows[2], co, &ctaps, &l_rows[2], lo, &ltaps, lstep, n,
+            );
             assert_eq!(a, b, "mismatch lstep={lstep} n={n}");
         }
     }

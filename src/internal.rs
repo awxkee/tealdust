@@ -71,6 +71,9 @@ pub(crate) struct NsWienerBank {
 pub(crate) struct TileState {
     pub(crate) cdf: CdfContext,
     pub(crate) msac_buf: Vec<u8>,
+    /// Parked entropy-decoder position between superblock rows (sbrow-granularity
+    /// scheduling): set at tile setup, then resumed/re-saved around each sbrow.
+    pub(crate) msac_state: crate::msac::MsacState,
 
     pub(crate) tiling: TileBounds,
 
@@ -92,6 +95,7 @@ impl Default for TileState {
         Self {
             cdf: Default::default(),
             msac_buf: Vec::new(),
+            msac_state: Default::default(),
             tiling: Default::default(),
             progress: [AtomicI32::new(0), AtomicI32::new(0), AtomicI32::new(0)],
             _frame_thread: Default::default(),
@@ -154,7 +158,7 @@ impl Default for FrameThread {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub(crate) struct LoopFilterState {
     pub(crate) mask: Vec<Av2Filter>,
     pub(crate) lr_mask: Vec<Av2Restoration>,
@@ -170,14 +174,7 @@ pub(crate) struct LoopFilterState {
     pub(crate) restore_planes: i32,
     pub(crate) wiener_idx: usize,
     pub(crate) ns_subclass_class_idx: Option<usize>,
-    pub(crate) lr_db_line: [Vec<u8>; 3],
     pub(crate) lr_cdef_line: [Vec<u8>; 3],
-    /// CDEF pre-filter top-row backup, double-buffered (2 banks x 3 planes).
-    /// Each plane bank holds 2 rows of the (positive-stride) plane width; the
-    /// `cdef_line_toggle` selects which bank holds the previous band's backup.
-    /// `f->lf.cdef_line[2][3]`.
-    pub(crate) cdef_line: [[Vec<u8>; 3]; 2],
-    pub(crate) cdef_line_toggle: usize,
     pub(crate) _p: [Vec<u8>; 3],
     pub(crate) _ns_subclass_lut: Vec<u8>,
     pub(crate) _pc_subclass_lut: Vec<u8>,

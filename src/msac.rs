@@ -179,6 +179,20 @@ pub(crate) struct MsacContext<'a> {
     allow_update_cdf: bool,
 }
 
+/// The resumable state of an `MsacContext`, with the buffer borrow stripped out.
+/// This lets a tile's entropy-decoder position be parked in its `TileState`
+/// between superblock rows so that *any* worker can pick up the next sbrow (the
+/// dav2d sbrow-granularity scheduling model), reconstructing the live context
+/// from the (owned-by-the-tile) `msac_buf` plus this snapshot.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct MsacState {
+    buf_pos: usize,
+    dif: u64,
+    rng: u32,
+    cnt: i32,
+    allow_update_cdf: bool,
+}
+
 impl<'a> MsacContext<'a> {
     pub(crate) fn new(data: &'a [u8], disable_cdf_update_flag: bool) -> Self {
         let mut s = Self {
@@ -191,6 +205,31 @@ impl<'a> MsacContext<'a> {
         };
         s.ctx_refill();
         s
+    }
+
+    /// Snapshot the resumable state (everything but the buffer borrow).
+    pub(crate) fn save(&self) -> MsacState {
+        MsacState {
+            buf_pos: self.buf_pos,
+            dif: self.dif,
+            rng: self.rng,
+            cnt: self.cnt,
+            allow_update_cdf: self.allow_update_cdf,
+        }
+    }
+
+    /// Rebuild a live context from an owned buffer plus a prior snapshot. No
+    /// `ctx_refill` here: the snapshot already reflects a refilled state, so this
+    /// is a pure restore (re-running refill would consume extra bytes).
+    pub(crate) fn resume(data: &'a [u8], st: MsacState) -> Self {
+        Self {
+            buf_pos: st.buf_pos,
+            buf: data,
+            dif: st.dif,
+            rng: st.rng,
+            cnt: st.cnt,
+            allow_update_cdf: st.allow_update_cdf,
+        }
     }
 
     #[inline]

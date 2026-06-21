@@ -314,17 +314,23 @@ pub fn decode_frame_init(
     }
 
     let num_sb256 = (sb256w * sb256h) as usize;
+    lf.restore_planes = compute_restore_planes(frame_hdr);
     lf.mask.resize_with(num_sb256, Default::default);
     for m in lf.mask.iter_mut() {
         *m = Default::default();
     }
     lf.lr_mask.resize_with(num_sb256, Default::default);
-    for m in lf.lr_mask.iter_mut() {
-        *m = Default::default();
+    // The LR mask (~num_sb256 * 24 KB) is consumed only by loop restoration; when
+    // no plane is restored it is never read, so the per-frame re-zero is dead work
+    // and is skipped. `resize_with` already zero-fills any newly grown elements,
+    // and any later LR-enabled frame re-zeros the buffer itself before use.
+    if lf.restore_planes != 0 {
+        for m in lf.lr_mask.iter_mut() {
+            *m = Default::default();
+        }
     }
 
     init_wiener(frame_hdr, lf);
-    lf.restore_planes = compute_restore_planes(frame_hdr);
 
     // Allocated only when segmentation is on and chroma deblock is enabled.
     if frame_hdr.segmentation.enabled != 0
@@ -433,6 +439,9 @@ pub fn setup_tile(
     }
     ts.last_qidx = frame_hdr.quant.yac as i32;
     ts.msac_buf = data.to_vec();
+    // Seed the resumable entropy state so every sbrow — including the first —
+    // restores uniformly from `ts.msac_state` (sbrow-granularity scheduling).
+    ts.msac_state = MsacContext::new(&ts.msac_buf, frame_hdr.disable_cdf_update != 0).save();
     ts.tile_start_off = tile_start_off;
 
     setup_tile_bounds(
@@ -461,11 +470,25 @@ pub fn decode_frame_init_cdf(
     n_tc: i32,
     n_passes: i32,
     tile_start_off: &mut [u32],
+    pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
     let ti = &frame_hdr.tiling.t;
+
+    // Phase 1 (serial): parse the tile-group structure into per-tile descriptors.
+    // This is only offset arithmetic + slicing; the expensive per-tile work — the
+    // 17 KB `CdfContext` clone and the tile-bitstream copy inside `setup_tile` —
+    // is deferred to the parallel phase so it no longer sits, 64-clones-deep, on
+    // the serial critical path ahead of the parallel decode.
+    struct TileInit<'a> {
+        j: usize,
+        data: &'a [u8],
+        tile_row: i32,
+        tile_col: i32,
+        start_off: u32,
+    }
+    let mut inits: Vec<TileInit> = Vec::with_capacity(ts.len());
     let mut tile_row = 0i32;
     let mut tile_col = 0i32;
-
     for tg in tile_groups.iter() {
         let mut data_off = 0usize;
         let mut remaining = tg.data.len();
@@ -499,22 +522,13 @@ pub fn decode_frame_init_cdf(
                 0
             };
 
-            setup_tile(
-                &mut ts[j as usize],
-                tile_data,
-                frame_hdr,
-                in_cdf,
-                qcat,
+            inits.push(TileInit {
+                j: j as usize,
+                data: tile_data,
                 tile_row,
                 tile_col,
-                ti.col_start_sb.as_ref(),
-                ti.row_start_sb.as_ref(),
-                sb_shift,
-                bw,
-                bh,
-                n_tc,
                 start_off,
-            );
+            });
 
             tile_col += 1;
             if tile_col == ti.cols as i32 {
@@ -526,6 +540,56 @@ pub fn decode_frame_init_cdf(
             remaining -= tile_sz;
         }
     }
+
+    // Phase 2 (parallel): run the per-tile setup across the pool. Each unit owns a
+    // distinct tile index `j`, so the `ts` writes are disjoint; `setup_tile` reads
+    // only shared, read-only frame state otherwise.
+    let n_units = inits.len();
+    if n_units == 0 {
+        return Ok(());
+    }
+    let active = if crate::decode::DECODE_POOL {
+        pool
+    } else {
+        None
+    };
+    let col_start_sb = ti.col_start_sb.as_ref();
+    let row_start_sb = ti.row_start_sb.as_ref();
+    let ts_dm = DisjointMut::new(ts);
+    let ts_dm = &ts_dm;
+    let inits = &inits[..];
+    let cursor = std::sync::atomic::AtomicUsize::new(0);
+    let cursor = &cursor;
+    let n_workers = (n_tc as usize).min(n_units).max(1);
+    let job = || {
+        loop {
+            let u = cursor.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if u >= n_units {
+                break;
+            }
+            let it = &inits[u];
+            // SAFETY: each unit has a distinct tile index `it.j`, so this is the
+            // only access to `ts[it.j]` (disjoint from every other worker).
+            let ts_slice = unsafe { ts_dm.whole() };
+            setup_tile(
+                &mut ts_slice[it.j],
+                it.data,
+                frame_hdr,
+                in_cdf,
+                qcat,
+                it.tile_row,
+                it.tile_col,
+                col_start_sb,
+                row_start_sb,
+                sb_shift,
+                bw,
+                bh,
+                n_tc,
+                it.start_off,
+            );
+        }
+    };
+    crate::mtpool::dispatch(active, n_workers, &job);
 
     Ok(())
 }
@@ -2654,7 +2718,7 @@ pub fn decode_tile_sbrow_entropy<BD: crate::pixel::BitDepth>(
         sb_seg_err |= recon.seg_id_err;
 
         // Save THIS superblock's bottom row into the above-row `ra` buffer (and
-        // its top-left backup `ra_tl`) for the next SB row's neighbour access.
+        // its top-left backup `ra_tl`) for the next SB row's neighbor access.
         // range so that `ra_tl` captures the correct per-SB top-left value; a
         // once-per-row save would leave `ra_tl` reflecting only the row's far
         // right edge and corrupt the SB-boundary top-left MV candidate.
@@ -2970,7 +3034,7 @@ pub fn decode_frame_main(
         ra: vec![refmvs::Block::default(); rf_rp_stride.max(1) as usize],
         ra_off: 0,
         ra_tl: refmvs::Block::default(),
-        r: vec![refmvs::Block::default(); 64 * 128],
+        r: Box::new([refmvs::Block::default(); 64 * 128]),
         tile_col: refmvs::TileRange { start: 0, end: bw },
         tile_row: refmvs::TileRange { start: 0, end: bh },
         bank: refmvs::MvBank {
@@ -3006,8 +3070,6 @@ pub fn decode_frame_main(
         bitdepth_v as i32,
         fc_inloop_filters,
     );
-    // The CDEF pre-filter line toggle runs across the whole frame's filter pass
-    lf.cdef_line_toggle = 0;
     let sb128 = frame_hdr.sb128 as i32;
 
     // for every superblock-row in the tile row, THEN PHASE B runs the deferred
@@ -3036,26 +3098,33 @@ pub fn decode_frame_main(
                 seq_hdr.layout != crate::headers::PixelLayout::I400,
             );
             if do_parallel {
-                // PARALLEL, DYNAMICALLY LOAD-BALANCED.
+                // PARALLEL, PIPELINED (dav2d-style single task pool).
                 //
-                // This previously mapped one tile *row* to one worker via static
-                // round-robin (`tr = w; tr += n_workers`). With as many rows as
-                // threads, each worker got exactly one row, so on heterogeneous
-                // cores (Apple P/E) the fast cores finished and parked on the
-                // join while the single slowest core set the wall-clock time.
+                // One persistent dispatch replaces the old decode-barrier-filter
+                // two-phase. Every worker runs the same loop and pulls whichever
+                // unit is available, preferring filter so that as decode marches
+                // top-to-bottom the loop-filter trails a couple of rows behind it
+                // on spare workers instead of waiting on a global barrier:
+                //   (1) a *ready* filter tile-row — ready once its own and its
+                //       vertically-adjacent rows (tr-1,tr,tr+1) have finished
+                //       decoding, so every seam pixel/mask entry it reads exists;
+                //   (2) else the next decode tile (claimed row-major);
+                //   (3) else PARK on a condvar until a decode completion (or the
+                //       final filter completion) signals progress. Workers never
+                //       busy-spin — the spin is exactly what regressed the earlier
+                //       fused attempt, its progress-poll traffic competing with the
+                //       decode critical path.
                 //
-                // Instead we run two phases, each scheduled dynamically over an
-                // atomic work cursor so a fast core simply claims the next unit:
-                //   PHASE A (decode): one unit per *tile* (rows*cols units).
-                //     Tiles are independent (own MSAC/CDF, disjoint picture
-                //     columns + context), so any claim order is valid; decoding
-                //     a tile's sbrows in order preserves the in-tile dependency.
-                //   barrier (the decode scope's join)
-                //   PHASE B (filter): one unit per tile *row* at full width,
-                //     since the cross-tile filters need the whole row decoded.
+                // ORDERING (weak-memory critical; x86-TSO CANNOT surface a missing
+                // fence, so this is aarch64-validated only): a decode tile, after
+                // writing its disjoint slice of every shared buffer, publishes with
+                // `dec_remaining[tr].fetch_sub(AcqRel)`; the Release half makes
+                // those writes visible. A filter unit's readiness check loads
+                // `dec_remaining[..]` with Acquire, so on observing 0 it is
+                // guaranteed to see the decoded pixels/masks it then reads.
                 let n_tiles = (rows as usize) * (cols as usize);
-                let n_dec_workers = (n_tc as usize).min(n_tiles);
-                let n_flt_workers = (n_tc as usize).min(rows as usize);
+                let rows_us = rows as usize;
+                let n_workers = (n_tc as usize).max(1);
                 let dst_y_dm = DisjointMut::new(dst_y);
                 let dst_u_dm = DisjointMut::new(dst_u);
                 let dst_v_dm = DisjointMut::new(dst_v);
@@ -3065,7 +3134,6 @@ pub fn decode_frame_main(
                 let cccso_dm = DisjointMut::new(&mut cur_ccsomap[..]);
                 let cmvs_dm = DisjointMut::new(&mut cur_mvs[..]);
                 let ts_dm = DisjointMut::new(&mut ts[..]);
-                let uv_segmap_stride = lf.uv_segmap_stride;
                 let recon_frame = &recon_frame;
                 let refp_pics = &refp_pics;
                 let svc_v = &svc_v;
@@ -3073,70 +3141,154 @@ pub fn decode_frame_main(
                 let prev_ccsomap_ref = prev_ccsomap_ref;
                 let refdist: &[i8; 7] = refdist;
                 let absrefdist: &[u8; 7] = absrefdist;
+
+                // Split `lf` into disjoint field borrows: masks are written by
+                // decode (and the idempotent bottom-edge crop) through DisjointMut;
+                // everything else is read-only for the whole dispatch.
+                let lf = &mut *lf;
+                let uv_segmap_stride = lf.uv_segmap_stride;
+                let base_q = lf.base_q;
+                let gdf_ref_dst_idx = lf.gdf_ref_dst_idx;
+                let wiener_idx = lf.wiener_idx;
+                let ns_subclass_class_idx = lf.ns_subclass_class_idx;
+                let restore_planes = lf.restore_planes;
+                let lf_start_of_tile_row: &[u8] = &lf.start_of_tile_row;
+                let lf_lr_cdef_line: &[Vec<u8>; 3] = &lf.lr_cdef_line;
+                let mask_dm = DisjointMut::new(&mut lf.mask[..]);
+                let lrmask_dm = DisjointMut::new(&mut lf.lr_mask[..]);
+                let seguv_dm =
+                    DisjointMut::new(std::sync::Arc::make_mut(&mut lf.segmap_uv).as_mut_slice());
+                let mask_dm = &mask_dm;
+                let lrmask_dm = &lrmask_dm;
+                let seguv_dm = &seguv_dm;
+
                 let got_err = std::sync::atomic::AtomicBool::new(false);
                 let got_err = &got_err;
+                // Per-tile sbrow cursor + in-progress flag for dav2d-style
+                // sbrow-granularity decode claiming. `tile_nsb[t]` is the number of
+                // superblock rows in tile t; `tile_sbrow[t]` is the next sbrow to
+                // decode; `tile_busy[t]` serialises a tile's (strictly sequential)
+                // sbrows so any worker may advance it one sbrow at a time, picking up
+                // the parked entropy state from `ts[t]`.
+                let cols_us = cols as usize;
+                let tile_nsb: Vec<usize> = {
+                    let ts_ref = unsafe { ts_dm.whole() };
+                    (0..n_tiles)
+                        .map(|t| {
+                            let tb = &ts_ref[t].tiling;
+                            (((tb.row_end - tb.row_start) + sb_step - 1) / sb_step).max(0) as usize
+                        })
+                        .collect()
+                };
+                let tile_nsb = &tile_nsb[..];
+                let tile_sbrow: Vec<std::sync::atomic::AtomicUsize> = (0..n_tiles)
+                    .map(|_| std::sync::atomic::AtomicUsize::new(0))
+                    .collect();
+                let tile_sbrow = &tile_sbrow[..];
+                let tile_busy: Vec<std::sync::atomic::AtomicBool> = (0..n_tiles)
+                    .map(|_| std::sync::atomic::AtomicBool::new(false))
+                    .collect();
+                let tile_busy = &tile_busy[..];
+                let dec_remaining: Vec<std::sync::atomic::AtomicUsize> = (0..rows_us)
+                    .map(|_| std::sync::atomic::AtomicUsize::new(cols as usize))
+                    .collect();
+                let dec_remaining = &dec_remaining[..];
+                let flt_claimed: Vec<std::sync::atomic::AtomicBool> = (0..rows_us)
+                    .map(|_| std::sync::atomic::AtomicBool::new(false))
+                    .collect();
+                let flt_claimed = &flt_claimed[..];
+                let flt_done = std::sync::atomic::AtomicUsize::new(0);
+                let flt_done = &flt_done;
+                let park_mx = std::sync::Mutex::new(());
+                let park_mx = &park_mx;
+                let park_cv = std::sync::Condvar::new();
+                let park_cv = &park_cv;
+                let wake_all = || {
+                    let _g = park_mx.lock().unwrap_or_else(|e| e.into_inner());
+                    drop(_g);
+                    park_cv.notify_all();
+                };
+                let wake_all = &wake_all;
 
-                // ---- PHASE A: decode, one dynamic work unit per tile. ----
-                {
-                    // `mask`/`lr_mask`/`segmap_uv` live in `lf`; during decode
-                    // they are written at disjoint tile positions, so they are
-                    // shared here via DisjointMut. These borrows of `lf` end with
-                    // this block, before the filter phase reborrows `lf`.
-                    let mask_dm = DisjointMut::new(&mut lf.mask[..]);
-                    let lrmask_dm = DisjointMut::new(&mut lf.lr_mask[..]);
-                    let seguv_dm = DisjointMut::new(
-                        std::sync::Arc::make_mut(&mut lf.segmap_uv).as_mut_slice(),
-                    );
-                    let mask_dm = &mask_dm;
-                    let lrmask_dm = &lrmask_dm;
-                    let seguv_dm = &seguv_dm;
-                    let next_tile = std::sync::atomic::AtomicUsize::new(0);
-                    let next_tile = &next_tile;
-                    let decode_worker = || {
-                        CF_SCRATCH.with(|cf_cell| {
-                            let mut cf_guard = cf_cell.borrow_mut();
-                            let cf: &mut [i32] = &mut cf_guard[..];
-                            let mut l = BlockContext::default();
-                            let mut rt = refmvs::Tile {
-                                _rp_proj: Vec::new(),
-                                rp_proj_off: 0,
-                                rp_traj_off: 0,
-                                ra: vec![refmvs::Block::default(); rf_rp_stride.max(1) as usize],
-                                ra_off: 0,
-                                ra_tl: refmvs::Block::default(),
-                                r: vec![refmvs::Block::default(); 64 * 128],
-                                tile_col: refmvs::TileRange { start: 0, end: bw },
-                                tile_row: refmvs::TileRange { start: 0, end: bh },
-                                bank: refmvs::MvBank {
-                                    mv: [[[Mv::default(); 2]; 4]; 9],
-                                    cwp_idx: [[0; 4]; 3],
-                                    r#ref: [RefPair::default(); 4],
-                                    size: [0; 9],
-                                    idx: [0; 9],
-                                    hits: [0; 2],
-                                    avail: 0,
-                                },
-                                warp: refmvs::WarpBank {
-                                    mat: [[[0; 6]; 4]; 7],
-                                    warp_type: [[0; 4]; 7],
-                                    hits: 0,
-                                    size: [0; 7],
-                                    idx: [0; 7],
-                                },
-                            };
-                            let mut part_w: Vec<u8> = Vec::new();
-                            let part_r: Vec<u8> = Vec::new();
-                            loop {
-                                let i =
-                                    next_tile.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                if i >= n_tiles {
-                                    break;
+                let worker = || {
+                    use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
+                    // A filter tile-row is ready when it and its vertical neighbours
+                    // are fully decoded (Acquire pairs with the decode Release).
+                    let row_ready = |tr: usize| -> bool {
+                        let lo = tr.saturating_sub(1);
+                        let hi = (tr + 1).min(rows_us - 1);
+                        (lo..=hi).all(|r| dec_remaining[r].load(Acquire) == 0)
+                    };
+                    CF_SCRATCH.with(|cf_cell| {
+                        let mut cf_guard = cf_cell.borrow_mut();
+                        let cf: &mut [i32] = &mut cf_guard[..];
+                        let mut l = BlockContext::default();
+                        let mut rt = refmvs::Tile {
+                            _rp_proj: Vec::new(),
+                            rp_proj_off: 0,
+                            rp_traj_off: 0,
+                            ra: vec![refmvs::Block::default(); rf_rp_stride.max(1) as usize],
+                            ra_off: 0,
+                            ra_tl: refmvs::Block::default(),
+                            r: Box::new([refmvs::Block::default(); 64 * 128]),
+                            tile_col: refmvs::TileRange { start: 0, end: bw },
+                            tile_row: refmvs::TileRange { start: 0, end: bh },
+                            bank: refmvs::MvBank {
+                                mv: [[[Mv::default(); 2]; 4]; 9],
+                                cwp_idx: [[0; 4]; 3],
+                                r#ref: [RefPair::default(); 4],
+                                size: [0; 9],
+                                idx: [0; 9],
+                                hits: [0; 2],
+                                avail: 0,
+                            },
+                            warp: refmvs::WarpBank {
+                                mat: [[[0; 6]; 4]; 7],
+                                warp_type: [[0; 4]; 7],
+                                hits: 0,
+                                size: [0; 7],
+                                idx: [0; 7],
+                            },
+                        };
+                        let mut part_w: Vec<u8> = Vec::new();
+                        let part_r: Vec<u8> = Vec::new();
+                        let mut sc = FilterScratch::default();
+                        // Cache the per-tile `SbFrameInfo` across that tile's sbrows so
+                        // it's rebuilt once per tile (as before the sbrow split) rather
+                        // than once per sbrow; a cross-worker handoff just rebuilds it.
+                        let mut cached_fi: Option<(usize, SbFrameInfo)> = None;
+
+                        loop {
+                            if got_err.load(Relaxed) {
+                                return;
+                            }
+
+                            // (1) Decode-priority: claim the next ready sbrow of some
+                            // tile. A tile's sbrows are strictly sequential, so
+                            // `tile_busy` lets only one worker advance a given tile at
+                            // a time while *different* tiles proceed in parallel. The
+                            // entropy position is resumed from / saved back to `ts[t]`,
+                            // so whoever picks up a tile's next sbrow need not be the
+                            // worker that decoded the previous one (dav2d's model).
+                            let mut claimed = None;
+                            for t in 0..n_tiles {
+                                if tile_sbrow[t].load(Acquire) >= tile_nsb[t] {
+                                    continue;
                                 }
-                                let tr = (i / cols as usize) as i32;
-                                let tc = (i % cols as usize) as i32;
-                                let ts_idx = (tr * cols + tc) as usize;
-                                // SAFETY: this unit only touches tile (tr,tc)'s disjoint
-                                // picture columns / context slices; see DisjointMut.
+                                if tile_busy[t].swap(true, AcqRel) {
+                                    continue; // another worker is advancing this tile
+                                }
+                                if tile_sbrow[t].load(Acquire) >= tile_nsb[t] {
+                                    tile_busy[t].store(false, Release);
+                                    continue;
+                                }
+                                claimed = Some(t);
+                                break;
+                            }
+                            if let Some(t) = claimed {
+                                let tr = t / cols_us;
+                                let ts_idx = t;
+                                let s = tile_sbrow[t].load(Relaxed);
                                 let a = unsafe { a_dm.whole() };
                                 let cur_segmap = unsafe { cseg_dm.whole() };
                                 let cur_ccsomap = unsafe { cccso_dm.whole() };
@@ -3149,145 +3301,220 @@ pub fn decode_frame_main(
                                 let lr_mask = unsafe { lrmask_dm.whole() };
                                 let segmap_uv = unsafe { seguv_dm.whole() };
                                 let (cs, ce, rs, re) = {
-                                    let t = &ts[ts_idx].tiling;
-                                    (t.col_start, t.col_end, t.row_start, t.row_end)
+                                    let tb = &ts[ts_idx].tiling;
+                                    (tb.col_start, tb.col_end, tb.row_start, tb.row_end)
                                 };
-                                let fi = SbFrameInfo::from_frame(
-                                    seq_hdr,
-                                    frame_hdr,
-                                    bw,
-                                    bh,
-                                    root_bs,
-                                    sb_step,
-                                    n_passes,
-                                    refdir,
-                                    refdist,
-                                    absrefdist,
-                                    skip_mode_refs,
-                                    cs,
-                                    ce,
-                                    rs,
-                                    re,
-                                    ffr_idx,
-                                    tip_ref,
-                                );
-                                let buf = std::mem::take(&mut ts[ts_idx].msac_buf);
-                                let mut msac = MsacContext::new(&buf, disable_cdf);
-                                part_w.clear();
-                                let mut by = rs;
-                                while by < re {
-                                    reset_context(&mut l, keyframe, is_tip);
-                                    if decode_tile_sbrow_entropy(
-                                        bd_local,
-                                        &fi,
-                                        frame_hdr,
-                                        &mut ts[ts_idx],
-                                        &mut msac,
-                                        a,
-                                        mask,
-                                        lr_mask,
-                                        &mut l,
-                                        &mut *dst_y,
-                                        &mut *dst_u,
-                                        &mut *dst_v,
-                                        &mut *cf,
-                                        recon_frame,
-                                        &mut cur_segmap[..],
-                                        prev_segmap_ref,
-                                        segmap_uv,
-                                        uv_segmap_stride,
-                                        &mut cur_ccsomap[..],
-                                        prev_ccsomap_ref,
-                                        &mut part_w,
-                                        &part_r,
-                                        by,
-                                        sb256w,
-                                        root_bs,
-                                        c_root_bs,
-                                        &mut rt,
-                                        rf_imm,
-                                        cur_mvs,
-                                        refp_pics,
-                                        svc_v,
-                                        seq_hdr,
-                                        frame_hdr,
-                                        masks,
-                                    )
-                                    .is_err()
-                                    {
-                                        got_err.store(true, std::sync::atomic::Ordering::Relaxed);
-                                        ts[ts_idx].msac_buf = buf;
-                                        cf.fill(0); // leave scratch clean for reuse after an error
-                                        return;
-                                    }
-                                    by += sb_step;
+                                let by = rs + (s as i32) * sb_step;
+                                if cached_fi.as_ref().map_or(true, |(ct, _)| *ct != t) {
+                                    cached_fi = Some((
+                                        t,
+                                        SbFrameInfo::from_frame(
+                                            seq_hdr,
+                                            frame_hdr,
+                                            bw,
+                                            bh,
+                                            root_bs,
+                                            sb_step,
+                                            n_passes,
+                                            refdir,
+                                            refdist,
+                                            absrefdist,
+                                            skip_mode_refs,
+                                            cs,
+                                            ce,
+                                            rs,
+                                            re,
+                                            ffr_idx,
+                                            tip_ref,
+                                        ),
+                                    ));
                                 }
-                                ts[ts_idx].msac_buf = buf;
-                            }
-                        });
-                    };
-                    // Dispatch on the decoder's pool when present, else a per-call
-                    // scope. The calling thread participates either way.
-                    crate::mtpool::dispatch(active_pool, n_dec_workers, &decode_worker);
-                    if got_err.load(std::sync::atomic::Ordering::Relaxed) {
-                        return Err(());
-                    }
-                }
-
-                // ---- PHASE B: filter, one dynamic work unit per tile row. ----
-                {
-                    let lf_ref: &crate::internal::LoopFilterState = &*lf;
-                    let next_row = std::sync::atomic::AtomicUsize::new(0);
-                    let next_row = &next_row;
-                    let filter_worker = || {
-                        // Private filter line scratch + a snapshot of the now
-                        // fully-written masks (decode finished at the barrier).
-                        let mut wlf = lf_ref.clone();
-                        loop {
-                            let tr = next_row.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            if tr >= rows as usize {
-                                break;
-                            }
-                            let cur_segmap = unsafe { cseg_dm.whole() };
-                            let dst_y = unsafe { dst_y_dm.whole() };
-                            let dst_u = unsafe { dst_u_dm.whole() };
-                            let dst_v = unsafe { dst_v_dm.whole() };
-                            let ts = unsafe { ts_dm.whole() };
-                            let (row_rs, row_re) = {
-                                let t = &ts[(tr as i32 * cols) as usize].tiling;
-                                (t.row_start, t.row_end)
-                            };
-                            let mut fby = row_rs;
-                            while fby < row_re {
-                                let sby = fby / sb_step;
-                                filter_sbrow(
+                                let fi = &cached_fi.as_ref().unwrap().1;
+                                let buf = std::mem::take(&mut ts[ts_idx].msac_buf);
+                                part_w.clear();
+                                reset_context(&mut l, keyframe, is_tip);
+                                // Resume this tile's parked entropy state for sbrow `s`.
+                                let mut msac = MsacContext::resume(&buf, ts[ts_idx].msac_state);
+                                let sbrow_res = decode_tile_sbrow_entropy(
                                     bd_local,
-                                    seq_hdr,
+                                    fi,
                                     frame_hdr,
-                                    &mut wlf,
+                                    &mut ts[ts_idx],
+                                    &mut msac,
+                                    a,
+                                    mask,
+                                    lr_mask,
+                                    &mut l,
                                     &mut *dst_y,
                                     &mut *dst_u,
                                     &mut *dst_v,
-                                    filter_params,
-                                    cur_segmap,
-                                    b4_stride_v,
-                                    hbd_v,
-                                    fc_inloop_filters,
-                                    fc_sbh,
-                                    sb_step,
+                                    &mut *cf,
+                                    recon_frame,
+                                    &mut cur_segmap[..],
+                                    prev_segmap_ref,
+                                    segmap_uv,
+                                    uv_segmap_stride,
+                                    &mut cur_ccsomap[..],
+                                    prev_ccsomap_ref,
+                                    &mut part_w,
+                                    &part_r,
+                                    by,
                                     sb256w,
-                                    sb128,
-                                    bw,
-                                    bh,
-                                    sby,
+                                    root_bs,
+                                    c_root_bs,
+                                    &mut rt,
+                                    rf_imm,
+                                    cur_mvs,
+                                    refp_pics,
+                                    svc_v,
+                                    seq_hdr,
+                                    frame_hdr,
+                                    masks,
                                 );
-                                fby += sb_step;
+                                // Park the advanced entropy state + buffer back.
+                                ts[ts_idx].msac_state = msac.save();
+                                ts[ts_idx].msac_buf = buf;
+                                if sbrow_res.is_err() {
+                                    got_err.store(true, Relaxed);
+                                    cf.fill(0);
+                                    tile_busy[t].store(false, Release);
+                                    wake_all();
+                                    return;
+                                }
+                                // Advance the tile. The Release on `tile_sbrow` /
+                                // `tile_busy` publishes the entropy snapshot, the `a`
+                                // above-context and the pixel writes to whichever
+                                // worker takes the tile's next sbrow (or, on the last
+                                // sbrow, to the filter via `dec_remaining`).
+                                let new_s = s + 1;
+                                tile_sbrow[t].store(new_s, Release);
+                                let tile_done = new_s >= tile_nsb[t];
+                                tile_busy[t].store(false, Release);
+                                if tile_done {
+                                    dec_remaining[tr].fetch_sub(1, AcqRel);
+                                }
+                                // Wake parked workers: the tile is claimable again for
+                                // its next sbrow, or (if done) a filter row may unblock.
+                                wake_all();
+                                continue;
                             }
+
+                            // (2) No decode sbrow claimable -> take a ready filter row.
+                            let mut did_work = false;
+                            for tr in 0..rows_us {
+                                if flt_claimed[tr].load(Relaxed) || !row_ready(tr) {
+                                    continue;
+                                }
+                                if flt_claimed[tr]
+                                    .compare_exchange(false, true, AcqRel, Relaxed)
+                                    .is_err()
+                                {
+                                    continue;
+                                }
+                                let cur_segmap = unsafe { cseg_dm.whole() };
+                                let dst_y = unsafe { dst_y_dm.whole() };
+                                let dst_u = unsafe { dst_u_dm.whole() };
+                                let dst_v = unsafe { dst_v_dm.whole() };
+                                let ts = unsafe { ts_dm.whole() };
+                                let (row_rs, row_re) = {
+                                    let t = &ts[(tr as i32 * cols) as usize].tiling;
+                                    (t.row_start, t.row_end)
+                                };
+                                let mut fby = row_rs;
+                                while fby < row_re {
+                                    let sby = fby / sb_step;
+                                    // Idempotent bottom-edge tx crop; a no-op except
+                                    // on the frame-bottom sb-row, which only this unit
+                                    // (the last tile-row) ever touches.
+                                    let mr = ((sby >> (2 - sb128)) * sb256w) as usize;
+                                    crate::deblock::deblock_crop_bottom_edge(
+                                        unsafe { mask_dm.whole() },
+                                        mr,
+                                        sb256w,
+                                        bw,
+                                        bh,
+                                        sb128,
+                                        sby,
+                                    );
+                                    let sh = FilterShared {
+                                        mask: unsafe { &*mask_dm.whole() },
+                                        lr_mask: unsafe { &*lrmask_dm.whole() },
+                                        segmap_uv: unsafe { &*seguv_dm.whole() },
+                                        start_of_tile_row: lf_start_of_tile_row,
+                                        lr_cdef_line: lf_lr_cdef_line,
+                                        uv_segmap_stride,
+                                        base_q,
+                                        gdf_ref_dst_idx,
+                                        wiener_idx,
+                                        ns_subclass_class_idx,
+                                        restore_planes,
+                                    };
+                                    filter_sbrow(
+                                        bd_local,
+                                        seq_hdr,
+                                        frame_hdr,
+                                        &sh,
+                                        &mut sc,
+                                        &mut *dst_y,
+                                        &mut *dst_u,
+                                        &mut *dst_v,
+                                        filter_params,
+                                        cur_segmap,
+                                        b4_stride_v,
+                                        hbd_v,
+                                        fc_inloop_filters,
+                                        fc_sbh,
+                                        sb_step,
+                                        sb256w,
+                                        sb128,
+                                        bw,
+                                        bh,
+                                        sby,
+                                    );
+                                    fby += sb_step;
+                                }
+                                let done_now = flt_done.fetch_add(1, AcqRel) + 1;
+                                if done_now >= rows_us {
+                                    wake_all();
+                                }
+                                did_work = true;
+                                break;
+                            }
+                            if did_work {
+                                continue;
+                            }
+
+                            // (3) Nothing claimable now.
+                            if flt_done.load(Relaxed) >= rows_us {
+                                return;
+                            }
+                            let guard = park_mx.lock().unwrap_or_else(|e| e.into_inner());
+                            if got_err.load(Relaxed) || flt_done.load(Relaxed) >= rows_us {
+                                return;
+                            }
+                            let more_decode = (0..n_tiles).any(|t| {
+                                tile_sbrow[t].load(Relaxed) < tile_nsb[t]
+                                    && !tile_busy[t].load(Relaxed)
+                            });
+                            let ready_filter = (0..rows_us)
+                                .any(|tr| !flt_claimed[tr].load(Relaxed) && row_ready(tr));
+                            if more_decode || ready_filter {
+                                drop(guard);
+                                continue;
+                            }
+                            drop(park_cv.wait(guard));
                         }
-                    };
-                    crate::mtpool::dispatch(active_pool, n_flt_workers, &filter_worker);
+                    });
+                };
+                crate::mtpool::dispatch(active_pool, n_workers, &worker);
+                if got_err.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(());
                 }
             } else {
+                // Serial fallback: one persistent line-scratch carried across all
+                // tile rows (mirrors the old single `lf` scratch, now split out so
+                // the masks can be borrowed read-only by the filter).
+                let mut serial_sc = FilterScratch::default();
                 for tr in 0..rows {
                     // Collect per-tile-col MSAC state that must stay live across the sby
                     // loop (each tile-col's symbol decoder advances one sbrow at a time but
@@ -3419,11 +3646,38 @@ pub fn decode_frame_main(
                     let mut by = row_rs;
                     while by < row_re {
                         let sby = by / sb_step;
+                        // Crop this sb-row's bottom tx edge (idempotent; no-op
+                        // except at the frame bottom) before borrowing the mask
+                        // read-only for the filter.
+                        let mask_row = ((sby >> (2 - sb128)) * sb256w) as usize;
+                        crate::deblock::deblock_crop_bottom_edge(
+                            &mut lf.mask,
+                            mask_row,
+                            sb256w,
+                            bw,
+                            bh,
+                            sb128,
+                            sby,
+                        );
+                        let sh = FilterShared {
+                            mask: &lf.mask[..],
+                            lr_mask: &lf.lr_mask[..],
+                            segmap_uv: &lf.segmap_uv[..],
+                            start_of_tile_row: &lf.start_of_tile_row[..],
+                            lr_cdef_line: &lf.lr_cdef_line,
+                            uv_segmap_stride: lf.uv_segmap_stride,
+                            base_q: lf.base_q,
+                            gdf_ref_dst_idx: lf.gdf_ref_dst_idx,
+                            wiener_idx: lf.wiener_idx,
+                            ns_subclass_class_idx: lf.ns_subclass_class_idx,
+                            restore_planes: lf.restore_planes,
+                        };
                         filter_sbrow(
                             bd_local,
                             seq_hdr,
                             frame_hdr,
-                            lf,
+                            &sh,
+                            &mut serial_sc,
                             &mut *dst_y,
                             &mut *dst_u,
                             &mut *dst_v,
@@ -3532,11 +3786,46 @@ impl FilterFrameParams {
 /// Each stage is gated on `inloop` (DAV2D_INLOOPFILTER_* bits) plus the relevant
 /// frame-header enable.
 #[allow(clippy::too_many_arguments)]
+/// Read-only frame state produced by the decode pass and consumed (without
+/// mutation) by every filter worker. Sharing it `&` across workers — instead of
+/// deep-cloning it per worker as part of `LoopFilterState` — is what lets the
+/// fused pipeline read masks that decode has already published (gated by the
+/// per-tile-row progress counters) without copying the whole frame N times.
+///
+/// The masks are strictly read-only here: the one in-place mutation (the
+/// bottom-of-frame tx-edge crop) is hoisted to a single pre-pass
+/// (`crop_bottom_edges`) that runs before any filter reads them.
+pub(crate) struct FilterShared<'a> {
+    pub(crate) mask: &'a [crate::lf_mask::Av2Filter],
+    pub(crate) lr_mask: &'a [crate::lf_mask::Av2Restoration],
+    pub(crate) segmap_uv: &'a [u8],
+    pub(crate) start_of_tile_row: &'a [u8],
+    pub(crate) lr_cdef_line: &'a [Vec<u8>; 3],
+    pub(crate) uv_segmap_stride: isize,
+    pub(crate) base_q: i32,
+    pub(crate) gdf_ref_dst_idx: i32,
+    pub(crate) wiener_idx: usize,
+    pub(crate) ns_subclass_class_idx: Option<usize>,
+    pub(crate) restore_planes: i32,
+}
+
+/// Per-worker mutable line scratch. Each filter worker owns one; nothing here is
+/// shared, so workers never contend on it and it is never cloned from the
+/// decode-written frame state (which is what would otherwise race in the fused
+/// pipeline).
+#[derive(Clone, Default)]
+pub(crate) struct FilterScratch {
+    pub(crate) cdef_line: [[Vec<u8>; 3]; 2],
+    pub(crate) cdef_line_toggle: usize,
+    pub(crate) lr_db_line: [Vec<u8>; 3],
+}
+
 fn filter_sbrow<BD: crate::pixel::BitDepth>(
     bd: BD,
     seq_hdr: &crate::headers::SequenceHeader,
     frame_hdr: &crate::headers::FrameHeader,
-    lf: &mut crate::internal::LoopFilterState,
+    sh: &FilterShared,
+    sc: &mut FilterScratch,
     dst_y: &mut [BD::Pixel],
     dst_u: &mut [BD::Pixel],
     dst_v: &mut [BD::Pixel],
@@ -3580,27 +3869,19 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
 
     if deblock_on {
         let start_of_tile_row =
-            (lf.start_of_tile_row.get(sby as usize).copied().unwrap_or(0) & 1) != 0;
-        // Bottom-of-frame tx-edge crop must run before the rows pass; it mutates
-        // the mask, so it is driven here while we hold `&mut lf.mask`.
-        crate::deblock::deblock_crop_bottom_edge(
-            &mut lf.mask,
-            mask_row,
-            sb256w,
-            bw,
-            bh,
-            sb128,
-            sby,
-        );
+            (sh.start_of_tile_row.get(sby as usize).copied().unwrap_or(0) & 1) != 0;
+        // The bottom-of-frame tx-edge crop (which mutates the mask) has already
+        // been applied once, up front, by `crop_bottom_edges`; the mask is
+        // strictly read-only from here on, so it can be shared across workers.
         let mut dctx = crate::deblock::DeblockCtx {
             frame_hdr,
-            mask: &lf.mask,
+            mask: sh.mask,
             mask_row,
             sb256w,
             cur_segmap,
             b4_stride,
-            segmap_uv: &lf.segmap_uv,
-            uv_segmap_stride: lf.uv_segmap_stride,
+            segmap_uv: sh.segmap_uv,
+            uv_segmap_stride: sh.uv_segmap_stride,
             hbd,
             ss_hor: fp.ss_hor as i32,
             ss_ver: fp.ss_ver as i32,
@@ -3639,18 +3920,18 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
     // restrict copy_db to the restore_planes case so we do not require allocating
     // `lr_db_line` for CDEF-only frames (its output would be dead).
     let copy_db_on =
-        lf.restore_planes != 0 && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0;
+        sh.restore_planes != 0 && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0;
     if copy_db_on {
         // num_lines == 20) so backup_db has somewhere to write. Each plane line
         // buffer is `stride * 20` bytes (positive-stride layout).
         let num_lines = 20usize;
         let y_ls = fp.y_stride.unsigned_abs();
         let uv_ls = fp.uv_stride.unsigned_abs();
-        if lf.lr_db_line[0].len() != y_ls * num_lines {
-            lf.lr_db_line[0] = vec![0u8; y_ls * num_lines];
+        if sc.lr_db_line[0].len() != y_ls * num_lines {
+            sc.lr_db_line[0] = vec![0u8; y_ls * num_lines];
         }
         if seq_hdr.layout != crate::headers::PixelLayout::I400 {
-            for b in lf.lr_db_line.iter_mut().skip(1) {
+            for b in sc.lr_db_line.iter_mut().skip(1) {
                 if b.len() != uv_ls * num_lines {
                     *b = vec![0u8; uv_ls * num_lines];
                 }
@@ -3658,7 +3939,7 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
         }
         let src: [&[u8]; 3] = [&*dst_y, &*dst_u, &*dst_v];
         crate::deblock::copy_db_8bpc(
-            &mut lf.lr_db_line,
+            &mut sc.lr_db_line,
             &src,
             &[fp.y_stride, fp.uv_stride],
             bw as usize,
@@ -3667,7 +3948,7 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
             frame_hdr.sb128 != 0,
             fp.ss_hor,
             fp.ss_ver,
-            lf.restore_planes != 0,
+            sh.restore_planes != 0,
         );
     }
 
@@ -3691,7 +3972,7 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
         let uv_ls = fp.uv_stride.unsigned_abs();
         let need_y = 2 * y_ls;
         let need_uv = 2 * uv_ls;
-        for bank in lf.cdef_line.iter_mut() {
+        for bank in sc.cdef_line.iter_mut() {
             if bank[0].len() != need_y {
                 bank[0] = vec![0u8; need_y];
             }
@@ -3716,7 +3997,7 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
                 layout: fp.layout,
                 on_skip_tx: fp.cdef_on_skiptx,
                 cdef_on: inloop & INLOOPFILTER_CDEF != 0,
-                mask: filter_mask_row(&lf.mask, prev_mask_row, sb256w),
+                mask: filter_mask_row(sh.mask, prev_mask_row, sb256w),
                 y_strength: &fp.cdef_y_strength,
                 uv_strength: &fp.cdef_uv_strength,
                 any_lossless,
@@ -3729,8 +4010,8 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
                 &bp,
                 fp.y_stride,
                 fp.uv_stride,
-                &mut lf.cdef_line,
-                &mut lf.cdef_line_toggle,
+                &mut sc.cdef_line,
+                &mut sc.cdef_line_toggle,
                 start - 2,
                 start,
                 sby,
@@ -3746,7 +4027,7 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
             layout: fp.layout,
             on_skip_tx: fp.cdef_on_skiptx,
             cdef_on: inloop & INLOOPFILTER_CDEF != 0,
-            mask: filter_mask_row(&lf.mask, mask_row, sb256w),
+            mask: filter_mask_row(sh.mask, mask_row, sb256w),
             y_strength: &fp.cdef_y_strength,
             uv_strength: &fp.cdef_uv_strength,
             any_lossless,
@@ -3759,8 +4040,8 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
             &bp,
             fp.y_stride,
             fp.uv_stride,
-            &mut lf.cdef_line,
-            &mut lf.cdef_line_toggle,
+            &mut sc.cdef_line,
+            &mut sc.cdef_line_toggle,
             start,
             end,
             sby,
@@ -3770,7 +4051,7 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
 
     // dispatch calls the Rust-native slice kernels directly (the asm dsp_lr
     // pointers are unavailable).
-    if lf.restore_planes != 0 && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0 {
+    if sh.restore_planes != 0 && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0 {
         LUMA_SNAP.with(|snap_cell| {
             let mut snap = snap_cell.borrow_mut();
             // The luma snapshot is read only by the chroma single-Wiener cross-
@@ -3811,10 +4092,10 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
             };
             // PC/NS wiener tables, selected by the qidx bucket computed in init_wiener
             // is unused; the kernels only index them for their own filter family.
-            let widx = lf.wiener_idx;
+            let widx = sh.wiener_idx;
             let pc_subclass_lut: &[u8] = &crate::tables::PC_WIENER_SUB_CLASSIFY[widx];
             let pc_filters: &[[i16; 13]] = &crate::tables::PC_WIENER_FILTERS[widx];
-            let ns_subclass_lut: &[u8] = match lf.ns_subclass_class_idx {
+            let ns_subclass_lut: &[u8] = match sh.ns_subclass_class_idx {
                 // `ci` is derived from num_classes_idx (parsed get_bits(3) → 0..7), so
                 // ci = num_classes_idx - 1 ∈ 0..6; clamp defensively to the table bound.
                 Some(ci) => &crate::tables::PC_WIENER_SUB_CLASSIFY_NS[widx][ci.min(6)],
@@ -3835,14 +4116,14 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
                 bh,
                 sb256w,
                 sbh,
-                mask: &lf.mask,
-                lr_mask: &lf.lr_mask,
-                lr_db_line: &lf.lr_db_line,
-                lr_cdef_line: &lf.lr_cdef_line,
+                mask: sh.mask,
+                lr_mask: sh.lr_mask,
+                lr_db_line: &sc.lr_db_line,
+                lr_cdef_line: &sh.lr_cdef_line,
                 lf_p_luma: luma_snapshot,
-                base_q: lf.base_q,
-                gdf_ref_dst_idx: lf.gdf_ref_dst_idx,
-                start_of_tile_row: &lf.start_of_tile_row,
+                base_q: sh.base_q,
+                gdf_ref_dst_idx: sh.gdf_ref_dst_idx,
+                start_of_tile_row: sh.start_of_tile_row,
                 ns_subclass_lut,
                 pc_subclass_lut,
                 pc_filters,
@@ -3850,7 +4131,7 @@ fn filter_sbrow<BD: crate::pixel::BitDepth>(
                 inloop_filters: inloop,
                 cur_stride: [fp.y_stride, fp.uv_stride],
                 unit_size: frame_hdr.restoration.unit_size,
-                restore_planes: lf.restore_planes,
+                restore_planes: sh.restore_planes,
             };
             let mut dst: [&mut [u8]; 3] = [dst_y, dst_u, dst_v];
             crate::looprestoration::lr_sbrow_8bpc(&ctx, &mut dst, sby);
@@ -3943,6 +4224,7 @@ pub fn decode_frame(
             n_tc,
             n_passes,
             &mut fc.frame_thread._tile_start_off,
+            pool,
         );
         r?;
     } else {

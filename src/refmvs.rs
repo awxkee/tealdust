@@ -428,7 +428,7 @@ pub(crate) struct Tile {
     pub(crate) ra: Vec<Block>,
     pub(crate) ra_off: usize,
     pub(crate) ra_tl: Block,
-    pub(crate) r: Vec<Block>,
+    pub(crate) r: Box<[Block; 8192]>,
     pub(crate) tile_col: TileRange,
     pub(crate) tile_row: TileRange,
     pub(crate) bank: MvBank,
@@ -3543,7 +3543,7 @@ pub(crate) fn reset_sb(
 }
 
 pub(crate) fn save_tmvs(
-    r: &[Block],
+    r: &[Block; 8192],
     ra: &mut [Block],
     ra_tl: &mut Block,
     col_start8: i32,

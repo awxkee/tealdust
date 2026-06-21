@@ -2183,13 +2183,9 @@ impl<'a> AvifDecoder<'a> {
     /// Open an AV2 decoder, feed it `obu_data`, drain one [`Picture`].
     fn run_decoder(obu_data: Vec<u8>) -> Result<Picture> {
         let mut settings = Settings::default();
-        // Honor the host's parallelism for the tile-row-parallel frame decode;
-        // callers wanting determinism or a fixed budget can cap this. Falls back
-        // to single-threaded if the platform can't report a thread count.
-        // settings.n_threads = std::thread::available_parallelism()
-        //     .map(|n| n.get() as u32)
-        //     .unwrap_or(1);
-        settings.n_threads = 1;
+        settings.n_threads = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1);
         settings.run_decode = true;
 
         let mut decoder = Decoder::open(&settings).map_err(AvifError::DecodeError)?;
@@ -2279,10 +2275,6 @@ fn read_leb128_usize(data: &[u8]) -> Result<(usize, usize)> {
 
     Err(AvifError::InvalidBox)
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Helper: copy one picture plane with overflow-checked arithmetic.
-// ────────────────────────────────────────────────────────────────────────────
 
 /// Copy `h` rows of `w` samples (each `bps` bytes wide) from a picture
 /// plane byte view using the given `stride` in bytes.
