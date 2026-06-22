@@ -544,7 +544,6 @@ pub(crate) struct DeblockCtx<'a> {
     pub(crate) ss_ver: i32,
     pub(crate) bw: i32,
     pub(crate) bh: i32,
-    pub(crate) sb128: i32,
     pub(crate) y_stride: isize,
     pub(crate) uv_stride: isize,
     pub(crate) layout: PixelLayout,
@@ -1331,53 +1330,6 @@ fn deblock64_rows<BD: BitDepth>(
                 );
             }
         }
-    }
-}
-
-/// sbrow's first pixel is at `y_off`/`uv_off`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn deblock_sbrow_cols<BD: BitDepth>(
-    bd: BD,
-    ctx: &mut DeblockCtx,
-    p_y: &mut [BD::Pixel],
-    y_off0: usize,
-    p_u: &mut [BD::Pixel],
-    p_v: &mut [BD::Pixel],
-    uv_off0: usize,
-    sby: i32,
-    _start_of_tile_row: bool,
-) {
-    let y64_start = sby << ctx.sb128;
-    let y64_end = imin((sby + 1) << ctx.sb128, (ctx.bh + 15) >> 4);
-    let mut y_off = y_off0;
-    let mut uv_off = uv_off0;
-    for y64 in y64_start..y64_end {
-        // bottom-frame crop must run before the cols pass reads filter_y[1].
-        deblock64_cols(bd, ctx, p_y, y_off, p_u, p_v, uv_off, y64);
-        y_off = (y_off as isize + 64 * ctx.y_stride) as usize;
-        uv_off = (uv_off as isize + (64 * ctx.uv_stride >> ctx.ss_ver)) as usize;
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn deblock_sbrow_rows<BD: BitDepth>(
-    bd: BD,
-    ctx: &mut DeblockCtx,
-    p_y: &mut [BD::Pixel],
-    y_off0: usize,
-    p_u: &mut [BD::Pixel],
-    p_v: &mut [BD::Pixel],
-    uv_off0: usize,
-    sby: i32,
-) {
-    let y64_start = sby << ctx.sb128;
-    let y64_end = imin((sby + 1) << ctx.sb128, (ctx.bh + 15) >> 4);
-    let mut y_off = y_off0;
-    let mut uv_off = uv_off0;
-    for y64 in y64_start..y64_end {
-        deblock64_rows(bd, ctx, p_y, y_off, p_u, p_v, uv_off, y64);
-        y_off = (y_off as isize + 64 * ctx.y_stride) as usize;
-        uv_off = (uv_off as isize + (64 * ctx.uv_stride >> ctx.ss_ver)) as usize;
     }
 }
 

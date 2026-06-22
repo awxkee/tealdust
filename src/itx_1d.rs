@@ -607,7 +607,6 @@ pub(crate) trait DctWide {
         clip: Self::Clip,
     );
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc);
-    unsafe fn to_array8(acc: Self::Acc) -> [i32; 8];
 }
 
 // pub(crate) struct ScalarWide;

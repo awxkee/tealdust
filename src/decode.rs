@@ -3631,7 +3631,6 @@ pub fn decode_frame_main(
                         let part_r: Vec<u8> = Vec::new();
                         let mut sc = FilterScratch::default();
                         let mut recon_scratch = ReconScratch::default();
-                        use crate::pixel::Pixel;
                         let mut recon_edge = vec![<$Pixel as Default>::default(); 2048];
                         // Cache the per-tile `SbFrameInfo` across that tile's sbrows so
                         // it's rebuilt once per tile (as before the sbrow split) rather
@@ -4269,326 +4268,6 @@ pub(crate) struct FilterScratch {
     pub(crate) cdef_line_toggle: usize,
     pub(crate) lr_db_line: [Vec<u8>; 3],
 }
-
-fn filter_sbrow<BD: crate::pixel::BitDepth>(
-    bd: BD,
-    seq_hdr: &crate::headers::SequenceHeader,
-    frame_hdr: &crate::headers::FrameHeader,
-    sh: &FilterShared,
-    sc: &mut FilterScratch,
-    dst_y: &mut [BD::Pixel],
-    dst_u: &mut [BD::Pixel],
-    dst_v: &mut [BD::Pixel],
-    fp: &FilterFrameParams,
-    cur_segmap: &[u8],
-    b4_stride: isize,
-    hbd: i32,
-    inloop: u32,
-    sbh: i32,
-    sb_step: i32,
-    sb256w: i32,
-    sb128: i32,
-    bw: i32,
-    bh: i32,
-    sby: i32,
-) {
-    use crate::looprestoration::{
-        INLOOPFILTER_CCSO, INLOOPFILTER_CDEF, INLOOPFILTER_DEBLOCK, INLOOPFILTER_GDF,
-        INLOOPFILTER_WIENER,
-    };
-
-    let _ = bd;
-    // The post-filter stages (deblock/cdef/ccso/lr) are wired for 8bpc only; the
-    // HBD recon oracle runs with all in-loop filters disabled, so for HBD this is
-    // a no-op. The 8bpc arm reinterprets the sample slices as `u8` (byte-identical
-    // to the prior hard-coded path) and runs the unchanged filter pipeline.
-    if BD::BPC != 8 {
-        return;
-    }
-    let dst_y: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst_y);
-    let dst_u: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst_u);
-    let dst_v: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst_v);
-
-    let deblock_on = inloop & INLOOPFILTER_DEBLOCK != 0
-        && (fp.deblock.level_y[0] != 0 || fp.deblock.level_y[1] != 0);
-
-    let mask_row = ((sby >> (2 - sb128)) * sb256w) as usize;
-
-    let y_off0 = (sby * sb_step * 4) as isize * fp.y_stride;
-    let uv_off0 = ((sby * sb_step * 4) as isize * fp.uv_stride) >> fp.ss_ver as i32;
-
-    if deblock_on {
-        let start_of_tile_row =
-            (sh.start_of_tile_row.get(sby as usize).copied().unwrap_or(0) & 1) != 0;
-        // The bottom-of-frame tx-edge crop (which mutates the mask) has already
-        // been applied once, up front, by `crop_bottom_edges`; the mask is
-        // strictly read-only from here on, so it can be shared across workers.
-        let mut dctx = crate::deblock::DeblockCtx {
-            frame_hdr,
-            mask: sh.mask,
-            mask_row,
-            sb256w,
-            cur_segmap,
-            b4_stride,
-            segmap_uv: sh.segmap_uv,
-            uv_segmap_stride: sh.uv_segmap_stride,
-            hbd,
-            ss_hor: fp.ss_hor as i32,
-            ss_ver: fp.ss_ver as i32,
-            bw,
-            bh,
-            sb128,
-            y_stride: fp.y_stride,
-            uv_stride: fp.uv_stride,
-            layout: seq_hdr.layout,
-        };
-        crate::deblock::deblock_sbrow_cols(
-            crate::pixel::BitDepth8,
-            &mut dctx,
-            dst_y,
-            y_off0 as usize,
-            dst_u,
-            dst_v,
-            uv_off0 as usize,
-            sby,
-            start_of_tile_row,
-        );
-        crate::deblock::deblock_sbrow_rows(
-            crate::pixel::BitDepth8,
-            &mut dctx,
-            dst_y,
-            y_off0 as usize,
-            dst_u,
-            dst_v,
-            uv_off0 as usize,
-            sby,
-        );
-    }
-    // threaded CDEF path reads `lr_db_line` across the sbrow/tile-row seam. In
-    // the single-thread (`have_tt == 0`) path CDEF reads only the toggled
-    // `cdef_line` banks, so `lr_db_line` is consumed only by loop restoration;
-    // restrict copy_db to the restore_planes case so we do not require allocating
-    // `lr_db_line` for CDEF-only frames (its output would be dead).
-    let copy_db_on =
-        sh.restore_planes != 0 && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0;
-    if copy_db_on {
-        // num_lines == 20) so backup_db has somewhere to write. Each plane line
-        // buffer is `stride * 20` bytes (positive-stride layout).
-        let num_lines = 20usize;
-        let y_ls = fp.y_stride.unsigned_abs();
-        let uv_ls = fp.uv_stride.unsigned_abs();
-        if sc.lr_db_line[0].len() != y_ls * num_lines {
-            sc.lr_db_line[0] = vec![0u8; y_ls * num_lines];
-        }
-        if seq_hdr.layout != crate::headers::PixelLayout::I400 {
-            for b in sc.lr_db_line.iter_mut().skip(1) {
-                if b.len() != uv_ls * num_lines {
-                    *b = vec![0u8; uv_ls * num_lines];
-                }
-            }
-        }
-        let src: [&[u8]; 3] = [&*dst_y, &*dst_u, &*dst_v];
-        crate::deblock::copy_db_8bpc(
-            &mut sc.lr_db_line,
-            &src,
-            &[fp.y_stride, fp.uv_stride],
-            bw as usize,
-            bh as usize,
-            sby,
-            frame_hdr.sb128 != 0,
-            fp.ss_hor,
-            fp.ss_ver,
-            sh.restore_planes != 0,
-        );
-    }
-
-    // after CDEF). It runs when the CCSO inloop bit is set and any plane enables
-    // CCSO in the frame header.
-    if seq_hdr.cdef && inloop & (INLOOPFILTER_CDEF | INLOOPFILTER_CCSO) != 0 {
-        let ccso_on = inloop & INLOOPFILTER_CCSO != 0
-            && (frame_hdr.ccso.p[0].enabled != 0
-                || frame_hdr.ccso.p[1].enabled != 0
-                || frame_hdr.ccso.p[2].enabled != 0);
-        let ccso_pcfg = [
-            build_ccso_plane_cfg(&frame_hdr, 0),
-            build_ccso_plane_cfg(&frame_hdr, 1),
-            build_ccso_plane_cfg(&frame_hdr, 2),
-        ];
-        let any_lossless = frame_hdr.segmentation.enabled != 0
-            && (0..crate::headers::MAX_SEGMENTS).any(|i| frame_hdr.segmentation.lossless[i] != 0);
-        // Allocate the toggled CDEF top-row backup banks lazily (2 banks x 3
-        // planes, 2 rows each at the plane's positive stride).
-        let y_ls = fp.y_stride.unsigned_abs();
-        let uv_ls = fp.uv_stride.unsigned_abs();
-        let need_y = 2 * y_ls;
-        let need_uv = 2 * uv_ls;
-        for bank in sc.cdef_line.iter_mut() {
-            if bank[0].len() != need_y {
-                bank[0] = vec![0u8; need_y];
-            }
-            if seq_hdr.layout != crate::headers::PixelLayout::I400 {
-                for b in bank.iter_mut().skip(1) {
-                    if b.len() != need_uv {
-                        *b = vec![0u8; need_uv];
-                    }
-                }
-            }
-        }
-        // here lives on `lf` so it persists across sbrows within the frame).
-        let start = sby * sb_step;
-        // Cross-sbrow seam: re-filter the 2 block-rows straddling the boundary
-        // superblock-row frame (the M2 clip) sby is always 0 so this is skipped.
-        if sby > 0 {
-            let prev_mask_row = (((sby - 1) >> (2 - sb128)) * sb256w) as usize;
-            let bp = crate::cdef::CdefBrowParams {
-                bw,
-                bh,
-                damping: fp.cdef_damping,
-                layout: fp.layout,
-                on_skip_tx: fp.cdef_on_skiptx,
-                cdef_on: inloop & INLOOPFILTER_CDEF != 0,
-                mask: filter_mask_row(sh.mask, prev_mask_row, sb256w),
-                y_strength: &fp.cdef_y_strength,
-                uv_strength: &fp.cdef_uv_strength,
-                any_lossless,
-                ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
-            };
-            crate::cdef::cdef_brow_8bpc(
-                dst_y,
-                dst_u,
-                dst_v,
-                &bp,
-                fp.y_stride,
-                fp.uv_stride,
-                &mut sc.cdef_line,
-                &mut sc.cdef_line_toggle,
-                start - 2,
-                start,
-                sby,
-                true,
-            );
-        }
-        let n_blks = sb_step - 2 * ((sby + 1 < sbh) as i32);
-        let end = (start + n_blks).min(bh);
-        let bp = crate::cdef::CdefBrowParams {
-            bw,
-            bh,
-            damping: fp.cdef_damping,
-            layout: fp.layout,
-            on_skip_tx: fp.cdef_on_skiptx,
-            cdef_on: inloop & INLOOPFILTER_CDEF != 0,
-            mask: filter_mask_row(sh.mask, mask_row, sb256w),
-            y_strength: &fp.cdef_y_strength,
-            uv_strength: &fp.cdef_uv_strength,
-            any_lossless,
-            ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
-        };
-        crate::cdef::cdef_brow_8bpc(
-            dst_y,
-            dst_u,
-            dst_v,
-            &bp,
-            fp.y_stride,
-            fp.uv_stride,
-            &mut sc.cdef_line,
-            &mut sc.cdef_line_toggle,
-            start,
-            end,
-            sby,
-            false,
-        );
-    }
-
-    // dispatch calls the Rust-native slice kernels directly (the asm dsp_lr
-    // pointers are unavailable).
-    if sh.restore_planes != 0 && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0 {
-        LUMA_SNAP.with(|snap_cell| {
-            let mut snap = snap_cell.borrow_mut();
-            // The luma snapshot is read only by the chroma single-Wiener cross-
-            // component refine, which runs only when chroma restoration is enabled.
-            // For luma-only restoration the snapshot is never read, so skip the copy
-            // entirely (pass an empty slice). When it is needed, refresh only the
-            // band the kernel touches: this superblock row's luma rows plus a 64-row
-            // halo (well over the Wiener vertical reach of ~12 — the sole reader is
-            // `ns_wiener_single_uv_8bpc`). The buffer keeps the full plane size so the
-            // kernel still indexes it by absolute offset; rows outside the band are
-            // not read for this `sby`. This replaces a full-plane `dst_y.to_vec()`
-            // per row.
-            let chroma_lr = {
-                // The luma snapshot is read only by the chroma single-Wiener cross-
-                // component refine, which a chroma unit selects only when its
-                // restoration type is NsWiener (or Switchable, where a unit may pick
-                // it). Any other chroma type (None/PcWiener) never reads luma, so the
-                // copy is pure waste — skip it.
-                let nsw = crate::headers::RestorationType::NsWiener as u8;
-                let sw = crate::headers::RestorationType::Switchable as u8;
-                let u = frame_hdr.restoration.p[1].restoration_type;
-                let v = frame_hdr.restoration.p[2].restoration_type;
-                u == nsw || u == sw || v == nsw || v == sw
-            };
-            let luma_snapshot: &[u8] = if chroma_lr {
-                if snap.len() != dst_y.len() {
-                    snap.resize(dst_y.len(), 0);
-                }
-                let sb_luma_h = sb_step * 4;
-                let ystride = fp.y_stride.unsigned_abs() as usize;
-                let band_lo = (((sby * sb_luma_h - 64).max(0)) as usize * ystride).min(dst_y.len());
-                let band_hi =
-                    ((((sby + 1) * sb_luma_h + 64).max(0)) as usize * ystride).min(dst_y.len());
-                snap[band_lo..band_hi].copy_from_slice(&dst_y[band_lo..band_hi]);
-                &snap[..]
-            } else {
-                &[]
-            };
-            // PC/NS wiener tables, selected by the qidx bucket computed in init_wiener
-            // is unused; the kernels only index them for their own filter family.
-            let widx = sh.wiener_idx;
-            let pc_subclass_lut: &[u8] = &crate::tables::PC_WIENER_SUB_CLASSIFY[widx];
-            let pc_filters: &[[i16; 13]] = &crate::tables::PC_WIENER_FILTERS[widx];
-            let ns_subclass_lut: &[u8] = match sh.ns_subclass_class_idx {
-                // `ci` is derived from num_classes_idx (parsed get_bits(3) → 0..7), so
-                // ci = num_classes_idx - 1 ∈ 0..6; clamp defensively to the table bound.
-                Some(ci) => &crate::tables::PC_WIENER_SUB_CLASSIFY_NS[widx][ci.min(6)],
-                // For valid streams the multi-class NS path only runs when this is Some
-                // (plane 0 num_classes_idx > 0). A malformed stream can still select the
-                // NsMulti per-unit path; fall back to a valid (non-empty) LUT bucket so
-                // classification never indexes an empty slice. No-op for valid input.
-                None => &crate::tables::PC_WIENER_SUB_CLASSIFY_NS[widx][0],
-            };
-            let ctx = crate::looprestoration::LrContext {
-                restoration_p: &frame_hdr.restoration.p,
-                gdf_qp_idx: frame_hdr.gdf.qp_idx as i32,
-                gdf_scale: frame_hdr.gdf.scale as i32,
-                sb128: frame_hdr.sb128 != 0,
-                cfl_ds_filter_index: seq_hdr.cfl_ds_filter_index as i32,
-                layout: seq_hdr.layout,
-                bw,
-                bh,
-                sb256w,
-                sbh,
-                mask: sh.mask,
-                lr_mask: sh.lr_mask,
-                lr_db_line: &sc.lr_db_line,
-                lr_cdef_line: &sh.lr_cdef_line,
-                lf_p_luma: luma_snapshot,
-                base_q: sh.base_q,
-                gdf_ref_dst_idx: sh.gdf_ref_dst_idx,
-                start_of_tile_row: sh.start_of_tile_row,
-                ns_subclass_lut,
-                pc_subclass_lut,
-                pc_filters,
-                n_tc: 1,
-                inloop_filters: inloop,
-                cur_stride: [fp.y_stride, fp.uv_stride],
-                unit_size: frame_hdr.restoration.unit_size,
-                restore_planes: sh.restore_planes,
-            };
-            let mut dst: [&mut [u8]; 3] = [dst_y, dst_u, dst_v];
-            crate::looprestoration::lr_sbrow_8bpc(&ctx, &mut dst, sby);
-        });
-    }
-}
-
 /// Dav2d-shaped post-filter slice for one 64px-high band (`by64`).
 ///
 /// The old multithreaded path claimed one whole root-SB row (`sby`). For 128x128
@@ -4654,7 +4333,7 @@ fn filter_sb64<BD: crate::pixel::BitDepth>(
             .unwrap_or(0)
             & 1)
             != 0;
-        let mut dctx = crate::deblock::DeblockCtx {
+        let dctx = crate::deblock::DeblockCtx {
             frame_hdr,
             mask: sh.mask,
             mask_row,
@@ -4668,7 +4347,6 @@ fn filter_sb64<BD: crate::pixel::BitDepth>(
             ss_ver: fp.ss_ver as i32,
             bw,
             bh,
-            sb128,
             y_stride: fp.y_stride,
             uv_stride: fp.uv_stride,
             layout: seq_hdr.layout,
@@ -14773,28 +14451,6 @@ fn inter_luma_tx_walk<BD: crate::pixel::BitDepth>(
     Ok(())
 }
 
-/// Reconstruct the luma plane of an intra (non-IntraBC) block at the decode_b
-/// leaf, for the 8bpc path.
-///
-/// Caller guarantees `b.is_intra != 0 && b.intrabc == 0` and luma is present.
-///
-/// Simplifications vs C (M1a, documented for the bit-exact follow-up):
-///  - palette blocks (`pal_sz != 0`) skip ordinary intra prediction and fill
-///  - `n_tr`/`n_bl` top-right / bottom-left availability use the per-SB
-///    `is_coded` grid as in C; the `prefilter_toplevel_sb_edge` (top SB row
-///    edge backup) is passed as `None` (no cross-SB-row prefilter buffer yet).
-#[allow(clippy::too_many_arguments)]
-fn recon_b_intra_luma<BD: crate::pixel::BitDepth>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
-    bx: i32,
-    by: i32,
-    _bx4: usize,
-    _by4: usize,
-    _intrabc: bool,
-) -> Result<(), ()> {
-    recon_b_intra_luma_phase(rb, bx, by, _bx4, _by4, _intrabc, TxPhase::Both)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn recon_b_intra_luma_phase<BD: crate::pixel::BitDepth>(
     rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
@@ -14829,21 +14485,8 @@ fn recon_b_intra_luma_phase<BD: crate::pixel::BitDepth>(
     )
 }
 
-/// As `recon_b_intra_luma`, but with the transform-walk geometry block size
-/// given explicitly. For >64px blocks split into 64x64 sub-blocks the tx walk
-/// uses the sub-block size while coefficient decoding still uses the full
 #[allow(clippy::too_many_arguments)]
-fn recon_b_intra_luma_geom<BD: crate::pixel::BitDepth>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
-    bx: i32,
-    by: i32,
-    geom_bs: usize,
-) -> Result<(), ()> {
-    recon_b_intra_luma_geom_phase(rb, bx, by, geom_bs, TxPhase::Both)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn recon_b_intra_luma_geom_phase<BD: crate::pixel::BitDepth>(
+fn recon_b_intra_luma_geom_phase<BD: BitDepth>(
     rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
     bx: i32,
     by: i32,
@@ -15425,30 +15068,6 @@ enum ChromaPhase {
 }
 
 #[inline(always)]
-fn tx_phase_for_pass(pass: u8) -> TxPhase {
-    let has_entropy = (pass & crate::internal::Pass::Entropy as u8) != 0;
-    let has_recon = (pass & crate::internal::Pass::Recon as u8) != 0;
-    match (has_entropy, has_recon) {
-        (true, true) => TxPhase::Both,
-        (true, false) => TxPhase::ReadOnly,
-        (false, true) => TxPhase::ReconOnly,
-        (false, false) => TxPhase::Both,
-    }
-}
-
-#[inline(always)]
-fn chroma_phase_for_pass(pass: u8) -> ChromaPhase {
-    let has_entropy = (pass & crate::internal::Pass::Entropy as u8) != 0;
-    let has_recon = (pass & crate::internal::Pass::Recon as u8) != 0;
-    match (has_entropy, has_recon) {
-        (true, true) => ChromaPhase::Both,
-        (true, false) => ChromaPhase::ReadOnly,
-        (false, true) => ChromaPhase::ReconOnly,
-        (false, false) => ChromaPhase::Both,
-    }
-}
-
-#[inline(always)]
 fn chroma_phase_intersect(local: ChromaPhase, outer: ChromaPhase) -> Option<ChromaPhase> {
     match outer {
         ChromaPhase::Both => Some(local),
@@ -15461,39 +15080,6 @@ fn chroma_phase_intersect(local: ChromaPhase, outer: ChromaPhase) -> Option<Chro
             ChromaPhase::ReadOnly => None,
         },
     }
-}
-
-fn recon_b_intra_chroma<BD: BitDepth>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
-    cbx: i32,
-    cby: i32,
-    cbs: BlockSize,
-    _intrabc: bool,
-    sdp_active: bool,
-) -> Result<(), ()> {
-    let recon = &mut *rb.recon;
-    let msac = &mut *rb.msac;
-    let cdf_m = &mut *rb.cdf_m;
-    let a = &mut *rb.a;
-    let l = &mut *rb.l;
-    let b = rb.b;
-    let fi = rb.fi;
-    recon_b_intra_chroma_phase(
-        &mut ReconBCtx {
-            recon: &mut *recon,
-            msac: &mut *msac,
-            cdf_m: &mut *cdf_m,
-            a: &mut *a,
-            l: &mut *l,
-            b,
-            fi,
-        },
-        cbx,
-        cby,
-        cbs,
-        sdp_active,
-        ChromaPhase::Both,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -16209,32 +15795,6 @@ fn cfl_predict_8bpc<BD: crate::pixel::BitDepth>(
         );
     }
     Ok(())
-}
-
-/// Reconstruct a single luma transform block (intra, non-IntraBC, 8bpc).
-///
-/// decode coefficients, run intra prediction into `dst_y`, then add the inverse
-/// transform residual. `bx`/`by` are the tx block's 4x4 grid position.
-#[allow(clippy::too_many_arguments)]
-fn recon_b_luma_tx<BD: crate::pixel::BitDepth>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD>,
-    tx: usize,
-    bx: i32,
-    by: i32,
-    pb_col_start: i32,
-    pb_row_start: i32,
-    lossless: bool,
-) -> Result<(), ()> {
-    recon_b_luma_tx_phase(
-        rb,
-        tx,
-        bx,
-        by,
-        pb_col_start,
-        pb_row_start,
-        lossless,
-        TxPhase::Both,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -279,31 +279,6 @@ fn lvl3(x: i8) -> u32 {
 }
 
 #[inline(always)]
-pub(crate) fn get_lo_ctx(
-    levels: &[i8],
-    off: usize,
-    tx_class: u8,
-    hi_mag: &mut u32,
-    xy: u32,
-    plane: i32,
-    stride: usize,
-) -> u32 {
-    let base = &levels[off..];
-
-    if plane != 0 {
-        if tx_class == 0 {
-            get_lo_ctx_chroma_2d(base, hi_mag, xy, plane, stride)
-        } else {
-            get_lo_ctx_chroma_1d(base, hi_mag, xy, stride)
-        }
-    } else if tx_class == 0 {
-        get_lo_ctx_luma_2d(base, hi_mag, xy, stride)
-    } else {
-        get_lo_ctx_luma_1d(base, hi_mag, xy, stride)
-    }
-}
-
-#[inline(always)]
 fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
     let a = base[1];
     let b = base[stride];

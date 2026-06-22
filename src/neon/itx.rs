@@ -170,15 +170,6 @@ impl crate::itx_1d::DctWide for NeonWide {
             vst1q_s32(dst.as_mut_ptr().add(off + 4), acc.1);
         }
     }
-    #[inline(always)]
-    unsafe fn to_array8(acc: Self::Acc) -> [i32; 8] {
-        unsafe {
-            let mut a = [0i32; 8];
-            vst1q_s32(a.as_mut_ptr(), acc.0);
-            vst1q_s32(a.as_mut_ptr().add(4), acc.1);
-            a
-        }
-    }
 }
 
 #[target_feature(enable = "rdm")]
@@ -256,11 +247,6 @@ impl crate::itx_1d::DctWide for NeonWideRdm {
     #[inline(always)]
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
         unsafe { NeonWide::store8(dst, off, acc) }
-    }
-
-    #[inline(always)]
-    unsafe fn to_array8(acc: Self::Acc) -> [i32; 8] {
-        unsafe { NeonWide::to_array8(acc) }
     }
 }
 

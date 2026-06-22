@@ -560,58 +560,6 @@ pub(crate) fn itx_dequant_scalar_core<const N: usize, const S: usize>(
     }
 }
 
-pub(crate) fn idct_dequant_rows_dct<const N: usize, const S: usize>(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    debug_assert!(S == 4 || S == 8 || S == 16 || S == 32);
-    debug_assert!(N <= coeff.len());
-    debug_assert!(S * S <= N);
-
-    let coeff = &mut coeff[..N];
-    let off = LAST_EOB_PER_COL.offset[tx] as usize;
-    let last_eob = &LAST_EOB_PER_COL.table[off..];
-    let mut ei = 0usize;
-    let mut y = 0usize;
-
-    loop {
-        let dst_row = row_mut(tmp, y);
-        for (x, dst) in dst_row[..S].iter_mut().enumerate() {
-            let v = coeff[y + x * S];
-            *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
-        }
-
-        dct_1d::<S>(dst_row, 1);
-        y += 1;
-
-        if y & 3 == 0 {
-            if eob > last_eob[ei] as i32 {
-                ei += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    while y < S {
-        row_mut(tmp, y)[..S].fill(0);
-        y += 1;
-    }
-
-    coeff[..S * S].fill(0);
-
-    let rnd0 = (1 << shift0) >> 1;
-    for y in 0..S {
-        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
-    }
-}
-
 pub(crate) trait DctSimd4 {
     type V: Copy + crate::itx_1d::DctLane;
     /// s16 8-wide widening-MAC backend used by `dct_1d_x8` for the 16/32 sizes.
