@@ -1378,7 +1378,7 @@ pub(crate) fn decode_coefs(
         && p.plane == 1
         && eob >= p.intra as i32
         && !p.lossless
-        && (p.layout == PixelLayout::I420 || t_dim.max < 8)
+        && (p.layout == PixelLayout::I420 || t_dim.min < 3)
     {
         let cctx = msac.decode_symbol_adapt_n::<6>(mode.cctx());
         *txtp |= (cctx << 8) as u16;

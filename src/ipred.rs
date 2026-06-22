@@ -1698,6 +1698,8 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
     th: usize,
     flags: i32,
     filter_type: i32,
+    ss_hor: usize,
+    ss_ver: usize,
 ) {
     let has_t = flags & CFL_HAS_TOP != 0;
     let has_l = flags & CFL_HAS_LEFT != 0;
@@ -1713,7 +1715,65 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
         0
     };
     let dst_left_base = n_top * dst_top_stride + 64 * 64;
+
+    // I444 (ss_hor==ss_ver==0): the MHCCP luma reference is the luma plane copied
+    // 1:1 with NO spatial downsampling (AVM: output = input[i], i.e. its q3 value
+    // is `input<<3` while cfl_filter here returns luma-scale, so no scaling).
+    // The dst layout is identical to the 4:2:0 case (it is at chroma resolution =
+    // luma resolution here); only the source sampling differs.
+    if ss_hor == 0 && ss_ver == 0 {
+        let ss = n_left;
+        let mut dst_p = 0usize;
+        let mut dst_lp = dst_left_base;
+        if has_t {
+            let has_tsb = top_sb_edge.is_some();
+            let (tsb, tsb_off) = top_sb_edge.unwrap_or((src, src_off));
+            let mut top_sp: usize = if has_tsb {
+                tsb_off - ss
+            } else {
+                (src_off - ss) - n_top * src_stride
+            };
+            let top_buf: &[P] = if has_tsb { tsb } else { src };
+            for _y in 0..n_top {
+                dst[dst_lp..(n_left + dst_lp)].copy_from_slice(&top_buf[top_sp..(n_left + top_sp)]);
+                for x in n_left..refw {
+                    dst[dst_p + x - n_left] = top_buf[top_sp + x];
+                }
+                if !has_tsb {
+                    top_sp += src_stride;
+                }
+                dst_lp += n_left;
+                dst_p += dst_top_stride;
+            }
+        }
+        let mut sp = src_off - ss;
+        for _y in 0..th {
+            dst[dst_lp..(n_left + dst_lp)].copy_from_slice(&src[sp..(n_left + sp)]);
+            for x in n_left..n_left + tw {
+                dst[dst_p + x - n_left] = src[sp + x];
+            }
+            sp += src_stride;
+            dst_lp += n_left;
+            dst_p += tw;
+        }
+        let n_bl = refh.saturating_sub(th);
+        for _y in 0..n_bl {
+            dst[dst_lp..(n_left + dst_lp)].copy_from_slice(&src[sp..(n_left + sp)]);
+            sp += src_stride;
+            dst_lp += n_left;
+        }
+        return;
+    }
+
     let ss = n_left << 1;
+
+    // Vertical handling is subsampling-aware: I420 (ss_ver=1) averages two luma
+    // rows per chroma row (bottom tap = src_stride, 2-row stride); I422 (ss_ver=0)
+    // keeps full vertical resolution (bottom tap = 0 so cfl_filter degenerates to a
+    // horizontal-only average, 1-row stride), matching AVM's
+    // cfl_adaptive_luma_subsampling_422.
+    let vstep = (src_stride as isize) << ss_ver;
+    let b_v: isize = if ss_ver == 1 { src_stride as isize } else { 0 };
 
     let mut dst_p = 0usize;
     let mut dst_lp = dst_left_base;
@@ -1733,9 +1793,9 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
             b = 0;
             t = 0;
         } else {
-            top_sp = (src_off - ss) - n_top * 2 * src_stride;
+            top_sp = (src_off - ss) - (n_top as isize * vstep) as usize;
             top_buf = src;
-            b = src_stride as isize;
+            b = b_v;
             t = if n_top == 1 {
                 -(src_stride as isize)
             } else {
@@ -1785,7 +1845,7 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
                 );
             }
             if !has_tsb {
-                top_sp += 2 * src_stride;
+                top_sp += vstep as usize;
                 t = -(src_stride as isize);
             }
             dst_lp += n_left;
@@ -1794,7 +1854,7 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
     }
 
     // l+blk: main block rows
-    let b = src_stride as isize;
+    let b = b_v;
     let mut sp = src_off - ss;
     let first_top: (&[P], usize) = if has_t {
         if let Some((tsb, tsb_off)) = top_sb_edge {
@@ -1851,7 +1911,7 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
                 filter_type,
             );
         }
-        sp += src_stride << 1;
+        sp += vstep as usize;
         dst_lp += n_left;
         dst_p += tw;
     }
@@ -1882,7 +1942,7 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
                 filter_type,
             );
         }
-        sp += src_stride << 1;
+        sp += vstep as usize;
         dst_lp += n_left;
     }
 }

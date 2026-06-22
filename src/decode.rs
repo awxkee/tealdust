@@ -4461,6 +4461,7 @@ fn filter_sb64<BD: crate::pixel::BitDepth>(
                     uv_strength: &fp.cdef_uv_strength,
                     any_lossless,
                     ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
+                    sb128: sb128 != 0,
                 };
                 crate::cdef::cdef_brow_8bpc(
                     dst_y,
@@ -4496,6 +4497,7 @@ fn filter_sb64<BD: crate::pixel::BitDepth>(
                 uv_strength: &fp.cdef_uv_strength,
                 any_lossless,
                 ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
+                sb128: sb128 != 0,
             };
             crate::cdef::cdef_brow_8bpc(
                 dst_y,
@@ -5862,7 +5864,12 @@ fn decode_b<BD: crate::pixel::BitDepth>(
         }
     }
 
-    if has_luma && (bx | by) & 63 == 0 {
+    if has_luma && (bx | by) & (63 >> (2 - fi.sb128)) == 0 {
+        let unit_mi = (63 >> (2 - fi.sb128)) + 1; // ccso unit = SB size in mi (32 for sb128)
+        let upr = (64 / unit_mi) as usize; // ccso units per row within a 256px lf region
+        let sub_x = ((bx & 63) / unit_mi) as usize;
+        let sub_y = ((by & 63) / unit_mi) as usize;
+        let sub = sub_y * upr + sub_x;
         let ccso_idx = (3 * ((bx >> 6) + (by >> 6) * fi.sb256w)) as usize;
         for p in 0..3 {
             if !fi.ccso_enabled[p] {
@@ -5874,15 +5881,26 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                     None => 0,
                 }
             } else {
-                let ctx = if bx - 64 >= fi.tile_col_start {
-                    recon.lf_mask[recon.lf_idx - 1].ccso[p] as usize * 2
+                // ccso is read at the SB's top-left block, which is always at the
+                // SB top boundary; fetch_spatial_neighbors excludes the above
+                // neighbours there, so the ctx uses the left SB only.
+                let left = if bx - unit_mi >= fi.tile_col_start {
+                    Some(if sub_x > 0 {
+                        recon.lf_mask[recon.lf_idx].ccso_sb[(sub - 1) * 3 + p]
+                    } else {
+                        recon.lf_mask[recon.lf_idx - 1].ccso_sb[(sub + upr - 1) * 3 + p]
+                    })
                 } else {
-                    0
+                    None
                 };
-
+                let ctx = match left {
+                    Some(l) => (l != 0) as usize * 2,
+                    None => 0,
+                };
                 msac.decode_bool_adapt(cdf_m.ccso(p, ctx)) as u8
             };
             recon.lf_mask[recon.lf_idx].ccso[p] = val;
+            recon.lf_mask[recon.lf_idx].ccso_sb[sub * 3 + p] = val;
             if !recon.cur_ccsomap.is_empty() {
                 recon.cur_ccsomap[ccso_idx + p] = val;
             }
@@ -6224,7 +6242,11 @@ fn decode_b<BD: crate::pixel::BitDepth>(
 
                 // Maximum valid uv_mode_idx: ctx=0 → 14 modes (0..13 non-dir+dir),
                 // ctx=1 → same+5+9=15 modes (0..14).
-                let max_uv = 4 + DEFAULT_MODE_LIST_UV_AV2.len() + uv_mode_ctx;
+                // Valid uv_mode_idx layout: [same-as-luma: uv_mode_ctx slots]
+                // + [5 non-directional] + [10 directional] = 15 + uv_mode_ctx
+                // values, so the index range is 0..=14+uv_mode_ctx. The escape
+                // path (symbol 7 + bools_bypass(3)) can legitimately produce 14.
+                let max_uv = 5 + DEFAULT_MODE_LIST_UV_AV2.len() + uv_mode_ctx;
                 if uv_mode_idx >= max_uv {
                     return Err(());
                 }
@@ -8018,6 +8040,17 @@ fn decode_b<BD: crate::pixel::BitDepth>(
             );
             if recon.seq_hdr.refmv_bank {
                 b.ref_pair = RefPair::from_pair(-1);
+                // The resolved IntraBC block vector lives in intra_data().intrabc_mv,
+                // but bank_add (shared with inter) reads inter_data().mv. Mirror the
+                // BV into inter.mv[0] so the ref-MV bank stores the real block vector
+                // (single ref => mv[1] unused). Without this the bank stored a stale
+                // zero MV, corrupting every later IntraBC block's BV predictor.
+                {
+                    let bv = b.intra_data().intrabc_mv;
+                    let id = b.inter_data_mut();
+                    id.mv[0] = bv;
+                    id.mv[1] = Mv::default();
+                }
                 crate::refmvs::bank_add(
                     &mut recon.rt.bank,
                     bs,
@@ -10669,7 +10702,7 @@ fn inter_chroma_residual_8bpc<BD: BitDepth>(
     }
 
     let cctx_enabled = recon.frame.seq_cctx
-        && (recon.frame.layout == crate::headers::PixelLayout::I420 || uv_t_dim.max < 8);
+        && (recon.frame.layout == crate::headers::PixelLayout::I420 || uv_t_dim.min < 8);
     let uv_stride = recon.frame.uv_stride_px;
     let mut y = 0;
     while y < ch4ss {
@@ -15207,7 +15240,10 @@ fn recon_b_intra_chroma_phase<BD: BitDepth>(
 
                     let params = crate::recon::DecodeCoefParams {
                         tx: uvtx,
-                        bs: cbs as u8 as usize,
+                        // skip/entropy ctx keys off the full chroma coding block
+                        // (b.cbs), not the tx-chunk walk size, matching luma's b.bs
+                        // and AVM's plane_bsize = chroma_ref_info.bsize_base.
+                        bs: b.cbs as usize,
                         plane: (pl + 1) as i32,
                         intra: is_intra,
                         fsc: b.fsc != 0,
@@ -15456,7 +15492,7 @@ fn recon_b_intra_chroma_phase<BD: BitDepth>(
             }
 
             let cctx_enabled = recon.frame.seq_cctx
-                && (recon.frame.layout == crate::headers::PixelLayout::I420 || uv_t_dim.max < 8);
+                && (recon.frame.layout == crate::headers::PixelLayout::I420 || uv_t_dim.min < 8);
             let cctx_type = if cctx_enabled && tu_eob[i][0] >= 1 {
                 (tu_txtp[i][0] >> 8) as i32
             } else {
@@ -15731,6 +15767,8 @@ fn cfl_predict_8bpc<BD: crate::pixel::BitDepth>(
         cth,
         edge_flags | dir as i32,
         filter_type,
+        ss_hor,
+        ss_ver,
     );
     refh += has_top as i32;
 
@@ -16635,24 +16673,36 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
             }
         }
         BlockPartition::Split => {
-            // For valid streams a square SPLIT is only decoded when both child
-            // malformed stream can desync the partition decode and reach here
-            // with the invariant broken; abort the tile gracefully instead of
-            // panicking. No effect on valid input.
-            if !(have_v_split && have_h_split && cbs == lbs) {
+            // A square SPLIT of a 128×128/256×256 SHARED block. For interior
+            // blocks all four children are on-frame; at a right/bottom boundary
+            // the off-frame children are skipped (mirroring AVM, which still
+            // reads do_square_split there because PARTITION_SPLIT stays eligible
+            // even when an implied rect direction is chroma-invalid for the
+            // subsampling). `cbs == lbs` must hold for a shared square split; a
+            // malformed stream that breaks the invariant aborts gracefully.
+            if cbs != lbs {
                 return Err(());
             }
             let sbs = BlockSize::from_raw(pcc.part[0][3]);
+            // top-left (origin is always on-frame)
             decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
-            *ctx.bx += hw4;
-            decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
-            *ctx.bx -= hw4;
-            *ctx.by += hh4;
-            decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
-            *ctx.bx += hw4;
-            decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
-            *ctx.bx -= hw4;
-            *ctx.by -= hh4;
+            // top-right
+            if *ctx.bx + hw4 < ctx.fi.bw {
+                *ctx.bx += hw4;
+                decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+                *ctx.bx -= hw4;
+            }
+            // bottom row
+            if *ctx.by + hh4 < ctx.fi.bh {
+                *ctx.by += hh4;
+                decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+                if *ctx.bx + hw4 < ctx.fi.bw {
+                    *ctx.bx += hw4;
+                    decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+                    *ctx.bx -= hw4;
+                }
+                *ctx.by -= hh4;
+            }
         }
         BlockPartition::V3 => {
             assert!(qw4 > 0 && hh4 > 0);

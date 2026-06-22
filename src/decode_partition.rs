@@ -33,6 +33,26 @@ use crate::internal::Pass;
 use crate::intops::{iclip, imax, imin};
 use crate::levels::{BlockPartition, BlockSize};
 
+/// Whether a chroma sub-block of `cw4`×`ch4` (4px units, already subsampled) is a
+/// valid plane block size, mirroring AVM `get_plane_block_size`/`ss_size_lookup`.
+/// A chroma block must be ≥4px in both dims and correspond to a real BLOCK_SIZE:
+/// aspect ≤ 8:1, and the longer side is capped per aspect class — 1:1/1:2 up to
+/// 256px (64 in 4px units), but 1:4 and 1:8 cap at 64px (16 in 4px units, i.e.
+/// 16×64 / 8×64 are the largest). So e.g. 32×128 chroma (from 64×128 luma in I422)
+/// is INVALID even though its 1:4 aspect alone would pass.
+fn chroma_sub_valid(cw4: i32, ch4: i32) -> bool {
+    if cw4 < 1 || ch4 < 1 {
+        return false;
+    }
+    let mn = imin(cw4, ch4);
+    let mx = imax(cw4, ch4);
+    let aspect = mx / mn;
+    if aspect > 8 {
+        return false;
+    }
+    if aspect >= 4 { mx <= 16 } else { mx <= 64 }
+}
+
 pub(crate) fn decode_partition(
     ctx: &mut SbCtx<'_, '_>,
     pass: u8,
@@ -75,16 +95,38 @@ pub(crate) fn decode_partition(
         assert!(bwh4ss[0] >= 1 && bwh4ss[1] >= 1);
         let mut dir = -1i32;
 
-        if imax(bwh4ss[0], bwh4ss[1]) == 1 || (pcc.part[0][0] & pcc.part[1][0]) == -1 {
+        if imax(bwh4ss[0], bwh4ss[1]) == 1
+            || (pl == 1 && bs == BlockSize::Bs8x8)
+            || (pcc.part[0][0] & pcc.part[1][0]) == -1
+        {
             bp = BlockPartition::None;
         } else if !have_h_split || !have_v_split {
             if bw4 == bh4 {
-                dir = have_v_split as i32;
-                bp = if !have_v_split {
-                    BlockPartition::H
+                // Boundary-implied direction: right-edge off-frame → VERT,
+                // bottom-edge off-frame → HORZ. For SHARED square-split-eligible
+                // blocks (128×128/256×256, chroma-coupled) the implied direction
+                // is only used when its chroma sub-block is a valid plane size
+                // (AVM checks partition_allowed[implied] before forcing). When it
+                // is invalid (e.g. I422 VERT → 64×128 → 32×128 chroma INVALID) we
+                // leave bp=Invalid so the square-split is read instead.
+                let implied_dir = have_v_split as i32;
+                let sq_eligible = bs == BlockSize::Bs128x128 || bs == BlockSize::Bs256x256;
+                let dir_chroma_ok = if !sq_eligible {
+                    true
+                } else if implied_dir != 0 {
+                    // SHARED block: chroma uses frame subsampling
+                    chroma_sub_valid((bw4 >> 1) >> fi.ss_hor, bh4 >> fi.ss_ver)
                 } else {
-                    BlockPartition::V
+                    chroma_sub_valid(bw4 >> fi.ss_hor, (bh4 >> 1) >> fi.ss_ver)
                 };
+                if dir_chroma_ok {
+                    dir = implied_dir;
+                    bp = if !have_v_split {
+                        BlockPartition::H
+                    } else {
+                        BlockPartition::V
+                    };
+                }
             } else if bw4 > bh4 {
                 if !have_h_split || fi.bh <= *by + qh4 {
                     dir = 1;
@@ -136,6 +178,30 @@ pub(crate) fn decode_partition(
                         if is_square != 0 {
                             bp = BlockPartition::Split;
                         }
+                    } else if (bs == BlockSize::Bs128x128 || bs == BlockSize::Bs256x256)
+                        && bp == BlockPartition::Invalid
+                    {
+                        // Boundary SHARED square block whose implied rect direction
+                        // was chroma-invalid (left bp=Invalid above): AVM still
+                        // allows PARTITION_SPLIT (is_square_split_eligible is true
+                        // for 128×128/256×256 regardless of boundary), so read the
+                        // square-split here. If not square, force the orthogonal
+                        // chroma-valid rect.
+                        let ctx3 = (ctx1 + (bs == BlockSize::Bs256x256) as i32 * 4) as usize;
+                        let is_square = msac.decode_bool_adapt(cdf_m.part_square(ctx3));
+                        if is_square != 0 {
+                            bp = BlockPartition::Split;
+                        } else {
+                            // right-edge boundary (implied VERT invalid) → HORZ;
+                            // bottom-edge (implied HORZ invalid) → VERT.
+                            if have_v_split {
+                                dir = 0;
+                                bp = BlockPartition::H;
+                            } else {
+                                dir = 1;
+                                bp = BlockPartition::V;
+                            }
+                        }
                     } else if imax(bw4, bh4) >= 32 {
                         bp = if bw4 > bh4 {
                             BlockPartition::V
@@ -152,12 +218,44 @@ pub(crate) fn decode_partition(
 
                         if imin(bwh4ss[0], bwh4ss[1]) == 1 {
                             dir = (bwh4ss[0] > bwh4ss[1]) as i32;
-                        } else if !(v_aspect && h_aspect) {
-                            dir = v_aspect as i32;
+                        } else if pl == 1 && (bs == BlockSize::Bs8x16 || bs == BlockSize::Bs8x32) {
+                            // chroma: no dimension of 4, so VERT (4-wide) disallowed -> HORZ
+                            dir = 0;
+                        } else if pl == 1 && (bs == BlockSize::Bs16x8 || bs == BlockSize::Bs32x8) {
+                            // chroma: no dimension of 4, so HORZ (4-tall) disallowed -> VERT
+                            dir = 1;
                         } else {
-                            let ctx4 = (ctx1 + pcc.ctx[1] as i32 * 4) as usize;
+                            // A split direction is disallowed when the resulting
+                            // chroma sub-block has no valid plane size (AVM
+                            // check_is_chroma_size_valid via ss_size_lookup):
+                            // chroma dim < 4px or chroma aspect > 8:1.
+                            let chroma_ok = |sw4: i32, sh4: i32| -> bool {
+                                if pl == 0 {
+                                    // SHARED square blocks (128×128/256×256) are
+                                    // chroma-coupled: a rect direction whose chroma
+                                    // sub-block is not a valid plane size (e.g. I422
+                                    // VERT → 64×128 → 32×128 chroma) is disallowed,
+                                    // so AVM forces the orthogonal rect without
+                                    // reading part_dir. Uses frame subsampling.
+                                    if bs == BlockSize::Bs128x128 || bs == BlockSize::Bs256x256 {
+                                        return chroma_sub_valid(
+                                            sw4 >> fi.ss_hor,
+                                            sh4 >> fi.ss_ver,
+                                        );
+                                    }
+                                    return true;
+                                }
+                                chroma_sub_valid(sw4 >> eff_ss_hor, sh4 >> eff_ss_ver)
+                            };
+                            let v_ok = v_aspect && chroma_ok(bw4 >> 1, bh4);
+                            let h_ok = h_aspect && chroma_ok(bw4, bh4 >> 1);
+                            if v_ok && h_ok {
+                                let ctx4 = (ctx1 + pcc.ctx[1] as i32 * 4) as usize;
 
-                            dir = msac.decode_bool_adapt(cdf_m.part_dir(pl, ctx4)) as i32;
+                                dir = msac.decode_bool_adapt(cdf_m.part_dir(pl, ctx4)) as i32;
+                            } else {
+                                dir = v_ok as i32;
+                            }
                         }
                         assert!(pcc.part[dir as usize][0] != -1);
                         bp = if dir != 0 {

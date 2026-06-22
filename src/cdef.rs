@@ -479,6 +479,8 @@ pub(crate) struct CdefBrowParams<'a> {
     pub(crate) any_lossless: bool,
     /// CCSO config; `None` when CCSO is disabled for this frame.
     pub(crate) ccso: Option<CcsoCfg>,
+    /// True for 128px superblocks; selects CCSO per-SB flag granularity.
+    pub(crate) sb128: bool,
 }
 
 impl<'a> CdefBrowParams<'a> {
@@ -495,8 +497,25 @@ impl<'a> CdefBrowParams<'a> {
     }
 
     #[inline(always)]
-    fn ccso_mask(&self, sb256x: usize) -> [u8; 3] {
-        self.mask_at(sb256x).map(|m| m.ccso).unwrap_or([0; 3])
+    fn ccso_mask(&self, sb256x: usize, sbx: i32, by: i32) -> [u8; 3] {
+        // CCSO flags are per coding-SB (128px for sb128, 64px for sb64), but the
+        // lf mask is per-256px region. `ccso_sb` holds the per-sub-SB flags; pick
+        // the sub covering this 64px filter unit. Last-wins `ccso` would otherwise
+        // smear one SB'"'"'s flag across the whole 256px region.
+        let sb128i = self.sb128 as i32;
+        let unit_mi = 16 << sb128i;
+        let upr = 64 / unit_mi;
+        let sub_x = (sbx & 3) >> sb128i;
+        let sub_y = (by & 63) / unit_mi;
+        let sub = (sub_y * upr + sub_x) as usize;
+        match self.mask_at(sb256x) {
+            Some(m) => [
+                m.ccso_sb[sub * 3],
+                m.ccso_sb[sub * 3 + 1],
+                m.ccso_sb[sub * 3 + 2],
+            ],
+            None => [0; 3],
+        }
     }
 
     #[inline(always)]
@@ -700,7 +719,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
             let cdef_idx = p.cdef_idx(sb256x, sb64_idx);
 
             if let Some(cc) = &p.ccso {
-                let ccm = p.ccso_mask(sb256x);
+                let ccm = p.ccso_mask(sb256x, sbx, by);
                 let flag = ccm[0] | ccm[1] | ccm[2];
                 let do_left = flag & !prev_flag;
                 prev_flag |= flag;
@@ -1009,7 +1028,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
             }
 
             if let Some(cc) = &p.ccso {
-                let ccm = p.ccso_mask(sb256x);
+                let ccm = p.ccso_mask(sb256x, sbx, by);
                 let flag = ccm[0] | ((ccm[1] | ccm[2]) << 1);
                 let do_right = flag & !prev_flag;
                 if do_right != 0 && (sbx + 1) * sbsz < p.bw {
