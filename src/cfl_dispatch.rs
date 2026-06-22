@@ -29,7 +29,10 @@
 
 use std::sync::OnceLock;
 
-pub(crate) type CflApply420Fn = fn(
+const CFL_FLT_TYPE_VSTRIP: u32 = 1;
+const CFL_FLT_TYPE_GAUSS: u32 = 2;
+
+pub(crate) type CflApplyFn = fn(
     y: &[u8],
     u: &mut [u8],
     v: &mut [u8],
@@ -49,6 +52,27 @@ pub(crate) type CflApply420Fn = fn(
     alpha1: i32,
 );
 
+pub(crate) type CflApply422Fn = fn(
+    y: &[u8],
+    u: &mut [u8],
+    v: &mut [u8],
+    yrow0: usize,
+    urow0: usize,
+    vrow0: usize,
+    ystride: usize,
+    cstride: usize,
+    w: usize,
+    h: usize,
+    xlim: usize,
+    ylim: usize,
+    dc0: i32,
+    dc1: i32,
+    dc2: i32,
+    alpha0: i32,
+    alpha1: i32,
+    filter_type: u32,
+);
+
 #[inline(always)]
 fn predict_one(dc: i32, alpha: i32, ac: i32) -> u8 {
     let diff = alpha * ac;
@@ -57,8 +81,19 @@ fn predict_one(dc: i32, alpha: i32, ac: i32) -> u8 {
     (dc + signed).clamp(0, 255) as u8
 }
 
+#[inline(always)]
+fn pad_bottom(plane: &mut [u8], row0: usize, stride: usize, w: usize, h: usize, ylim: usize) {
+    debug_assert_ne!(ylim, 0);
+    let src = row0 + (ylim - 1) * stride;
+    for yy in ylim..h {
+        let dst = row0 + yy * stride;
+        plane.copy_within(src..src + w, dst);
+    }
+}
+
 /// Bit-exact scalar reference. Mirrors the 420 / uniform branch of the
 /// `cfl_pred_raw` apply loop, including the right/bottom padding.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn cfl_apply_420_8bpc_scalar(
     y: &[u8],
     u: &mut [u8],
@@ -78,6 +113,12 @@ pub(crate) fn cfl_apply_420_8bpc_scalar(
     alpha0: i32,
     alpha1: i32,
 ) {
+    let do_u = alpha0 != 0;
+    let do_v = alpha1 != 0;
+    if !do_u && !do_v {
+        return;
+    }
+
     let mut yrow = yrow0;
     let mut urow = urow0;
     let mut vrow = vrow0;
@@ -90,61 +131,316 @@ pub(crate) fn cfl_apply_420_8bpc_scalar(
                 + y[yrow + xl + ystride + 1] as i32)
                 << 1)
                 - dc0;
-            if alpha0 != 0 {
+            if do_u {
                 u[urow + x] = predict_one(dc1, alpha0, ac);
             }
-            if alpha1 != 0 {
+            if do_v {
                 v[vrow + x] = predict_one(dc2, alpha1, ac);
             }
         }
-        if alpha0 != 0 {
+        if do_u {
             let last = u[urow + xlim - 1];
-            for xpad in xlim..w {
-                u[urow + xpad] = last;
-            }
+            u[urow + xlim..urow + w].fill(last);
         }
-        if alpha1 != 0 {
+        if do_v {
             let last = v[vrow + xlim - 1];
-            for xpad in xlim..w {
-                v[vrow + xpad] = last;
-            }
+            v[vrow + xlim..vrow + w].fill(last);
         }
         yrow += ystride << 1;
         urow += cstride;
         vrow += cstride;
     }
-    if alpha0 != 0 {
-        let src = urow0 + (ylim - 1) * cstride;
-        for yy in ylim..h {
-            let dst = urow0 + yy * cstride;
-            u.copy_within(src..src + w, dst);
-        }
+    if do_u {
+        pad_bottom(u, urow0, cstride, w, h, ylim);
     }
-    if alpha1 != 0 {
-        let src = vrow0 + (ylim - 1) * cstride;
-        for yy in ylim..h {
-            let dst = vrow0 + yy * cstride;
-            v.copy_within(src..src + w, dst);
-        }
+    if do_v {
+        pad_bottom(v, vrow0, cstride, w, h, ylim);
     }
 }
 
-static CFL_APPLY_420_8BPC: OnceLock<CflApply420Fn> = OnceLock::new();
+/// Bit-exact scalar apply path for 4:4:4 CFL. The luma plane is already at
+/// chroma resolution, so the AC term is just `y << 3` minus the q3 DC.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cfl_apply_444_8bpc_scalar(
+    y: &[u8],
+    u: &mut [u8],
+    v: &mut [u8],
+    yrow0: usize,
+    urow0: usize,
+    vrow0: usize,
+    ystride: usize,
+    cstride: usize,
+    w: usize,
+    h: usize,
+    xlim: usize,
+    ylim: usize,
+    dc0: i32,
+    dc1: i32,
+    dc2: i32,
+    alpha0: i32,
+    alpha1: i32,
+) {
+    let do_u = alpha0 != 0;
+    let do_v = alpha1 != 0;
+    if !do_u && !do_v {
+        return;
+    }
+
+    let mut yrow = yrow0;
+    let mut urow = urow0;
+    let mut vrow = vrow0;
+    for _y in 0..ylim {
+        let ysrc = &y[yrow..yrow + xlim];
+
+        match (do_u, do_v) {
+            (true, true) => {
+                let udst = &mut u[urow..urow + xlim];
+                let vdst = &mut v[vrow..vrow + xlim];
+                for ((&yy, du), dv) in ysrc.iter().zip(udst.iter_mut()).zip(vdst.iter_mut()) {
+                    let ac = ((yy as i32) << 3) - dc0;
+                    *du = predict_one(dc1, alpha0, ac);
+                    *dv = predict_one(dc2, alpha1, ac);
+                }
+            }
+            (true, false) => {
+                let udst = &mut u[urow..urow + xlim];
+                for (&yy, du) in ysrc.iter().zip(udst.iter_mut()) {
+                    let ac = ((yy as i32) << 3) - dc0;
+                    *du = predict_one(dc1, alpha0, ac);
+                }
+            }
+            (false, true) => {
+                let vdst = &mut v[vrow..vrow + xlim];
+                for (&yy, dv) in ysrc.iter().zip(vdst.iter_mut()) {
+                    let ac = ((yy as i32) << 3) - dc0;
+                    *dv = predict_one(dc2, alpha1, ac);
+                }
+            }
+            (false, false) => unreachable!(),
+        }
+
+        if do_u {
+            let last = u[urow + xlim - 1];
+            u[urow + xlim..urow + w].fill(last);
+        }
+        if do_v {
+            let last = v[vrow + xlim - 1];
+            v[vrow + xlim..vrow + w].fill(last);
+        }
+        yrow += ystride;
+        urow += cstride;
+        vrow += cstride;
+    }
+    if do_u {
+        pad_bottom(u, urow0, cstride, w, h, ylim);
+    }
+    if do_v {
+        pad_bottom(v, vrow0, cstride, w, h, ylim);
+    }
+}
+
+#[inline(always)]
+fn cfl_ac_422_scalar(y: &[u8], yrow: usize, x: usize, dc0: i32, filter_type: u32) -> i32 {
+    let xl = x << 1;
+    if filter_type == CFL_FLT_TYPE_GAUSS {
+        ((y[yrow + xl] as i32) << 3) - dc0
+    } else if filter_type == CFL_FLT_TYPE_VSTRIP {
+        let left = ((xl as i32) & -64).max(xl as i32 - 1) as usize;
+        (y[yrow + left] as i32 + 2 * y[yrow + xl] as i32 + y[yrow + xl + 1] as i32) * 2 - dc0
+    } else {
+        ((y[yrow + xl] as i32 + y[yrow + xl + 1] as i32) << 2) - dc0
+    }
+}
+
+/// Bit-exact scalar apply path for 4:2:2 CFL. This covers the horizontal CFL
+/// downsampling filters while keeping full vertical chroma resolution.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cfl_apply_422_8bpc_scalar(
+    y: &[u8],
+    u: &mut [u8],
+    v: &mut [u8],
+    yrow0: usize,
+    urow0: usize,
+    vrow0: usize,
+    ystride: usize,
+    cstride: usize,
+    w: usize,
+    h: usize,
+    xlim: usize,
+    ylim: usize,
+    dc0: i32,
+    dc1: i32,
+    dc2: i32,
+    alpha0: i32,
+    alpha1: i32,
+    filter_type: u32,
+) {
+    let do_u = alpha0 != 0;
+    let do_v = alpha1 != 0;
+    if !do_u && !do_v {
+        return;
+    }
+
+    let mut yrow = yrow0;
+    let mut urow = urow0;
+    let mut vrow = vrow0;
+    for _y in 0..ylim {
+        if filter_type == CFL_FLT_TYPE_GAUSS {
+            let ysrc = &y[yrow..yrow + (xlim << 1)];
+            match (do_u, do_v) {
+                (true, true) => {
+                    let udst = &mut u[urow..urow + xlim];
+                    let vdst = &mut v[vrow..vrow + xlim];
+                    for ((&yy, du), dv) in ysrc
+                        .iter()
+                        .step_by(2)
+                        .take(xlim)
+                        .zip(udst.iter_mut())
+                        .zip(vdst.iter_mut())
+                    {
+                        let ac = ((yy as i32) << 3) - dc0;
+                        *du = predict_one(dc1, alpha0, ac);
+                        *dv = predict_one(dc2, alpha1, ac);
+                    }
+                }
+                (true, false) => {
+                    let udst = &mut u[urow..urow + xlim];
+                    for (&yy, du) in ysrc.iter().step_by(2).take(xlim).zip(udst.iter_mut()) {
+                        let ac = ((yy as i32) << 3) - dc0;
+                        *du = predict_one(dc1, alpha0, ac);
+                    }
+                }
+                (false, true) => {
+                    let vdst = &mut v[vrow..vrow + xlim];
+                    for (&yy, dv) in ysrc.iter().step_by(2).take(xlim).zip(vdst.iter_mut()) {
+                        let ac = ((yy as i32) << 3) - dc0;
+                        *dv = predict_one(dc2, alpha1, ac);
+                    }
+                }
+                (false, false) => unreachable!(),
+            }
+        } else if filter_type != CFL_FLT_TYPE_VSTRIP {
+            let ysrc = &y[yrow..yrow + (xlim << 1)];
+            match (do_u, do_v) {
+                (true, true) => {
+                    let udst = &mut u[urow..urow + xlim];
+                    let vdst = &mut v[vrow..vrow + xlim];
+                    for ((pair, du), dv) in ysrc
+                        .chunks_exact(2)
+                        .zip(udst.iter_mut())
+                        .zip(vdst.iter_mut())
+                    {
+                        let ac = ((pair[0] as i32 + pair[1] as i32) << 2) - dc0;
+                        *du = predict_one(dc1, alpha0, ac);
+                        *dv = predict_one(dc2, alpha1, ac);
+                    }
+                }
+                (true, false) => {
+                    let udst = &mut u[urow..urow + xlim];
+                    for (pair, du) in ysrc.chunks_exact(2).zip(udst.iter_mut()) {
+                        let ac = ((pair[0] as i32 + pair[1] as i32) << 2) - dc0;
+                        *du = predict_one(dc1, alpha0, ac);
+                    }
+                }
+                (false, true) => {
+                    let vdst = &mut v[vrow..vrow + xlim];
+                    for (pair, dv) in ysrc.chunks_exact(2).zip(vdst.iter_mut()) {
+                        let ac = ((pair[0] as i32 + pair[1] as i32) << 2) - dc0;
+                        *dv = predict_one(dc2, alpha1, ac);
+                    }
+                }
+                (false, false) => unreachable!(),
+            }
+        } else {
+            for x in 0..xlim {
+                let ac = cfl_ac_422_scalar(y, yrow, x, dc0, filter_type);
+                if do_u {
+                    u[urow + x] = predict_one(dc1, alpha0, ac);
+                }
+                if do_v {
+                    v[vrow + x] = predict_one(dc2, alpha1, ac);
+                }
+            }
+        }
+
+        if do_u {
+            let last = u[urow + xlim - 1];
+            u[urow + xlim..urow + w].fill(last);
+        }
+        if do_v {
+            let last = v[vrow + xlim - 1];
+            v[vrow + xlim..vrow + w].fill(last);
+        }
+        yrow += ystride;
+        urow += cstride;
+        vrow += cstride;
+    }
+    if do_u {
+        pad_bottom(u, urow0, cstride, w, h, ylim);
+    }
+    if do_v {
+        pad_bottom(v, vrow0, cstride, w, h, ylim);
+    }
+}
+
+static CFL_APPLY_420_8BPC: OnceLock<CflApplyFn> = OnceLock::new();
+static CFL_APPLY_422_8BPC: OnceLock<CflApply422Fn> = OnceLock::new();
+static CFL_APPLY_444_8BPC: OnceLock<CflApplyFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cfl_apply_420() -> CflApply420Fn {
+fn resolve_cfl_apply_420() -> CflApplyFn {
     *CFL_APPLY_420_8BPC.get_or_init(|| {
-        let mut f = cfl_apply_420_8bpc_scalar as CflApply420Fn;
+        let mut f = cfl_apply_420_8bpc_scalar as CflApplyFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cfl_apply_420_8bpc_neon as CflApply420Fn;
+                f = crate::neon::cfl_apply_420_8bpc_neon as CflApplyFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cfl_apply_420_8bpc_sse41 as CflApply420Fn;
+                f = crate::sse::cfl_apply_420_8bpc_sse41 as CflApplyFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_cfl_apply_422() -> CflApply422Fn {
+    *CFL_APPLY_422_8BPC.get_or_init(|| {
+        let mut f = cfl_apply_422_8bpc_scalar as CflApply422Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::cfl_apply_422_8bpc_neon as CflApply422Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::cfl_apply_422_8bpc_sse41 as CflApply422Fn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_cfl_apply_444() -> CflApplyFn {
+    *CFL_APPLY_444_8BPC.get_or_init(|| {
+        let mut f = cfl_apply_444_8bpc_scalar as CflApplyFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::cfl_apply_444_8bpc_neon as CflApplyFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::cfl_apply_444_8bpc_sse41 as CflApplyFn;
             }
         }
         f
@@ -173,6 +469,77 @@ pub(crate) fn cfl_apply_420_8bpc(
     alpha1: i32,
 ) {
     resolve_cfl_apply_420()(
+        y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2, alpha0,
+        alpha1,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cfl_apply_422_8bpc(
+    y: &[u8],
+    u: &mut [u8],
+    v: &mut [u8],
+    yrow0: usize,
+    urow0: usize,
+    vrow0: usize,
+    ystride: usize,
+    cstride: usize,
+    w: usize,
+    h: usize,
+    xlim: usize,
+    ylim: usize,
+    dc0: i32,
+    dc1: i32,
+    dc2: i32,
+    alpha0: i32,
+    alpha1: i32,
+    filter_type: u32,
+) {
+    resolve_cfl_apply_422()(
+        y,
+        u,
+        v,
+        yrow0,
+        urow0,
+        vrow0,
+        ystride,
+        cstride,
+        w,
+        h,
+        xlim,
+        ylim,
+        dc0,
+        dc1,
+        dc2,
+        alpha0,
+        alpha1,
+        filter_type,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cfl_apply_444_8bpc(
+    y: &[u8],
+    u: &mut [u8],
+    v: &mut [u8],
+    yrow0: usize,
+    urow0: usize,
+    vrow0: usize,
+    ystride: usize,
+    cstride: usize,
+    w: usize,
+    h: usize,
+    xlim: usize,
+    ylim: usize,
+    dc0: i32,
+    dc1: i32,
+    dc2: i32,
+    alpha0: i32,
+    alpha1: i32,
+) {
+    resolve_cfl_apply_444()(
         y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2, alpha0,
         alpha1,
     );

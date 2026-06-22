@@ -47,7 +47,9 @@ pub(crate) use itx::{
 };
 
 pub(crate) use cdef::cdef_filter_block_8bpc_sse41;
-pub(crate) use cfl::cfl_apply_420_8bpc_sse41;
+pub(crate) use cfl::{
+    cfl_apply_420_8bpc_sse41, cfl_apply_422_8bpc_sse41, cfl_apply_444_8bpc_sse41,
+};
 pub(crate) use deblocking::deblock_apply_8bpc_sse41;
 pub(crate) use filter::{
     avg_row_8bpc_sse41, blend_row_8bpc_sse41, cctx_row_sse41, dc_add_row_8bpc_sse41,

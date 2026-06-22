@@ -2218,7 +2218,10 @@ static ADST_DEQUANT_8X8: OnceLock<IadstDequantFn<64>> = OnceLock::new();
 static ADST_DEQUANT_16X16: OnceLock<IadstDequantFn<256>> = OnceLock::new();
 
 #[inline]
-pub(crate) fn idct_dequant_4x4() -> IdctDequantFn<16> {
+pub(crate) fn idct_dequant_4x4(hbd: bool) -> IdctDequantFn<16> {
+    if hbd {
+        return idct_dequant_4x4_scalar;
+    }
     *DEQUANT_4X4.get_or_init(|| {
         let mut f = idct_dequant_4x4_scalar as IdctDequantFn<16>;
         #[cfg(target_arch = "aarch64")]
@@ -2238,7 +2241,10 @@ pub(crate) fn idct_dequant_4x4() -> IdctDequantFn<16> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_8x8() -> IdctDequantFn<64> {
+pub(crate) fn idct_dequant_8x8(hbd: bool) -> IdctDequantFn<64> {
+    if hbd {
+        return idct_dequant_8x8_scalar;
+    }
     *DEQUANT_8X8.get_or_init(|| {
         let mut f = idct_dequant_8x8_scalar as IdctDequantFn<64>;
         #[cfg(target_arch = "aarch64")]
@@ -2258,7 +2264,10 @@ pub(crate) fn idct_dequant_8x8() -> IdctDequantFn<64> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_16x16() -> IdctDequantFn<256> {
+pub(crate) fn idct_dequant_16x16(hbd: bool) -> IdctDequantFn<256> {
+    if hbd {
+        return idct_dequant_16x16_scalar;
+    }
     *DEQUANT_16X16.get_or_init(|| {
         let mut f = idct_dequant_16x16_scalar as IdctDequantFn<256>;
         #[cfg(target_arch = "aarch64")]
@@ -2278,7 +2287,10 @@ pub(crate) fn idct_dequant_16x16() -> IdctDequantFn<256> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_32x32() -> IdctDequantFn<1024> {
+pub(crate) fn idct_dequant_32x32(hbd: bool) -> IdctDequantFn<1024> {
+    if hbd {
+        return idct_dequant_32x32_scalar;
+    }
     *DEQUANT_32X32.get_or_init(|| {
         let mut f = idct_dequant_32x32_scalar as IdctDequantFn<1024>;
         #[cfg(target_arch = "aarch64")]
@@ -2302,7 +2314,10 @@ pub(crate) fn idct_dequant_32x32() -> IdctDequantFn<1024> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_64x64() -> IdctDequantFn<1024> {
+pub(crate) fn idct_dequant_64x64(hbd: bool) -> IdctDequantFn<1024> {
+    if hbd {
+        return idct_dequant_64x64_scalar;
+    }
     *DEQUANT_64X64.get_or_init(|| {
         let mut f = idct_dequant_64x64_scalar as IdctDequantFn<1024>;
         #[cfg(target_arch = "aarch64")]
@@ -2322,7 +2337,10 @@ pub(crate) fn idct_dequant_64x64() -> IdctDequantFn<1024> {
 }
 
 #[inline]
-pub(crate) fn iadst_dequant_4x4() -> IadstDequantFn<16> {
+pub(crate) fn iadst_dequant_4x4(hbd: bool) -> IadstDequantFn<16> {
+    if hbd {
+        return iadst_dequant_4x4_scalar;
+    }
     *ADST_DEQUANT_4X4.get_or_init(|| {
         let mut f = iadst_dequant_4x4_scalar as IadstDequantFn<16>;
         #[cfg(target_arch = "aarch64")]
@@ -2342,7 +2360,10 @@ pub(crate) fn iadst_dequant_4x4() -> IadstDequantFn<16> {
 }
 
 #[inline]
-pub(crate) fn iadst_dequant_8x8() -> IadstDequantFn<64> {
+pub(crate) fn iadst_dequant_8x8(hbd: bool) -> IadstDequantFn<64> {
+    if hbd {
+        return iadst_dequant_8x8_scalar;
+    }
     *ADST_DEQUANT_8X8.get_or_init(|| {
         let mut f = iadst_dequant_8x8_scalar as IadstDequantFn<64>;
         #[cfg(target_arch = "aarch64")]
@@ -2362,7 +2383,10 @@ pub(crate) fn iadst_dequant_8x8() -> IadstDequantFn<64> {
 }
 
 #[inline]
-pub(crate) fn iadst_dequant_16x16() -> IadstDequantFn<256> {
+pub(crate) fn iadst_dequant_16x16(hbd: bool) -> IadstDequantFn<256> {
+    if hbd {
+        return iadst_dequant_16x16_scalar;
+    }
     *ADST_DEQUANT_16X16.get_or_init(|| {
         let mut f = iadst_dequant_16x16_scalar as IadstDequantFn<256>;
         #[cfg(target_arch = "aarch64")]
@@ -2395,7 +2419,10 @@ static DEQUANT_RECT_4X32: OnceLock<IdctDequantFn<128>> = OnceLock::new();
 static DEQUANT_RECT_32X4: OnceLock<IdctDequantFn<128>> = OnceLock::new();
 
 #[inline]
-pub(crate) fn idct_dequant_4x8() -> IdctDequantFn<32> {
+pub(crate) fn idct_dequant_4x8(hbd: bool) -> IdctDequantFn<32> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<32, 4, 8>;
+    }
     *DEQUANT_RECT_4X8.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<32, 4, 8> as IdctDequantFn<32>;
         #[cfg(target_arch = "aarch64")]
@@ -2419,7 +2446,10 @@ pub(crate) fn idct_dequant_4x8() -> IdctDequantFn<32> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_8x4() -> IdctDequantFn<32> {
+pub(crate) fn idct_dequant_8x4(hbd: bool) -> IdctDequantFn<32> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<32, 8, 4>;
+    }
     *DEQUANT_RECT_8X4.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<32, 8, 4> as IdctDequantFn<32>;
         #[cfg(target_arch = "aarch64")]
@@ -2443,7 +2473,10 @@ pub(crate) fn idct_dequant_8x4() -> IdctDequantFn<32> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_8x16() -> IdctDequantFn<128> {
+pub(crate) fn idct_dequant_8x16(hbd: bool) -> IdctDequantFn<128> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<128, 8, 16>;
+    }
     *DEQUANT_RECT_8X16.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<128, 8, 16> as IdctDequantFn<128>;
         #[cfg(target_arch = "aarch64")]
@@ -2467,7 +2500,10 @@ pub(crate) fn idct_dequant_8x16() -> IdctDequantFn<128> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_16x8() -> IdctDequantFn<128> {
+pub(crate) fn idct_dequant_16x8(hbd: bool) -> IdctDequantFn<128> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<128, 16, 8>;
+    }
     *DEQUANT_RECT_16X8.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<128, 16, 8> as IdctDequantFn<128>;
         #[cfg(target_arch = "aarch64")]
@@ -2491,7 +2527,10 @@ pub(crate) fn idct_dequant_16x8() -> IdctDequantFn<128> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_16x32() -> IdctDequantFn<512> {
+pub(crate) fn idct_dequant_16x32(hbd: bool) -> IdctDequantFn<512> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<512, 16, 32>;
+    }
     *DEQUANT_RECT_16X32.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<512, 16, 32> as IdctDequantFn<512>;
         #[cfg(target_arch = "aarch64")]
@@ -2515,7 +2554,10 @@ pub(crate) fn idct_dequant_16x32() -> IdctDequantFn<512> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_32x16() -> IdctDequantFn<512> {
+pub(crate) fn idct_dequant_32x16(hbd: bool) -> IdctDequantFn<512> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<512, 32, 16>;
+    }
     *DEQUANT_RECT_32X16.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<512, 32, 16> as IdctDequantFn<512>;
         #[cfg(target_arch = "aarch64")]
@@ -2539,7 +2581,10 @@ pub(crate) fn idct_dequant_32x16() -> IdctDequantFn<512> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_4x16() -> IdctDequantFn<64> {
+pub(crate) fn idct_dequant_4x16(hbd: bool) -> IdctDequantFn<64> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<64, 4, 16>;
+    }
     *DEQUANT_RECT_4X16.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<64, 4, 16> as IdctDequantFn<64>;
         #[cfg(target_arch = "aarch64")]
@@ -2563,7 +2608,10 @@ pub(crate) fn idct_dequant_4x16() -> IdctDequantFn<64> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_16x4() -> IdctDequantFn<64> {
+pub(crate) fn idct_dequant_16x4(hbd: bool) -> IdctDequantFn<64> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<64, 16, 4>;
+    }
     *DEQUANT_RECT_16X4.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<64, 16, 4> as IdctDequantFn<64>;
         #[cfg(target_arch = "aarch64")]
@@ -2587,7 +2635,10 @@ pub(crate) fn idct_dequant_16x4() -> IdctDequantFn<64> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_8x32() -> IdctDequantFn<256> {
+pub(crate) fn idct_dequant_8x32(hbd: bool) -> IdctDequantFn<256> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<256, 8, 32>;
+    }
     *DEQUANT_RECT_8X32.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<256, 8, 32> as IdctDequantFn<256>;
         #[cfg(target_arch = "aarch64")]
@@ -2611,7 +2662,10 @@ pub(crate) fn idct_dequant_8x32() -> IdctDequantFn<256> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_32x8() -> IdctDequantFn<256> {
+pub(crate) fn idct_dequant_32x8(hbd: bool) -> IdctDequantFn<256> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<256, 32, 8>;
+    }
     *DEQUANT_RECT_32X8.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<256, 32, 8> as IdctDequantFn<256>;
         #[cfg(target_arch = "aarch64")]
@@ -2635,7 +2689,10 @@ pub(crate) fn idct_dequant_32x8() -> IdctDequantFn<256> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_4x32() -> IdctDequantFn<128> {
+pub(crate) fn idct_dequant_4x32(hbd: bool) -> IdctDequantFn<128> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<128, 4, 32>;
+    }
     *DEQUANT_RECT_4X32.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<128, 4, 32> as IdctDequantFn<128>;
         #[cfg(target_arch = "aarch64")]
@@ -2659,7 +2716,10 @@ pub(crate) fn idct_dequant_4x32() -> IdctDequantFn<128> {
 }
 
 #[inline]
-pub(crate) fn idct_dequant_32x4() -> IdctDequantFn<128> {
+pub(crate) fn idct_dequant_32x4(hbd: bool) -> IdctDequantFn<128> {
+    if hbd {
+        return idct_dequant_rect_scalar_core::<128, 32, 4>;
+    }
     *DEQUANT_RECT_32X4.get_or_init(|| {
         let mut f = idct_dequant_rect_scalar_core::<128, 32, 4> as IdctDequantFn<128>;
         #[cfg(target_arch = "aarch64")]
@@ -2690,7 +2750,10 @@ static ADST_DEQUANT_RECT_4X16: OnceLock<IadstDequantFn<64>> = OnceLock::new();
 static ADST_DEQUANT_RECT_16X4: OnceLock<IadstDequantFn<64>> = OnceLock::new();
 
 #[inline]
-pub(crate) fn iadst_dequant_4x8() -> IadstDequantFn<32> {
+pub(crate) fn iadst_dequant_4x8(hbd: bool) -> IadstDequantFn<32> {
+    if hbd {
+        return itx_dequant_rect_scalar_core::<32, 4, 8>;
+    }
     *ADST_DEQUANT_RECT_4X8.get_or_init(|| {
         let mut f = itx_dequant_rect_scalar_core::<32, 4, 8> as IadstDequantFn<32>;
         #[cfg(target_arch = "aarch64")]
@@ -2714,7 +2777,10 @@ pub(crate) fn iadst_dequant_4x8() -> IadstDequantFn<32> {
 }
 
 #[inline]
-pub(crate) fn iadst_dequant_8x4() -> IadstDequantFn<32> {
+pub(crate) fn iadst_dequant_8x4(hbd: bool) -> IadstDequantFn<32> {
+    if hbd {
+        return itx_dequant_rect_scalar_core::<32, 8, 4>;
+    }
     *ADST_DEQUANT_RECT_8X4.get_or_init(|| {
         let mut f = itx_dequant_rect_scalar_core::<32, 8, 4> as IadstDequantFn<32>;
         #[cfg(target_arch = "aarch64")]
@@ -2738,7 +2804,10 @@ pub(crate) fn iadst_dequant_8x4() -> IadstDequantFn<32> {
 }
 
 #[inline]
-pub(crate) fn iadst_dequant_8x16() -> IadstDequantFn<128> {
+pub(crate) fn iadst_dequant_8x16(hbd: bool) -> IadstDequantFn<128> {
+    if hbd {
+        return itx_dequant_rect_scalar_core::<128, 8, 16>;
+    }
     *ADST_DEQUANT_RECT_8X16.get_or_init(|| {
         let mut f = itx_dequant_rect_scalar_core::<128, 8, 16> as IadstDequantFn<128>;
         #[cfg(target_arch = "aarch64")]
@@ -2762,7 +2831,10 @@ pub(crate) fn iadst_dequant_8x16() -> IadstDequantFn<128> {
 }
 
 #[inline]
-pub(crate) fn iadst_dequant_16x8() -> IadstDequantFn<128> {
+pub(crate) fn iadst_dequant_16x8(hbd: bool) -> IadstDequantFn<128> {
+    if hbd {
+        return itx_dequant_rect_scalar_core::<128, 16, 8>;
+    }
     *ADST_DEQUANT_RECT_16X8.get_or_init(|| {
         let mut f = itx_dequant_rect_scalar_core::<128, 16, 8> as IadstDequantFn<128>;
         #[cfg(target_arch = "aarch64")]
@@ -2786,7 +2858,10 @@ pub(crate) fn iadst_dequant_16x8() -> IadstDequantFn<128> {
 }
 
 #[inline]
-pub(crate) fn iadst_dequant_4x16() -> IadstDequantFn<64> {
+pub(crate) fn iadst_dequant_4x16(hbd: bool) -> IadstDequantFn<64> {
+    if hbd {
+        return itx_dequant_rect_scalar_core::<64, 4, 16>;
+    }
     *ADST_DEQUANT_RECT_4X16.get_or_init(|| {
         let mut f = itx_dequant_rect_scalar_core::<64, 4, 16> as IadstDequantFn<64>;
         #[cfg(target_arch = "aarch64")]
@@ -2810,7 +2885,10 @@ pub(crate) fn iadst_dequant_4x16() -> IadstDequantFn<64> {
 }
 
 #[inline]
-pub(crate) fn iadst_dequant_16x4() -> IadstDequantFn<64> {
+pub(crate) fn iadst_dequant_16x4(hbd: bool) -> IadstDequantFn<64> {
+    if hbd {
+        return itx_dequant_rect_scalar_core::<64, 16, 4>;
+    }
     *ADST_DEQUANT_RECT_16X4.get_or_init(|| {
         let mut f = itx_dequant_rect_scalar_core::<64, 16, 4> as IadstDequantFn<64>;
         #[cfg(target_arch = "aarch64")]

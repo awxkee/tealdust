@@ -35,7 +35,7 @@ mod itx;
 mod looprestoration;
 
 pub(crate) use cdef::cdef_filter_block_8bpc_neon;
-pub(crate) use cfl::cfl_apply_420_8bpc_neon;
+pub(crate) use cfl::{cfl_apply_420_8bpc_neon, cfl_apply_422_8bpc_neon, cfl_apply_444_8bpc_neon};
 pub(crate) use deblocking::deblock_apply_8bpc_neon;
 pub(crate) use filter::{
     avg_row_8bpc_neon, blend_row_8bpc_neon, cctx_row_neon, dc_add_row_8bpc_neon,

@@ -29,6 +29,9 @@
 
 use core::arch::aarch64::*;
 
+const CFL_FLT_TYPE_VSTRIP: u32 = 1;
+const CFL_FLT_TYPE_GAUSS: u32 = 2;
+
 #[inline(always)]
 fn predict_one(dc: i32, alpha: i32, ac: i32) -> u8 {
     let diff = alpha * ac;
@@ -47,6 +50,21 @@ fn store_u8x8(a: &mut [u8; 8], v: uint8x8_t) {
     unsafe { vst1_u8(a.as_mut_ptr(), v) };
 }
 
+#[inline(always)]
+fn store_u8x16(a: &mut [u8; 16], v: uint8x16_t) {
+    unsafe { vst1q_u8(a.as_mut_ptr(), v) };
+}
+
+#[inline(always)]
+fn pad_bottom(plane: &mut [u8], row0: usize, stride: usize, w: usize, h: usize, ylim: usize) {
+    debug_assert_ne!(ylim, 0);
+    let src = row0 + (ylim - 1) * stride;
+    for yy in ylim..h {
+        let dst = row0 + yy * stride;
+        plane.copy_within(src..src + w, dst);
+    }
+}
+
 #[inline]
 #[target_feature(enable = "neon")]
 fn ac8_420_i16(top: uint8x16_t, bot: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
@@ -57,6 +75,26 @@ fn ac8_420_i16(top: uint8x16_t, bot: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
     let sum2x2_x2 = vshlq_n_u16::<1>(sum2x2); // <= 2040
 
     vsubq_s16(vreinterpretq_s16_u16(sum2x2_x2), dc0v)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn ac8_444_i16(src: uint8x8_t, dc0v: int16x8_t) -> int16x8_t {
+    let y16 = vmovl_u8(src);
+    vsubq_s16(vreinterpretq_s16_u16(vshlq_n_u16::<3>(y16)), dc0v)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn ac8_422_uniform_i16(src: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
+    let sum = vpaddlq_u8(src);
+    vsubq_s16(vreinterpretq_s16_u16(vshlq_n_u16::<2>(sum)), dc0v)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn ac8_422_gauss_i16(src: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
+    ac8_444_i16(vget_low_u8(vuzp1q_u8(src, src)), dc0v)
 }
 
 /// Apply alpha to 8 i16 AC lanes.
@@ -89,6 +127,33 @@ fn apply8_i16_ac(
     let val_hi = vaddq_s32(dc_v, signed_hi);
 
     vqmovn_u16(vcombine_u16(vqmovun_s32(val_lo), vqmovun_s32(val_hi)))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn apply16_444_i16_ac(
+    src: uint8x16_t,
+    dc0v: int16x8_t,
+    alpha_v: int16x4_t,
+    dc_v: int32x4_t,
+    round_v: int32x4_t,
+    zero_v: int32x4_t,
+) -> uint8x16_t {
+    let lo = apply8_i16_ac(
+        ac8_444_i16(vget_low_u8(src), dc0v),
+        alpha_v,
+        dc_v,
+        round_v,
+        zero_v,
+    );
+    let hi = apply8_i16_ac(
+        ac8_444_i16(vget_high_u8(src), dc0v),
+        alpha_v,
+        dc_v,
+        round_v,
+        zero_v,
+    );
+    vcombine_u8(lo, hi)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -226,19 +291,293 @@ fn cfl_apply_420_8bpc_neon_impl(
     }
 
     if do_u {
-        let src = urow0 + (ylim - 1) * cstride;
-        for yy in ylim..h {
-            let dst = urow0 + yy * cstride;
-            u.copy_within(src..src + w, dst);
-        }
+        pad_bottom(u, urow0, cstride, w, h, ylim);
     }
 
     if do_v {
-        let src = vrow0 + (ylim - 1) * cstride;
-        for yy in ylim..h {
-            let dst = vrow0 + yy * cstride;
-            v.copy_within(src..src + w, dst);
+        pad_bottom(v, vrow0, cstride, w, h, ylim);
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn ac8_422_i16<const GAUSS: bool>(src: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
+    if GAUSS {
+        ac8_422_gauss_i16(src, dc0v)
+    } else {
+        ac8_422_uniform_i16(src, dc0v)
+    }
+}
+
+#[inline(always)]
+fn cfl_ac_422_scalar_filter<const GAUSS: bool>(y: &[u8], yrow: usize, x: usize, dc0: i32) -> i32 {
+    let xl = x << 1;
+    if GAUSS {
+        ((y[yrow + xl] as i32) << 3) - dc0
+    } else {
+        ((y[yrow + xl] as i32 + y[yrow + xl + 1] as i32) << 2) - dc0
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "neon")]
+fn cfl_apply_422_8bpc_neon_impl<const GAUSS: bool>(
+    y: &[u8],
+    u: &mut [u8],
+    v: &mut [u8],
+    yrow0: usize,
+    urow0: usize,
+    vrow0: usize,
+    ystride: usize,
+    cstride: usize,
+    w: usize,
+    h: usize,
+    xlim: usize,
+    ylim: usize,
+    dc0: i32,
+    dc1: i32,
+    dc2: i32,
+    alpha0: i32,
+    alpha1: i32,
+) {
+    let do_u = alpha0 != 0;
+    let do_v = alpha1 != 0;
+
+    if !do_u && !do_v {
+        return;
+    }
+
+    assert_ne!(xlim, 0);
+    assert_ne!(ylim, 0);
+
+    assert!((i16::MIN as i32..=i16::MAX as i32).contains(&dc0));
+    assert!((i16::MIN as i32..=i16::MAX as i32).contains(&alpha0));
+    assert!((i16::MIN as i32..=i16::MAX as i32).contains(&alpha1));
+
+    let nfull = xlim / 8;
+    let xfull = nfull * 8;
+    let lfull = nfull * 16;
+
+    let dc0v = vdupq_n_s16(dc0 as i16);
+
+    let alpha0v = vdup_n_s16(alpha0 as i16);
+    let alpha1v = vdup_n_s16(alpha1 as i16);
+
+    let dc1v = vdupq_n_s32(dc1);
+    let dc2v = vdupq_n_s32(dc2);
+
+    let round_v = vdupq_n_s32(1024);
+    let zero_v = vdupq_n_s32(0);
+
+    let mut yrow = yrow0;
+    let mut urow = urow0;
+    let mut vrow = vrow0;
+
+    for _y in 0..ylim {
+        let row = y[yrow..yrow + lfull].as_chunks::<16>().0;
+
+        match (do_u, do_v) {
+            (true, true) => {
+                let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
+                let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
+
+                for ((du, dv), yy) in u_chunks.iter_mut().zip(v_chunks.iter_mut()).zip(row.iter()) {
+                    let ac = ac8_422_i16::<GAUSS>(load_u8x16(yy), dc0v);
+
+                    store_u8x8(du, apply8_i16_ac(ac, alpha0v, dc1v, round_v, zero_v));
+                    store_u8x8(dv, apply8_i16_ac(ac, alpha1v, dc2v, round_v, zero_v));
+                }
+            }
+
+            (true, false) => {
+                let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
+
+                for (du, yy) in u_chunks.iter_mut().zip(row.iter()) {
+                    let ac = ac8_422_i16::<GAUSS>(load_u8x16(yy), dc0v);
+
+                    store_u8x8(du, apply8_i16_ac(ac, alpha0v, dc1v, round_v, zero_v));
+                }
+            }
+
+            (false, true) => {
+                let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
+
+                for (dv, yy) in v_chunks.iter_mut().zip(row.iter()) {
+                    let ac = ac8_422_i16::<GAUSS>(load_u8x16(yy), dc0v);
+
+                    store_u8x8(dv, apply8_i16_ac(ac, alpha1v, dc2v, round_v, zero_v));
+                }
+            }
+
+            (false, false) => unreachable!(),
         }
+
+        for x in xfull..xlim {
+            let ac = cfl_ac_422_scalar_filter::<GAUSS>(y, yrow, x, dc0);
+
+            if do_u {
+                u[urow + x] = predict_one(dc1, alpha0, ac);
+            }
+            if do_v {
+                v[vrow + x] = predict_one(dc2, alpha1, ac);
+            }
+        }
+
+        if do_u {
+            let last = u[urow + xlim - 1];
+            u[urow + xlim..urow + w].fill(last);
+        }
+
+        if do_v {
+            let last = v[vrow + xlim - 1];
+            v[vrow + xlim..vrow + w].fill(last);
+        }
+
+        yrow += ystride;
+        urow += cstride;
+        vrow += cstride;
+    }
+
+    if do_u {
+        pad_bottom(u, urow0, cstride, w, h, ylim);
+    }
+
+    if do_v {
+        pad_bottom(v, vrow0, cstride, w, h, ylim);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "neon")]
+fn cfl_apply_444_8bpc_neon_impl(
+    y: &[u8],
+    u: &mut [u8],
+    v: &mut [u8],
+    yrow0: usize,
+    urow0: usize,
+    vrow0: usize,
+    ystride: usize,
+    cstride: usize,
+    w: usize,
+    h: usize,
+    xlim: usize,
+    ylim: usize,
+    dc0: i32,
+    dc1: i32,
+    dc2: i32,
+    alpha0: i32,
+    alpha1: i32,
+) {
+    let do_u = alpha0 != 0;
+    let do_v = alpha1 != 0;
+
+    if !do_u && !do_v {
+        return;
+    }
+
+    assert_ne!(xlim, 0);
+    assert_ne!(ylim, 0);
+
+    assert!((i16::MIN as i32..=i16::MAX as i32).contains(&dc0));
+    assert!((i16::MIN as i32..=i16::MAX as i32).contains(&alpha0));
+    assert!((i16::MIN as i32..=i16::MAX as i32).contains(&alpha1));
+
+    let nfull = xlim / 16;
+    let xfull = nfull * 16;
+
+    let dc0v = vdupq_n_s16(dc0 as i16);
+
+    let alpha0v = vdup_n_s16(alpha0 as i16);
+    let alpha1v = vdup_n_s16(alpha1 as i16);
+
+    let dc1v = vdupq_n_s32(dc1);
+    let dc2v = vdupq_n_s32(dc2);
+
+    let round_v = vdupq_n_s32(1024);
+    let zero_v = vdupq_n_s32(0);
+
+    let mut yrow = yrow0;
+    let mut urow = urow0;
+    let mut vrow = vrow0;
+
+    for _y in 0..ylim {
+        let row = y[yrow..yrow + xfull].as_chunks::<16>().0;
+
+        match (do_u, do_v) {
+            (true, true) => {
+                let u_chunks = u[urow..urow + xfull].as_chunks_mut::<16>().0;
+                let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<16>().0;
+
+                for ((du, dv), yy) in u_chunks.iter_mut().zip(v_chunks.iter_mut()).zip(row.iter()) {
+                    let yy = load_u8x16(yy);
+                    store_u8x16(
+                        du,
+                        apply16_444_i16_ac(yy, dc0v, alpha0v, dc1v, round_v, zero_v),
+                    );
+                    store_u8x16(
+                        dv,
+                        apply16_444_i16_ac(yy, dc0v, alpha1v, dc2v, round_v, zero_v),
+                    );
+                }
+            }
+
+            (true, false) => {
+                let u_chunks = u[urow..urow + xfull].as_chunks_mut::<16>().0;
+
+                for (du, yy) in u_chunks.iter_mut().zip(row.iter()) {
+                    store_u8x16(
+                        du,
+                        apply16_444_i16_ac(load_u8x16(yy), dc0v, alpha0v, dc1v, round_v, zero_v),
+                    );
+                }
+            }
+
+            (false, true) => {
+                let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<16>().0;
+
+                for (dv, yy) in v_chunks.iter_mut().zip(row.iter()) {
+                    store_u8x16(
+                        dv,
+                        apply16_444_i16_ac(load_u8x16(yy), dc0v, alpha1v, dc2v, round_v, zero_v),
+                    );
+                }
+            }
+
+            (false, false) => unreachable!(),
+        }
+
+        for x in xfull..xlim {
+            let ac = ((y[yrow + x] as i32) << 3) - dc0;
+
+            if do_u {
+                u[urow + x] = predict_one(dc1, alpha0, ac);
+            }
+            if do_v {
+                v[vrow + x] = predict_one(dc2, alpha1, ac);
+            }
+        }
+
+        if do_u {
+            let last = u[urow + xlim - 1];
+            u[urow + xlim..urow + w].fill(last);
+        }
+
+        if do_v {
+            let last = v[vrow + xlim - 1];
+            v[vrow + xlim..vrow + w].fill(last);
+        }
+
+        yrow += ystride;
+        urow += cstride;
+        vrow += cstride;
+    }
+
+    if do_u {
+        pad_bottom(u, urow0, cstride, w, h, ylim);
+    }
+
+    if do_v {
+        pad_bottom(v, vrow0, cstride, w, h, ylim);
     }
 }
 
@@ -264,6 +603,91 @@ pub(crate) fn cfl_apply_420_8bpc_neon(
 ) {
     unsafe {
         cfl_apply_420_8bpc_neon_impl(
+            y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
+            alpha0, alpha1,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cfl_apply_422_8bpc_neon(
+    y: &[u8],
+    u: &mut [u8],
+    v: &mut [u8],
+    yrow0: usize,
+    urow0: usize,
+    vrow0: usize,
+    ystride: usize,
+    cstride: usize,
+    w: usize,
+    h: usize,
+    xlim: usize,
+    ylim: usize,
+    dc0: i32,
+    dc1: i32,
+    dc2: i32,
+    alpha0: i32,
+    alpha1: i32,
+    filter_type: u32,
+) {
+    match filter_type {
+        CFL_FLT_TYPE_VSTRIP => crate::cfl_dispatch::cfl_apply_422_8bpc_scalar(
+            y,
+            u,
+            v,
+            yrow0,
+            urow0,
+            vrow0,
+            ystride,
+            cstride,
+            w,
+            h,
+            xlim,
+            ylim,
+            dc0,
+            dc1,
+            dc2,
+            alpha0,
+            alpha1,
+            filter_type,
+        ),
+        CFL_FLT_TYPE_GAUSS => unsafe {
+            cfl_apply_422_8bpc_neon_impl::<true>(
+                y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
+                alpha0, alpha1,
+            )
+        },
+        _ => unsafe {
+            cfl_apply_422_8bpc_neon_impl::<false>(
+                y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
+                alpha0, alpha1,
+            )
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cfl_apply_444_8bpc_neon(
+    y: &[u8],
+    u: &mut [u8],
+    v: &mut [u8],
+    yrow0: usize,
+    urow0: usize,
+    vrow0: usize,
+    ystride: usize,
+    cstride: usize,
+    w: usize,
+    h: usize,
+    xlim: usize,
+    ylim: usize,
+    dc0: i32,
+    dc1: i32,
+    dc2: i32,
+    alpha0: i32,
+    alpha1: i32,
+) {
+    unsafe {
+        cfl_apply_444_8bpc_neon_impl(
             y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
             alpha0, alpha1,
         )

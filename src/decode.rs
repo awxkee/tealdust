@@ -185,6 +185,7 @@ pub(crate) fn init_quant_tables(
     frame_hdr: &FrameHeader,
     qidx: i32,
     dq: &mut [[[u32; 2]; 3]; MAX_SEGMENTS],
+    qmax: i32,
 ) {
     let n = if frame_hdr.segmentation.enabled != 0 {
         8
@@ -203,19 +204,25 @@ pub(crate) fn init_quant_tables(
         let vac = yac + frame_hdr.quant.vac_delta as i32;
         let vdc = yac + frame_hdr.quant.vdc_delta as i32;
 
-        dq[i][0][0] = dq_lookup(ydc) as u32;
-        dq[i][0][1] = dq_lookup(yac) as u32;
-        dq[i][1][0] = dq_lookup(udc) as u32;
-        dq[i][1][1] = dq_lookup(uac) as u32;
-        dq[i][2][0] = dq_lookup(vdc) as u32;
-        dq[i][2][1] = dq_lookup(vac) as u32;
+        // AVM clamps the effective qindex to the bit-depth MAXQ (255/303/351).
+        dq[i][0][0] = dq_lookup(ydc.min(qmax)) as u32;
+        dq[i][0][1] = dq_lookup(yac.min(qmax)) as u32;
+        dq[i][1][0] = dq_lookup(udc.min(qmax)) as u32;
+        dq[i][1][1] = dq_lookup(uac.min(qmax)) as u32;
+        dq[i][2][0] = dq_lookup(vdc.min(qmax)) as u32;
+        dq[i][2][1] = dq_lookup(vac.min(qmax)) as u32;
     }
 }
 
 /// Recompute the per-segment dequant tables for a single qindex (used by the
 /// per-superblock delta-q path; mirrors `init_quant_tables` with state pulled
 /// from `SbFrameInfo` instead of `FrameHeader`).
-pub fn init_quant_tables_fi(fi: &SbFrameInfo, qidx: i32, dq: &mut [[[u32; 2]; 3]; MAX_SEGMENTS]) {
+pub fn init_quant_tables_fi(
+    fi: &SbFrameInfo,
+    qidx: i32,
+    dq: &mut [[[u32; 2]; 3]; MAX_SEGMENTS],
+    qmax: i32,
+) {
     let n = if fi.seg_enabled { 8 } else { 1 };
     for i in 0..n {
         let yac = if fi.seg_enabled {
@@ -229,12 +236,13 @@ pub fn init_quant_tables_fi(fi: &SbFrameInfo, qidx: i32, dq: &mut [[[u32; 2]; 3]
         let vac = yac + fi.q_vac_delta;
         let vdc = yac + fi.q_vdc_delta;
 
-        dq[i][0][0] = dq_lookup(ydc) as u32;
-        dq[i][0][1] = dq_lookup(yac) as u32;
-        dq[i][1][0] = dq_lookup(udc) as u32;
-        dq[i][1][1] = dq_lookup(uac) as u32;
-        dq[i][2][0] = dq_lookup(vdc) as u32;
-        dq[i][2][1] = dq_lookup(vac) as u32;
+        // AVM clamps the effective qindex to the bit-depth MAXQ (255/303/351).
+        dq[i][0][0] = dq_lookup(ydc.min(qmax)) as u32;
+        dq[i][0][1] = dq_lookup(yac.min(qmax)) as u32;
+        dq[i][1][0] = dq_lookup(udc.min(qmax)) as u32;
+        dq[i][1][1] = dq_lookup(uac.min(qmax)) as u32;
+        dq[i][2][0] = dq_lookup(vdc.min(qmax)) as u32;
+        dq[i][2][1] = dq_lookup(vac.min(qmax)) as u32;
     }
 }
 
@@ -356,7 +364,8 @@ pub fn decode_frame_init(
     let re_sz = sb256h * frame_hdr.tiling.t.cols as i32;
     lf.re_sz = re_sz;
 
-    init_quant_tables(frame_hdr, frame_hdr.quant.yac as i32, dq);
+    let qmax = 255 + 48 * seq_hdr.hbd as i32;
+    init_quant_tables(frame_hdr, frame_hdr.quant.yac as i32, dq, qmax);
 
     if frame_hdr.quant.qm.enabled == 0 {
         *qm = Default::default();
@@ -537,11 +546,7 @@ pub fn decode_frame_init_cdf(
     if n_units == 0 {
         return Ok(());
     }
-    let active = if crate::decode::DECODE_POOL {
-        pool
-    } else {
-        None
-    };
+    let active = pool;
     let col_start_sb = ti.col_start_sb.as_ref();
     let row_start_sb = ti.row_start_sb.as_ref();
     let ts_dm = DisjointMut::new(ts);
@@ -2175,13 +2180,6 @@ pub struct ReconFrameCtx<'a> {
     pub ibp_weights: [[[u8; 16]; 16]; 7],
 }
 
-/// When `true`, the multi-threaded decode/filter runs on the persistent
-/// [`crate::mtpool`] worker pool (spawned once per process) instead of spawning
-/// fresh `std::thread::scope` threads every frame. Both paths are byte-identical
-/// in output (validated against the golden hash); the pool path removes the
-/// per-frame `pthread_create` cost. Flip to `false` to A/B the scope path.
-pub(crate) const DECODE_POOL: bool = true;
-
 std::thread_local! {
     /// Per-thread reusable coefficient scratch (one max 64x64 transform block).
     ///
@@ -3387,11 +3385,7 @@ pub fn decode_frame_main(
         ($bd:expr, $Pixel:ty) => {{
             let bd_local = $bd;
             let do_parallel = rows >= 2 && (n_tc as usize) >= 2 && !need_load_tmvs;
-            let active_pool = if crate::decode::DECODE_POOL {
-                pool
-            } else {
-                None
-            };
+            let active_pool = pool;
             let (dst_y, dst_u, dst_v): (&mut [$Pixel], &mut [$Pixel], &mut [$Pixel]) = cur_pic
                 .plane_slices_rows3_mut::<$Pixel>(
                 y_h,
@@ -3399,8 +3393,6 @@ pub fn decode_frame_main(
                 seq_hdr.layout != crate::headers::PixelLayout::I400,
             );
             if do_parallel {
-                // PARALLEL, PIPELINED (dav2d-style single task pool).
-                //
                 // One persistent dispatch replaces the old decode-barrier-filter
                 // two-phase. Every worker runs the same loop and pulls whichever
                 // unit is available, preferring filter so that as decode marches
@@ -3415,14 +3407,6 @@ pub fn decode_frame_main(
                 //       busy-spin — the spin is exactly what regressed the earlier
                 //       fused attempt, its progress-poll traffic competing with the
                 //       decode critical path.
-                //
-                // ORDERING (weak-memory critical; x86-TSO CANNOT surface a missing
-                // fence, so this is aarch64-validated only): a decode tile, after
-                // writing its disjoint slice of every shared buffer, publishes with
-                // `dec_remaining[tr].fetch_sub(AcqRel)`; the Release half makes
-                // those writes visible. A filter unit's readiness check loads
-                // `dec_remaining[..]` with Acquire, so on observing 0 it is
-                // guaranteed to see the decoded pixels/masks it then reads.
                 let n_tiles = (rows as usize) * (cols as usize);
                 let rows_us = rows as usize;
                 let max_workers = (n_tc as usize).max(1);
@@ -5922,13 +5906,15 @@ fn decode_b<BD: crate::pixel::BitDepth>(
                 }
                 delta_q *= 1 << fi.delta_q_res_log2;
             }
-            recon.last_qidx = iclip(recon.last_qidx + delta_q, 1, 255);
+            let qmax = 255 + (recon.frame.bitdepth as i32 - 8) * 24;
+            recon.last_qidx = iclip(recon.last_qidx + delta_q, 1, qmax);
         }
         let new_qidx = recon.last_qidx;
         if new_qidx == fi.quant_yac {
             recon.dq_active = *recon.frame.dq;
         } else if new_qidx != prev_qidx {
-            init_quant_tables_fi(fi, new_qidx, &mut recon.dqmem);
+            let qmax = 255 + (recon.frame.bitdepth as i32 - 8) * 24;
+            init_quant_tables_fi(fi, new_qidx, &mut recon.dqmem, qmax);
             recon.dq_active = recon.dqmem;
         }
 
@@ -16678,27 +16664,33 @@ pub fn decode_sb<BD: crate::pixel::BitDepth>(
             // the off-frame children are skipped (mirroring AVM, which still
             // reads do_square_split there because PARTITION_SPLIT stays eligible
             // even when an implied rect direction is chroma-invalid for the
-            // subsampling). `cbs == lbs` must hold for a shared square split; a
-            // malformed stream that breaks the invariant aborts gracefully.
-            if cbs != lbs {
-                return Err(());
-            }
+            // subsampling).
             let sbs = BlockSize::from_raw(pcc.part[0][3]);
+            // Monochrome (I400) carries no chroma block (cbs == Invalid): recurse
+            // luma-only. Otherwise a SHARED square split must have cbs == lbs and
+            // the children carry `sbs` as their (coupled) chroma block size.
+            let child_cbs = if cbs == BlockSize::Invalid {
+                BlockSize::Invalid
+            } else if cbs == lbs {
+                sbs
+            } else {
+                return Err(());
+            };
             // top-left (origin is always on-frame)
-            decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+            decode_sb(ctx, recon, pass, sbs, child_cbs, &mut child_dir)?;
             // top-right
             if *ctx.bx + hw4 < ctx.fi.bw {
                 *ctx.bx += hw4;
-                decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+                decode_sb(ctx, recon, pass, sbs, child_cbs, &mut child_dir)?;
                 *ctx.bx -= hw4;
             }
             // bottom row
             if *ctx.by + hh4 < ctx.fi.bh {
                 *ctx.by += hh4;
-                decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+                decode_sb(ctx, recon, pass, sbs, child_cbs, &mut child_dir)?;
                 if *ctx.bx + hw4 < ctx.fi.bw {
                     *ctx.bx += hw4;
-                    decode_sb(ctx, recon, pass, sbs, sbs, &mut child_dir)?;
+                    decode_sb(ctx, recon, pass, sbs, child_cbs, &mut child_dir)?;
                     *ctx.bx -= hw4;
                 }
                 *ctx.by -= hh4;
