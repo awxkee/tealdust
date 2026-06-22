@@ -384,90 +384,19 @@ impl<'a> MsacContext<'a> {
         (ret == 0) as u32
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
-        macro_rules! decode_n {
-            ($n:literal) => {{
-                if cdf.len() <= $n {
-                    return 0;
-                }
-
-                // Safe compile-time sized array conversion (Zero-cost)
-                let cdf_all: &mut [u16; $n + 1] = (&mut cdf[..=$n]).try_into().unwrap();
-
-                let min_prob: &[u16; $n + 1] = (&MSAC_MIN_PROB[$n - 1][..=$n]).try_into().unwrap();
-
-                let c = (self.dif >> 48) as u32;
-                let r = self.rng >> 8;
-
-                let mut v_arr = [0u32; $n + 2];
-                v_arr[0] = self.rng;
-
-                for i in 0..=$n {
-                    let p_raw = (cdf_all[i] | 127) as i32 - min_prob[i] as i32;
-                    let p = p_raw.max(0) as u32;
-                    v_arr[i + 1] = ((r * p) >> 10) << 3;
-                }
-
-                let mut mask = 0u32;
-                for i in 0..=$n {
-                    mask |= ((c < v_arr[i + 1]) as u32) << i;
-                }
-
-                let val_usize = (mask.trailing_ones() as usize).min($n);
-                let val = val_usize as u32;
-
-                let u = v_arr[val_usize];
-                let v = v_arr[val_usize + 1];
-
-                debug_assert!(val <= $n);
-                debug_assert!(u <= self.rng);
-
-                self.ctx_norm(self.dif - ((v as u64) << 48), u - v);
-
-                if self.allow_update_cdf {
-                    let (cdf_syms, cdf_count) = cdf_all.split_at_mut($n);
-
-                    let cdf_syms: &mut [u16; $n] = cdf_syms.try_into().unwrap();
-                    let cdf_count: &mut [u16; 1] = cdf_count.try_into().unwrap();
-
-                    let pc = cdf_count[0];
-                    let count = (pc & 0xFF) as u8;
-
-                    debug_assert!(count <= 32);
-
-                    let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize]
-                        + if $n > 2 { 1 } else { 0 };
-
-                    // This used to compute both the increment and decrement for
-                    // every CDF entry and select with a mask. On Apple cores the
-                    // branchy split is faster for this entropy hot path: it does
-                    // roughly half the shifts/adds, and `val_usize` is not
-                    // adversarial random noise. Semantics are identical to the
-                    // branchless update above.
-                    for cdf_i in cdf_syms[..val_usize].iter_mut() {
-                        *cdf_i = cdf_i.wrapping_add((32768u16 - *cdf_i) >> rate);
-                    }
-                    for cdf_i in cdf_syms[val_usize..].iter_mut() {
-                        *cdf_i = cdf_i.wrapping_sub(*cdf_i >> rate);
-                    }
-
-                    cdf_count[0] = pc + u16::from(count < 32);
-                }
-
-                val
-            }};
-        }
-
-        // Fully safe exhaustive match
+        // Keep the dynamic interface for non-hot call sites, but dispatch to
+        // the fixed-size implementation so the actual decoder body is shared
+        // and monomorphized where possible.
         match n_symbols {
-            1 => decode_n!(1),
-            2 => decode_n!(2),
-            3 => decode_n!(3),
-            4 => decode_n!(4),
-            5 => decode_n!(5),
-            6 => decode_n!(6),
-            7 => decode_n!(7),
+            1 => self.decode_symbol_adapt_n::<1>(cdf),
+            2 => self.decode_symbol_adapt_n::<2>(cdf),
+            3 => self.decode_symbol_adapt_n::<3>(cdf),
+            4 => self.decode_symbol_adapt_n::<4>(cdf),
+            5 => self.decode_symbol_adapt_n::<5>(cdf),
+            6 => self.decode_symbol_adapt_n::<6>(cdf),
+            7 => self.decode_symbol_adapt_n::<7>(cdf),
             _ => unreachable!("invalid MSAC symbol count"),
         }
     }
@@ -491,27 +420,37 @@ impl<'a> MsacContext<'a> {
         let c = (self.dif >> 48) as u32;
         let r = self.rng >> 8;
 
-        let mut v_arr = [0u32; 9];
-        v_arr[0] = self.rng;
+        // Branchy interval search. The previous version computed every range
+        // boundary into a stack array, then scanned all boundaries with masks.
+        // In the coefficient hot path symbol 0/1 dominate, so most calls only
+        // need one or two boundaries. This mirrors the usual entropy decoder
+        // shape more closely and avoids a lot of multiply/shift work.
+        let mut u = self.rng;
+        let mut v = 0u32;
+        let mut val_usize = N;
 
-        for i in 0..=N {
+        for i in 0..N {
             let p_raw = (cdf[i] | 127) as i32 - min_prob[i] as i32;
             let p = p_raw.max(0) as u32;
-            v_arr[i + 1] = ((r * p) >> 10) << 3;
+            let boundary = ((r * p) >> 10) << 3;
+
+            if c >= boundary {
+                v = boundary;
+                val_usize = i;
+                break;
+            }
+
+            u = boundary;
         }
 
-        let mut mask = 0u32;
-        for i in 0..=N {
-            mask |= ((c < v_arr[i + 1]) as u32) << i;
+        if val_usize == N {
+            let p_raw = (cdf[N] | 127) as i32 - min_prob[N] as i32;
+            let p = p_raw.max(0) as u32;
+            v = ((r * p) >> 10) << 3;
         }
-
-        let val_usize = (mask.trailing_ones() as usize).min(N);
-        let val = val_usize as u32;
-
-        let u = v_arr[val_usize];
-        let v = v_arr[val_usize + 1];
 
         debug_assert!(u <= self.rng);
+        debug_assert!(u >= v);
         self.ctx_norm(self.dif - ((v as u64) << 48), u - v);
 
         if self.allow_update_cdf {
@@ -533,7 +472,7 @@ impl<'a> MsacContext<'a> {
             cdf[N] = pc + u16::from(count < 32);
         }
 
-        val
+        val_usize as u32
     }
 
     #[inline]
