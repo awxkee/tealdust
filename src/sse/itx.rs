@@ -173,6 +173,7 @@ impl crate::itx_1d::DctWide for SseWide {
     ) {
         unsafe {
             let (rnd, sh, minv, maxv) = clip;
+
             let lo = _mm_min_epi32(
                 _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(acc.0, rnd), sh), minv),
                 maxv,
@@ -181,31 +182,33 @@ impl crate::itx_1d::DctWide for SseWide {
                 _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(acc.1, rnd), sh), minv),
                 maxv,
             );
-            let p = dst.as_mut_ptr().add(off);
-            *p.add(0 * stride) = _mm_extract_epi32::<0>(lo);
-            *p.add(1 * stride) = _mm_extract_epi32::<1>(lo);
-            *p.add(2 * stride) = _mm_extract_epi32::<2>(lo);
-            *p.add(3 * stride) = _mm_extract_epi32::<3>(lo);
-            *p.add(4 * stride) = _mm_extract_epi32::<0>(hi);
-            *p.add(5 * stride) = _mm_extract_epi32::<1>(hi);
-            *p.add(6 * stride) = _mm_extract_epi32::<2>(hi);
-            *p.add(7 * stride) = _mm_extract_epi32::<3>(hi);
+
+            let p = dst.as_mut_ptr().add(off) as *mut f32;
+
+            #[inline(always)]
+            unsafe fn store_lane0(p: *mut f32, v: __m128i) {
+                unsafe {
+                    _mm_store_ss(p, _mm_castsi128_ps(v));
+                }
+            }
+
+            store_lane0(p.add(0), lo);
+            store_lane0(p.add(1 * stride), _mm_shuffle_epi32::<0x55>(lo));
+            store_lane0(p.add(2 * stride), _mm_shuffle_epi32::<0xaa>(lo));
+            store_lane0(p.add(3 * stride), _mm_shuffle_epi32::<0xff>(lo));
+
+            store_lane0(p.add(4 * stride), hi);
+            store_lane0(p.add(5 * stride), _mm_shuffle_epi32::<0x55>(hi));
+            store_lane0(p.add(6 * stride), _mm_shuffle_epi32::<0xaa>(hi));
+            store_lane0(p.add(7 * stride), _mm_shuffle_epi32::<0xff>(hi));
         }
     }
+
     #[inline(always)]
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
         unsafe {
             _mm_storeu_si128(dst.as_mut_ptr().add(off) as *mut __m128i, acc.0);
             _mm_storeu_si128(dst.as_mut_ptr().add(off + 4) as *mut __m128i, acc.1);
-        }
-    }
-    #[inline(always)]
-    unsafe fn to_array8(acc: Self::Acc) -> [i32; 8] {
-        unsafe {
-            let mut a = [0i32; 8];
-            _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, acc.0);
-            _mm_storeu_si128(a.as_mut_ptr().add(4) as *mut __m128i, acc.1);
-            a
         }
     }
 }
