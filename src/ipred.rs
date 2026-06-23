@@ -245,7 +245,7 @@ pub(crate) static DR_INTERP_FILTER: [DrFilter4Tap; 32] = [
     },
 ];
 
-pub(crate) fn get_filter_strength(wh: i32, angle: i32, is_sm: bool) -> i32 {
+pub(crate) fn filter_strength(wh: i32, angle: i32, is_sm: bool) -> i32 {
     if is_sm {
         if wh <= 8 {
             if angle >= 64 {
@@ -946,7 +946,7 @@ pub(crate) fn ipred_z1<BD: BitDepth>(
     let top_off = 2 + mrl_idx;
     let sz = 1 + mrl_idx + width + height + mrl_idx * 2;
     let str = if enable_intra_edge_filter && have_top && mrl_idx == 0 {
-        get_filter_strength((width + height) as i32, 90 - angle, is_sm_t)
+        filter_strength((width + height) as i32, 90 - angle, is_sm_t)
     } else {
         0
     };
@@ -1140,7 +1140,7 @@ pub(crate) fn ipred_z3<BD: BitDepth>(
     let sz = 1 + mrl_idx + width + height + mrl_idx * 2;
 
     let str = if enable_intra_edge_filter && mrl_idx == 0 && have_left {
-        get_filter_strength((width + height) as i32, angle - 180, is_sm_l)
+        filter_strength((width + height) as i32, angle - 180, is_sm_l)
     } else {
         0
     };
@@ -1311,7 +1311,7 @@ pub(crate) fn ipred_z2<BD: BitDepth>(
     let top_off = mrl_idx;
     let sz_t = 1 + width + mrl_idx;
     let str_t = if enable_intra_edge_filter && have_top && mrl_idx == 0 {
-        get_filter_strength((width + height) as i32, angle - 90, is_sm_t)
+        filter_strength((width + height) as i32, angle - 90, is_sm_t)
     } else {
         0
     };
@@ -1337,7 +1337,7 @@ pub(crate) fn ipred_z2<BD: BitDepth>(
     let left_off: usize = height + 2;
     let sz_l = 1 + height + mrl_idx;
     let str_l = if enable_intra_edge_filter && have_left && mrl_idx == 0 {
-        get_filter_strength((width + height) as i32, 180 - angle, is_sm_l)
+        filter_strength((width + height) as i32, 180 - angle, is_sm_l)
     } else {
         0
     };
@@ -2616,50 +2616,44 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
         BD::Pixel::try_as_u8_slice_mut(u_plane),
         BD::Pixel::try_as_u8_slice_mut(v_plane),
     ) {
+        let cfl_layout = crate::cfl_dispatch::CflLayout {
+            yrow0: ysrc_off,
+            urow0: usrc_off,
+            vrow0: vsrc_off,
+            ystride: ystride as usize,
+            cstride: cstride as usize,
+        };
+        let cfl_area = crate::cfl_dispatch::CflArea { w, h, xlim, ylim };
+        let cfl_params = crate::cfl_dispatch::CflParams {
+            dc0: dc[0],
+            dc1: dc[1],
+            dc2: dc[2],
+            alpha0: alpha[0],
+            alpha1: alpha[1],
+            filter_type: flt,
+        };
+
         match (ss_hor, ss_ver) {
             (0, 0) => {
-                crate::cfl_dispatch::cfl_apply_444_8bpc(
-                    y_u8,
-                    u_u8,
-                    v_u8,
-                    ysrc_off,
-                    usrc_off,
-                    vsrc_off,
-                    ystride as usize,
-                    cstride as usize,
-                    w,
-                    h,
-                    xlim,
-                    ylim,
-                    dc[0],
-                    dc[1],
-                    dc[2],
-                    alpha[0],
-                    alpha[1],
-                );
+                crate::cfl_dispatch::cfl_apply_444_8bpc(crate::cfl_dispatch::CflApply8 {
+                    y: y_u8,
+                    u: u_u8,
+                    v: v_u8,
+                    layout: cfl_layout,
+                    area: cfl_area,
+                    params: cfl_params,
+                });
                 return Ok(());
             }
             (1, 0) => {
-                crate::cfl_dispatch::cfl_apply_422_8bpc(
-                    y_u8,
-                    u_u8,
-                    v_u8,
-                    ysrc_off,
-                    usrc_off,
-                    vsrc_off,
-                    ystride as usize,
-                    cstride as usize,
-                    w,
-                    h,
-                    xlim,
-                    ylim,
-                    dc[0],
-                    dc[1],
-                    dc[2],
-                    alpha[0],
-                    alpha[1],
-                    flt,
-                );
+                crate::cfl_dispatch::cfl_apply_422_8bpc(crate::cfl_dispatch::CflApply8 {
+                    y: y_u8,
+                    u: u_u8,
+                    v: v_u8,
+                    layout: cfl_layout,
+                    area: cfl_area,
+                    params: cfl_params,
+                });
                 return Ok(());
             }
             (1, 1)
@@ -2668,25 +2662,83 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
                     && !skiph
                     && !skipv =>
             {
-                crate::cfl_dispatch::cfl_apply_420_8bpc(
-                    y_u8,
-                    u_u8,
-                    v_u8,
-                    ysrc_off,
-                    usrc_off,
-                    vsrc_off,
-                    ystride as usize,
-                    cstride as usize,
-                    w,
-                    h,
-                    xlim,
-                    ylim,
-                    dc[0],
-                    dc[1],
-                    dc[2],
-                    alpha[0],
-                    alpha[1],
-                );
+                crate::cfl_dispatch::cfl_apply_420_8bpc(crate::cfl_dispatch::CflApply8 {
+                    y: y_u8,
+                    u: u_u8,
+                    v: v_u8,
+                    layout: cfl_layout,
+                    area: cfl_area,
+                    params: cfl_params,
+                });
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+
+    if let (Some(y_u16), Some(u_u16), Some(v_u16)) = (
+        BD::Pixel::try_as_u16_slice(y_plane),
+        BD::Pixel::try_as_u16_slice_mut(u_plane),
+        BD::Pixel::try_as_u16_slice_mut(v_plane),
+    ) {
+        let bitdepth_max = bd.bitdepth_max();
+        let cfl_layout = crate::cfl_dispatch::CflLayout {
+            yrow0: ysrc_off,
+            urow0: usrc_off,
+            vrow0: vsrc_off,
+            ystride: ystride as usize,
+            cstride: cstride as usize,
+        };
+        let cfl_area = crate::cfl_dispatch::CflArea { w, h, xlim, ylim };
+        let cfl_params = crate::cfl_dispatch::CflParams {
+            dc0: dc[0],
+            dc1: dc[1],
+            dc2: dc[2],
+            alpha0: alpha[0],
+            alpha1: alpha[1],
+            filter_type: flt,
+        };
+
+        match (ss_hor, ss_ver) {
+            (0, 0) => {
+                crate::cfl_dispatch::cfl_apply_444_hbd(crate::cfl_dispatch::CflApplyHbd {
+                    y: y_u16,
+                    u: u_u16,
+                    v: v_u16,
+                    layout: cfl_layout,
+                    area: cfl_area,
+                    params: cfl_params,
+                    bitdepth_max,
+                });
+                return Ok(());
+            }
+            (1, 0) => {
+                crate::cfl_dispatch::cfl_apply_422_hbd(crate::cfl_dispatch::CflApplyHbd {
+                    y: y_u16,
+                    u: u_u16,
+                    v: v_u16,
+                    layout: cfl_layout,
+                    area: cfl_area,
+                    params: cfl_params,
+                    bitdepth_max,
+                });
+                return Ok(());
+            }
+            (1, 1)
+                if flt != CFL_FLT_TYPE_VSTRIP as u32
+                    && flt != CFL_FLT_TYPE_GAUSS as u32
+                    && !skiph
+                    && !skipv =>
+            {
+                crate::cfl_dispatch::cfl_apply_420_hbd(crate::cfl_dispatch::CflApplyHbd {
+                    y: y_u16,
+                    u: u_u16,
+                    v: v_u16,
+                    layout: cfl_layout,
+                    area: cfl_area,
+                    params: cfl_params,
+                    bitdepth_max,
+                });
                 return Ok(());
             }
             _ => {}

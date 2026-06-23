@@ -62,6 +62,13 @@ fn resolve_residual_add() -> ResidualAddFn {
                 f = crate::sse::residual_add_row_8bpc_sse41 as ResidualAddFn;
             }
         }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::residual_add_row_8bpc_avx2 as ResidualAddFn;
+            }
+        }
         f
     })
 }
@@ -99,6 +106,13 @@ fn resolve_dc_add() -> DcAddFn {
                 f = crate::sse::dc_add_row_8bpc_sse41 as DcAddFn;
             }
         }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::dc_add_row_8bpc_avx2 as DcAddFn;
+            }
+        }
         f
     })
 }
@@ -133,6 +147,13 @@ fn resolve_row_clip() -> RowClipFn {
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 f = crate::sse::row_clip_sse41 as RowClipFn;
+            }
+        }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::row_clip_avx2 as RowClipFn;
             }
         }
         f
@@ -180,6 +201,13 @@ fn resolve_cctx() -> CctxFn {
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 f = crate::sse::cctx_row_sse41 as CctxFn;
+            }
+        }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::cctx_row_avx2 as CctxFn;
             }
         }
         f
@@ -234,6 +262,13 @@ fn resolve_avg() -> AvgFn {
                 f = crate::sse::avg_row_8bpc_sse41 as AvgFn;
             }
         }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::avg_row_8bpc_avx2 as AvgFn;
+            }
+        }
         f
     })
 }
@@ -278,6 +313,13 @@ fn resolve_w_avg() -> WAvgFn {
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 f = crate::sse::w_avg_row_8bpc_sse41 as WAvgFn;
+            }
+        }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::w_avg_row_8bpc_avx2 as WAvgFn;
             }
         }
         f
@@ -335,6 +377,13 @@ fn resolve_mask() -> MaskFn {
                 f = crate::sse::mask_row_8bpc_sse41 as MaskFn;
             }
         }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::mask_row_8bpc_avx2 as MaskFn;
+            }
+        }
         f
     })
 }
@@ -383,6 +432,13 @@ fn resolve_blend() -> BlendFn {
                 f = crate::sse::blend_row_8bpc_sse41 as BlendFn;
             }
         }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::blend_row_8bpc_avx2 as BlendFn;
+            }
+        }
         f
     })
 }
@@ -419,6 +475,13 @@ fn resolve_morph() -> MorphFn {
                 f = crate::sse::morph_row_8bpc_sse41 as MorphFn;
             }
         }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::morph_row_8bpc_avx2 as MorphFn;
+            }
+        }
         f
     })
 }
@@ -427,6 +490,373 @@ fn resolve_morph() -> MorphFn {
 pub(crate) fn morph_row_8bpc(dst: &mut [u8], alpha: i32, beta: i32, n: usize) {
     // SAFETY: see `avg_row_8bpc`.
     unsafe { resolve_morph()(dst, alpha, beta, n) };
+}
+
+pub(crate) type ResidualAddHbdFn = unsafe fn(&mut [u16], &[i32], usize, i32, i32, i32);
+
+pub(crate) fn residual_add_row_hbd_scalar(
+    dst: &mut [u16],
+    c: &[i32],
+    n: usize,
+    rnd: i32,
+    shift: i32,
+    bitdepth_max: i32,
+) {
+    for i in 0..n {
+        dst[i] = (dst[i] as i32 + ((c[i] + rnd) >> shift)).clamp(0, bitdepth_max) as u16;
+    }
+}
+
+static RESIDUAL_ADD_HBD: OnceLock<ResidualAddHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_residual_add_hbd() -> ResidualAddHbdFn {
+    *RESIDUAL_ADD_HBD.get_or_init(|| {
+        let mut f = residual_add_row_hbd_scalar as ResidualAddHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::residual_add_row_hbd_neon as ResidualAddHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::residual_add_row_hbd_sse41 as ResidualAddHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::residual_add_row_hbd_avx2 as ResidualAddHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn residual_add_row_hbd(
+    dst: &mut [u16],
+    c: &[i32],
+    n: usize,
+    rnd: i32,
+    shift: i32,
+    bitdepth_max: i32,
+) {
+    unsafe { resolve_residual_add_hbd()(dst, c, n, rnd, shift, bitdepth_max) };
+}
+
+pub(crate) type DcAddHbdFn = unsafe fn(&mut [u16], i32, usize, i32);
+
+pub(crate) fn dc_add_row_hbd_scalar(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
+    for d in dst[..n].iter_mut() {
+        *d = (*d as i32 + dc).clamp(0, bitdepth_max) as u16;
+    }
+}
+
+static DC_ADD_HBD: OnceLock<DcAddHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_dc_add_hbd() -> DcAddHbdFn {
+    *DC_ADD_HBD.get_or_init(|| {
+        let mut f = dc_add_row_hbd_scalar as DcAddHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::dc_add_row_hbd_neon as DcAddHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::dc_add_row_hbd_sse41 as DcAddHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::dc_add_row_hbd_avx2 as DcAddHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn dc_add_row_hbd(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
+    unsafe { resolve_dc_add_hbd()(dst, dc, n, bitdepth_max) };
+}
+
+pub(crate) type AvgHbdFn = unsafe fn(&mut [u16], &[i16], &[i16], usize, i32, i32, i32);
+
+pub(crate) fn avg_row_hbd_scalar(
+    dst: &mut [u16],
+    t1: &[i16],
+    t2: &[i16],
+    n: usize,
+    rnd: i32,
+    sh: i32,
+    bitdepth_max: i32,
+) {
+    for x in 0..n {
+        dst[x] = ((t1[x] as i32 + t2[x] as i32 + rnd) >> sh).clamp(0, bitdepth_max) as u16;
+    }
+}
+
+static AVG_HBD: OnceLock<AvgHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_avg_hbd() -> AvgHbdFn {
+    *AVG_HBD.get_or_init(|| {
+        let mut f = avg_row_hbd_scalar as AvgHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::avg_row_hbd_neon as AvgHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::avg_row_hbd_sse41 as AvgHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::avg_row_hbd_avx2 as AvgHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn avg_row_hbd(
+    dst: &mut [u16],
+    t1: &[i16],
+    t2: &[i16],
+    n: usize,
+    rnd: i32,
+    sh: i32,
+    bitdepth_max: i32,
+) {
+    unsafe { resolve_avg_hbd()(dst, t1, t2, n, rnd, sh, bitdepth_max) };
+}
+
+pub(crate) type WAvgHbdFn = unsafe fn(&mut [u16], &[i16], &[i16], usize, i32, i32, i32, i32);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn w_avg_row_hbd_scalar(
+    dst: &mut [u16],
+    t1: &[i16],
+    t2: &[i16],
+    n: usize,
+    weight: i32,
+    rnd: i32,
+    sh: i32,
+    bitdepth_max: i32,
+) {
+    for x in 0..n {
+        dst[x] = ((t1[x] as i32 * weight + t2[x] as i32 * (16 - weight) + rnd) >> sh)
+            .clamp(0, bitdepth_max) as u16;
+    }
+}
+
+static W_AVG_HBD: OnceLock<WAvgHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_w_avg_hbd() -> WAvgHbdFn {
+    *W_AVG_HBD.get_or_init(|| {
+        let mut f = w_avg_row_hbd_scalar as WAvgHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::w_avg_row_hbd_neon as WAvgHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::w_avg_row_hbd_sse41 as WAvgHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::w_avg_row_hbd_avx2 as WAvgHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn w_avg_row_hbd(
+    dst: &mut [u16],
+    t1: &[i16],
+    t2: &[i16],
+    n: usize,
+    weight: i32,
+    rnd: i32,
+    sh: i32,
+    bitdepth_max: i32,
+) {
+    unsafe { resolve_w_avg_hbd()(dst, t1, t2, n, weight, rnd, sh, bitdepth_max) };
+}
+
+pub(crate) type MaskHbdFn = unsafe fn(&mut [u16], &[i16], &[i16], &[u8], usize, i32, i32, i32);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn mask_row_hbd_scalar(
+    dst: &mut [u16],
+    t1: &[i16],
+    t2: &[i16],
+    mask: &[u8],
+    n: usize,
+    rnd: i32,
+    sh: i32,
+    bitdepth_max: i32,
+) {
+    for x in 0..n {
+        let m = mask[x] as i32;
+        dst[x] = ((t1[x] as i32 * m + t2[x] as i32 * (64 - m) + rnd) >> sh).clamp(0, bitdepth_max)
+            as u16;
+    }
+}
+
+static MASK_HBD: OnceLock<MaskHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_mask_hbd() -> MaskHbdFn {
+    *MASK_HBD.get_or_init(|| {
+        let mut f = mask_row_hbd_scalar as MaskHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::mask_row_hbd_neon as MaskHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::mask_row_hbd_sse41 as MaskHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::mask_row_hbd_avx2 as MaskHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn mask_row_hbd(
+    dst: &mut [u16],
+    t1: &[i16],
+    t2: &[i16],
+    mask: &[u8],
+    n: usize,
+    rnd: i32,
+    sh: i32,
+    bitdepth_max: i32,
+) {
+    unsafe { resolve_mask_hbd()(dst, t1, t2, mask, n, rnd, sh, bitdepth_max) };
+}
+
+pub(crate) type BlendHbdFn = unsafe fn(&mut [u16], &[u16], &[u8], usize);
+
+pub(crate) fn blend_row_hbd_scalar(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
+    for x in 0..n {
+        let m = mask[x] as i32;
+        dst[x] = ((dst[x] as i32 * (64 - m) + tmp[x] as i32 * m + 32) >> 6) as u16;
+    }
+}
+
+static BLEND_HBD: OnceLock<BlendHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_blend_hbd() -> BlendHbdFn {
+    *BLEND_HBD.get_or_init(|| {
+        let mut f = blend_row_hbd_scalar as BlendHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::blend_row_hbd_neon as BlendHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::blend_row_hbd_sse41 as BlendHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::blend_row_hbd_avx2 as BlendHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn blend_row_hbd(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
+    unsafe { resolve_blend_hbd()(dst, tmp, mask, n) };
+}
+
+pub(crate) type MorphHbdFn = unsafe fn(&mut [u16], i32, i32, usize, i32);
+
+pub(crate) fn morph_row_hbd_scalar(
+    dst: &mut [u16],
+    alpha: i32,
+    beta: i32,
+    n: usize,
+    bitdepth_max: i32,
+) {
+    for d in dst[..n].iter_mut() {
+        *d = ((alpha * *d as i32 + beta) >> 8).clamp(0, bitdepth_max) as u16;
+    }
+}
+
+static MORPH_HBD: OnceLock<MorphHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_morph_hbd() -> MorphHbdFn {
+    *MORPH_HBD.get_or_init(|| {
+        let mut f = morph_row_hbd_scalar as MorphHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::morph_row_hbd_neon as MorphHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::morph_row_hbd_sse41 as MorphHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::morph_row_hbd_avx2 as MorphHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn morph_row_hbd(dst: &mut [u16], alpha: i32, beta: i32, n: usize, bitdepth_max: i32) {
+    unsafe { resolve_morph_hbd()(dst, alpha, beta, n, bitdepth_max) };
 }
 
 pub(crate) type GdfAddFn = unsafe fn(&mut [u8], &[i8], i32, usize);
@@ -456,6 +886,13 @@ fn resolve_gdf_add() -> GdfAddFn {
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 f = crate::sse::gdf_add_run_8bpc_sse41 as GdfAddFn;
+            }
+        }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::gdf_add_run_8bpc_avx2 as GdfAddFn;
             }
         }
         f
@@ -532,6 +969,13 @@ fn resolve_gdf_grad() -> GdfGradFn {
                 f = crate::sse::gdf_gradient_group_sse41 as GdfGradFn;
             }
         }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::gdf_gradient_group_avx2 as GdfGradFn;
+            }
+        }
         f
     })
 }
@@ -565,4 +1009,67 @@ pub(crate) fn gdf_gradient_group(
             shift,
         )
     };
+}
+
+pub(crate) type CctxI16Fn = unsafe fn(&mut [i16], &mut [i16], i32, i32, usize, i32, i32);
+
+pub(crate) fn cctx_row_i16_scalar(
+    u: &mut [i16],
+    v: &mut [i16],
+    sina: i32,
+    cosa: i32,
+    sz: usize,
+    min: i32,
+    max: i32,
+) {
+    for i in 0..sz {
+        let ui = u[i] as i32;
+        let vi = v[i] as i32;
+        let a = ui * cosa - vi * sina;
+        let b = ui * sina + vi * cosa;
+        u[i] = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
+        v[i] = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
+    }
+}
+
+static CCTX_I16: OnceLock<CctxI16Fn> = OnceLock::new();
+
+#[inline]
+fn resolve_cctx_i16() -> CctxI16Fn {
+    *CCTX_I16.get_or_init(|| {
+        let mut f = cctx_row_i16_scalar as CctxI16Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::cctx_row_i16_neon as CctxI16Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::cctx_row_i16_sse41 as CctxI16Fn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::cctx_row_i16_avx2 as CctxI16Fn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cctx_row_i16(
+    u: &mut [i16],
+    v: &mut [i16],
+    sina: i32,
+    cosa: i32,
+    sz: usize,
+    min: i32,
+    max: i32,
+) {
+    unsafe { resolve_cctx_i16()(u, v, sina, cosa, sz, min, max) };
 }

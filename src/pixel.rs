@@ -63,6 +63,13 @@ pub trait Pixel: Copy + Default + Send + Sync + Into<i32> + 'static {
 
     /// Mutable counterpart of [`Pixel::try_as_u8_slice`].
     fn try_as_u8_slice_mut(samples: &mut [Self]) -> Option<&mut [u8]>;
+
+    /// Typed high-bit-depth view. Returns `Some` only for the built-in `u16`
+    /// storage used by both 10-bit and 12-bit decode paths.
+    fn try_as_u16_slice(samples: &[Self]) -> Option<&[u16]>;
+
+    /// Mutable counterpart of [`Pixel::try_as_u16_slice`].
+    fn try_as_u16_slice_mut(samples: &mut [Self]) -> Option<&mut [u16]>;
 }
 
 impl Pixel for u8 {
@@ -115,6 +122,16 @@ impl Pixel for u8 {
     #[inline(always)]
     fn try_as_u8_slice_mut(samples: &mut [Self]) -> Option<&mut [u8]> {
         Some(samples)
+    }
+
+    #[inline(always)]
+    fn try_as_u16_slice(_samples: &[Self]) -> Option<&[u16]> {
+        None
+    }
+
+    #[inline(always)]
+    fn try_as_u16_slice_mut(_samples: &mut [Self]) -> Option<&mut [u16]> {
+        None
     }
 }
 
@@ -177,6 +194,104 @@ impl Pixel for u16 {
     fn try_as_u8_slice_mut(_samples: &mut [Self]) -> Option<&mut [u8]> {
         None
     }
+
+    #[inline(always)]
+    fn try_as_u16_slice(samples: &[Self]) -> Option<&[u16]> {
+        Some(samples)
+    }
+
+    #[inline(always)]
+    fn try_as_u16_slice_mut(samples: &mut [Self]) -> Option<&mut [u16]> {
+        Some(samples)
+    }
+}
+
+/// Signed coefficient storage. Low bit-depth uses `i16` like dav2d; high
+/// bit-depth keeps `i32` because valid dequantized 10/12-bit coefficients do
+/// not fit in `i16`. Entropy decoding stores through this trait while ITX/CCTX
+/// widen back to `i32` for intermediate math.
+pub trait Coeff: Copy + Default + Send + Sync + 'static {
+    const ZERO: Self;
+    #[allow(unused)]
+    const IS_I16: bool;
+
+    fn from_i32(v: i32) -> Self;
+
+    fn to_i32(self) -> i32;
+
+    #[allow(unused)]
+    #[inline(always)]
+    fn try_as_i16_slice(_samples: &[Self]) -> Option<&[i16]> {
+        None
+    }
+
+    #[inline(always)]
+    fn try_as_i16_slice_mut(_samples: &mut [Self]) -> Option<&mut [i16]> {
+        None
+    }
+
+    #[allow(unused)]
+    #[inline(always)]
+    fn try_as_i32_slice(_samples: &[Self]) -> Option<&[i32]> {
+        None
+    }
+
+    #[allow(unused)]
+    #[inline(always)]
+    fn try_as_i32_slice_mut(_samples: &mut [Self]) -> Option<&mut [i32]> {
+        None
+    }
+}
+
+impl Coeff for i16 {
+    const ZERO: Self = 0;
+    const IS_I16: bool = true;
+
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        debug_assert!((i16::MIN as i32..=i16::MAX as i32).contains(&v));
+        v as i16
+    }
+
+    #[inline(always)]
+    fn to_i32(self) -> i32 {
+        self as i32
+    }
+
+    #[inline(always)]
+    fn try_as_i16_slice(samples: &[Self]) -> Option<&[i16]> {
+        Some(samples)
+    }
+
+    #[inline(always)]
+    fn try_as_i16_slice_mut(samples: &mut [Self]) -> Option<&mut [i16]> {
+        Some(samples)
+    }
+}
+
+impl Coeff for i32 {
+    const ZERO: Self = 0;
+    const IS_I16: bool = false;
+
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v
+    }
+
+    #[inline(always)]
+    fn to_i32(self) -> i32 {
+        self
+    }
+
+    #[inline(always)]
+    fn try_as_i32_slice(samples: &[Self]) -> Option<&[i32]> {
+        Some(samples)
+    }
+
+    #[inline(always)]
+    fn try_as_i32_slice_mut(samples: &mut [Self]) -> Option<&mut [i32]> {
+        Some(samples)
+    }
 }
 
 ///
@@ -191,7 +306,7 @@ pub trait BitDepth: Clone + Copy + Send + Sync + 'static {
     /// Sample storage type (`u8` or `u16`).
     type Pixel: Pixel;
     /// Intermediate/coefficient signed type wide enough for this depth.
-    type Coef: Copy;
+    type Coef: Coeff;
 
     /// Compile-time storage width in bits (8 or 16).
     const BPC: u8;

@@ -34,20 +34,19 @@ use std::arch::x86_64::*;
 
 use crate::filter::WienerTap;
 
-/// Load 8 consecutive `u8` and zero-extend into two `__m128i` (4×i32) halves.
 #[inline(always)]
-unsafe fn load8(p: *const u8) -> (__m128i, __m128i) {
+fn load8(p: &[u8]) -> (__m128i, __m128i) {
     unsafe {
-        let v = _mm_loadl_epi64(p as *const __m128i); // 8 bytes in low 64 bits
-        let lo = _mm_cvtepu8_epi32(v); // bytes 0..3 -> i32x4
-        let hi = _mm_cvtepu8_epi32(_mm_srli_si128(v, 4)); // bytes 4..7 -> i32x4
+        let v = _mm_loadl_epi64(p.as_ptr().cast());
+        let lo = _mm_cvtepu8_epi32(v);
+        let hi = _mm_cvtepu8_epi32(_mm_srli_si128(v, 4));
         (lo, hi)
     }
 }
 
 /// `(s + 64) >> 7`, clamped to `[0, 255]`, narrowed to 8 packed `u8`, stored.
 #[inline(always)]
-unsafe fn finish(dst: *mut u8, slo: __m128i, shi: __m128i) {
+fn finish(dst: &mut [u8], slo: __m128i, shi: __m128i) {
     unsafe {
         let rnd = _mm_set1_epi32(64);
         let zero = _mm_setzero_si128();
@@ -64,7 +63,7 @@ unsafe fn finish(dst: *mut u8, slo: __m128i, shi: __m128i) {
         // Values are in [0, 255], so the saturating packs are exact.
         let packed16 = _mm_packus_epi32(vlo, vhi); // 8 x u16
         let packed8 = _mm_packus_epi16(packed16, packed16); // low 8 bytes = result
-        _mm_storel_epi64(dst as *mut __m128i, packed8);
+        _mm_storel_epi64(dst.as_mut_ptr().cast(), packed8);
     }
 }
 
@@ -76,48 +75,46 @@ fn ns_wiener_fir_run_sse41_impl(
     taps: &[WienerTap],
     n: usize,
 ) {
-    unsafe {
-        let mut x = 0;
-        while x + 8 <= n {
-            let c = col0 + x;
-            debug_assert!(c + 8 <= center.len());
-            let (mlo, mhi) = load8(center[c..c + 8].as_ptr());
-            let mut slo = _mm_slli_epi32(mlo, 7);
-            let mut shi = _mm_slli_epi32(mhi, 7);
-            let two_mlo = _mm_add_epi32(mlo, mlo);
-            let two_mhi = _mm_add_epi32(mhi, mhi);
-            for t in taps {
-                let cp = (c as i32 + t.dx) as usize;
-                let cm = (c as i32 - t.dx) as usize;
-                debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8(t.row_p[cp..cp + 8].as_ptr());
-                let (blo, bhi) = load8(t.row_m[cm..cm + 8].as_ptr());
-                let coef = _mm_set1_epi32(t.coef);
-                // (a + b - 2*m) * coef
-                slo = _mm_add_epi32(
-                    slo,
-                    _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(alo, blo), two_mlo), coef),
-                );
-                shi = _mm_add_epi32(
-                    shi,
-                    _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(ahi, bhi), two_mhi), coef),
-                );
-            }
-            finish(dst[x..x + 8].as_mut_ptr(), slo, shi);
-            x += 8;
+    let mut x = 0;
+    while x + 8 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 8 <= center.len());
+        let (mlo, mhi) = load8(&center[c..]);
+        let mut slo = _mm_slli_epi32(mlo, 7);
+        let mut shi = _mm_slli_epi32(mhi, 7);
+        let two_mlo = _mm_add_epi32(mlo, mlo);
+        let two_mhi = _mm_add_epi32(mhi, mhi);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
+            let (alo, ahi) = load8(&t.row_p[cp..]);
+            let (blo, bhi) = load8(&t.row_m[cm..]);
+            let coef = _mm_set1_epi32(t.coef);
+            // (a + b - 2*m) * coef
+            slo = _mm_add_epi32(
+                slo,
+                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(alo, blo), two_mlo), coef),
+            );
+            shi = _mm_add_epi32(
+                shi,
+                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(ahi, bhi), two_mhi), coef),
+            );
         }
-        while x < n {
-            let c = col0 + x;
-            let m = center[c] as i32;
-            let mut s = m << 7;
-            for t in taps {
-                let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
-                let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
-                s += (a + b - 2 * m) * t.coef;
-            }
-            dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
-            x += 1;
+        finish(&mut dst[x..], slo, shi);
+        x += 8;
+    }
+    while x < n {
+        let c = col0 + x;
+        let m = center[c] as i32;
+        let mut s = m << 7;
+        for t in taps {
+            let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
+            s += (a + b - 2 * m) * t.coef;
         }
+        dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
+        x += 1;
     }
 }
 
@@ -130,41 +127,39 @@ fn pc_wiener_fir_run_sse41_impl(
     taps: &[WienerTap],
     n: usize,
 ) {
-    unsafe {
-        let mut x = 0;
-        while x + 8 <= n {
-            let c = col0 + x;
-            debug_assert!(c + 8 <= center.len());
-            let (mlo, mhi) = load8(center[c..c + 8].as_ptr());
-            let cc = _mm_set1_epi32(center_coef);
-            let mut slo = _mm_mullo_epi32(mlo, cc);
-            let mut shi = _mm_mullo_epi32(mhi, cc);
-            for t in taps {
-                let cp = (c as i32 + t.dx) as usize;
-                let cm = (c as i32 - t.dx) as usize;
-                debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8(t.row_p[cp..cp + 8].as_ptr());
-                let (blo, bhi) = load8(t.row_m[cm..cm + 8].as_ptr());
-                let coef = _mm_set1_epi32(t.coef);
-                // (a + b) * coef
-                slo = _mm_add_epi32(slo, _mm_mullo_epi32(_mm_add_epi32(alo, blo), coef));
-                shi = _mm_add_epi32(shi, _mm_mullo_epi32(_mm_add_epi32(ahi, bhi), coef));
-            }
-            finish(dst[x..x + 8].as_mut_ptr(), slo, shi);
-            x += 8;
+    let mut x = 0;
+    while x + 8 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 8 <= center.len());
+        let (mlo, mhi) = load8(&center[c..]);
+        let cc = _mm_set1_epi32(center_coef);
+        let mut slo = _mm_mullo_epi32(mlo, cc);
+        let mut shi = _mm_mullo_epi32(mhi, cc);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
+            let (alo, ahi) = load8(&t.row_p[cp..]);
+            let (blo, bhi) = load8(&t.row_m[cm..]);
+            let coef = _mm_set1_epi32(t.coef);
+            // (a + b) * coef
+            slo = _mm_add_epi32(slo, _mm_mullo_epi32(_mm_add_epi32(alo, blo), coef));
+            shi = _mm_add_epi32(shi, _mm_mullo_epi32(_mm_add_epi32(ahi, bhi), coef));
         }
-        while x < n {
-            let c = col0 + x;
-            let m = center[c] as i32;
-            let mut s = m * center_coef;
-            for t in taps {
-                let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
-                let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
-                s += (a + b) * t.coef;
-            }
-            dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
-            x += 1;
+        finish(&mut dst[x..], slo, shi);
+        x += 8;
+    }
+    while x < n {
+        let c = col0 + x;
+        let m = center[c] as i32;
+        let mut s = m * center_coef;
+        for t in taps {
+            let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
+            s += (a + b) * t.coef;
         }
+        dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
+        x += 1;
     }
 }
 

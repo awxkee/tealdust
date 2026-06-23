@@ -48,6 +48,124 @@ pub(crate) type CdefFilterFn = unsafe fn(
     usize,
 );
 
+pub(crate) type CdefFilterHbdFn = unsafe fn(
+    &mut [u16],
+    usize,
+    usize,
+    &[i16],
+    usize,
+    usize,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    usize,
+    usize,
+    usize,
+);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cdef_filter_block_hbd_scalar(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+    w: usize,
+    h: usize,
+) {
+    let mut dp = dst_off;
+    let mut tp = o;
+    if pri_strength != 0 && sec_strength != 0 {
+        for _y in 0..h {
+            for x in 0..w {
+                let px = tmp[tp + x] as i32;
+                let mut sum = 0i32;
+                let mut min_v = px;
+                let mut max_v = px;
+                let mut ptap = pri_tap;
+                for k in 0..2 {
+                    let off1 = CDEF_DIRECTIONS[dir + 2][k] as isize;
+                    let p0 = tmp[((tp + x) as isize + off1) as usize] as i32;
+                    let p1 = tmp[((tp + x) as isize - off1) as usize] as i32;
+                    sum += ptap * constrain(p0 - px, pri_strength, pri_shift);
+                    sum += ptap * constrain(p1 - px, pri_strength, pri_shift);
+                    ptap = (ptap & 3) | 2;
+                    min_v = p0.min(min_v).min(p1);
+                    max_v = p0.max(max_v).max(p1);
+                    let off2 = CDEF_DIRECTIONS[dir + 4][k] as isize;
+                    let off3 = CDEF_DIRECTIONS[dir][k] as isize;
+                    let s0 = tmp[((tp + x) as isize + off2) as usize] as i32;
+                    let s1 = tmp[((tp + x) as isize - off2) as usize] as i32;
+                    let s2 = tmp[((tp + x) as isize + off3) as usize] as i32;
+                    let s3 = tmp[((tp + x) as isize - off3) as usize] as i32;
+                    let st = 2 - k as i32;
+                    sum += st * constrain(s0 - px, sec_strength, sec_shift);
+                    sum += st * constrain(s1 - px, sec_strength, sec_shift);
+                    sum += st * constrain(s2 - px, sec_strength, sec_shift);
+                    sum += st * constrain(s3 - px, sec_strength, sec_shift);
+                    min_v = s0.min(min_v).min(s1).min(s2).min(s3);
+                    max_v = s0.max(max_v).max(s1).max(s2).max(s3);
+                }
+                let v = px + ((sum - (sum < 0) as i32 + 8) >> 4);
+                dst[dp + x] = v.clamp(min_v, max_v) as u16;
+            }
+            dp += dst_stride;
+            tp += tmp_stride;
+        }
+    } else if pri_strength != 0 {
+        for _y in 0..h {
+            for x in 0..w {
+                let px = tmp[tp + x] as i32;
+                let mut sum = 0i32;
+                let mut ptap = pri_tap;
+                for k in 0..2 {
+                    let off = CDEF_DIRECTIONS[dir + 2][k] as isize;
+                    let p0 = tmp[((tp + x) as isize + off) as usize] as i32;
+                    let p1 = tmp[((tp + x) as isize - off) as usize] as i32;
+                    sum += ptap * constrain(p0 - px, pri_strength, pri_shift);
+                    sum += ptap * constrain(p1 - px, pri_strength, pri_shift);
+                    ptap = (ptap & 3) | 2;
+                }
+                dst[dp + x] = (px + ((sum - (sum < 0) as i32 + 8) >> 4)) as u16;
+            }
+            dp += dst_stride;
+            tp += tmp_stride;
+        }
+    } else {
+        for _y in 0..h {
+            for x in 0..w {
+                let px = tmp[tp + x] as i32;
+                let mut sum = 0i32;
+                for k in 0..2 {
+                    let off1 = CDEF_DIRECTIONS[dir + 4][k] as isize;
+                    let off2 = CDEF_DIRECTIONS[dir][k] as isize;
+                    let s0 = tmp[((tp + x) as isize + off1) as usize] as i32;
+                    let s1 = tmp[((tp + x) as isize - off1) as usize] as i32;
+                    let s2 = tmp[((tp + x) as isize + off2) as usize] as i32;
+                    let s3 = tmp[((tp + x) as isize - off2) as usize] as i32;
+                    let st = 2 - k as i32;
+                    sum += st * constrain(s0 - px, sec_strength, sec_shift);
+                    sum += st * constrain(s1 - px, sec_strength, sec_shift);
+                    sum += st * constrain(s2 - px, sec_strength, sec_shift);
+                    sum += st * constrain(s3 - px, sec_strength, sec_shift);
+                }
+                dst[dp + x] = (px + ((sum - (sum < 0) as i32 + 8) >> 4)) as u16;
+            }
+            dp += dst_stride;
+            tp += tmp_stride;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cdef_filter_block_8bpc_scalar(
     dst: &mut [u8],
@@ -167,6 +285,42 @@ fn resolve_cdef_filter() -> CdefFilterFn {
                 f = crate::sse::cdef_filter_block_8bpc_sse41 as CdefFilterFn;
             }
         }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::cdef_filter_block_8bpc_avx2 as CdefFilterFn;
+            }
+        }
+        f
+    })
+}
+
+static CDEF_FILTER_HBD: OnceLock<CdefFilterHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_cdef_filter_hbd() -> CdefFilterHbdFn {
+    *CDEF_FILTER_HBD.get_or_init(|| {
+        let mut f = cdef_filter_block_hbd_scalar as CdefFilterHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::cdef_filter_block_hbd_neon as CdefFilterHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::cdef_filter_block_hbd_sse41 as CdefFilterHbdFn;
+            }
+        }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::cdef_filter_block_hbd_avx2 as CdefFilterHbdFn;
+            }
+        }
         f
     })
 }
@@ -194,6 +348,48 @@ pub(crate) fn cdef_filter_block_8bpc(
     // detected; the scalar default is always sound.
     unsafe {
         resolve_cdef_filter()(
+            dst,
+            dst_stride,
+            dst_off,
+            tmp,
+            tmp_stride,
+            o,
+            pri_strength,
+            sec_strength,
+            pri_shift,
+            sec_shift,
+            pri_tap,
+            dir,
+            w,
+            h,
+        )
+    };
+}
+
+/// Dispatched high-bit-depth CDEF filter apply. The same function is used for
+/// 10-bit and 12-bit because both are stored as native-endian `u16` samples.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cdef_filter_block_hbd(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+    w: usize,
+    h: usize,
+) {
+    // SAFETY: resolve only returns architecture-specific kernels after runtime
+    // feature detection; the scalar default is always sound.
+    unsafe {
+        resolve_cdef_filter_hbd()(
             dst,
             dst_stride,
             dst_off,

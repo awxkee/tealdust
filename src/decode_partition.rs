@@ -53,8 +53,8 @@ fn chroma_sub_valid(cw4: i32, ch4: i32) -> bool {
     if aspect >= 4 { mx <= 16 } else { mx <= 64 }
 }
 
-pub(crate) fn decode_partition(
-    ctx: &mut SbCtx<'_, '_>,
+pub(crate) fn decode_partition<const UPDATE_CDF: bool>(
+    ctx: &mut SbCtx<'_, '_, UPDATE_CDF>,
     pass: u8,
     lbs: BlockSize,
     cbs: BlockSize,
@@ -67,7 +67,7 @@ pub(crate) fn decode_partition(
     have_h_split: bool,
     have_v_split: bool,
     dir_ptr: &mut i32,
-) -> (BlockPartition, BlockSize) {
+) -> Result<(BlockPartition, BlockSize), ()> {
     let fi = ctx.fi;
     let bx = &*ctx.bx;
     let by = &*ctx.by;
@@ -92,7 +92,9 @@ pub(crate) fn decode_partition(
         let eff_ss_ver = fi.ss_ver & (lbs == BlockSize::Invalid) as i32;
         let eff_ss_hor = fi.ss_hor & (lbs == BlockSize::Invalid) as i32;
         let bwh4ss = [bw4 >> eff_ss_hor, bh4 >> eff_ss_ver];
-        assert!(bwh4ss[0] >= 1 && bwh4ss[1] >= 1);
+        if bwh4ss[0] < 1 || bwh4ss[1] < 1 {
+            return Err(());
+        }
         let mut dir = -1i32;
 
         if imax(bwh4ss[0], bwh4ss[1]) == 1
@@ -214,7 +216,9 @@ pub(crate) fn decode_partition(
                         let aspect = 1i32 << fi.max_pb_aspect_ratio_log2;
                         let v_aspect = bw4 * aspect >= bh4 * 2;
                         let h_aspect = bh4 * aspect >= bw4 * 2;
-                        assert!(v_aspect || h_aspect);
+                        if !v_aspect && !h_aspect {
+                            return Err(());
+                        }
 
                         if imin(bwh4ss[0], bwh4ss[1]) == 1 {
                             dir = (bwh4ss[0] > bwh4ss[1]) as i32;
@@ -257,7 +261,9 @@ pub(crate) fn decode_partition(
                                 dir = v_ok as i32;
                             }
                         }
-                        assert!(pcc.part[dir as usize][0] != -1);
+                        if pcc.part[dir as usize][0] == -1 {
+                            return Err(());
+                        }
                         bp = if dir != 0 {
                             BlockPartition::V
                         } else {
@@ -299,7 +305,9 @@ pub(crate) fn decode_partition(
                                     }));
 
                             if has_hv3 || has_hv4ab {
-                                assert!(pcc.part[ddir][1] != -1);
+                                if pcc.part[ddir][1] == -1 {
+                                    return Err(());
+                                }
                                 let ctx5 = get_partition2_ctx(a, l, b_dim, pl, dir, by4, bx4);
                                 let ctx6 = (ctx5 + pcc.ctx[0] as i32 * 4) as usize;
                                 let is_ext = msac.decode_bool_adapt(cdf_m.part_ext(pl, ctx6));
@@ -310,7 +318,9 @@ pub(crate) fn decode_partition(
                                         BlockPartition::H3
                                     };
                                     if has_hv4ab {
-                                        assert!(pcc.part[ddir][2] != -1);
+                                        if pcc.part[ddir][2] == -1 {
+                                            return Err(());
+                                        }
                                         let is_4way = if !has_hv3 {
                                             1u32
                                         } else {
@@ -369,15 +379,20 @@ pub(crate) fn decode_partition(
             *part_w_idx += 1;
         }
     } else {
-        let val = part_r[*part_r_idx];
+        let val = match part_r.get(*part_r_idx) {
+            Some(&val) => val,
+            None => return Err(()),
+        };
         *part_r_idx += 1;
         if val & 0x80 != 0 {
-            assert!(*intra_region == 0);
+            if *intra_region != 0 {
+                return Err(());
+            }
             *intra_region = 1;
             cbs = BlockSize::Invalid;
         }
         bp = BlockPartition::from_raw((val & 0x7f) as i8);
     }
 
-    (bp, cbs)
+    Ok((bp, cbs))
 }

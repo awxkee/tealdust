@@ -15,3 +15,7 @@ exclude = ["*.jpg", "/assets", "*.png", "*.sh", "/assets/*", "/scripts/*"]
 rust-version = "1.93.0"
 
 [dependencies]
+
+[features]
+default = ["avx"]
+avx = []

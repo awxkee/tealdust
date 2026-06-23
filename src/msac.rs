@@ -170,38 +170,30 @@ static MSAC_MIN_PROB_INNER: Aligned<[[u16; 8]; 7]> = Aligned([
 
 pub(crate) static MSAC_MIN_PROB: &[[u16; 8]; 7] = &MSAC_MIN_PROB_INNER.0;
 
-pub(crate) struct MsacContext<'a> {
+pub(crate) struct MsacContext<'a, const UPDATE_CDF: bool> {
     buf_pos: usize,
     buf: &'a [u8],
     dif: u64,
     rng: u32,
     cnt: i32,
-    allow_update_cdf: bool,
 }
 
-/// The resumable state of an `MsacContext`, with the buffer borrow stripped out.
-/// This lets a tile's entropy-decoder position be parked in its `TileState`
-/// between superblock rows so that *any* worker can pick up the next sbrow (the
-/// dav2d sbrow-granularity scheduling model), reconstructing the live context
-/// from the (owned-by-the-tile) `msac_buf` plus this snapshot.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct MsacState {
     buf_pos: usize,
     dif: u64,
     rng: u32,
     cnt: i32,
-    allow_update_cdf: bool,
 }
 
-impl<'a> MsacContext<'a> {
-    pub(crate) fn new(data: &'a [u8], disable_cdf_update_flag: bool) -> Self {
+impl<'a, const UPDATE_CDF: bool> MsacContext<'a, UPDATE_CDF> {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
         let mut s = Self {
             buf_pos: 0,
             buf: data,
             dif: !0u64 >> 1,
             rng: 0x8000,
             cnt: -15,
-            allow_update_cdf: !disable_cdf_update_flag,
         };
         s.ctx_refill();
         s
@@ -214,7 +206,6 @@ impl<'a> MsacContext<'a> {
             dif: self.dif,
             rng: self.rng,
             cnt: self.cnt,
-            allow_update_cdf: self.allow_update_cdf,
         }
     }
 
@@ -228,7 +219,6 @@ impl<'a> MsacContext<'a> {
             dif: st.dif,
             rng: st.rng,
             cnt: st.cnt,
-            allow_update_cdf: st.allow_update_cdf,
         }
     }
 
@@ -453,7 +443,7 @@ impl<'a> MsacContext<'a> {
         debug_assert!(u >= v);
         self.ctx_norm(self.dif - ((v as u64) << 48), u - v);
 
-        if self.allow_update_cdf {
+        if UPDATE_CDF {
             let pc = cdf[N];
             let count = (pc & 0xFF) as u8;
 
@@ -479,7 +469,7 @@ impl<'a> MsacContext<'a> {
     pub(crate) fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
         let bit = self.decode_bool_raw(cdf[0] as u32);
 
-        if self.allow_update_cdf {
+        if UPDATE_CDF {
             let pc = cdf[1];
             let count = (pc & 0xFF) as u8;
             let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize];

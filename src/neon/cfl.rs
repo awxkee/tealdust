@@ -29,6 +29,7 @@
 
 use core::arch::aarch64::*;
 
+use crate::cfl_dispatch::CflApply8;
 const CFL_FLT_TYPE_VSTRIP: u32 = 1;
 const CFL_FLT_TYPE_GAUSS: u32 = 2;
 
@@ -68,8 +69,8 @@ fn pad_bottom(plane: &mut [u8], row0: usize, stride: usize, w: usize, h: usize, 
 #[inline]
 #[target_feature(enable = "neon")]
 fn ac8_420_i16(top: uint8x16_t, bot: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
-    let top_pairs = vpaddlq_u8(top); // u16x8, adjacent horizontal pairs
-    let bot_pairs = vpaddlq_u8(bot); // u16x8
+    let top_pairs = vpaddlq_u8(top);
+    let bot_pairs = vpaddlq_u8(bot);
 
     let sum2x2 = vaddq_u16(top_pairs, bot_pairs); // <= 1020
     let sum2x2_x2 = vshlq_n_u16::<1>(sum2x2); // <= 2040
@@ -80,8 +81,7 @@ fn ac8_420_i16(top: uint8x16_t, bot: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
 #[inline]
 #[target_feature(enable = "neon")]
 fn ac8_444_i16(src: uint8x8_t, dc0v: int16x8_t) -> int16x8_t {
-    let y16 = vmovl_u8(src);
-    vsubq_s16(vreinterpretq_s16_u16(vshlq_n_u16::<3>(y16)), dc0v)
+    vsubq_s16(vreinterpretq_s16_u16(vshll_n_u8::<3>(src)), dc0v)
 }
 
 #[inline]
@@ -156,27 +156,33 @@ fn apply16_444_i16_ac(
     vcombine_u8(lo, hi)
 }
 
-#[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
-fn cfl_apply_420_8bpc_neon_impl(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
+fn cfl_apply_420_8bpc_neon_impl(args: CflApply8<'_>) {
+    let CflApply8 {
+        y,
+        u,
+        v,
+        layout,
+        area,
+        params,
+    } = args;
+    let crate::cfl_dispatch::CflLayout {
+        yrow0,
+        urow0,
+        vrow0,
+        ystride,
+        cstride,
+    } = layout;
+    let crate::cfl_dispatch::CflArea { w, h, xlim, ylim } = area;
+    let crate::cfl_dispatch::CflParams {
+        dc0,
+        dc1,
+        dc2,
+        alpha0,
+        alpha1,
+        filter_type: _,
+    } = params;
+
     let do_u = alpha0 != 0;
     let do_v = alpha1 != 0;
 
@@ -319,27 +325,33 @@ fn cfl_ac_422_scalar_filter<const GAUSS: bool>(y: &[u8], yrow: usize, x: usize, 
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
-fn cfl_apply_422_8bpc_neon_impl<const GAUSS: bool>(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
+fn cfl_apply_422_8bpc_neon_impl<const GAUSS: bool>(args: CflApply8<'_>) {
+    let CflApply8 {
+        y,
+        u,
+        v,
+        layout,
+        area,
+        params,
+    } = args;
+    let crate::cfl_dispatch::CflLayout {
+        yrow0,
+        urow0,
+        vrow0,
+        ystride,
+        cstride,
+    } = layout;
+    let crate::cfl_dispatch::CflArea { w, h, xlim, ylim } = area;
+    let crate::cfl_dispatch::CflParams {
+        dc0,
+        dc1,
+        dc2,
+        alpha0,
+        alpha1,
+        filter_type: _,
+    } = params;
+
     let do_u = alpha0 != 0;
     let do_v = alpha1 != 0;
 
@@ -447,27 +459,33 @@ fn cfl_apply_422_8bpc_neon_impl<const GAUSS: bool>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
-fn cfl_apply_444_8bpc_neon_impl(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
+fn cfl_apply_444_8bpc_neon_impl(args: CflApply8<'_>) {
+    let CflApply8 {
+        y,
+        u,
+        v,
+        layout,
+        area,
+        params,
+    } = args;
+    let crate::cfl_dispatch::CflLayout {
+        yrow0,
+        urow0,
+        vrow0,
+        ystride,
+        cstride,
+    } = layout;
+    let crate::cfl_dispatch::CflArea { w, h, xlim, ylim } = area;
+    let crate::cfl_dispatch::CflParams {
+        dc0,
+        dc1,
+        dc2,
+        alpha0,
+        alpha1,
+        filter_type: _,
+    } = params;
+
     let do_u = alpha0 != 0;
     let do_v = alpha1 != 0;
 
@@ -581,115 +599,18 @@ fn cfl_apply_444_8bpc_neon_impl(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn cfl_apply_420_8bpc_neon(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
-    unsafe {
-        cfl_apply_420_8bpc_neon_impl(
-            y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
-            alpha0, alpha1,
-        )
+pub(crate) fn cfl_apply_420_8bpc_neon(args: CflApply8<'_>) {
+    unsafe { cfl_apply_420_8bpc_neon_impl(args) }
+}
+
+pub(crate) fn cfl_apply_422_8bpc_neon(args: CflApply8<'_>) {
+    match args.params.filter_type {
+        CFL_FLT_TYPE_VSTRIP => crate::cfl_dispatch::cfl_apply_422_8bpc_scalar(args),
+        CFL_FLT_TYPE_GAUSS => unsafe { cfl_apply_422_8bpc_neon_impl::<true>(args) },
+        _ => unsafe { cfl_apply_422_8bpc_neon_impl::<false>(args) },
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn cfl_apply_422_8bpc_neon(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-    filter_type: u32,
-) {
-    match filter_type {
-        CFL_FLT_TYPE_VSTRIP => crate::cfl_dispatch::cfl_apply_422_8bpc_scalar(
-            y,
-            u,
-            v,
-            yrow0,
-            urow0,
-            vrow0,
-            ystride,
-            cstride,
-            w,
-            h,
-            xlim,
-            ylim,
-            dc0,
-            dc1,
-            dc2,
-            alpha0,
-            alpha1,
-            filter_type,
-        ),
-        CFL_FLT_TYPE_GAUSS => unsafe {
-            cfl_apply_422_8bpc_neon_impl::<true>(
-                y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
-                alpha0, alpha1,
-            )
-        },
-        _ => unsafe {
-            cfl_apply_422_8bpc_neon_impl::<false>(
-                y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
-                alpha0, alpha1,
-            )
-        },
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn cfl_apply_444_8bpc_neon(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
-    unsafe {
-        cfl_apply_444_8bpc_neon_impl(
-            y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
-            alpha0, alpha1,
-        )
-    }
+pub(crate) fn cfl_apply_444_8bpc_neon(args: CflApply8<'_>) {
+    unsafe { cfl_apply_444_8bpc_neon_impl(args) }
 }

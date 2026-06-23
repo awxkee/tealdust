@@ -241,6 +241,20 @@ fn deblock_bd<BD: BitDepth>(
             );
             return;
         }
+    } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+        crate::deblock_dispatch::deblock_apply_hbd(
+            d16,
+            off,
+            stridea,
+            strideb,
+            width_neg,
+            width_pos,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bdmax,
+        );
+        return;
     }
 
     let mut dp = off;
@@ -482,6 +496,49 @@ pub(crate) fn deblock_v_sb64uv_bd<BD: BitDepth>(
 pub(crate) fn backup_db(
     dst: &mut [u8],
     src: &[u8],
+    stride: usize,
+    ss_ver: i32,
+    sb128: bool,
+    mut row: i32,
+    row_h: i32,
+    w: usize,
+    lr_backup: bool,
+    n_tc: i32,
+) {
+    let cdef_backup = (!lr_backup) as i32;
+    let sb128_i = sb128 as i32;
+
+    let mut stripe_h = ((64 << (cdef_backup & sb128_i)) - 8 * (row == 0) as i32) >> ss_ver;
+    let mut src_off = (stripe_h - 2) as usize * stride;
+    let mut dst_off = 0usize;
+
+    if n_tc == 1 {
+        if row > 0 {
+            let top = 4usize << sb128_i;
+            for i in 0..4usize {
+                let from = dst_off + (top + i) * stride;
+                let to = dst_off + i * stride;
+                dst.copy_within(from..from + w, to);
+            }
+        }
+        dst_off += 4 * stride;
+    }
+
+    while row + stripe_h <= row_h {
+        for _ in 0..4 {
+            dst[dst_off..dst_off + w].copy_from_slice(&src[src_off..src_off + w]);
+            dst_off += stride;
+            src_off += stride;
+        }
+        row += stripe_h;
+        stripe_h = 64 >> ss_ver;
+        src_off += (stripe_h - 4) as usize * stride;
+    }
+}
+
+pub(crate) fn backup_db_hbd(
+    dst: &mut [u16],
+    src: &[u16],
     stride: usize,
     ss_ver: i32,
     sb128: bool,
@@ -1425,6 +1482,76 @@ pub(crate) fn copy_db_8bpc(
                 1,
             );
             backup_db(
+                &mut lr_db[2],
+                &src[2][cys_off..],
+                strides[1].unsigned_abs(),
+                ss_ver_i,
+                sb128,
+                cy_stripe,
+                crow_h,
+                cw,
+                lr_backup,
+                1,
+            );
+        }
+    }
+}
+
+pub(crate) fn copy_db_hbd(
+    lr_db: &mut [Vec<u16>; 3],
+    src: &[&[u16]; 3],
+    strides: &[isize; 2],
+    bw: usize,
+    bh: usize,
+    sby: i32,
+    sb128: bool,
+    ss_hor: bool,
+    ss_ver: bool,
+    lr_backup: bool,
+) {
+    let h = (bh * 4) as i32;
+    let w = bw * 4;
+    let offset = 8 * (sby != 0) as i32;
+    let y_stripe = (sby << (6 + sb128 as i32)) - offset;
+    let row_h = imin((sby + 1) << (6 + sb128 as i32), h - 1);
+    if y_stripe < row_h {
+        let ys_off = (y_stripe as isize * strides[0]) as usize;
+        backup_db_hbd(
+            &mut lr_db[0],
+            &src[0][ys_off..],
+            strides[0].unsigned_abs(),
+            0,
+            sb128,
+            y_stripe,
+            row_h,
+            w,
+            lr_backup,
+            1,
+        );
+    }
+
+    if strides[1] != 0 {
+        let cw = w >> (ss_hor as usize);
+        let ch = (bh * 4 >> ss_ver as i32) as i32;
+        let ss_ver_i = ss_ver as i32;
+        let offset_uv = offset >> ss_ver_i;
+        let cy_stripe = (sby << ((6 - ss_ver_i) + sb128 as i32)) - offset_uv;
+        let crow_h = imin((sby + 1) << ((6 - ss_ver_i) + sb128 as i32), ch - 1);
+        if cy_stripe < crow_h {
+            let cys_off = (cy_stripe as isize * strides[1]) as usize;
+            backup_db_hbd(
+                &mut lr_db[1],
+                &src[1][cys_off..],
+                strides[1].unsigned_abs(),
+                ss_ver_i,
+                sb128,
+                cy_stripe,
+                crow_h,
+                cw,
+                lr_backup,
+                1,
+            );
+            backup_db_hbd(
                 &mut lr_db[2],
                 &src[2][cys_off..],
                 strides[1].unsigned_abs(),

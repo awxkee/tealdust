@@ -53,6 +53,15 @@ fn constrain_v(diff: int32x4_t, threshold: int32x4_t, nsh: int32x4_t) -> int32x4
     }
 }
 
+#[inline(always)]
+fn mul_i32x4_i16_n(v: int32x4_t, k: i32) -> int32x4_t {
+    unsafe {
+        // CDEF constrain() is strength-bounded, so it fits i16. Widen-multiply
+        // from i16 instead of using four full i32 multiplies.
+        vmull_n_s16(vqmovn_s32(v), k as i16)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
@@ -81,7 +90,6 @@ pub(crate) fn cdef_filter_block_8bpc_neon(
     let sec_nsh = vdupq_n_s32(-sec_shift);
     let zero = vdupq_n_s32(0);
     let eight = vdupq_n_s32(8);
-    let nsh4 = vdupq_n_s32(-4);
     let lowmask = vdupq_n_s32(0xFF);
     let dirs = &crate::tables::CDEF_DIRECTIONS;
     let groups = w / 4;
@@ -106,14 +114,14 @@ pub(crate) fn cdef_filter_block_8bpc_neon(
                     let off1 = dirs[dir + 2][k] as isize;
                     let p0 = load(off1);
                     let p1 = load(-off1);
-                    let pt = vdupq_n_s32(ptap);
+                    let pt = ptap;
                     sum = vaddq_s32(
                         sum,
-                        vmulq_s32(pt, constrain_v(vsubq_s32(p0, px), pri_s, pri_nsh)),
+                        mul_i32x4_i16_n(constrain_v(vsubq_s32(p0, px), pri_s, pri_nsh), pt),
                     );
                     sum = vaddq_s32(
                         sum,
-                        vmulq_s32(pt, constrain_v(vsubq_s32(p1, px), pri_s, pri_nsh)),
+                        mul_i32x4_i16_n(constrain_v(vsubq_s32(p1, px), pri_s, pri_nsh), pt),
                     );
                     ptap = (ptap & 3) | 2;
                     if clip {
@@ -127,22 +135,22 @@ pub(crate) fn cdef_filter_block_8bpc_neon(
                         let s1 = load(-off2);
                         let s2 = load(off3);
                         let s3 = load(-off3);
-                        let st = vdupq_n_s32(2 - k as i32);
+                        let st = 2 - k as i32;
                         sum = vaddq_s32(
                             sum,
-                            vmulq_s32(st, constrain_v(vsubq_s32(s0, px), sec_s, sec_nsh)),
+                            mul_i32x4_i16_n(constrain_v(vsubq_s32(s0, px), sec_s, sec_nsh), st),
                         );
                         sum = vaddq_s32(
                             sum,
-                            vmulq_s32(st, constrain_v(vsubq_s32(s1, px), sec_s, sec_nsh)),
+                            mul_i32x4_i16_n(constrain_v(vsubq_s32(s1, px), sec_s, sec_nsh), st),
                         );
                         sum = vaddq_s32(
                             sum,
-                            vmulq_s32(st, constrain_v(vsubq_s32(s2, px), sec_s, sec_nsh)),
+                            mul_i32x4_i16_n(constrain_v(vsubq_s32(s2, px), sec_s, sec_nsh), st),
                         );
                         sum = vaddq_s32(
                             sum,
-                            vmulq_s32(st, constrain_v(vsubq_s32(s3, px), sec_s, sec_nsh)),
+                            mul_i32x4_i16_n(constrain_v(vsubq_s32(s3, px), sec_s, sec_nsh), st),
                         );
                         min_v = vminq_s32(min_v, vminq_s32(vminq_s32(s0, s1), vminq_s32(s2, s3)));
                         max_v = vmaxq_s32(max_v, vmaxq_s32(vmaxq_s32(s0, s1), vmaxq_s32(s2, s3)));
@@ -156,29 +164,29 @@ pub(crate) fn cdef_filter_block_8bpc_neon(
                     let s1 = load(-off1);
                     let s2 = load(off2);
                     let s3 = load(-off2);
-                    let st = vdupq_n_s32(2 - k as i32);
+                    let st = 2 - k as i32;
                     sum = vaddq_s32(
                         sum,
-                        vmulq_s32(st, constrain_v(vsubq_s32(s0, px), sec_s, sec_nsh)),
+                        mul_i32x4_i16_n(constrain_v(vsubq_s32(s0, px), sec_s, sec_nsh), st),
                     );
                     sum = vaddq_s32(
                         sum,
-                        vmulq_s32(st, constrain_v(vsubq_s32(s1, px), sec_s, sec_nsh)),
+                        mul_i32x4_i16_n(constrain_v(vsubq_s32(s1, px), sec_s, sec_nsh), st),
                     );
                     sum = vaddq_s32(
                         sum,
-                        vmulq_s32(st, constrain_v(vsubq_s32(s2, px), sec_s, sec_nsh)),
+                        mul_i32x4_i16_n(constrain_v(vsubq_s32(s2, px), sec_s, sec_nsh), st),
                     );
                     sum = vaddq_s32(
                         sum,
-                        vmulq_s32(st, constrain_v(vsubq_s32(s3, px), sec_s, sec_nsh)),
+                        mul_i32x4_i16_n(constrain_v(vsubq_s32(s3, px), sec_s, sec_nsh), st),
                     );
                 }
             }
 
             // delta = (sum - (sum < 0) + 8) >> 4 ; mask = -1 where sum<0, so sum + mask
             let mask = vreinterpretq_s32_u32(vcltq_s32(sum, zero));
-            let delta = vshlq_s32(vaddq_s32(vaddq_s32(sum, mask), eight), nsh4);
+            let delta = vshrq_n_s32::<4>(vaddq_s32(vaddq_s32(sum, mask), eight));
             let mut res = vaddq_s32(px, delta);
             if clip {
                 res = vminq_s32(vmaxq_s32(res, min_v), max_v);

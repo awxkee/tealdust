@@ -113,7 +113,9 @@ impl crate::itx_1d::DctWide for SseWide {
     #[inline(always)]
     fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: __m128i, c: __m128i) -> Self::Acc {
         unsafe {
-            // broadcast coefficient lane LANE (i16) to i32x4, sign-extended
+            // Fallback single-tap widening MAC. The paired path below is used by
+            // the hot ITX kernels; keep this for the generic default and odd
+            // future callers.
             let raw = match LANE {
                 0 => _mm_extract_epi16(c, 0),
                 1 => _mm_extract_epi16(c, 1),
@@ -134,6 +136,36 @@ impl crate::itx_1d::DctWide for SseWide {
         }
     }
     #[inline(always)]
+    fn mul_add_pair<const LANE0: i32, const LANE1: i32>(
+        acc: Self::Acc,
+        x0: __m128i,
+        x1: __m128i,
+        c: __m128i,
+    ) -> Self::Acc {
+        unsafe {
+            let _ = LANE1;
+            debug_assert_eq!(LANE1, LANE0 + 1);
+            debug_assert_eq!(LANE0 & 1, 0);
+
+            // c is eight i16 coefficients. Replicate an adjacent i16 pair as
+            // [c0, c1, c0, c1, ...], then use madd_epi16 on interleaved source
+            // pairs: x0[i] * c0 + x1[i] * c1. This halves the number of madds
+            // and avoids the extract+broadcast sequence in the single-lane path.
+            let k01 = match LANE0 {
+                0 => _mm_shuffle_epi32(c, 0x00),
+                2 => _mm_shuffle_epi32(c, 0x55),
+                4 => _mm_shuffle_epi32(c, 0xaa),
+                _ => _mm_shuffle_epi32(c, 0xff),
+            };
+            let xlo = _mm_unpacklo_epi16(x0, x1);
+            let xhi = _mm_unpackhi_epi16(x0, x1);
+            (
+                _mm_add_epi32(acc.0, _mm_madd_epi16(xlo, k01)),
+                _mm_add_epi32(acc.1, _mm_madd_epi16(xhi, k01)),
+            )
+        }
+    }
+    #[inline(always)]
     unsafe fn load8_narrow(src: &[i32], off: usize) -> __m128i {
         unsafe {
             let lo = _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i);
@@ -144,13 +176,39 @@ impl crate::itx_1d::DctWide for SseWide {
     #[inline(always)]
     unsafe fn load8_rect2_narrow(src: &[i32], off: usize) -> __m128i {
         unsafe {
-            // Same normalization as dav2d's s16 path: narrow first, then
-            // rounded high multiply by 0x5a80. For s16 inputs this equals
-            // `(v * 181 + 128) >> 8`.
             let lo = _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i);
             let hi = _mm_loadu_si128(src.as_ptr().add(off + 4) as *const __m128i);
             _mm_mulhrs_epi16(_mm_packs_epi32(lo, hi), _mm_set1_epi16(0x5a80))
         }
+    }
+    #[inline(always)]
+    unsafe fn load4_narrow(src: &[i32], off: usize) -> __m128i {
+        unsafe {
+            let lo = _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i);
+            _mm_packs_epi32(lo, _mm_setzero_si128())
+        }
+    }
+    #[inline(always)]
+    unsafe fn load4_rect2_narrow(src: &[i32], off: usize) -> __m128i {
+        unsafe { _mm_mulhrs_epi16(Self::load4_narrow(src, off), _mm_set1_epi16(0x5a80)) }
+    }
+    #[inline(always)]
+    unsafe fn load8_i16(src: &[i16], off: usize) -> __m128i {
+        debug_assert!(off + 8 <= src.len());
+        unsafe { _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i) }
+    }
+    #[inline(always)]
+    unsafe fn load8_rect2_i16(src: &[i16], off: usize) -> __m128i {
+        unsafe { _mm_mulhrs_epi16(Self::load8_i16(src, off), _mm_set1_epi16(0x5a80)) }
+    }
+    #[inline(always)]
+    unsafe fn load4_i16(src: &[i16], off: usize) -> __m128i {
+        debug_assert!(off + 4 <= src.len());
+        unsafe { _mm_loadl_epi64(src.as_ptr().add(off) as *const __m128i) }
+    }
+    #[inline(always)]
+    unsafe fn load4_rect2_i16(src: &[i16], off: usize) -> __m128i {
+        unsafe { _mm_mulhrs_epi16(Self::load4_i16(src, off), _mm_set1_epi16(0x5a80)) }
     }
     #[inline(always)]
     fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
@@ -183,24 +241,50 @@ impl crate::itx_1d::DctWide for SseWide {
                 maxv,
             );
 
-            let p = dst.as_mut_ptr().add(off) as *mut f32;
-
             #[inline(always)]
-            unsafe fn store_lane0(p: *mut f32, v: __m128i) {
+            fn store_lane0(dst: &mut [i32], off: usize, v: __m128i) {
                 unsafe {
-                    _mm_store_ss(p, _mm_castsi128_ps(v));
+                    _mm_store_ss(dst.as_mut_ptr().add(off).cast(), _mm_castsi128_ps(v));
                 }
             }
 
-            store_lane0(p.add(0), lo);
-            store_lane0(p.add(1 * stride), _mm_shuffle_epi32::<0x55>(lo));
-            store_lane0(p.add(2 * stride), _mm_shuffle_epi32::<0xaa>(lo));
-            store_lane0(p.add(3 * stride), _mm_shuffle_epi32::<0xff>(lo));
+            store_lane0(dst, off, lo);
+            store_lane0(dst, off + 1 * stride, _mm_shuffle_epi32::<0x55>(lo));
+            store_lane0(dst, off + 2 * stride, _mm_shuffle_epi32::<0xaa>(lo));
+            store_lane0(dst, off + 3 * stride, _mm_shuffle_epi32::<0xff>(lo));
 
-            store_lane0(p.add(4 * stride), hi);
-            store_lane0(p.add(5 * stride), _mm_shuffle_epi32::<0x55>(hi));
-            store_lane0(p.add(6 * stride), _mm_shuffle_epi32::<0xaa>(hi));
-            store_lane0(p.add(7 * stride), _mm_shuffle_epi32::<0xff>(hi));
+            store_lane0(dst, off + 4 * stride, hi);
+            store_lane0(dst, off + 5 * stride, _mm_shuffle_epi32::<0x55>(hi));
+            store_lane0(dst, off + 6 * stride, _mm_shuffle_epi32::<0xaa>(hi));
+            store_lane0(dst, off + 7 * stride, _mm_shuffle_epi32::<0xff>(hi));
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn store4_strided_clip(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: Self::Acc,
+        clip: Self::Clip,
+    ) {
+        unsafe {
+            let (rnd, sh, minv, maxv) = clip;
+            let lo = _mm_min_epi32(
+                _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(acc.0, rnd), sh), minv),
+                maxv,
+            );
+            #[inline(always)]
+            fn store_lane0(dst: &mut [i32], off: usize, v: __m128i) {
+                unsafe {
+                    _mm_store_ss(dst.as_mut_ptr().add(off).cast(), _mm_castsi128_ps(v));
+                }
+            }
+
+            store_lane0(dst, off, lo);
+            store_lane0(dst, off + 1 * stride, _mm_shuffle_epi32::<0x55>(lo));
+            store_lane0(dst, off + 2 * stride, _mm_shuffle_epi32::<0xaa>(lo));
+            store_lane0(dst, off + 3 * stride, _mm_shuffle_epi32::<0xff>(lo));
         }
     }
 
@@ -209,6 +293,13 @@ impl crate::itx_1d::DctWide for SseWide {
         unsafe {
             _mm_storeu_si128(dst.as_mut_ptr().add(off) as *mut __m128i, acc.0);
             _mm_storeu_si128(dst.as_mut_ptr().add(off + 4) as *mut __m128i, acc.1);
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn store4(dst: &mut [i32], off: usize, acc: Self::Acc) {
+        unsafe {
+            _mm_storeu_si128(dst.as_mut_ptr().add(off) as *mut __m128i, acc.0);
         }
     }
 }
@@ -277,6 +368,13 @@ impl DctSimd4 for SseDct2d {
     }
 
     #[inline(always)]
+    unsafe fn load_slice_i16(src: &[i16], off: usize) -> Self::V {
+        debug_assert!(off + 4 <= src.len());
+        let p = unsafe { src.as_ptr().add(off) as *const __m128i };
+        SseI32x4(unsafe { _mm_cvtepi16_epi32(_mm_loadl_epi64(p)) })
+    }
+
+    #[inline(always)]
     unsafe fn to_array(v: Self::V) -> [i32; 4] {
         let mut out = [0i32; 4];
         let p = out.as_mut_ptr() as *mut __m128i;
@@ -297,7 +395,7 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        idct_dequant_simd4_core::<Self, 16, 4>(
+        idct_dequant_simd4_core::<Self, 16, 4, i32>(
             coeff,
             tmp,
             eob,
@@ -320,7 +418,7 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        idct_dequant_simd4_core::<Self, 64, 8>(
+        idct_dequant_simd4_core::<Self, 64, 8, i32>(
             coeff,
             tmp,
             eob,
@@ -343,7 +441,7 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        idct_dequant_simd4_core::<Self, 256, 16>(
+        idct_dequant_simd4_core::<Self, 256, 16, i32>(
             coeff,
             tmp,
             eob,
@@ -366,7 +464,7 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        idct_dequant_simd4_core::<Self, 1024, 32>(
+        idct_dequant_simd4_core::<Self, 1024, 32, i32>(
             coeff,
             tmp,
             eob,
@@ -389,7 +487,7 @@ impl Dct2dBackend for SseDct2d {
         row_clip_min: i32,
         row_clip_max: i32,
     ) {
-        idct_dequant_simd4_core::<Self, 1024, 32>(
+        idct_dequant_simd4_core::<Self, 1024, 32, i32>(
             coeff,
             tmp,
             eob,
@@ -416,7 +514,7 @@ impl Adst2dBackend for SseDct2d {
         first_kind: usize,
         second_kind: usize,
     ) {
-        itx_dequant_simd4_core::<Self, 16, 4>(
+        itx_dequant_simd4_core::<Self, 16, 4, i32>(
             coeff,
             tmp,
             eob,
@@ -443,7 +541,7 @@ impl Adst2dBackend for SseDct2d {
         first_kind: usize,
         second_kind: usize,
     ) {
-        itx_dequant_simd4_core::<Self, 64, 8>(
+        itx_dequant_simd4_core::<Self, 64, 8, i32>(
             coeff,
             tmp,
             eob,
@@ -470,7 +568,7 @@ impl Adst2dBackend for SseDct2d {
         first_kind: usize,
         second_kind: usize,
     ) {
-        itx_dequant_simd4_core::<Self, 256, 16>(
+        itx_dequant_simd4_core::<Self, 256, 16, i32>(
             coeff,
             tmp,
             eob,
@@ -920,7 +1018,7 @@ fn idct_dequant_4x8_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 32, 4, 8>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 32, 4, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -967,7 +1065,7 @@ fn idct_dequant_8x4_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 32, 8, 4>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 32, 8, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -1014,7 +1112,7 @@ fn idct_dequant_8x16_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 8, 16>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 8, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -1061,7 +1159,7 @@ fn idct_dequant_16x8_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 16, 8>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 16, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -1108,7 +1206,7 @@ fn idct_dequant_16x32_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 512, 16, 32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 512, 16, 32, i32>(
         coeff,
         tmp,
         eob,
@@ -1155,7 +1253,7 @@ fn idct_dequant_32x16_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 512, 32, 16>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 512, 32, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -1202,7 +1300,7 @@ fn idct_dequant_4x16_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 64, 4, 16>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 64, 4, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -1249,7 +1347,7 @@ fn idct_dequant_16x4_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 64, 16, 4>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 64, 16, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -1296,7 +1394,7 @@ fn idct_dequant_8x32_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 256, 8, 32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 256, 8, 32, i32>(
         coeff,
         tmp,
         eob,
@@ -1343,7 +1441,7 @@ fn idct_dequant_32x8_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 256, 32, 8>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 256, 32, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -1390,7 +1488,7 @@ fn idct_dequant_4x32_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 4, 32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 4, 32, i32>(
         coeff,
         tmp,
         eob,
@@ -1437,7 +1535,7 @@ fn idct_dequant_32x4_sse41_impl(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 32, 4>(
+    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 32, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -1490,7 +1588,7 @@ fn iadst_dequant_4x8_sse41_impl(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 32, 4, 8>(
+    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 32, 4, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -1545,7 +1643,7 @@ fn iadst_dequant_8x4_sse41_impl(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 32, 8, 4>(
+    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 32, 8, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -1600,7 +1698,7 @@ fn iadst_dequant_8x16_sse41_impl(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 128, 8, 16>(
+    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 128, 8, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -1655,7 +1753,7 @@ fn iadst_dequant_16x8_sse41_impl(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 128, 16, 8>(
+    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 128, 16, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -1710,7 +1808,7 @@ fn iadst_dequant_4x16_sse41_impl(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 64, 4, 16>(
+    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 64, 4, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -1765,7 +1863,7 @@ fn iadst_dequant_16x4_sse41_impl(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 64, 16, 4>(
+    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 64, 16, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -1778,3 +1876,392 @@ fn iadst_dequant_16x4_sse41_impl(
         second_kind,
     );
 }
+
+// Low-bit-depth i16 coefficient entry points.
+
+macro_rules! idct_i16_fn {
+    ($pub:ident, $imp:ident, $n:expr, $s:expr) => {
+        #[target_feature(enable = "sse4.1")]
+        fn $imp(
+            coeff: &mut [i16],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+        ) {
+            idct_dequant_simd4_core::<SseDct2d, { $n }, { $s }, i16>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+            );
+        }
+        pub(crate) fn $pub(
+            coeff: &mut [i16],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+        ) {
+            unsafe {
+                $imp(
+                    coeff,
+                    tmp,
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                )
+            }
+        }
+    };
+}
+macro_rules! iadst_i16_fn {
+    ($pub:ident, $imp:ident, $n:expr, $s:expr) => {
+        #[target_feature(enable = "sse4.1")]
+        fn $imp(
+            coeff: &mut [i16],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+            first_kind: usize,
+            second_kind: usize,
+        ) {
+            itx_dequant_simd4_core::<SseDct2d, { $n }, { $s }, i16>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+                first_kind,
+                second_kind,
+            );
+        }
+        pub(crate) fn $pub(
+            coeff: &mut [i16],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+            first_kind: usize,
+            second_kind: usize,
+        ) {
+            unsafe {
+                $imp(
+                    coeff,
+                    tmp,
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    first_kind,
+                    second_kind,
+                )
+            }
+        }
+    };
+}
+macro_rules! idct_rect_i16_fn {
+    ($pub:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+        #[target_feature(enable = "sse4.1")]
+        fn $imp(
+            coeff: &mut [i16],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+        ) {
+            crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, { $n }, { $w }, { $h }, i16>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+            );
+        }
+        pub(crate) fn $pub(
+            coeff: &mut [i16],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+        ) {
+            unsafe {
+                $imp(
+                    coeff,
+                    tmp,
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                )
+            }
+        }
+    };
+}
+macro_rules! iadst_rect_i16_fn {
+    ($pub:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+        #[target_feature(enable = "sse4.1")]
+        fn $imp(
+            coeff: &mut [i16],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+            first_kind: usize,
+            second_kind: usize,
+        ) {
+            crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, { $n }, { $w }, { $h }, i16>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+                first_kind,
+                second_kind,
+            );
+        }
+        pub(crate) fn $pub(
+            coeff: &mut [i16],
+            tmp: &mut [i32; ITX_TMP_PIXELS],
+            eob: i32,
+            tx: usize,
+            is_rect2: bool,
+            shift0: i32,
+            row_clip_min: i32,
+            row_clip_max: i32,
+            first_kind: usize,
+            second_kind: usize,
+        ) {
+            unsafe {
+                $imp(
+                    coeff,
+                    tmp,
+                    eob,
+                    tx,
+                    is_rect2,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    first_kind,
+                    second_kind,
+                )
+            }
+        }
+    };
+}
+idct_i16_fn!(
+    idct_dequant_4x4_i16_sse41,
+    idct_dequant_4x4_i16_sse41_impl,
+    16,
+    4
+);
+idct_i16_fn!(
+    idct_dequant_8x8_i16_sse41,
+    idct_dequant_8x8_i16_sse41_impl,
+    64,
+    8
+);
+idct_i16_fn!(
+    idct_dequant_16x16_i16_sse41,
+    idct_dequant_16x16_i16_sse41_impl,
+    256,
+    16
+);
+idct_i16_fn!(
+    idct_dequant_32x32_i16_sse41,
+    idct_dequant_32x32_i16_sse41_impl,
+    1024,
+    32
+);
+idct_i16_fn!(
+    idct_dequant_64x64_i16_sse41,
+    idct_dequant_64x64_i16_sse41_impl,
+    1024,
+    32
+);
+iadst_i16_fn!(
+    iadst_dequant_4x4_i16_sse41,
+    iadst_dequant_4x4_i16_sse41_impl,
+    16,
+    4
+);
+iadst_i16_fn!(
+    iadst_dequant_8x8_i16_sse41,
+    iadst_dequant_8x8_i16_sse41_impl,
+    64,
+    8
+);
+iadst_i16_fn!(
+    iadst_dequant_16x16_i16_sse41,
+    iadst_dequant_16x16_i16_sse41_impl,
+    256,
+    16
+);
+idct_rect_i16_fn!(
+    idct_dequant_4x8_i16_sse41,
+    idct_dequant_4x8_i16_sse41_impl,
+    32,
+    4,
+    8
+);
+idct_rect_i16_fn!(
+    idct_dequant_8x4_i16_sse41,
+    idct_dequant_8x4_i16_sse41_impl,
+    32,
+    8,
+    4
+);
+idct_rect_i16_fn!(
+    idct_dequant_8x16_i16_sse41,
+    idct_dequant_8x16_i16_sse41_impl,
+    128,
+    8,
+    16
+);
+idct_rect_i16_fn!(
+    idct_dequant_16x8_i16_sse41,
+    idct_dequant_16x8_i16_sse41_impl,
+    128,
+    16,
+    8
+);
+idct_rect_i16_fn!(
+    idct_dequant_16x32_i16_sse41,
+    idct_dequant_16x32_i16_sse41_impl,
+    512,
+    16,
+    32
+);
+idct_rect_i16_fn!(
+    idct_dequant_32x16_i16_sse41,
+    idct_dequant_32x16_i16_sse41_impl,
+    512,
+    32,
+    16
+);
+idct_rect_i16_fn!(
+    idct_dequant_4x16_i16_sse41,
+    idct_dequant_4x16_i16_sse41_impl,
+    64,
+    4,
+    16
+);
+idct_rect_i16_fn!(
+    idct_dequant_16x4_i16_sse41,
+    idct_dequant_16x4_i16_sse41_impl,
+    64,
+    16,
+    4
+);
+idct_rect_i16_fn!(
+    idct_dequant_8x32_i16_sse41,
+    idct_dequant_8x32_i16_sse41_impl,
+    256,
+    8,
+    32
+);
+idct_rect_i16_fn!(
+    idct_dequant_32x8_i16_sse41,
+    idct_dequant_32x8_i16_sse41_impl,
+    256,
+    32,
+    8
+);
+idct_rect_i16_fn!(
+    idct_dequant_4x32_i16_sse41,
+    idct_dequant_4x32_i16_sse41_impl,
+    128,
+    4,
+    32
+);
+idct_rect_i16_fn!(
+    idct_dequant_32x4_i16_sse41,
+    idct_dequant_32x4_i16_sse41_impl,
+    128,
+    32,
+    4
+);
+iadst_rect_i16_fn!(
+    iadst_dequant_4x8_i16_sse41,
+    iadst_dequant_4x8_i16_sse41_impl,
+    32,
+    4,
+    8
+);
+iadst_rect_i16_fn!(
+    iadst_dequant_8x4_i16_sse41,
+    iadst_dequant_8x4_i16_sse41_impl,
+    32,
+    8,
+    4
+);
+iadst_rect_i16_fn!(
+    iadst_dequant_8x16_i16_sse41,
+    iadst_dequant_8x16_i16_sse41_impl,
+    128,
+    8,
+    16
+);
+iadst_rect_i16_fn!(
+    iadst_dequant_16x8_i16_sse41,
+    iadst_dequant_16x8_i16_sse41_impl,
+    128,
+    16,
+    8
+);
+iadst_rect_i16_fn!(
+    iadst_dequant_4x16_i16_sse41,
+    iadst_dequant_4x16_i16_sse41_impl,
+    64,
+    4,
+    16
+);
+iadst_rect_i16_fn!(
+    iadst_dequant_16x4_i16_sse41,
+    iadst_dequant_16x4_i16_sse41_impl,
+    64,
+    16,
+    4
+);

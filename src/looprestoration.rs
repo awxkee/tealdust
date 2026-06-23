@@ -28,7 +28,9 @@
  */
 
 use crate::gdf_tables::{GDF_ALPHA, GDF_BIAS, GDF_INTER_ERROR, GDF_INTRA_ERROR, GDF_WEIGHT};
+use crate::headers::{FhRestorationPlane, PixelLayout};
 use crate::intops::{apply_sign, iclip, imax, imin};
+use crate::lf_mask::{Av2Filter, Av2Restoration};
 use crate::tables::PC_WIENER_LUT_TO_CLASS;
 
 pub(crate) const LR_HAVE_LEFT: u8 = 1 << 0;
@@ -1565,9 +1567,6 @@ pub(crate) enum FirstSbInTileRow {
     Bottom = 2,
 }
 
-use crate::headers::{FhRestorationPlane, PixelLayout};
-use crate::lf_mask::{Av2Filter, Av2Restoration};
-
 pub(crate) struct LrContext<'a> {
     pub(crate) restoration_p: &'a [FhRestorationPlane; 3],
     pub(crate) gdf_qp_idx: i32,
@@ -1779,7 +1778,8 @@ fn lr_stripe_8bpc(
 
         // mask (ss_hor) into a single byte per 4-row; for luma / non-ss_hor it is
         let ll_rows = (stripe_h >> 2).max(1) as usize + 1;
-        let mut ll_mask_buf = vec![[0u16; 4]; ll_rows];
+        let mut ll_mask_storage = [[0u16; 4]; 17];
+        let ll_mask_buf = &mut ll_mask_storage[..ll_rows.min(17)];
         if sb256_idx < ctx.mask.len() {
             let m = &ctx.mask[sb256_idx];
             if plane == 0 || ss_hor == 0 {
@@ -1856,7 +1856,7 @@ fn lr_stripe_8bpc(
                         stripe_u,
                         &filter,
                         edges,
-                        &ll_mask_buf,
+                        ll_mask_buf,
                     );
                 }
                 WKind::NsSingle => {
@@ -1899,7 +1899,7 @@ fn lr_stripe_8bpc(
                         ss_ver as usize,
                         ctx.cfl_ds_filter_index,
                         edges,
-                        &ll_mask_buf,
+                        ll_mask_buf,
                     );
                 }
                 WKind::NsMulti => {
@@ -1937,7 +1937,7 @@ fn lr_stripe_8bpc(
                         &noskip_mask[noskip_offset..],
                         ctx.base_q,
                         edges,
-                        &ll_mask_buf,
+                        ll_mask_buf,
                     );
                     noskip_offset += (stripe_h >> 2) as usize;
                 }
@@ -1963,7 +1963,7 @@ fn lr_stripe_8bpc(
                         &noskip_mask[noskip_offset..],
                         ctx.base_q,
                         edges,
-                        &ll_mask_buf,
+                        ll_mask_buf,
                     );
                     noskip_offset += (stripe_h >> 2) as usize;
                 }
@@ -1980,7 +1980,7 @@ fn lr_stripe_8bpc(
                 w_u,
                 stripe_u,
                 gdf_scale,
-                &ll_mask_buf,
+                ll_mask_buf,
             );
         }
 
@@ -2254,6 +2254,1760 @@ pub(crate) fn lr_sbrow_8bpc(ctx: &LrContext, dst: &mut [&mut [u8]; 3], sby: i32)
         }
         let abs_stride_y = dst_stride[0].unsigned_abs();
         lr_sbrow(
+            ctx,
+            dst[0],
+            (y_stripe.max(0) as usize) * abs_stride_y,
+            y_stripe,
+            w,
+            h,
+            row_h,
+            0,
+            if first_sby_in_tile_row_flag != 0 {
+                FirstSbInTileRow::Bottom
+            } else {
+                FirstSbInTileRow::None
+            },
+            tile_row - 1,
+        );
+    }
+}
+
+pub(crate) const EMPTY_LR_DB_LINE_HBD: [Vec<u16>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+
+pub(crate) fn backup_row_hbd(
+    dst: &mut [u16],
+    o: usize,
+    src: &[u16],
+    src_o: usize,
+    left: &[u16],
+    left_off: usize,
+    w: usize,
+    edge_len: usize,
+    edges: u8,
+) {
+    if edges & LR_HAVE_LEFT != 0 {
+        for x in 0..edge_len {
+            dst[o - edge_len + x] = left[left_off - edge_len + x];
+        }
+    } else {
+        dst[o - edge_len..o].fill(src[src_o]);
+    }
+
+    dst[o..o + w].copy_from_slice(&src[src_o..src_o + w]);
+
+    if edges & LR_HAVE_RIGHT != 0 {
+        dst[o + w..o + w + edge_len].copy_from_slice(&src[src_o + w..src_o + w + edge_len]);
+    } else {
+        dst[o + w..o + w + edge_len].fill(src[src_o + w - 1]);
+    }
+}
+
+pub(crate) fn backup_row_lpf_hbd(
+    dst: &mut [u16],
+    o: usize,
+    src: &[u16],
+    src_o: usize,
+    w: usize,
+    edge_len: usize,
+    edges: u8,
+) {
+    if edges & LR_HAVE_LEFT != 0 {
+        for x in 0..edge_len {
+            dst[o - edge_len + x] = src[src_o - edge_len + x];
+        }
+    } else {
+        dst[o - edge_len..o].fill(src[src_o]);
+    }
+
+    dst[o..o + w].copy_from_slice(&src[src_o..src_o + w]);
+
+    if edges & LR_HAVE_RIGHT != 0 {
+        dst[o + w..o + w + edge_len].copy_from_slice(&src[src_o + w..src_o + w + edge_len]);
+    } else {
+        dst[o + w..o + w + edge_len].fill(src[src_o + w - 1]);
+    }
+}
+
+pub(crate) fn backup_row_luma_hbd(
+    dst: &mut [u16],
+    o: usize,
+    src: &[u16],
+    src_o: usize,
+    src_stride: usize,
+    w: usize,
+    edges: u8,
+    ss_hor: usize,
+    ss_ver: usize,
+    cfl_ds_flt: i32,
+) {
+    if ss_ver == 0 {
+        backup_row_lpf_hbd(dst, o, src, src_o, w, 4, edges);
+        return;
+    }
+
+    let src2_o = src_o + src_stride;
+
+    match cfl_ds_flt {
+        0 => {
+            let mut x = 0;
+            while x < w {
+                dst[o + x] = ((src[src_o + x] as u32
+                    + src[src2_o + x] as u32
+                    + src[src_o + x + 1] as u32
+                    + src[src2_o + x + 1] as u32)
+                    >> 2) as u16;
+                x += 1 + ss_hor;
+            }
+        }
+        1 => {
+            for x in 0..w {
+                dst[o + x] = ((src[src_o + x] as u32 + src[src2_o + x] as u32) >> 1) as u16;
+            }
+        }
+        _ => {
+            dst[o..o + w].copy_from_slice(&src[src_o..src_o + w]);
+        }
+    }
+
+    if edges & LR_HAVE_LEFT != 0 {
+        match cfl_ds_flt {
+            0 => {
+                for i in 0..4usize {
+                    let si = src_o - 4 + i;
+                    let s2i = src2_o - 4 + i;
+                    dst[o - 4 + i] = ((src[si] as u32
+                        + src[s2i] as u32
+                        + src[si + 1] as u32
+                        + src[s2i + 1] as u32)
+                        >> 2) as u16;
+                }
+            }
+            1 => {
+                for i in 0..4usize {
+                    dst[o - 4 + i] =
+                        ((src[src_o - 4 + i] as u32 + src[src2_o - 4 + i] as u32) >> 1) as u16;
+                }
+            }
+            _ => {
+                for i in 0..4usize {
+                    dst[o - 4 + i] = src[src_o - 4 + i];
+                }
+            }
+        }
+    } else {
+        let fill_val = dst[o];
+        dst[o - 4..o].fill(fill_val);
+    }
+
+    if edges & LR_HAVE_RIGHT != 0 {
+        match cfl_ds_flt {
+            0 => {
+                for i in 0..4usize {
+                    let si = src_o + w + i;
+                    let s2i = src2_o + w + i;
+                    dst[o + w + i] = ((src[si] as u32
+                        + src[s2i] as u32
+                        + src[si + 1] as u32
+                        + src[s2i + 1] as u32)
+                        >> 2) as u16;
+                }
+            }
+            1 => {
+                for i in 0..4usize {
+                    dst[o + w + i] =
+                        ((src[src_o + w + i] as u32 + src[src2_o + w + i] as u32) >> 1) as u16;
+                }
+            }
+            _ => {
+                for i in 0..4usize {
+                    dst[o + w + i] = src[src_o + w + i];
+                }
+            }
+        }
+    } else {
+        let fill_val = dst[o + w - 2];
+        dst[o + w..o + w + 4].fill(fill_val);
+    }
+}
+
+pub(crate) fn get_class_lut_idx_hbd(
+    rows: &[&[u16]],
+    row_center: usize,
+    col_off: usize,
+    noskip_mask: &[u16],
+    base_q: i32,
+    bx: usize,
+    by: usize,
+    bh: usize,
+    bitdepth_min_8: i32,
+) -> i32 {
+    let mut f = [0i32; 3];
+    let mut s = 0i32;
+
+    for dy in -1i32..=4 {
+        for dx in -1i32..=4 {
+            let x = (col_off as i32 + bx as i32 * 4 + dx) as usize;
+            let y = (row_center as i32 + dy) as usize;
+            let m = (rows[y][x] as i32) >> bitdepth_min_8;
+            let up = (rows[y - 1][x] as i32) >> bitdepth_min_8;
+            let down = (rows[y + 1][x] as i32) >> bitdepth_min_8;
+            let vert = up - 2 * m + down;
+
+            let up_right = (rows[y - 1][x + 1] as i32) >> bitdepth_min_8;
+            let down_left = (rows[y + 1][x.wrapping_sub(1)] as i32) >> bitdepth_min_8;
+            let anti_diag = up_right - 2 * m + down_left;
+
+            let down_right = (rows[y + 1][x + 1] as i32) >> bitdepth_min_8;
+            let up_left = (rows[y - 1][x.wrapping_sub(1)] as i32) >> bitdepth_min_8;
+            let diag = up_left - 2 * m + down_right;
+
+            f[0] += vert.abs();
+            f[1] += anti_diag.abs();
+            f[2] += diag.abs();
+        }
+    }
+
+    let num_pixels: [u8; 3] = [16, 4, 1];
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let edge = (dy != 0) as usize + (dx != 0) as usize;
+            let fx = iclip((bx & 15) as i32 + dx, 0, 15) as usize;
+            let fy = iclip(by as i32 + dy, 0, bh as i32 - 1) as usize;
+            s += num_pixels[edge] as i32 * (((noskip_mask[fy] >> fx) & 1) == 0) as i32;
+        }
+    }
+
+    for i in 0..3 {
+        f[i] *= PC_WIENER_NORMALIZER[i] as i32;
+    }
+    s *= PC_WIENER_NORMALIZER[3] as i32;
+
+    let mut qval = (imax(0, get_qval_given_tskip(base_q, s, 0, bitdepth_min_8)) + (1 << 13)) >> 14;
+    qval = imin(qval, 255) >> 5;
+    let mut lut_idx = qval << 9;
+    for i in 0..3 {
+        qval = (imax(
+            0,
+            f[i] + get_qval_given_tskip(base_q, s, i + 1, bitdepth_min_8),
+        ) + (1 << 13))
+            >> 14;
+        qval = imin(qval, 255) >> 5;
+        lut_idx |= qval << (3 * (2 - i));
+    }
+    lut_idx
+}
+pub(crate) fn ns_wiener_single_y_hbd(
+    p: &mut [u16],
+    p_off: usize,
+    stride: usize,
+    left: &[[u16; 6]],
+    lpf: &[u16],
+    lpf_off: usize,
+    lpf_bottom: &[u16],
+    lpf_bottom_off: usize,
+    w: usize,
+    h: usize,
+    filter: &[i8; 16],
+    edges: u8,
+    ll_mask: &[[u16; 4]],
+    bitdepth_max: i32,
+) {
+    let mut row_buffers = [[0u16; REST_UNIT_STRIDE]; 9];
+    let mut ptrs: [usize; 9] = [0; 9];
+    let o = ROW_ORIGIN;
+
+    backup_row_hbd(&mut row_buffers[4], o, &*p, p_off, &left[0], 6, w, 4, edges);
+    ptrs[4] = 4;
+
+    if edges & LR_HAVE_TOP_INTEGRATED != 0 {
+        let mut loff = lpf_off;
+        for i in 0..4 {
+            backup_row_lpf_hbd(&mut row_buffers[i], o, lpf, loff, w, 4, edges);
+            loff += stride;
+            ptrs[i] = i;
+        }
+    } else if edges & LR_HAVE_TOP != 0 {
+        backup_row_lpf_hbd(&mut row_buffers[2], o, lpf, lpf_off, w, 4, edges);
+        ptrs[2] = 2;
+        backup_row_lpf_hbd(&mut row_buffers[3], o, lpf, lpf_off + stride, w, 4, edges);
+        ptrs[3] = 3;
+        ptrs[0] = 2;
+        ptrs[1] = 2;
+    } else {
+        ptrs[0] = 4;
+        ptrs[1] = 4;
+        ptrs[2] = 4;
+        ptrs[3] = 4;
+    }
+
+    backup_row_hbd(
+        &mut row_buffers[5],
+        o,
+        &*p,
+        p_off + stride,
+        &left[1],
+        6,
+        w,
+        4,
+        edges,
+    );
+    ptrs[5] = 5;
+    backup_row_hbd(
+        &mut row_buffers[6],
+        o,
+        &*p,
+        p_off + 2 * stride,
+        &left[2],
+        6,
+        w,
+        4,
+        edges,
+    );
+    ptrs[6] = 6;
+    backup_row_hbd(
+        &mut row_buffers[7],
+        o,
+        &*p,
+        p_off + 3 * stride,
+        &left[3],
+        6,
+        w,
+        4,
+        edges,
+    );
+    ptrs[7] = 7;
+
+    let mut bak_idx: usize = 8;
+
+    for y in 0..h {
+        if y + 4 < h {
+            backup_row_hbd(
+                &mut row_buffers[bak_idx],
+                o,
+                &*p,
+                p_off + (y + 4) * stride,
+                &left[y + 4],
+                6,
+                w,
+                4,
+                edges,
+            );
+            ptrs[8] = bak_idx;
+        } else if edges & LR_HAVE_BOTTOM_INTEGRATED != 0 {
+            backup_row_lpf_hbd(
+                &mut row_buffers[bak_idx],
+                o,
+                &*p,
+                p_off + (y + 4) * stride,
+                w,
+                4,
+                edges,
+            );
+            ptrs[8] = bak_idx;
+        } else if y + 2 < h && edges & LR_HAVE_BOTTOM != 0 {
+            let offset_y = y + 4 - h;
+            backup_row_lpf_hbd(
+                &mut row_buffers[bak_idx],
+                o,
+                lpf_bottom,
+                lpf_bottom_off + offset_y * stride,
+                w,
+                4,
+                edges,
+            );
+            ptrs[8] = bak_idx;
+        } else {
+            ptrs[8] = ptrs[7];
+        }
+
+        bak_idx += 1;
+        if bak_idx == 9 {
+            bak_idx = 0;
+        }
+
+        let refs: [&[u16]; 9] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u16]);
+        let taps: [crate::filter::WienerTapHbd; 16] = core::array::from_fn(|i| {
+            let dy = WIENER_NS_CONFIG_Y[i][0] as i32;
+            let dx = WIENER_NS_CONFIG_Y[i][1] as i32;
+            crate::filter::WienerTapHbd {
+                row_p: refs[(4 + dy) as usize],
+                row_m: refs[(4 - dy) as usize],
+                dx,
+                coef: filter[i] as i32,
+            }
+        });
+        let skip_mask = ll_mask[y >> 2][0];
+        let dst_row = &mut p[p_off + y * stride..];
+        let bw = w >> 2;
+        let mut bx = 0usize;
+        while bx < bw {
+            if skip_mask & (1 << bx) != 0 {
+                bx += 1;
+                continue;
+            }
+            let bx_start = bx;
+            bx += 1;
+            while bx < bw && skip_mask & (1 << bx) == 0 {
+                bx += 1;
+            }
+            let x0 = bx_start << 2;
+            let n = (bx - bx_start) << 2;
+            (crate::filter::ns_wiener_fir_run_hbd())(
+                &mut dst_row[x0..x0 + n],
+                refs[4],
+                o + x0,
+                &taps,
+                n,
+                bitdepth_max,
+            );
+        }
+
+        for r in 0..8 {
+            ptrs[r] = ptrs[r + 1];
+        }
+    }
+}
+fn wiener_multi_hbd(
+    p: &mut [u16],
+    p_off: usize,
+    stride: usize,
+    left: &[[u16; 6]],
+    lpf: &[u16],
+    lpf_off: usize,
+    lpf_bottom: &[u16],
+    lpf_bottom_off: usize,
+    w: usize,
+    h: usize,
+    filters_user: Option<&[[i8; 18]]>,
+    filters_pretrained: Option<&[[i16; 13]]>,
+    subclass_lut: &[u8],
+    noskip_mask: &[u16],
+    base_q: i32,
+    edges: u8,
+    ll_mask: &[[u16; 4]],
+    bitdepth_min_8: i32,
+    bitdepth_max: i32,
+) {
+    let mut classes = [0u8; 16];
+    let mut row_buffers = [[0u16; REST_UNIT_STRIDE]; 10];
+    let mut ptrs: [usize; 10] = [0; 10];
+    let o = ROW_ORIGIN;
+
+    backup_row_hbd(&mut row_buffers[4], o, &*p, p_off, &left[0], 6, w, 4, edges);
+    ptrs[4] = 4;
+
+    if edges & LR_HAVE_TOP_INTEGRATED != 0 {
+        let mut loff = lpf_off;
+        for i in 0..4 {
+            backup_row_lpf_hbd(&mut row_buffers[i], o, lpf, loff, w, 4, edges);
+            loff += stride;
+            ptrs[i] = i;
+        }
+    } else if edges & LR_HAVE_TOP != 0 {
+        backup_row_lpf_hbd(&mut row_buffers[2], o, lpf, lpf_off, w, 4, edges);
+        ptrs[2] = 2;
+        backup_row_lpf_hbd(&mut row_buffers[3], o, lpf, lpf_off + stride, w, 4, edges);
+        ptrs[3] = 3;
+        ptrs[0] = 2;
+        ptrs[1] = 2;
+    } else {
+        ptrs[0] = 4;
+        ptrs[1] = 4;
+        ptrs[2] = 4;
+        ptrs[3] = 4;
+    }
+
+    backup_row_hbd(
+        &mut row_buffers[5],
+        o,
+        &*p,
+        p_off + stride,
+        &left[1],
+        6,
+        w,
+        4,
+        edges,
+    );
+    ptrs[5] = 5;
+    backup_row_hbd(
+        &mut row_buffers[6],
+        o,
+        &*p,
+        p_off + 2 * stride,
+        &left[2],
+        6,
+        w,
+        4,
+        edges,
+    );
+    ptrs[6] = 6;
+    backup_row_hbd(
+        &mut row_buffers[7],
+        o,
+        &*p,
+        p_off + 3 * stride,
+        &left[3],
+        6,
+        w,
+        4,
+        edges,
+    );
+    ptrs[7] = 7;
+
+    let mut bak_idx: usize = 8;
+    let bh = h >> 2;
+    let bw = w >> 2;
+
+    for by in 0..bh {
+        let by4 = by << 2;
+
+        if by + 1 < bh {
+            backup_row_hbd(
+                &mut row_buffers[bak_idx],
+                o,
+                &*p,
+                p_off + (by4 + 4) * stride,
+                &left[by4 + 4],
+                6,
+                w,
+                4,
+                edges,
+            );
+            ptrs[8] = bak_idx;
+            backup_row_hbd(
+                &mut row_buffers[9],
+                o,
+                &*p,
+                p_off + (by4 + 5) * stride,
+                &left[by4 + 5],
+                6,
+                w,
+                4,
+                edges,
+            );
+            ptrs[9] = 9;
+        } else if edges & LR_HAVE_BOTTOM_INTEGRATED != 0 {
+            backup_row_lpf_hbd(
+                &mut row_buffers[bak_idx],
+                o,
+                &*p,
+                p_off + (by4 + 4) * stride,
+                w,
+                4,
+                edges,
+            );
+            ptrs[8] = bak_idx;
+            backup_row_lpf_hbd(
+                &mut row_buffers[9],
+                o,
+                &*p,
+                p_off + (by4 + 5) * stride,
+                w,
+                4,
+                edges,
+            );
+            ptrs[9] = 9;
+        } else if edges & LR_HAVE_BOTTOM != 0 {
+            backup_row_lpf_hbd(
+                &mut row_buffers[bak_idx],
+                o,
+                lpf_bottom,
+                lpf_bottom_off,
+                w,
+                4,
+                edges,
+            );
+            ptrs[8] = bak_idx;
+            backup_row_lpf_hbd(
+                &mut row_buffers[9],
+                o,
+                lpf_bottom,
+                lpf_bottom_off + stride,
+                w,
+                4,
+                edges,
+            );
+            ptrs[9] = 9;
+        } else {
+            ptrs[8] = ptrs[7];
+            ptrs[9] = ptrs[7];
+        }
+
+        {
+            let refs: [&[u16]; 10] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u16]);
+            for bx in 0..bw {
+                let lut_idx = get_class_lut_idx_hbd(
+                    &refs,
+                    4,
+                    o,
+                    noskip_mask,
+                    base_q,
+                    bx,
+                    by,
+                    bh,
+                    bitdepth_min_8,
+                );
+                let cls = PC_WIENER_LUT_TO_CLASS[lut_idx as usize];
+                classes[bx] = subclass_lut[cls as usize];
+            }
+        }
+
+        for y in by4..by4 + 4 {
+            if y + 4 < h {
+                backup_row_hbd(
+                    &mut row_buffers[bak_idx],
+                    o,
+                    &*p,
+                    p_off + (y + 4) * stride,
+                    &left[y + 4],
+                    6,
+                    w,
+                    4,
+                    edges,
+                );
+                ptrs[8] = bak_idx;
+            } else if edges & LR_HAVE_BOTTOM_INTEGRATED != 0 {
+                backup_row_lpf_hbd(
+                    &mut row_buffers[bak_idx],
+                    o,
+                    &*p,
+                    p_off + (y + 4) * stride,
+                    w,
+                    4,
+                    edges,
+                );
+                ptrs[8] = bak_idx;
+            } else if y + 2 < h && edges & LR_HAVE_BOTTOM != 0 {
+                let offset_y = y + 4 - h;
+                backup_row_lpf_hbd(
+                    &mut row_buffers[bak_idx],
+                    o,
+                    lpf_bottom,
+                    lpf_bottom_off + offset_y * stride,
+                    w,
+                    4,
+                    edges,
+                );
+                ptrs[8] = bak_idx;
+            } else {
+                ptrs[8] = ptrs[7];
+            }
+
+            bak_idx += 1;
+            if bak_idx == 9 {
+                bak_idx = 0;
+            }
+
+            // Row references for the FIR taps; immutable borrow of row_buffers
+            // (disjoint from the mutable `p` we write).
+            let refs: [&[u16]; 10] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u16]);
+            let skip_mask = ll_mask[y >> 2][0];
+            let dst_row = &mut p[p_off + y * stride..];
+
+            // Batch consecutive non-skipped bx that share the same class into a
+            // single SIMD FIR run (every pixel in the run uses one filter; the
+            // run breaks at any skip or class change, so it stays bit-exact).
+            let mut bx = 0usize;
+            while bx < bw {
+                if skip_mask & (1 << bx) != 0 {
+                    bx += 1;
+                    continue;
+                }
+                let cls = classes[bx];
+                let bx_start = bx;
+                bx += 1;
+                while bx < bw && skip_mask & (1 << bx) == 0 && classes[bx] == cls {
+                    bx += 1;
+                }
+                let x0 = bx_start << 2;
+                let n = (bx - bx_start) << 2;
+                let col0 = o + x0;
+
+                if let Some(fu) = filters_user {
+                    let filter = &fu[cls as usize];
+                    let taps: [crate::filter::WienerTapHbd; 16] = core::array::from_fn(|i| {
+                        let dy = WIENER_NS_CONFIG_Y[i][0] as i32;
+                        let dx = WIENER_NS_CONFIG_Y[i][1] as i32;
+                        crate::filter::WienerTapHbd {
+                            row_p: refs[(4 + dy) as usize],
+                            row_m: refs[(4 - dy) as usize],
+                            dx,
+                            coef: filter[i] as i32,
+                        }
+                    });
+                    (crate::filter::ns_wiener_fir_run_hbd())(
+                        &mut dst_row[x0..x0 + n],
+                        refs[4],
+                        col0,
+                        &taps,
+                        n,
+                        bitdepth_max,
+                    );
+                } else if let Some(fp) = filters_pretrained {
+                    let filter = &fp[cls as usize];
+                    let taps: [crate::filter::WienerTapHbd; 12] = core::array::from_fn(|i| {
+                        let dy = PC_WIENER_CONFIG[i][0] as i32;
+                        let dx = PC_WIENER_CONFIG[i][1] as i32;
+                        crate::filter::WienerTapHbd {
+                            row_p: refs[(4 + dy) as usize],
+                            row_m: refs[(4 - dy) as usize],
+                            dx,
+                            coef: filter[i] as i32,
+                        }
+                    });
+                    (crate::filter::pc_wiener_fir_run_hbd())(
+                        &mut dst_row[x0..x0 + n],
+                        refs[4],
+                        filter[12] as i32,
+                        col0,
+                        &taps,
+                        n,
+                        bitdepth_max,
+                    );
+                }
+            }
+
+            for r in 0..8 {
+                ptrs[r] = ptrs[r + 1];
+            }
+        }
+    }
+}
+pub(crate) fn ns_wiener_multi_hbd(
+    p: &mut [u16],
+    p_off: usize,
+    stride: usize,
+    left: &[[u16; 6]],
+    lpf: &[u16],
+    lpf_off: usize,
+    lpf_bottom: &[u16],
+    lpf_bottom_off: usize,
+    w: usize,
+    h: usize,
+    filters_user: &[[i8; 18]],
+    subclass_lut: &[u8],
+    noskip_mask: &[u16],
+    base_q: i32,
+    edges: u8,
+    ll_mask: &[[u16; 4]],
+    bitdepth_min_8: i32,
+    bitdepth_max: i32,
+) {
+    wiener_multi_hbd(
+        p,
+        p_off,
+        stride,
+        left,
+        lpf,
+        lpf_off,
+        lpf_bottom,
+        lpf_bottom_off,
+        w,
+        h,
+        Some(filters_user),
+        None,
+        subclass_lut,
+        noskip_mask,
+        base_q,
+        edges,
+        ll_mask,
+        bitdepth_min_8,
+        bitdepth_max,
+    );
+}
+pub(crate) fn pc_wiener_hbd(
+    p: &mut [u16],
+    p_off: usize,
+    stride: usize,
+    left: &[[u16; 6]],
+    lpf: &[u16],
+    lpf_off: usize,
+    lpf_bottom: &[u16],
+    lpf_bottom_off: usize,
+    w: usize,
+    h: usize,
+    filters_pretrained: &[[i16; 13]],
+    subclass_lut: &[u8],
+    noskip_mask: &[u16],
+    base_q: i32,
+    edges: u8,
+    ll_mask: &[[u16; 4]],
+    bitdepth_min_8: i32,
+    bitdepth_max: i32,
+) {
+    wiener_multi_hbd(
+        p,
+        p_off,
+        stride,
+        left,
+        lpf,
+        lpf_off,
+        lpf_bottom,
+        lpf_bottom_off,
+        w,
+        h,
+        None,
+        Some(filters_pretrained),
+        subclass_lut,
+        noskip_mask,
+        base_q,
+        edges,
+        ll_mask,
+        bitdepth_min_8,
+        bitdepth_max,
+    );
+}
+pub(crate) fn ns_wiener_single_uv_hbd(
+    p: &mut [u16],
+    p_off: usize,
+    stride: usize,
+    left: &[[u16; 6]],
+    lpf: &[u16],
+    lpf_off: usize,
+    lpf_bottom: &[u16],
+    lpf_bottom_off: usize,
+    w: usize,
+    h: usize,
+    filter: &[i8; 18],
+    luma: &[u16],
+    luma_off: usize,
+    lstride: usize,
+    luma_top: &[u16],
+    luma_top_off: usize,
+    luma_bottom: &[u16],
+    luma_bottom_off: usize,
+    ss_hor: usize,
+    ss_ver: usize,
+    ds_flt: i32,
+    edges: u8,
+    ll_mask: &[[u16; 4]],
+    bitdepth_max: i32,
+) {
+    let mut c_buffers = [[0u16; REST_UNIT_STRIDE]; 5];
+    let mut l_buffers = [[0u16; LUMA_BUF_STRIDE]; 5];
+    let mut c_ptrs: [usize; 5] = [0; 5];
+    let mut l_ptrs: [usize; 5] = [0; 5];
+    let o = ROW_ORIGIN;
+    let luma_w = w << ss_hor;
+
+    backup_row_hbd(&mut c_buffers[2], o, &*p, p_off, &left[0], 6, w, 2, edges);
+    c_ptrs[2] = 2;
+
+    if edges & (LR_HAVE_TOP_INTEGRATED | LR_HAVE_TOP) != 0 {
+        let mut loff = lpf_off;
+        for i in 0..2 {
+            backup_row_lpf_hbd(&mut c_buffers[i], o, lpf, loff, w, 2, edges);
+            c_ptrs[i] = i;
+            loff += stride;
+        }
+    } else {
+        c_ptrs[0] = 2;
+        c_ptrs[1] = 2;
+    }
+
+    backup_row_hbd(
+        &mut c_buffers[3],
+        o,
+        &*p,
+        p_off + stride,
+        &left[1],
+        6,
+        w,
+        2,
+        edges,
+    );
+    c_ptrs[3] = 3;
+    let mut bak_idx: usize = 4;
+
+    backup_row_luma_hbd(
+        &mut l_buffers[2],
+        o,
+        luma,
+        luma_off,
+        lstride,
+        luma_w,
+        edges,
+        ss_hor,
+        ss_ver,
+        ds_flt,
+    );
+    l_ptrs[2] = 2;
+
+    if edges & LR_HAVE_TOP_INTEGRATED != 0 {
+        backup_row_luma_hbd(
+            &mut l_buffers[0],
+            o,
+            luma,
+            luma_off - 4 * lstride,
+            lstride,
+            luma_w,
+            edges,
+            ss_hor,
+            ss_ver,
+            ds_flt,
+        );
+        l_ptrs[0] = 0;
+        backup_row_luma_hbd(
+            &mut l_buffers[1],
+            o,
+            luma,
+            luma_off - 2 * lstride,
+            lstride,
+            luma_w,
+            edges,
+            ss_hor,
+            ss_ver,
+            ds_flt,
+        );
+        l_ptrs[1] = 1;
+    } else if edges & LR_HAVE_TOP != 0 {
+        backup_row_luma_hbd(
+            &mut l_buffers[0],
+            o,
+            luma_top,
+            luma_top_off,
+            0,
+            luma_w,
+            edges,
+            ss_hor,
+            ss_ver,
+            ds_flt,
+        );
+        l_ptrs[0] = 0;
+        backup_row_luma_hbd(
+            &mut l_buffers[1],
+            o,
+            luma_top,
+            luma_top_off,
+            lstride,
+            luma_w,
+            edges,
+            ss_hor,
+            ss_ver,
+            ds_flt,
+        );
+        l_ptrs[1] = 1;
+    } else {
+        l_ptrs[0] = 2;
+        l_ptrs[1] = 2;
+    }
+
+    backup_row_luma_hbd(
+        &mut l_buffers[3],
+        o,
+        luma,
+        luma_off + (1 << ss_ver) * lstride,
+        lstride,
+        luma_w,
+        edges,
+        ss_hor,
+        ss_ver,
+        ds_flt,
+    );
+    l_ptrs[3] = 3;
+    let mut lbak_idx: usize = 4;
+    let mut luma_pos = luma_off;
+
+    for y in 0..h {
+        if y + 2 < h {
+            backup_row_hbd(
+                &mut c_buffers[bak_idx],
+                o,
+                &*p,
+                p_off + (y + 2) * stride,
+                &left[y + 2],
+                6,
+                w,
+                2,
+                edges,
+            );
+            c_ptrs[4] = bak_idx;
+        } else if edges & LR_HAVE_BOTTOM_INTEGRATED != 0 {
+            backup_row_lpf_hbd(
+                &mut c_buffers[bak_idx],
+                o,
+                &*p,
+                p_off + (y + 2) * stride,
+                w,
+                2,
+                edges,
+            );
+            c_ptrs[4] = bak_idx;
+        } else if edges & LR_HAVE_BOTTOM != 0 {
+            let offset_y = y + 2 - h;
+            backup_row_lpf_hbd(
+                &mut c_buffers[bak_idx],
+                o,
+                lpf_bottom,
+                lpf_bottom_off + offset_y * stride,
+                w,
+                2,
+                edges,
+            );
+            c_ptrs[4] = bak_idx;
+        } else {
+            c_ptrs[4] = c_ptrs[3];
+        }
+        bak_idx += 1;
+        if bak_idx == 5 {
+            bak_idx = 0;
+        }
+
+        if c_ptrs[4] == c_ptrs[3] {
+            l_ptrs[4] = l_ptrs[3];
+        } else if y + 2 == h && edges & LR_HAVE_BOTTOM_INTEGRATED == 0 {
+            backup_row_luma_hbd(
+                &mut l_buffers[lbak_idx],
+                o,
+                luma_bottom,
+                luma_bottom_off,
+                lstride,
+                luma_w,
+                edges,
+                ss_hor,
+                ss_ver,
+                ds_flt,
+            );
+            l_ptrs[4] = lbak_idx;
+        } else if y + 1 == h && edges & LR_HAVE_BOTTOM_INTEGRATED == 0 {
+            backup_row_luma_hbd(
+                &mut l_buffers[lbak_idx],
+                o,
+                luma_bottom,
+                luma_bottom_off + lstride,
+                0,
+                luma_w,
+                edges,
+                ss_hor,
+                ss_ver,
+                ds_flt,
+            );
+            l_ptrs[4] = lbak_idx;
+        } else {
+            backup_row_luma_hbd(
+                &mut l_buffers[lbak_idx],
+                o,
+                luma,
+                luma_pos + (2 << ss_ver) * lstride,
+                lstride,
+                luma_w,
+                edges,
+                ss_hor,
+                ss_ver,
+                ds_flt,
+            );
+            l_ptrs[4] = lbak_idx;
+        }
+        lbak_idx += 1;
+        if lbak_idx == 5 {
+            lbak_idx = 0;
+        }
+
+        let c_refs: [&[u16]; 5] = core::array::from_fn(|i| &c_buffers[c_ptrs[i]] as &[u16]);
+        let l_refs: [&[u16]; 5] = core::array::from_fn(|i| &l_buffers[l_ptrs[i]] as &[u16]);
+        let lstep = 1usize << ss_hor;
+        let ctaps: [crate::filter::WienerTapHbd; 6] = core::array::from_fn(|i| {
+            let dy = WIENER_NS_CONFIG_UV[i][0] as i32;
+            let dx = WIENER_NS_CONFIG_UV[i][1] as i32;
+            crate::filter::WienerTapHbd {
+                row_p: c_refs[(2 + dy) as usize],
+                row_m: c_refs[(2 - dy) as usize],
+                dx,
+                coef: filter[i] as i32,
+            }
+        });
+        let ltaps: [crate::filter::UvLumaTapHbd; 12] = core::array::from_fn(|i| {
+            let dy = WIENER_NS_CONFIG_UV_FROM_Y[i][0] as i32;
+            let dx = WIENER_NS_CONFIG_UV_FROM_Y[i][1] as i32;
+            crate::filter::UvLumaTapHbd {
+                row: l_refs[(2 + dy) as usize],
+                ldx: dx * lstep as i32,
+                coef: filter[6 + i] as i32,
+            }
+        });
+        let skip_mask = ll_mask[y >> 2][0];
+        let dst_row = &mut p[p_off + y * stride..];
+        let bw = w >> 2;
+        let mut bx = 0usize;
+        while bx < bw {
+            if skip_mask & (1 << bx) != 0 {
+                bx += 1;
+                continue;
+            }
+            let bx_start = bx;
+            bx += 1;
+            while bx < bw && skip_mask & (1 << bx) == 0 {
+                bx += 1;
+            }
+            let x0 = bx_start << 2;
+            let n = (bx - bx_start) << 2;
+            (crate::filter::ns_wiener_uv_fir_run_hbd())(
+                &mut dst_row[x0..x0 + n],
+                c_refs[2],
+                o + x0,
+                &ctaps,
+                l_refs[2],
+                o + (x0 << ss_hor),
+                &ltaps,
+                lstep,
+                n,
+                bitdepth_max,
+            );
+        }
+
+        for r in 0..4 {
+            c_ptrs[r] = c_ptrs[r + 1];
+        }
+        for r in 0..4 {
+            l_ptrs[r] = l_ptrs[r + 1];
+        }
+        luma_pos += lstride << ss_ver;
+    }
+}
+
+pub(crate) struct LrContextHbd<'a> {
+    pub(crate) restoration_p: &'a [FhRestorationPlane; 3],
+    pub(crate) sb128: bool,
+    pub(crate) cfl_ds_filter_index: i32,
+    pub(crate) layout: PixelLayout,
+    pub(crate) bw: i32,
+    pub(crate) bh: i32,
+    pub(crate) sb256w: i32,
+    pub(crate) sbh: i32,
+    pub(crate) mask: &'a [Av2Filter],
+    pub(crate) lr_mask: &'a [Av2Restoration],
+    pub(crate) lr_db_line: &'a [Vec<u16>; 3],
+    pub(crate) lr_cdef_line: &'a [Vec<u16>; 3],
+    pub(crate) lf_p_luma: &'a [u16],
+    pub(crate) base_q: i32,
+    pub(crate) start_of_tile_row: &'a [u8],
+    pub(crate) ns_subclass_lut: &'a [u8],
+    pub(crate) pc_subclass_lut: &'a [u8],
+    pub(crate) pc_filters: &'a [[i16; 13]],
+    pub(crate) n_tc: i32,
+    pub(crate) inloop_filters: u32,
+    pub(crate) cur_stride: [isize; 2],
+    pub(crate) unit_size: [u8; 2],
+    pub(crate) restore_planes: i32,
+    pub(crate) bitdepth_min_8: i32,
+    pub(crate) bitdepth_max: i32,
+}
+fn lr_stripe_hbd(
+    ctx: &LrContextHbd,
+    p: &mut [u16],
+    p_off: usize,
+    left: &[[u16; 6]],
+    x: i32,
+    mut y: i32,
+    plane: i32,
+    w: i32,
+    row_h: i32,
+    lr: &crate::lf_mask::Av2RestorationUnit,
+    mut edges: u8,
+    first_sby_in_tile_row: FirstSbInTileRow,
+    tile_row_m1: i32,
+) {
+    let chroma = (plane != 0) as i32;
+    let ss_ver = chroma & (ctx.layout == PixelLayout::I420) as i32;
+    let ss_hor = chroma & (ctx.layout != PixelLayout::I444) as i32;
+    let stride = ctx.cur_stride[chroma as usize];
+    let abs_stride = stride.unsigned_abs();
+    let sby = (y + if y != 0 { 8 << ss_ver } else { 0 }) >> (6 - ss_ver + ctx.sb128 as i32);
+    let have_tt = (ctx.n_tc > 1) as i32;
+    let sb256x = (x << ss_hor) >> 8;
+    let sb64x_idx = ((x << ss_hor) >> 6) & 3;
+
+    let mut stripe_h = imin(
+        (64 - 8 * (first_sby_in_tile_row != FirstSbInTileRow::None) as i32) >> ss_ver,
+        row_h - y,
+    );
+
+    let wiener_type: u8 = if ctx.inloop_filters & INLOOPFILTER_WIENER != 0 {
+        lr.restoration_type
+    } else {
+        0 // RestorationType::None
+    };
+
+    // the asm/dsp_lr pointers are all None, so we call the slice kernels directly,
+    #[derive(PartialEq)]
+    enum WKind {
+        None,
+        NsSingle,
+        NsMulti,
+        PcWiener,
+    }
+    let mut multi_wiener = false;
+    let mut noskip_mask = [0u16; 66];
+
+    let pd = &ctx.restoration_p[plane as usize].ns;
+
+    let wkind = if wiener_type == RestorationType::NsWiener as u8 {
+        if pd.frame_filters_on != 0 {
+            if pd.num_classes == 1 {
+                WKind::NsSingle
+            } else {
+                multi_wiener = true;
+                WKind::NsMulti
+            }
+        } else {
+            WKind::NsSingle
+        }
+    } else if wiener_type == RestorationType::PcWiener as u8 {
+        multi_wiener = true;
+        WKind::PcWiener
+    } else {
+        WKind::None
+    };
+
+    if multi_wiener {
+        let mut r = 0usize;
+        let mut by = y >> 2;
+        while by < row_h >> 2 {
+            let by_idx = (by & 63) as usize;
+            let sb256_idx = ctx.sb256w as usize * (by as usize >> 6) + sb256x as usize;
+            if sb256_idx < ctx.mask.len() {
+                let noskip_row = &ctx.mask[sb256_idx].lr_noskip_mask[by_idx];
+                noskip_mask[r] = noskip_row[sb64x_idx as usize];
+                if edges & LR_HAVE_RIGHT == 0 && w & 63 != 0 {
+                    let shift = ((w >> 2) & 15) - 1;
+                    let mask_val = noskip_mask[r];
+                    let edge_bit = mask_val >> shift as u16;
+                    noskip_mask[r] |= edge_bit << ((shift + 1) as u16);
+                }
+            }
+            r += 1;
+            by += 1;
+        }
+    }
+
+    let lstride = ctx.cur_stride[0];
+    let lstride_u = lstride.unsigned_abs();
+    let stride_u = abs_stride;
+
+    let mut left_idx = 0usize;
+    let mut noskip_offset = 0usize;
+    // by `stripe_h * stride` each iteration). The slice kernels index `p` with a
+    // local stripe-relative `y`, so this must track the stripe origin.
+    let mut cur_off = p_off;
+    let mut lpf_off =
+        (have_tt as isize * (sby as isize * (4 << ctx.sb128 as i32) - 4) * stride_u as isize
+            + x as isize) as usize;
+    let mut llpf_off =
+        (have_tt as isize * (sby as isize * (4 << ctx.sb128 as i32) - 4) * lstride_u as isize
+            + (x * 2) as isize) as usize;
+
+    while y + stripe_h <= row_h {
+        edges ^= ((-(((sby + 1) != ctx.sbh) as i32 | (y + stripe_h != row_h) as i32)) as u8
+            ^ edges)
+            & LR_HAVE_BOTTOM;
+
+        let inc = if (edges & (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED | LR_HAVE_BOTTOM_INTEGRATED))
+            == LR_HAVE_TOP
+            && y + 8 < ((ctx.bh * 4) >> ss_ver)
+        {
+            8
+        } else {
+            0
+        };
+
+        let sb256_idx =
+            ctx.sb256w as usize * ((((y << ss_ver) + inc) as usize) >> 8) + sb256x as usize;
+
+        let gdf_enabled = false;
+
+        let plane_u = plane as usize;
+        let stripe_u = stripe_h as usize;
+        let w_u = w as usize;
+
+        // `top` source: the cross-tile-row CDEF line when both HAVE_TOP and
+        // HAVE_TOP_INTEGRATED are set; otherwise the deblocked-line store.
+        let cdef_top: Option<usize> = if (edges & (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED))
+            == (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED)
+        {
+            let cdef_off = tile_row_m1 as usize * (6 - 4 * chroma as usize) * stride_u + x as usize;
+            let off = cdef_off + (2 * (1 - chroma) as usize) * stride_u;
+            if off < ctx.lr_cdef_line[plane_u].len() {
+                Some(off)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let _ = gdf_enabled;
+
+        let y4 = (((y << ss_ver) & 255) >> 2) as usize;
+
+        // mask (ss_hor) into a single byte per 4-row; for luma / non-ss_hor it is
+        let ll_rows = (stripe_h >> 2).max(1) as usize + 1;
+        let mut ll_mask_storage = [[0u16; 4]; 17];
+        let ll_mask_buf = &mut ll_mask_storage[..ll_rows.min(17)];
+        if sb256_idx < ctx.mask.len() {
+            let m = &ctx.mask[sb256_idx];
+            if plane == 0 || ss_hor == 0 {
+                let src = if plane == 0 {
+                    &m.lossless_mask_y
+                } else {
+                    &m.lossless_mask_uv
+                };
+                for (r, slot) in ll_mask_buf.iter_mut().enumerate() {
+                    let yy = y4 + r;
+                    if yy < 64 {
+                        let row = &src[yy];
+                        for k in 0..4 {
+                            if sb64x_idx as usize + k < 4 {
+                                slot[k] = row[sb64x_idx as usize + k];
+                            }
+                        }
+                    }
+                }
+            } else {
+                // chroma, ss_hor: pack two adjacent columns into the low/high byte.
+                let init_y = (y >> 2) as usize;
+                let end_y = ((y + stripe_h) >> 2) as usize;
+                let base = (y4 >> ss_ver) as usize;
+                for (r, yy) in (init_y..end_y).enumerate() {
+                    let src_y = base + (yy - init_y);
+                    if src_y < 64 && r < ll_mask_buf.len() {
+                        let row = &m.lossless_mask_uv[src_y];
+                        let lo = row[sb64x_idx as usize];
+                        let hi = if sb64x_idx as usize + 1 < 4 {
+                            row[sb64x_idx as usize + 1]
+                        } else {
+                            0
+                        };
+                        ll_mask_buf[r][0] = (lo & 0xff) | ((hi & 0xff) << 8);
+                    }
+                }
+            }
+        }
+
+        if wkind != WKind::None {
+            let (top_slice, top_off): (&[u16], usize) = match cdef_top {
+                Some(off) => (&ctx.lr_cdef_line[plane_u], off),
+                None => (&ctx.lr_db_line[plane_u], lpf_off),
+            };
+            // Borrow the line store directly; LR kernels only mutate `p`, not
+            // the line buffers, so no per-stripe clone is needed.
+            let db_line = &ctx.lr_db_line[plane_u];
+            let bottom_off = lpf_off + 6 * stride_u;
+            match wkind {
+                WKind::NsSingle if chroma == 0 => {
+                    let mut filter = [0i8; 16];
+                    let src = if pd.frame_filters_on != 0 {
+                        &pd.filter[0][..16]
+                    } else {
+                        &lr.ns_filter[0][..16]
+                    };
+                    filter.copy_from_slice(src);
+                    let (ts, to): (&[u16], usize) = if cdef_top.is_some() {
+                        (top_slice, top_off)
+                    } else {
+                        (db_line, lpf_off)
+                    };
+                    ns_wiener_single_y_hbd(
+                        p,
+                        cur_off,
+                        stride_u,
+                        &left[left_idx..],
+                        ts,
+                        to,
+                        db_line,
+                        bottom_off,
+                        w_u,
+                        stripe_u,
+                        &filter,
+                        edges,
+                        ll_mask_buf,
+                        ctx.bitdepth_max,
+                    );
+                }
+                WKind::NsSingle => {
+                    // chroma single wiener (uses luma for cross-component refine).
+                    let mut filter = [0i8; 18];
+                    let src = if pd.frame_filters_on != 0 {
+                        &pd.filter[0][..18]
+                    } else {
+                        &lr.ns_filter[0][..18]
+                    };
+                    filter.copy_from_slice(src);
+                    let luma = ctx.lf_p_luma;
+                    let luma_off = (x << ss_hor) as usize + (y << ss_ver) as usize * lstride_u;
+                    let luma_db = &ctx.lr_db_line[0];
+                    let (ts, to): (&[u16], usize) = if cdef_top.is_some() {
+                        (top_slice, top_off)
+                    } else {
+                        (db_line, lpf_off)
+                    };
+                    ns_wiener_single_uv_hbd(
+                        p,
+                        cur_off,
+                        stride_u,
+                        &left[left_idx..],
+                        ts,
+                        to,
+                        db_line,
+                        bottom_off,
+                        w_u,
+                        stripe_u,
+                        &filter,
+                        luma,
+                        luma_off,
+                        lstride_u,
+                        luma_db,
+                        llpf_off,
+                        luma_db,
+                        llpf_off + 6 * lstride_u,
+                        ss_hor as usize,
+                        ss_ver as usize,
+                        ctx.cfl_ds_filter_index,
+                        edges,
+                        ll_mask_buf,
+                        ctx.bitdepth_max,
+                    );
+                }
+                WKind::NsMulti => {
+                    let mut filters_owned = [[0i8; 18]; 16];
+                    let filters: &[[i8; 18]] = if pd.frame_filters_on != 0 {
+                        &pd.filter
+                    } else {
+                        // Per-unit ns_filter is [i8;32]; the multi kernel reads the
+                        // first 18 taps per class. Copy those prefixes into a fixed
+                        // stack array instead of allocating a Vec or reinterpreting
+                        // the row layout through a raw slice cast.
+                        for (dst, src) in filters_owned.iter_mut().zip(lr.ns_filter.iter()) {
+                            dst.copy_from_slice(&src[..18]);
+                        }
+                        &filters_owned
+                    };
+                    let (ts, to): (&[u16], usize) = if cdef_top.is_some() {
+                        (top_slice, top_off)
+                    } else {
+                        (db_line, lpf_off)
+                    };
+                    ns_wiener_multi_hbd(
+                        p,
+                        cur_off,
+                        stride_u,
+                        &left[left_idx..],
+                        ts,
+                        to,
+                        db_line,
+                        bottom_off,
+                        w_u,
+                        stripe_u,
+                        filters,
+                        ctx.ns_subclass_lut,
+                        &noskip_mask[noskip_offset..],
+                        ctx.base_q,
+                        edges,
+                        ll_mask_buf,
+                        ctx.bitdepth_min_8,
+                        ctx.bitdepth_max,
+                    );
+                    noskip_offset += (stripe_h >> 2) as usize;
+                }
+                WKind::PcWiener => {
+                    let (ts, to): (&[u16], usize) = if cdef_top.is_some() {
+                        (top_slice, top_off)
+                    } else {
+                        (db_line, lpf_off)
+                    };
+                    pc_wiener_hbd(
+                        p,
+                        cur_off,
+                        stride_u,
+                        &left[left_idx..],
+                        ts,
+                        to,
+                        db_line,
+                        bottom_off,
+                        w_u,
+                        stripe_u,
+                        ctx.pc_filters,
+                        ctx.pc_subclass_lut,
+                        &noskip_mask[noskip_offset..],
+                        ctx.base_q,
+                        edges,
+                        ll_mask_buf,
+                        ctx.bitdepth_min_8,
+                        ctx.bitdepth_max,
+                    );
+                    noskip_offset += (stripe_h >> 2) as usize;
+                }
+                WKind::None => {}
+            }
+        }
+
+        edges &= !(LR_HAVE_BOTTOM_INTEGRATED | LR_HAVE_TOP_INTEGRATED);
+        left_idx += stripe_h as usize;
+        cur_off += stripe_u * stride_u;
+        y += stripe_h;
+        edges |= LR_HAVE_TOP;
+        stripe_h = imin(64 >> ss_ver, row_h - y);
+        if stripe_h == 0 {
+            break;
+        }
+        lpf_off += 4 * stride_u;
+        llpf_off += 4 * lstride_u;
+    }
+}
+fn lr_sbrow_hbd_inner(
+    ctx: &LrContextHbd,
+    p: &mut [u16],
+    p_off: usize,
+    y: i32,
+    w: i32,
+    h: i32,
+    row_h: i32,
+    plane: i32,
+    first_sby_in_tile_row: FirstSbInTileRow,
+    tile_row_m1: i32,
+) {
+    let chroma = (plane != 0) as i32;
+    let ss_ver = chroma & (ctx.layout == PixelLayout::I420) as i32;
+    let ss_hor = chroma & (ctx.layout != PixelLayout::I444) as i32;
+    let p_stride = ctx.cur_stride[chroma as usize];
+    let abs_stride = p_stride.unsigned_abs();
+
+    let unit_size_log2 = ctx.unit_size[chroma.min(1) as usize] as i32;
+    let unit_size = 1 << unit_size_log2;
+    let half_unit_size = unit_size >> 1;
+
+    let row_y = y + ((8 >> ss_ver) * (first_sby_in_tile_row != FirstSbInTileRow::None) as i32);
+    let shift_hor = 8 - ss_hor;
+
+    let mut pre_lr_border = [[[0u16; 6]; 264]; 2];
+
+    let mut aligned_unit_pos = row_y & !(unit_size - 1);
+    if aligned_unit_pos != 0 && aligned_unit_pos + half_unit_size > h {
+        aligned_unit_pos -= unit_size;
+    }
+    aligned_unit_pos <<= ss_ver;
+    let sb_idx = (aligned_unit_pos >> 8) * ctx.sb256w;
+    let unit_idx_base = ((aligned_unit_pos >> 6) & 0x3) << 2;
+
+    let mut edges: u8 = if y > 0 { LR_HAVE_TOP } else { 0 } | LR_HAVE_RIGHT;
+    if first_sby_in_tile_row == FirstSbInTileRow::Top {
+        edges |= LR_HAVE_BOTTOM_INTEGRATED;
+    }
+    if first_sby_in_tile_row == FirstSbInTileRow::Bottom && y > 0 {
+        edges |= LR_HAVE_TOP_INTEGRATED;
+    }
+
+    let mut lr_idx_0 = sb_idx as usize;
+    let mut lr_unit_0 = unit_idx_base as usize;
+    let mut bit = 0usize;
+    let mut x = 0i32;
+    let mut cur_p_off = p_off;
+
+    while x + 64 < w {
+        let next_x = x + 64;
+        let mut next_iter_lru_start_x = next_x & !(unit_size - 1);
+        if next_iter_lru_start_x != 0 && w - next_iter_lru_start_x < half_unit_size {
+            next_iter_lru_start_x -= unit_size;
+        }
+        let next_u_idx = unit_idx_base + ((next_iter_lru_start_x >> (shift_hor - 2)) & 3);
+        let next_sb_idx = sb_idx + (next_iter_lru_start_x >> shift_hor);
+
+        let n = if plane != 0 { 2 } else { 6 };
+        let border_src_off = cur_p_off + 64;
+        if border_src_off + n <= p.len() {
+            for row in 0..(row_h - y) as usize {
+                let src_row = border_src_off + row * abs_stride;
+                if src_row >= n && src_row < p.len() {
+                    let start = src_row - n;
+                    for i in 0..n.min(6) {
+                        pre_lr_border[bit][row][6 - n + i] = p[start + i];
+                    }
+                }
+            }
+        }
+
+        let lr_sb = lr_idx_0;
+        let lr_u = lr_unit_0;
+        if lr_sb < ctx.lr_mask.len() && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len() {
+            let lr_unit = &ctx.lr_mask[lr_sb].lr[plane as usize][lr_u];
+            lr_stripe_hbd(
+                ctx,
+                p,
+                cur_p_off,
+                &pre_lr_border[1 - bit],
+                x,
+                y,
+                plane,
+                64,
+                row_h,
+                lr_unit,
+                edges,
+                first_sby_in_tile_row,
+                tile_row_m1,
+            );
+        }
+
+        lr_idx_0 = next_sb_idx as usize;
+        lr_unit_0 = next_u_idx as usize;
+        x = next_x;
+        cur_p_off += 64;
+        edges |= LR_HAVE_LEFT;
+        bit ^= 1;
+    }
+
+    edges &= !LR_HAVE_RIGHT;
+    let end_w = w - x;
+    let lr_sb = lr_idx_0;
+    let lr_u = lr_unit_0;
+    if lr_sb < ctx.lr_mask.len() && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len() {
+        let lr_unit = &ctx.lr_mask[lr_sb].lr[plane as usize][lr_u];
+        lr_stripe_hbd(
+            ctx,
+            p,
+            cur_p_off,
+            &pre_lr_border[1 - bit],
+            x,
+            y,
+            plane,
+            end_w,
+            row_h,
+            lr_unit,
+            edges,
+            first_sby_in_tile_row,
+            tile_row_m1,
+        );
+    }
+}
+pub(crate) fn lr_sbrow_hbd(ctx: &LrContextHbd, dst: &mut [&mut [u16]; 3], sby: i32) {
+    let dst_stride = ctx.cur_stride;
+    // For monochrome frames the chroma destination planes are empty; a malformed
+    // stream can still signal chroma restoration, so mask off the U/V restore
+    // bits when those planes are absent to avoid reading/writing empty buffers.
+    // No-op when chroma planes are present.
+    let mut restore_planes = ctx.restore_planes;
+    if dst[1].is_empty() || dst[2].is_empty() {
+        restore_planes &= LR_RESTORE_Y;
+    }
+    let not_last = (sby + 1 < ctx.sbh) as i32;
+    let start_tile_val = if (sby as usize) < ctx.start_of_tile_row.len() {
+        ctx.start_of_tile_row[sby as usize]
+    } else {
+        0
+    };
+    let tile_row = (start_tile_val >> 1) as i32;
+    let first_sby_in_tile_row_flag = start_tile_val & 1;
+
+    if restore_planes & (LR_RESTORE_U | LR_RESTORE_V) != 0 {
+        let ss_ver = (ctx.layout == PixelLayout::I420) as i32;
+        let ss_hor = (ctx.layout != PixelLayout::I444) as i32;
+        let h = (ctx.bh * 4) >> ss_ver;
+        let w = (ctx.bw * 4) >> ss_hor;
+        let next_row_y = (sby + 1) << ((6 - ss_ver) + ctx.sb128 as i32);
+        let row_h = imin(next_row_y - (8 >> ss_ver) * not_last, h);
+        let offset_uv = (8 * (sby != 0) as i32) >> ss_ver;
+        let mut y_stripe = (sby << ((6 - ss_ver) + ctx.sb128 as i32)) - offset_uv;
+
+        if sby != 0 && first_sby_in_tile_row_flag != 0 {
+            let first_top = if first_sby_in_tile_row_flag != 0 {
+                FirstSbInTileRow::Top
+            } else {
+                FirstSbInTileRow::None
+            };
+            if restore_planes & LR_RESTORE_U != 0 {
+                let abs_stride_uv = dst_stride[1].unsigned_abs();
+                lr_sbrow_hbd_inner(
+                    ctx,
+                    dst[1],
+                    (y_stripe.max(0) as usize) * abs_stride_uv,
+                    y_stripe,
+                    w,
+                    h,
+                    y_stripe + (8 >> ss_ver),
+                    1,
+                    first_top,
+                    tile_row - 1,
+                );
+            }
+            if restore_planes & LR_RESTORE_V != 0 {
+                let abs_stride_uv = dst_stride[1].unsigned_abs();
+                lr_sbrow_hbd_inner(
+                    ctx,
+                    dst[2],
+                    (y_stripe.max(0) as usize) * abs_stride_uv,
+                    y_stripe,
+                    w,
+                    h,
+                    y_stripe + (8 >> ss_ver),
+                    2,
+                    first_top,
+                    tile_row - 1,
+                );
+            }
+            y_stripe += 8 >> ss_ver;
+        }
+
+        let first_bot = if first_sby_in_tile_row_flag != 0 {
+            FirstSbInTileRow::Bottom
+        } else {
+            FirstSbInTileRow::None
+        };
+        if restore_planes & LR_RESTORE_U != 0 {
+            let abs_stride_uv = dst_stride[1].unsigned_abs();
+            lr_sbrow_hbd_inner(
+                ctx,
+                dst[1],
+                (y_stripe.max(0) as usize) * abs_stride_uv,
+                y_stripe,
+                w,
+                h,
+                row_h,
+                1,
+                first_bot,
+                tile_row - 1,
+            );
+        }
+        if restore_planes & LR_RESTORE_V != 0 {
+            let abs_stride_uv = dst_stride[1].unsigned_abs();
+            lr_sbrow_hbd_inner(
+                ctx,
+                dst[2],
+                (y_stripe.max(0) as usize) * abs_stride_uv,
+                y_stripe,
+                w,
+                h,
+                row_h,
+                2,
+                first_bot,
+                tile_row - 1,
+            );
+        }
+    }
+
+    if restore_planes & LR_RESTORE_Y != 0 {
+        let h = ctx.bh * 4;
+        let w = ctx.bw * 4;
+        let next_row_y = (sby + 1) << (6 + ctx.sb128 as i32);
+        let row_h = imin(next_row_y - 8 * not_last, h);
+        let offset_y = 8 * (sby != 0) as i32;
+        let mut y_stripe = (sby << (6 + ctx.sb128 as i32)) - offset_y;
+
+        if sby != 0 && first_sby_in_tile_row_flag != 0 {
+            let abs_stride_y = dst_stride[0].unsigned_abs();
+            lr_sbrow_hbd_inner(
+                ctx,
+                dst[0],
+                (y_stripe.max(0) as usize) * abs_stride_y,
+                y_stripe,
+                w,
+                h,
+                y_stripe + 8,
+                0,
+                FirstSbInTileRow::Top,
+                tile_row - 1,
+            );
+            y_stripe += 8;
+        }
+        let abs_stride_y = dst_stride[0].unsigned_abs();
+        lr_sbrow_hbd_inner(
             ctx,
             dst[0],
             (y_stripe.max(0) as usize) * abs_stride_y,

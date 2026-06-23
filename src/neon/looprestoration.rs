@@ -32,8 +32,8 @@ use std::arch::aarch64::*;
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn load8_u8_i32(p: *const u8) -> (int32x4_t, int32x4_t) {
-    let v = unsafe { vld1_u8(p) }; // 8 x u8
+fn load8_u8_i32(p: &[u8]) -> (int32x4_t, int32x4_t) {
+    let v = unsafe { vld1_u8(p.as_ptr()) }; // 8 x u8
     let w = vmovl_u8(v); // 8 x u16
     let lo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w)));
     let hi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w)));
@@ -44,7 +44,7 @@ fn load8_u8_i32(p: *const u8) -> (int32x4_t, int32x4_t) {
 /// to 8 packed `u8` and store at `dst`.
 #[inline]
 #[target_feature(enable = "neon")]
-fn finish_store(dst: *mut u8, slo: int32x4_t, shi: int32x4_t) {
+fn finish_store(dst: &mut [u8], slo: int32x4_t, shi: int32x4_t) {
     let rnd = vdupq_n_s32(64);
     let zero = vdupq_n_s32(0);
     let max = vdupq_n_s32(255);
@@ -55,7 +55,7 @@ fn finish_store(dst: *mut u8, slo: int32x4_t, shi: int32x4_t) {
     let u16lo = vmovn_u32(vreinterpretq_u32_s32(vlo));
     let u16hi = vmovn_u32(vreinterpretq_u32_s32(vhi));
     let packed = vmovn_u16(vcombine_u16(u16lo, u16hi));
-    unsafe { vst1_u8(dst, packed) };
+    unsafe { vst1_u8(dst.as_mut_ptr(), packed) };
 }
 
 /// NEON "NS" Wiener FIR. Mirrors `crate::simd::ns_wiener_fir_run_simd`.
@@ -71,7 +71,7 @@ pub(crate) fn ns_wiener_fir_run_neon(
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
         unsafe {
-            let (mlo, mhi) = load8_u8_i32(center[c..c + 8].as_ptr());
+            let (mlo, mhi) = load8_u8_i32(&center[c..]);
             let mut slo = vshlq_n_s32::<7>(mlo);
             let mut shi = vshlq_n_s32::<7>(mhi);
             let two_mlo = vaddq_s32(mlo, mlo);
@@ -80,8 +80,8 @@ pub(crate) fn ns_wiener_fir_run_neon(
                 let cp = (c as i32 + t.dx) as usize;
                 let cm = (c as i32 - t.dx) as usize;
                 debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8_u8_i32(t.row_p[cp..cp + 8].as_ptr());
-                let (blo, bhi) = load8_u8_i32(t.row_m[cm..cm + 8].as_ptr());
+                let (alo, ahi) = load8_u8_i32(&t.row_p[cp..]);
+                let (blo, bhi) = load8_u8_i32(&t.row_m[cm..]);
                 let coef = vdupq_n_s32(t.coef);
                 // (a + b - 2*m) * coef
                 slo = vaddq_s32(
@@ -93,7 +93,7 @@ pub(crate) fn ns_wiener_fir_run_neon(
                     vmulq_s32(vsubq_s32(vaddq_s32(ahi, bhi), two_mhi), coef),
                 );
             }
-            finish_store(dst[x..x + 8].as_mut_ptr(), slo, shi);
+            finish_store(&mut dst[x..], slo, shi);
         }
         x += 8;
     }
@@ -126,7 +126,7 @@ pub(crate) fn pc_wiener_fir_run_neon(
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
         unsafe {
-            let (mlo, mhi) = load8_u8_i32(center[c..c + 8].as_ptr());
+            let (mlo, mhi) = load8_u8_i32(&center[c..]);
             let cc = vdupq_n_s32(center_coef);
             let mut slo = vmulq_s32(mlo, cc);
             let mut shi = vmulq_s32(mhi, cc);
@@ -134,14 +134,14 @@ pub(crate) fn pc_wiener_fir_run_neon(
                 let cp = (c as i32 + t.dx) as usize;
                 let cm = (c as i32 - t.dx) as usize;
                 debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8_u8_i32(t.row_p[cp..cp + 8].as_ptr());
-                let (blo, bhi) = load8_u8_i32(t.row_m[cm..cm + 8].as_ptr());
+                let (alo, ahi) = load8_u8_i32(&t.row_p[cp..]);
+                let (blo, bhi) = load8_u8_i32(&t.row_m[cm..]);
                 let coef = vdupq_n_s32(t.coef);
                 // (a + b) * coef
                 slo = vaddq_s32(slo, vmulq_s32(vaddq_s32(alo, blo), coef));
                 shi = vaddq_s32(shi, vmulq_s32(vaddq_s32(ahi, bhi), coef));
             }
-            finish_store(dst[x..x + 8].as_mut_ptr(), slo, shi);
+            finish_store(&mut dst[x..], slo, shi);
         }
         x += 8;
     }

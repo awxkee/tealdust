@@ -102,7 +102,7 @@ pub(crate) fn generate_grain_y(
             let coeff = &data.ar_coeffs[0];
             let mut sum = 0i32;
             let mut ci = 0usize;
-            for dy in (y.wrapping_sub(ar_lag))..=y {
+            for dy in y.wrapping_sub(ar_lag)..=y {
                 let dx_start = x.wrapping_sub(ar_lag);
                 let dx_end = if dy == y { x } else { x + ar_lag + 1 };
                 for dx in dx_start..dx_end {
@@ -155,7 +155,7 @@ pub(crate) fn generate_grain_uv(
             let coeff = &data.ar_coeffs[1 + uv];
             let mut sum = 0i32;
             let mut ci = 0usize;
-            'outer: for dy in (y.wrapping_sub(ar_lag))..=y {
+            'outer: for dy in y.wrapping_sub(ar_lag)..=y {
                 let dx_start = x.wrapping_sub(ar_lag);
                 // Current row stops at (and includes) the center pixel dx==x,
                 // case uses the final AR coeff for the luma contribution, then

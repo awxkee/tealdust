@@ -79,26 +79,18 @@ const MAX_IPMA_ENTRIES: u32 = 4096;
 /// Maximum extents per `iloc` item.
 const MAX_EXTENTS_PER_ITEM: u16 = 32;
 /// Maximum total OBU bytes assembled from `iloc` extents before feeding the
-/// decoder.  Prevents a crafted file from forcing a multi-GB allocation.
+/// decoder.
 const MAX_OBU_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
-/// Maximum image dimension accepted from `ispe`.  Images wider or taller than
-/// this are rejected before any pixel memory is allocated.
+/// Maximum image dimension accepted from `ispe`.
 const MAX_IMAGE_DIMENSION: u32 = 65536;
 /// Maximum allowed `iloc` item count (v0/v1 = u16, v2 = u32; cap both).
 const MAX_ILOC_ITEMS: u32 = 1024;
 /// Maximum number of `ftyp` compatible brands scanned (prevents O(n) on junk).
 const MAX_COMPAT_BRANDS: usize = 64;
 /// Maximum byte length of an `auxC` URN string accepted from the bitstream.
-/// Real alpha URNs are ~50 bytes; this prevents a huge string from being
-/// cloned into an `AuxiliaryType` value.
 const MAX_AUXC_URN_LEN: usize = 512;
 /// Maximum number of item references consumed from one `iref` type-ref box.
-/// Prevents O(n) work when a crafted file claims millions of alpha references.
 const MAX_IREF_REFS: u16 = 256;
-
-// ────────────────────────────────────────────────────────────────────────────
-// Public error type
-// ────────────────────────────────────────────────────────────────────────────
 
 /// Errors that can occur when parsing or decoding an AVIF file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,10 +514,6 @@ impl Orientation {
         }
     }
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Clean aperture (`clap`, ISO 14496-12 §12.1.4)
-// ────────────────────────────────────────────────────────────────────────────
 
 /// A rational number as a (numerator, denominator) pair.
 ///
@@ -2119,8 +2107,6 @@ impl<'a> AvifDecoder<'a> {
         &self.container
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
-
     fn item_content_light_level(&self, item: &AvifItem) -> Result<Option<ContentLightLevel>> {
         let obu_data = self.assemble_obu(item)?;
         scan_content_light_level_from_obus(&obu_data)
@@ -2265,14 +2251,6 @@ fn read_leb128_usize(data: &[u8]) -> Result<(usize, usize)> {
     Err(AvifError::InvalidBox)
 }
 
-/// Copy `h` rows of `w` samples (each `bps` bytes wide) from a picture
-/// plane byte view using the given `stride` in bytes.
-///
-/// # Fuzzer hardening
-///
-/// Every multiplication and slice range is checked. This function no longer
-/// accepts raw pointers; the only pointer-to-slice conversion remains
-/// centralized in `Picture::plane_bytes()`.
 fn copy_plane(
     plane: Option<&[u8]>,
     stride: usize,
@@ -2304,10 +2282,6 @@ fn copy_plane(
     Ok(out)
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Utility: quick AVIF probe
-// ────────────────────────────────────────────────────────────────────────────
-
 /// Quick probe: returns `true` if `data` begins with an ISOBMFF `ftyp` box
 /// carrying a recognised AVIF brand (`avif`, `avis`, or `av02`).
 ///
@@ -2323,7 +2297,3 @@ pub fn probe_avif(data: &[u8]) -> bool {
     let brand = [data[8], data[9], data[10], data[11]];
     is_avif_brand(&brand)
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Tests
-// ────────────────────────────────────────────────────────────────────────────

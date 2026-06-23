@@ -96,6 +96,26 @@ fn store_i32x8_u8(a: &mut [u8; 8], lo: int32x4_t, hi: int32x4_t) {
 }
 
 #[inline(always)]
+fn load_u8x16(a: &[u8; 16]) -> uint8x16_t {
+    unsafe { vld1q_u8(a.as_ptr()) }
+}
+
+#[inline(always)]
+fn store_u8x16(a: &mut [u8; 16], v: uint8x16_t) {
+    unsafe { vst1q_u8(a.as_mut_ptr(), v) };
+}
+
+#[inline(always)]
+fn load_u8x8(a: &[u8; 8]) -> uint8x8_t {
+    unsafe { vld1_u8(a.as_ptr()) }
+}
+
+#[inline(always)]
+fn store_u8x8(a: &mut [u8; 8], v: uint8x8_t) {
+    unsafe { vst1_u8(a.as_mut_ptr(), v) };
+}
+
+#[inline(always)]
 fn load_u8x8_i16(a: &[u8; 8]) -> int16x8_t {
     unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(a.as_ptr()))) }
 }
@@ -170,19 +190,47 @@ pub(crate) fn residual_add_row_8bpc_neon(
 #[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn dc_add_row_8bpc_neon(dst: &mut [u8], dc: i32, n: usize) {
-    let dc_v = vdupq_n_s32(dc);
-    let (c8, r8) = dst[..n].as_chunks_mut::<8>();
-    for d in c8.iter_mut() {
-        let (d_lo, d_hi) = load_u8x8_i32x2(&*d);
-        store_i32x8_u8(d, vaddq_s32(d_lo, dc_v), vaddq_s32(d_hi, dc_v));
+    if dc == 0 {
+        return;
     }
-    let (c4, r4) = r8.as_chunks_mut::<4>();
-    for d in c4.iter_mut() {
-        let dv = load_u8x4_i32(d);
-        store_i32x4_u8(d, vaddq_s32(dv, dc_v));
-    }
-    for d in r4.iter_mut() {
-        *d = ((*d as i32) + dc).clamp(0, 255) as u8;
+
+    let amt = if dc > 0 {
+        dc.min(255) as u8
+    } else {
+        dc.saturating_neg().min(255) as u8
+    };
+
+    let (c16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+
+    if dc > 0 {
+        let amt16 = vdupq_n_u8(amt);
+        for d in c16.iter_mut() {
+            store_u8x16(d, vqaddq_u8(load_u8x16(&*d), amt16));
+        }
+
+        let amt8 = vdup_n_u8(amt);
+        for d in c8.iter_mut() {
+            store_u8x8(d, vqadd_u8(load_u8x8(&*d), amt8));
+        }
+
+        for d in r8.iter_mut() {
+            *d = d.saturating_add(amt);
+        }
+    } else {
+        let amt16 = vdupq_n_u8(amt);
+        for d in c16.iter_mut() {
+            store_u8x16(d, vqsubq_u8(load_u8x16(&*d), amt16));
+        }
+
+        let amt8 = vdup_n_u8(amt);
+        for d in c8.iter_mut() {
+            store_u8x8(d, vqsub_u8(load_u8x8(&*d), amt8));
+        }
+
+        for d in r8.iter_mut() {
+            *d = d.saturating_sub(amt);
+        }
     }
 }
 
@@ -231,14 +279,13 @@ pub(crate) fn cctx_row_neon(
     let zero = vdupq_n_s32(0);
     let min_v = vdupq_n_s32(min);
     let max_v = vdupq_n_s32(max);
-    let nsh8 = vdupq_n_s32(-8);
     let rot = |uu: int32x4_t, vv: int32x4_t| -> (int32x4_t, int32x4_t) {
         let a = vsubq_s32(vmulq_s32(uu, cosa_v), vmulq_s32(vv, sina_v));
         let b = vaddq_s32(vmulq_s32(uu, sina_v), vmulq_s32(vv, cosa_v));
         let amask = vreinterpretq_s32_u32(vcltq_s32(a, zero));
         let bmask = vreinterpretq_s32_u32(vcltq_s32(b, zero));
-        let ra = vshlq_s32(vaddq_s32(vaddq_s32(a, c128), amask), nsh8);
-        let rb = vshlq_s32(vaddq_s32(vaddq_s32(b, c128), bmask), nsh8);
+        let ra = vshrq_n_s32::<8>(vaddq_s32(vaddq_s32(a, c128), amask));
+        let rb = vshrq_n_s32::<8>(vaddq_s32(vaddq_s32(b, c128), bmask));
         (
             vminq_s32(vmaxq_s32(ra, min_v), max_v),
             vminq_s32(vmaxq_s32(rb, min_v), max_v),
@@ -412,15 +459,11 @@ pub(crate) fn mask_row_8bpc_neon(
 pub(crate) fn blend_row_8bpc_neon(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: usize) {
     let c64 = vdupq_n_s16(64);
     let rnd_v = vdupq_n_s16(32);
-    let nsh6 = vdupq_n_s16(-6);
     let f = |d: int16x8_t, t: int16x8_t, m: int16x8_t| {
-        vshlq_s16(
-            vaddq_s16(
-                vaddq_s16(vmulq_s16(d, vsubq_s16(c64, m)), vmulq_s16(t, m)),
-                rnd_v,
-            ),
-            nsh6,
-        )
+        vshrq_n_s16::<6>(vaddq_s16(
+            vaddq_s16(vmulq_s16(d, vsubq_s16(c64, m)), vmulq_s16(t, m)),
+            rnd_v,
+        ))
     };
     let (c16, r16) = dst[..n].as_chunks_mut::<16>();
     let (t16, _) = tmp[..n].as_chunks::<16>();
@@ -453,8 +496,7 @@ pub(crate) fn blend_row_8bpc_neon(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: us
 pub(crate) fn morph_row_8bpc_neon(dst: &mut [u8], alpha: i32, beta: i32, n: usize) {
     let a_v = vdupq_n_s32(alpha);
     let b_v = vdupq_n_s32(beta);
-    let nsh8 = vdupq_n_s32(-8);
-    let f = |d: int32x4_t| vshlq_s32(vaddq_s32(vmulq_s32(d, a_v), b_v), nsh8);
+    let f = |d: int32x4_t| vshrq_n_s32::<8>(vaddq_s32(vmulq_s32(d, a_v), b_v));
     let (c8, r8) = dst[..n].as_chunks_mut::<8>();
     for d in c8.iter_mut() {
         let (d0, d1) = load_u8x8_i32x2(&*d);
@@ -479,11 +521,10 @@ pub(crate) fn morph_row_8bpc_neon(dst: &mut [u8], alpha: i32, beta: i32, n: usiz
 pub(crate) fn gdf_add_run_8bpc_neon(dst: &mut [u8], err: &[i8], scale: i32, n: usize) {
     let sc = vdupq_n_s32(scale);
     let rnd = vdupq_n_s32(8);
-    let nsh4 = vdupq_n_s32(-4);
     let zero = vdupq_n_s32(0);
     let adj = |e: int32x4_t| {
         let diff = vmulq_s32(e, sc);
-        let mag = vshlq_s32(vaddq_s32(vabsq_s32(diff), rnd), nsh4);
+        let mag = vshrq_n_s32::<4>(vaddq_s32(vabsq_s32(diff), rnd));
         vbslq_s32(vcltq_s32(diff, zero), vnegq_s32(mag), mag)
     };
     let (c8, r8) = dst[..n].as_chunks_mut::<8>();
@@ -556,5 +597,77 @@ pub(crate) fn gdf_gradient_group_neon(
     store_i32x4(&mut out, pair);
     for k in 0..ncells {
         dst[base_cell + k][d] = out[k] as u16;
+    }
+}
+
+/// cctx rotate+clip over two i16 coefficient planes, widening only inside the SIMD arithmetic.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cctx_row_i16_neon(
+    u: &mut [i16],
+    v: &mut [i16],
+    sina: i32,
+    cosa: i32,
+    sz: usize,
+    min: i32,
+    max: i32,
+) {
+    unsafe {
+        let sina16 = sina as i16;
+        let cosa16 = cosa as i16;
+        let c128 = vdupq_n_s32(128);
+        let min_v = vdupq_n_s32(min);
+        let max_v = vdupq_n_s32(max);
+        let zero = vdupq_n_s32(0);
+        let mut i = 0usize;
+        while i + 8 <= sz {
+            let uu16 = vld1q_s16(u.as_ptr().add(i));
+            let vv16 = vld1q_s16(v.as_ptr().add(i));
+            let rot = |uu: int16x4_t, vv: int16x4_t| -> (int32x4_t, int32x4_t) {
+                let a = vmlsl_n_s16(vmull_n_s16(uu, cosa16), vv, sina16);
+                let b = vmlal_n_s16(vmull_n_s16(uu, sina16), vv, cosa16);
+                let ra = vminq_s32(
+                    vmaxq_s32(
+                        vshrq_n_s32::<8>(vaddq_s32(
+                            vaddq_s32(a, c128),
+                            vreinterpretq_s32_u32(vcltq_s32(a, zero)),
+                        )),
+                        min_v,
+                    ),
+                    max_v,
+                );
+                let rb = vminq_s32(
+                    vmaxq_s32(
+                        vshrq_n_s32::<8>(vaddq_s32(
+                            vaddq_s32(b, c128),
+                            vreinterpretq_s32_u32(vcltq_s32(b, zero)),
+                        )),
+                        min_v,
+                    ),
+                    max_v,
+                );
+                (ra, rb)
+            };
+            let (ulo, vlo) = rot(vget_low_s16(uu16), vget_low_s16(vv16));
+            let (uhi, vhi) = rot(vget_high_s16(uu16), vget_high_s16(vv16));
+            vst1q_s16(
+                u.as_mut_ptr().add(i),
+                vcombine_s16(vmovn_s32(ulo), vmovn_s32(uhi)),
+            );
+            vst1q_s16(
+                v.as_mut_ptr().add(i),
+                vcombine_s16(vmovn_s32(vlo), vmovn_s32(vhi)),
+            );
+            i += 8;
+        }
+        while i < sz {
+            let ui = u[i] as i32;
+            let vi = v[i] as i32;
+            let a = ui * cosa - vi * sina;
+            let b = ui * sina + vi * cosa;
+            u[i] = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
+            v[i] = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
+            i += 1;
+        }
     }
 }

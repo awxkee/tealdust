@@ -38,8 +38,6 @@ fn load_u8x8_i16_fixed(ptr: &[u8; 8]) -> int16x8_t {
     unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(ptr.as_ptr()))) }
 }
 
-/// One 16-byte load split into two i16x8 lanes (low 8, high 8), replacing two
-/// adjacent 8-byte loads of a contiguous `[u8; 16]` chunk.
 #[inline(always)]
 fn load_u8x16_i16x2_neon(a: &[u8; 16]) -> (int16x8_t, int16x8_t) {
     let v = unsafe { vld1q_u8(a.as_ptr()) };
@@ -74,17 +72,9 @@ fn sra_i16(v: int16x8_t, shift: i32) -> int16x8_t {
 
 #[inline(always)]
 fn dist8(base: i16) -> int16x8_t {
-    let a = [
-        base,
-        base - 1,
-        base - 2,
-        base - 3,
-        base - 4,
-        base - 5,
-        base - 6,
-        base - 7,
-    ];
-    unsafe { vld1q_s16(a.as_ptr()) }
+    static OFFSETS: [i16; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
+    let offsets = unsafe { vld1q_s16(OFFSETS.as_ptr()) };
+    unsafe { vsubq_s16(vdupq_n_s16(base), offsets) }
 }
 
 pub(crate) fn ipred_v_8bpc_neon(
@@ -199,16 +189,12 @@ pub(crate) fn ipred_smooth_v_8bpc_neon(
                 let (above0, above1) = load_u8x16_i16x2_neon(tl);
                 let mul0 = vmulq_s16(vsubq_s16(above0, bottom_v), off_y);
                 let pred0 = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul0, rnd), bhl2));
-                let adj0 = sra_i16(
-                    vaddq_s16(vmulq_s16(vsubq_s16(above0, pred0), w_ver), add32),
-                    6,
-                );
+                let adj0 =
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(above0, pred0), w_ver), add32));
                 let mul1 = vmulq_s16(vsubq_s16(above1, bottom_v), off_y);
                 let pred1 = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul1, rnd), bhl2));
-                let adj1 = sra_i16(
-                    vaddq_s16(vmulq_s16(vsubq_s16(above1, pred1), w_ver), add32),
-                    6,
-                );
+                let adj1 =
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(above1, pred1), w_ver), add32));
                 store_i16x8x2_u8_fixed(dst, vaddq_s16(pred0, adj0), vaddq_s16(pred1, adj1));
             }
 
@@ -218,10 +204,8 @@ pub(crate) fn ipred_smooth_v_8bpc_neon(
                 let above = load_u8x8_i16_fixed(tl);
                 let mul = vmulq_s16(vsubq_s16(above, bottom_v), off_y);
                 let pred = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul, rnd), bhl2));
-                let adj = sra_i16(
-                    vaddq_s16(vmulq_s16(vsubq_s16(above, pred), w_ver), add32),
-                    6,
-                );
+                let adj =
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(above, pred), w_ver), add32));
                 store_i16x8_u8_fixed(dst, vaddq_s16(pred, adj));
             }
 
@@ -280,18 +264,18 @@ pub(crate) fn ipred_smooth_h_8bpc_neon(
                     right_v,
                     sra_i16(vaddq_s16(vmulq_s16(diff, d_lo), rnd), bwl2),
                 );
-                let adj_lo = sra_i16(
-                    vaddq_s16(vmulq_s16(vsubq_s16(left_v, pred_lo), wx_lo), add32),
-                    6,
-                );
+                let adj_lo = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(left_v, pred_lo), wx_lo),
+                    add32,
+                ));
                 let pred_hi = vaddq_s16(
                     right_v,
                     sra_i16(vaddq_s16(vmulq_s16(diff, d_hi), rnd), bwl2),
                 );
-                let adj_hi = sra_i16(
-                    vaddq_s16(vmulq_s16(vsubq_s16(left_v, pred_hi), wx_hi), add32),
-                    6,
-                );
+                let adj_hi = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(left_v, pred_hi), wx_hi),
+                    add32,
+                ));
                 store_i16x8x2_u8_fixed(oc, vaddq_s16(pred_lo, adj_lo), vaddq_s16(pred_hi, adj_hi));
             }
 
@@ -309,7 +293,8 @@ pub(crate) fn ipred_smooth_h_8bpc_neon(
                     right_v,
                     sra_i16(vaddq_s16(vmulq_s16(diff, dvec), rnd), bwl2),
                 );
-                let adj = sra_i16(vaddq_s16(vmulq_s16(vsubq_s16(left_v, pred), wx), add32), 6);
+                let adj =
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left_v, pred), wx), add32));
                 store_i16x8_u8_fixed(oc, vaddq_s16(pred, adj));
             }
             let base_x = done + c8.len() * 8;
@@ -387,16 +372,13 @@ pub(crate) fn ipred_smooth_8bpc_neon(
                 );
                 pv0 = vaddq_s16(
                     pv0,
-                    sra_i16(
-                        vaddq_s16(vmulq_s16(vsubq_s16(above0, pv0), w_ver), add32),
-                        6,
-                    ),
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(above0, pv0), w_ver), add32)),
                 );
                 ph0 = vaddq_s16(
                     ph0,
-                    sra_i16(vaddq_s16(vmulq_s16(vsubq_s16(left_v, ph0), wx0), add32), 6),
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left_v, ph0), wx0), add32)),
                 );
-                let out0 = sra_i16(vaddq_s16(vaddq_s16(pv0, ph0), one), 1);
+                let out0 = vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pv0, ph0), one));
 
                 let mut pv1 = vaddq_s16(
                     bottom_v,
@@ -411,16 +393,13 @@ pub(crate) fn ipred_smooth_8bpc_neon(
                 );
                 pv1 = vaddq_s16(
                     pv1,
-                    sra_i16(
-                        vaddq_s16(vmulq_s16(vsubq_s16(above1, pv1), w_ver), add32),
-                        6,
-                    ),
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(above1, pv1), w_ver), add32)),
                 );
                 ph1 = vaddq_s16(
                     ph1,
-                    sra_i16(vaddq_s16(vmulq_s16(vsubq_s16(left_v, ph1), wx1), add32), 6),
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left_v, ph1), wx1), add32)),
                 );
-                let out1 = sra_i16(vaddq_s16(vaddq_s16(pv1, ph1), one), 1);
+                let out1 = vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pv1, ph1), one));
 
                 store_i16x8x2_u8_fixed(oc, out0, out1);
             }
@@ -449,19 +428,16 @@ pub(crate) fn ipred_smooth_8bpc_neon(
                 );
                 pred_ver = vaddq_s16(
                     pred_ver,
-                    sra_i16(
-                        vaddq_s16(vmulq_s16(vsubq_s16(above, pred_ver), w_ver), add32),
-                        6,
-                    ),
+                    vshrq_n_s16::<6>(vaddq_s16(
+                        vmulq_s16(vsubq_s16(above, pred_ver), w_ver),
+                        add32,
+                    )),
                 );
                 pred_hor = vaddq_s16(
                     pred_hor,
-                    sra_i16(
-                        vaddq_s16(vmulq_s16(vsubq_s16(left_v, pred_hor), wx), add32),
-                        6,
-                    ),
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left_v, pred_hor), wx), add32)),
                 );
-                let out = sra_i16(vaddq_s16(vaddq_s16(pred_ver, pred_hor), one), 1);
+                let out = vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pred_ver, pred_hor), one));
                 store_i16x8_u8_fixed(oc, out);
             }
             let base_x = done + c8.len() * 8;
@@ -946,7 +922,7 @@ fn ipred_z1_8bpc_neon_impl(
     let top_off = 2usize;
     let sz = 1 + w + h;
     let str = if enable_intra_edge_filter && have_top {
-        crate::ipred::get_filter_strength((w + h) as i32, 90 - a, is_sm_t)
+        crate::ipred::filter_strength((w + h) as i32, 90 - a, is_sm_t)
     } else {
         0
     };
@@ -1148,7 +1124,7 @@ fn ipred_z3_8bpc_neon_impl(
     let left_off = 1 + w + h;
     let sz = 1 + w + h;
     let str = if enable_intra_edge_filter && have_left {
-        crate::ipred::get_filter_strength((w + h) as i32, a - 180, is_sm_l)
+        crate::ipred::filter_strength((w + h) as i32, a - 180, is_sm_l)
     } else {
         0
     };
@@ -1304,7 +1280,7 @@ fn ipred_z2_8bpc_neon_impl(
     let top_off = 0usize;
     let sz_t = 1 + w;
     let str_t = if enable_intra_edge_filter && have_top {
-        crate::ipred::get_filter_strength((w + h) as i32, a - 90, is_sm_t)
+        crate::ipred::filter_strength((w + h) as i32, a - 90, is_sm_t)
     } else {
         0
     };
@@ -1329,7 +1305,7 @@ fn ipred_z2_8bpc_neon_impl(
     let left_off: usize = h + 2;
     let sz_l = 1 + h;
     let str_l = if enable_intra_edge_filter && have_left {
-        crate::ipred::get_filter_strength((w + h) as i32, 180 - a, is_sm_l)
+        crate::ipred::filter_strength((w + h) as i32, 180 - a, is_sm_l)
     } else {
         0
     };

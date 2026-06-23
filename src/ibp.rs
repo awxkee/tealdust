@@ -27,6 +27,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use std::sync::OnceLock;
+
 use crate::intops::ulog2;
 use crate::tables::DIV_RECIP;
 
@@ -42,7 +44,7 @@ fn fast_div32(num: u32, den: u32) -> u8 {
     res as u8
 }
 
-pub(crate) fn init_ibp_weights() -> [[[u8; 16]; 16]; 7] {
+fn init_ibp_weights() -> [[[u8; 16]; 16]; 7] {
     static DR_DY_Q6: [u32; 7] = [682, 256, 170, 128, 81, 64, 50];
     let mut weights = [[[0u8; 16]; 16]; 7];
     for m in 0..7 {
@@ -57,4 +59,10 @@ pub(crate) fn init_ibp_weights() -> [[[u8; 16]; 16]; 7] {
         }
     }
     weights
+}
+
+#[inline]
+pub(crate) fn ibp_weights() -> &'static [[[u8; 16]; 16]; 7] {
+    static IBP_WEIGHTS: OnceLock<[[[u8; 16]; 16]; 7]> = OnceLock::new();
+    IBP_WEIGHTS.get_or_init(init_ibp_weights)
 }

@@ -26,40 +26,45 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+mod ccso;
+mod ccso_hd;
 mod cdef;
+mod cdef_hd;
 mod cfl;
+mod cfl_hd;
 mod deblocking;
 mod filter;
+mod filter_hd;
+mod inter_hd;
 mod ipred;
+mod ipred_hd;
 mod itx;
 mod looprestoration;
+mod looprestoration_hd;
 
+pub(crate) use ccso::{ccso_add_8bpc_neon, ccso_prep_lut_8bpc_neon};
+pub(crate) use ccso_hd::{ccso_add_hbd_neon, ccso_prep_lut_hbd_neon};
 pub(crate) use cdef::cdef_filter_block_8bpc_neon;
+pub(crate) use cdef_hd::cdef_filter_block_hbd_neon;
 pub(crate) use cfl::{cfl_apply_420_8bpc_neon, cfl_apply_422_8bpc_neon, cfl_apply_444_8bpc_neon};
-pub(crate) use deblocking::deblock_apply_8bpc_neon;
+pub(crate) use cfl_hd::{cfl_apply_420_hbd_neon, cfl_apply_422_hbd_neon, cfl_apply_444_hbd_neon};
+pub(crate) use deblocking::{deblock_apply_8bpc_neon, deblock_apply_hbd_neon};
 pub(crate) use filter::{
-    avg_row_8bpc_neon, blend_row_8bpc_neon, cctx_row_neon, dc_add_row_8bpc_neon,
+    avg_row_8bpc_neon, blend_row_8bpc_neon, cctx_row_i16_neon, cctx_row_neon, dc_add_row_8bpc_neon,
     gdf_add_run_8bpc_neon, gdf_gradient_group_neon, mask_row_8bpc_neon, morph_row_8bpc_neon,
     residual_add_row_8bpc_neon, row_clip_neon, w_avg_row_8bpc_neon,
 };
-pub(crate) use ipred::*;
-pub(crate) use itx::{
-    iadst_dequant_4x4_neon, iadst_dequant_4x8_neon, iadst_dequant_4x8_neon_rdm,
-    iadst_dequant_4x16_neon, iadst_dequant_4x16_neon_rdm, iadst_dequant_8x4_neon,
-    iadst_dequant_8x4_neon_rdm, iadst_dequant_8x8_neon, iadst_dequant_8x16_neon,
-    iadst_dequant_8x16_neon_rdm, iadst_dequant_16x4_neon, iadst_dequant_16x4_neon_rdm,
-    iadst_dequant_16x8_neon, iadst_dequant_16x8_neon_rdm, iadst_dequant_16x16_neon,
-    idct_dequant_4x4_neon, idct_dequant_4x8_neon, idct_dequant_4x8_neon_rdm,
-    idct_dequant_4x16_neon, idct_dequant_4x16_neon_rdm, idct_dequant_4x32_neon,
-    idct_dequant_4x32_neon_rdm, idct_dequant_8x4_neon, idct_dequant_8x4_neon_rdm,
-    idct_dequant_8x8_neon, idct_dequant_8x16_neon, idct_dequant_8x16_neon_rdm,
-    idct_dequant_8x32_neon, idct_dequant_8x32_neon_rdm, idct_dequant_16x4_neon,
-    idct_dequant_16x4_neon_rdm, idct_dequant_16x8_neon, idct_dequant_16x8_neon_rdm,
-    idct_dequant_16x16_neon, idct_dequant_16x32_neon, idct_dequant_16x32_neon_rdm,
-    idct_dequant_32x4_neon, idct_dequant_32x4_neon_rdm, idct_dequant_32x8_neon,
-    idct_dequant_32x8_neon_rdm, idct_dequant_32x16_neon, idct_dequant_32x16_neon_rdm,
-    idct_dequant_32x32_neon, idct_dequant_32x32_neon_rdm, idct_dequant_64x64_neon,
+pub(crate) use filter_hd::{
+    avg_row_hbd_neon, blend_row_hbd_neon, dc_add_row_hbd_neon, mask_row_hbd_neon,
+    morph_row_hbd_neon, residual_add_row_hbd_neon, w_avg_row_hbd_neon,
 };
+pub(crate) use inter_hd::*;
+pub(crate) use ipred::*;
+pub(crate) use ipred_hd::*;
+pub(crate) use itx::*;
 pub(crate) use looprestoration::{
     ns_wiener_fir_run_neon, ns_wiener_uv_fir_run_neon, pc_wiener_fir_run_neon,
+};
+pub(crate) use looprestoration_hd::{
+    ns_wiener_fir_run_hbd_neon, ns_wiener_uv_fir_run_hbd_neon, pc_wiener_fir_run_hbd_neon,
 };

@@ -35,42 +35,6 @@ pub struct DataProps {
     pub duration: i64,
     pub offset: i64,
     pub size: usize,
-    pub user_data: Option<Arc<UserData>>,
-}
-
-pub struct UserData {
-    // Opaque user pointer stored as an address so the wrapper itself does not
-    // need manual Send/Sync impls. The address is only converted back to a raw
-    // pointer when returned to the caller or passed to the user callback.
-    data_addr: usize,
-    free_callback: Box<dyn Fn(*const u8) + Send + Sync>,
-}
-
-impl UserData {
-    pub fn new(data: *const u8, free_callback: Box<dyn Fn(*const u8) + Send + Sync>) -> Self {
-        Self {
-            data_addr: data as usize,
-            free_callback,
-        }
-    }
-
-    pub fn data(&self) -> *const u8 {
-        self.data_addr as *const u8
-    }
-}
-
-impl Drop for UserData {
-    fn drop(&mut self) {
-        (self.free_callback)(self.data());
-    }
-}
-
-impl std::fmt::Debug for UserData {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UserData")
-            .field("data", &self.data())
-            .finish()
-    }
 }
 
 impl DataProps {
@@ -87,7 +51,6 @@ impl DataProps {
         self.duration = src.duration;
         self.offset = src.offset;
         self.size = src.size;
-        self.user_data = src.user_data.clone();
     }
 }
 

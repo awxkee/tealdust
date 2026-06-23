@@ -596,8 +596,23 @@ pub(crate) trait DctWide {
     fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc;
     fn load_coeffs(table: &[i16], idx: usize) -> Self::Coeffs;
     fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: Self::In, c: Self::Coeffs) -> Self::Acc;
+    #[inline(always)]
+    fn mul_add_pair<const LANE0: i32, const LANE1: i32>(
+        acc: Self::Acc,
+        x0: Self::In,
+        x1: Self::In,
+        c: Self::Coeffs,
+    ) -> Self::Acc {
+        Self::mul_add_lane::<LANE1>(Self::mul_add_lane::<LANE0>(acc, x0, c), x1, c)
+    }
     unsafe fn load8_narrow(src: &[i32], off: usize) -> Self::In;
     unsafe fn load8_rect2_narrow(src: &[i32], off: usize) -> Self::In;
+    unsafe fn load4_narrow(src: &[i32], off: usize) -> Self::In;
+    unsafe fn load4_rect2_narrow(src: &[i32], off: usize) -> Self::In;
+    unsafe fn load8_i16(src: &[i16], off: usize) -> Self::In;
+    unsafe fn load8_rect2_i16(src: &[i16], off: usize) -> Self::In;
+    unsafe fn load4_i16(src: &[i16], off: usize) -> Self::In;
+    unsafe fn load4_rect2_i16(src: &[i16], off: usize) -> Self::In;
     fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip;
     unsafe fn store8_strided_clip(
         dst: &mut [i32],
@@ -606,49 +621,16 @@ pub(crate) trait DctWide {
         acc: Self::Acc,
         clip: Self::Clip,
     );
+    unsafe fn store4_strided_clip(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: Self::Acc,
+        clip: Self::Clip,
+    );
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc);
+    unsafe fn store4(dst: &mut [i32], off: usize, acc: Self::Acc);
 }
-
-// pub(crate) struct ScalarWide;
-// impl DctWide for ScalarWide {
-//     type In = [i32; 8];
-//     type Acc = [i32; 8];
-//     type Coeffs = [i16; 8];
-//     #[inline(always)]
-//     fn zero() -> [i32; 8] {
-//         [0; 8]
-//     }
-//     #[inline(always)]
-//     fn add(a: [i32; 8], b: [i32; 8]) -> [i32; 8] {
-//         core::array::from_fn(|i| a[i].wrapping_add(b[i]))
-//     }
-//     #[inline(always)]
-//     fn sub(a: [i32; 8], b: [i32; 8]) -> [i32; 8] {
-//         core::array::from_fn(|i| a[i].wrapping_sub(b[i]))
-//     }
-//     #[inline(always)]
-//     fn load_coeffs(table: &[i16], idx: usize) -> [i16; 8] {
-//         core::array::from_fn(|k| table[idx + k])
-//     }
-//     #[inline(always)]
-//     fn mul_add_lane<const LANE: i32>(acc: [i32; 8], x: [i32; 8], c: [i16; 8]) -> [i32; 8] {
-//         let k = c[LANE as usize] as i32;
-//         core::array::from_fn(|i| acc[i].wrapping_add(x[i].wrapping_mul(k)))
-//     }
-//     #[inline(always)]
-//     unsafe fn load8_narrow(src: &[i32], off: usize) -> [i32; 8] {
-//         core::array::from_fn(|i| src[off + i])
-//     }
-//     #[inline(always)]
-//     unsafe fn store8(dst: &mut [i32], off: usize, acc: [i32; 8]) {
-//         dst[off..off + 8].copy_from_slice(&acc);
-//     }
-//     #[inline(always)]
-//     unsafe fn to_array8(acc: [i32; 8]) -> [i32; 8] {
-//         acc
-//     }
-// }
-
 #[inline(always)]
 pub(crate) fn dct32_wide<W: DctWide>(
     load: impl Fn(usize) -> W::In,
@@ -663,14 +645,10 @@ pub(crate) fn dct32_wide<W: DctWide>(
         while grp < 2 {
             let c = W::load_coeffs(&DCT32_KBW, base + grp * 8);
             let k0 = grp * 8;
-            acc = W::mul_add_lane::<0>(acc, load(2 * k0 + 1), c);
-            acc = W::mul_add_lane::<1>(acc, load(2 * (k0 + 1) + 1), c);
-            acc = W::mul_add_lane::<2>(acc, load(2 * (k0 + 2) + 1), c);
-            acc = W::mul_add_lane::<3>(acc, load(2 * (k0 + 3) + 1), c);
-            acc = W::mul_add_lane::<4>(acc, load(2 * (k0 + 4) + 1), c);
-            acc = W::mul_add_lane::<5>(acc, load(2 * (k0 + 5) + 1), c);
-            acc = W::mul_add_lane::<6>(acc, load(2 * (k0 + 6) + 1), c);
-            acc = W::mul_add_lane::<7>(acc, load(2 * (k0 + 7) + 1), c);
+            acc = W::mul_add_pair::<0, 1>(acc, load(2 * k0 + 1), load(2 * (k0 + 1) + 1), c);
+            acc = W::mul_add_pair::<2, 3>(acc, load(2 * (k0 + 2) + 1), load(2 * (k0 + 3) + 1), c);
+            acc = W::mul_add_pair::<4, 5>(acc, load(2 * (k0 + 4) + 1), load(2 * (k0 + 5) + 1), c);
+            acc = W::mul_add_pair::<6, 7>(acc, load(2 * (k0 + 6) + 1), load(2 * (k0 + 7) + 1), c);
             grp += 1;
         }
         acc
@@ -678,34 +656,28 @@ pub(crate) fn dct32_wide<W: DctWide>(
     let d: [W::Acc; 8] = core::array::from_fn(|m| {
         let c = W::load_coeffs(&DCT32_KDW, m * 8);
         let mut acc = z;
-        acc = W::mul_add_lane::<0>(acc, load(2), c);
-        acc = W::mul_add_lane::<1>(acc, load(6), c);
-        acc = W::mul_add_lane::<2>(acc, load(10), c);
-        acc = W::mul_add_lane::<3>(acc, load(14), c);
-        acc = W::mul_add_lane::<4>(acc, load(18), c);
-        acc = W::mul_add_lane::<5>(acc, load(22), c);
-        acc = W::mul_add_lane::<6>(acc, load(26), c);
-        acc = W::mul_add_lane::<7>(acc, load(30), c);
+        acc = W::mul_add_pair::<0, 1>(acc, load(2), load(6), c);
+        acc = W::mul_add_pair::<2, 3>(acc, load(10), load(14), c);
+        acc = W::mul_add_pair::<4, 5>(acc, load(18), load(22), c);
+        acc = W::mul_add_pair::<6, 7>(acc, load(26), load(30), c);
         acc
     });
     let f: [W::Acc; 4] = core::array::from_fn(|m| {
         let c = W::load_coeffs(&DCT32_KFW, m * 8);
         let mut acc = z;
-        acc = W::mul_add_lane::<0>(acc, load(4), c);
-        acc = W::mul_add_lane::<1>(acc, load(12), c);
-        acc = W::mul_add_lane::<2>(acc, load(20), c);
-        acc = W::mul_add_lane::<3>(acc, load(28), c);
+        acc = W::mul_add_pair::<0, 1>(acc, load(4), load(12), c);
+        acc = W::mul_add_pair::<2, 3>(acc, load(20), load(28), c);
         acc
     });
     let ch = W::load_coeffs(&DCT32_KHW, 0);
     let h = [
-        W::mul_add_lane::<1>(W::mul_add_lane::<0>(z, load(8), ch), load(24), ch),
-        W::mul_add_lane::<3>(W::mul_add_lane::<2>(z, load(8), ch), load(24), ch),
+        W::mul_add_pair::<0, 1>(z, load(8), load(24), ch),
+        W::mul_add_pair::<2, 3>(z, load(8), load(24), ch),
     ];
     let cg = W::load_coeffs(&DCT32_KGW, 0);
     let g = [
-        W::mul_add_lane::<1>(W::mul_add_lane::<0>(z, load(0), cg), load(16), cg),
-        W::mul_add_lane::<3>(W::mul_add_lane::<2>(z, load(0), cg), load(16), cg),
+        W::mul_add_pair::<0, 1>(z, load(0), load(16), cg),
+        W::mul_add_pair::<2, 3>(z, load(0), load(16), cg),
     ];
     let e = [
         W::add(g[0], h[0]),
@@ -733,6 +705,20 @@ pub(crate) fn dct32_wide<W: DctWide>(
     }
 }
 
+#[inline(always)]
+pub(crate) fn mat4_wide<W: DctWide>(
+    load: impl Fn(usize) -> W::In,
+    mut store: impl FnMut(usize, W::Acc),
+    kernel: &[i16],
+) {
+    for i in 0..4 {
+        let c = W::load_coeffs(kernel, i * 8);
+        let mut acc = W::mul_add_pair::<0, 1>(W::zero(), load(0), load(1), c);
+        acc = W::mul_add_pair::<2, 3>(acc, load(2), load(3), c);
+        store(i, acc);
+    }
+}
+
 /// s16 8-wide DCT-16 (bit-exact to `dct16_flat`).
 #[inline(always)]
 pub(crate) fn dct16_wide<W: DctWide>(
@@ -744,34 +730,28 @@ pub(crate) fn dct16_wide<W: DctWide>(
     let b: [W::Acc; 8] = core::array::from_fn(|m| {
         let c = W::load_coeffs(&DCT16_KBW, m * 8);
         let mut acc = z;
-        acc = W::mul_add_lane::<0>(acc, load(1), c);
-        acc = W::mul_add_lane::<1>(acc, load(3), c);
-        acc = W::mul_add_lane::<2>(acc, load(5), c);
-        acc = W::mul_add_lane::<3>(acc, load(7), c);
-        acc = W::mul_add_lane::<4>(acc, load(9), c);
-        acc = W::mul_add_lane::<5>(acc, load(11), c);
-        acc = W::mul_add_lane::<6>(acc, load(13), c);
-        acc = W::mul_add_lane::<7>(acc, load(15), c);
+        acc = W::mul_add_pair::<0, 1>(acc, load(1), load(3), c);
+        acc = W::mul_add_pair::<2, 3>(acc, load(5), load(7), c);
+        acc = W::mul_add_pair::<4, 5>(acc, load(9), load(11), c);
+        acc = W::mul_add_pair::<6, 7>(acc, load(13), load(15), c);
         acc
     });
     let d: [W::Acc; 4] = core::array::from_fn(|m| {
         let c = W::load_coeffs(&DCT16_KDW, m * 8);
         let mut acc = z;
-        acc = W::mul_add_lane::<0>(acc, load(2), c);
-        acc = W::mul_add_lane::<1>(acc, load(6), c);
-        acc = W::mul_add_lane::<2>(acc, load(10), c);
-        acc = W::mul_add_lane::<3>(acc, load(14), c);
+        acc = W::mul_add_pair::<0, 1>(acc, load(2), load(6), c);
+        acc = W::mul_add_pair::<2, 3>(acc, load(10), load(14), c);
         acc
     });
     let cf = W::load_coeffs(&DCT16_KFW, 0);
     let f = [
-        W::mul_add_lane::<1>(W::mul_add_lane::<0>(z, load(4), cf), load(12), cf),
-        W::mul_add_lane::<3>(W::mul_add_lane::<2>(z, load(4), cf), load(12), cf),
+        W::mul_add_pair::<0, 1>(z, load(4), load(12), cf),
+        W::mul_add_pair::<2, 3>(z, load(4), load(12), cf),
     ];
     let cg = W::load_coeffs(&DCT16_KGW, 0);
     let g = [
-        W::mul_add_lane::<1>(W::mul_add_lane::<0>(z, load(0), cg), load(8), cg),
-        W::mul_add_lane::<3>(W::mul_add_lane::<2>(z, load(0), cg), load(8), cg),
+        W::mul_add_pair::<0, 1>(z, load(0), load(8), cg),
+        W::mul_add_pair::<2, 3>(z, load(0), load(8), cg),
     ];
     let cc: [W::Acc; 4] = core::array::from_fn(|i| {
         if i < 2 {
@@ -806,14 +786,10 @@ pub(crate) fn adst8_wide<W: DctWide>(
 ) {
     for i in 0..8 {
         let c = W::load_coeffs(kernel, i * 8);
-        let mut acc = W::mul_add_lane::<0>(W::zero(), load(0), c);
-        acc = W::mul_add_lane::<1>(acc, load(1), c);
-        acc = W::mul_add_lane::<2>(acc, load(2), c);
-        acc = W::mul_add_lane::<3>(acc, load(3), c);
-        acc = W::mul_add_lane::<4>(acc, load(4), c);
-        acc = W::mul_add_lane::<5>(acc, load(5), c);
-        acc = W::mul_add_lane::<6>(acc, load(6), c);
-        acc = W::mul_add_lane::<7>(acc, load(7), c);
+        let mut acc = W::mul_add_pair::<0, 1>(W::zero(), load(0), load(1), c);
+        acc = W::mul_add_pair::<2, 3>(acc, load(2), load(3), c);
+        acc = W::mul_add_pair::<4, 5>(acc, load(4), load(5), c);
+        acc = W::mul_add_pair::<6, 7>(acc, load(6), load(7), c);
         store(if flip { 7 - i } else { i }, acc);
     }
 }
@@ -827,108 +803,16 @@ pub(crate) fn adst16_wide<W: DctWide>(
 ) {
     for i in 0..16 {
         let c0 = W::load_coeffs(kernel, i * 16);
-        let mut acc = W::mul_add_lane::<0>(W::zero(), load(0), c0);
-        acc = W::mul_add_lane::<1>(acc, load(1), c0);
-        acc = W::mul_add_lane::<2>(acc, load(2), c0);
-        acc = W::mul_add_lane::<3>(acc, load(3), c0);
-        acc = W::mul_add_lane::<4>(acc, load(4), c0);
-        acc = W::mul_add_lane::<5>(acc, load(5), c0);
-        acc = W::mul_add_lane::<6>(acc, load(6), c0);
-        acc = W::mul_add_lane::<7>(acc, load(7), c0);
+        let mut acc = W::mul_add_pair::<0, 1>(W::zero(), load(0), load(1), c0);
+        acc = W::mul_add_pair::<2, 3>(acc, load(2), load(3), c0);
+        acc = W::mul_add_pair::<4, 5>(acc, load(4), load(5), c0);
+        acc = W::mul_add_pair::<6, 7>(acc, load(6), load(7), c0);
         let c1 = W::load_coeffs(kernel, i * 16 + 8);
-        acc = W::mul_add_lane::<0>(acc, load(8), c1);
-        acc = W::mul_add_lane::<1>(acc, load(9), c1);
-        acc = W::mul_add_lane::<2>(acc, load(10), c1);
-        acc = W::mul_add_lane::<3>(acc, load(11), c1);
-        acc = W::mul_add_lane::<4>(acc, load(12), c1);
-        acc = W::mul_add_lane::<5>(acc, load(13), c1);
-        acc = W::mul_add_lane::<6>(acc, load(14), c1);
-        acc = W::mul_add_lane::<7>(acc, load(15), c1);
+        acc = W::mul_add_pair::<0, 1>(acc, load(8), load(9), c1);
+        acc = W::mul_add_pair::<2, 3>(acc, load(10), load(11), c1);
+        acc = W::mul_add_pair::<4, 5>(acc, load(12), load(13), c1);
+        acc = W::mul_add_pair::<6, 7>(acc, load(14), load(15), c1);
         store(if flip { 15 - i } else { i }, acc);
-    }
-}
-
-#[inline(always)]
-pub(crate) fn dct32_flat_bylane<L: DctLane>(
-    load: impl Fn(usize) -> L,
-    mut store: impl FnMut(usize, L),
-) {
-    use crate::itx_2d::{DCT32_KB, DCT32_KD, DCT32_KF, DCT32_KG, DCT32_KH};
-    let z = L::zero();
-    let b: [L; 16] = core::array::from_fn(|m| {
-        let mut acc = z;
-        let base = m * 16;
-        let mut grp = 0;
-        while grp < 4 {
-            let c = L::load_coeffs(&DCT32_KB, base + grp * 4);
-            let k0 = grp * 4;
-            acc = acc.mul_add_lane::<0>(load(2 * k0 + 1), c);
-            acc = acc.mul_add_lane::<1>(load(2 * (k0 + 1) + 1), c);
-            acc = acc.mul_add_lane::<2>(load(2 * (k0 + 2) + 1), c);
-            acc = acc.mul_add_lane::<3>(load(2 * (k0 + 3) + 1), c);
-            grp += 1;
-        }
-        acc
-    });
-    let d: [L; 8] = core::array::from_fn(|m| {
-        let mut acc = z;
-        let base = m * 8;
-        let mut grp = 0;
-        while grp < 2 {
-            let c = L::load_coeffs(&DCT32_KD, base + grp * 4);
-            let k0 = grp * 4;
-            acc = acc.mul_add_lane::<0>(load(4 * k0 + 2), c);
-            acc = acc.mul_add_lane::<1>(load(4 * (k0 + 1) + 2), c);
-            acc = acc.mul_add_lane::<2>(load(4 * (k0 + 2) + 2), c);
-            acc = acc.mul_add_lane::<3>(load(4 * (k0 + 3) + 2), c);
-            grp += 1;
-        }
-        acc
-    });
-    let f: [L; 4] = core::array::from_fn(|m| {
-        let c = L::load_coeffs(&DCT32_KF, m * 4);
-        z.mul_add_lane::<0>(load(4), c)
-            .mul_add_lane::<1>(load(12), c)
-            .mul_add_lane::<2>(load(20), c)
-            .mul_add_lane::<3>(load(28), c)
-    });
-    let ch = L::load_coeffs(&DCT32_KH, 0);
-    let h = [
-        z.mul_add_lane::<0>(load(8), ch)
-            .mul_add_lane::<1>(load(24), ch),
-        z.mul_add_lane::<2>(load(8), ch)
-            .mul_add_lane::<3>(load(24), ch),
-    ];
-    let cg = L::load_coeffs(&DCT32_KG, 0);
-    let g = [
-        z.mul_add_lane::<0>(load(0), cg)
-            .mul_add_lane::<1>(load(16), cg),
-        z.mul_add_lane::<2>(load(0), cg)
-            .mul_add_lane::<3>(load(16), cg),
-    ];
-    let e = [
-        g[0].add(h[0]),
-        g[1].add(h[1]),
-        g[1].sub(h[1]),
-        g[0].sub(h[0]),
-    ];
-    let cc: [L; 8] = core::array::from_fn(|i| {
-        if i < 4 {
-            e[i].add(f[i])
-        } else {
-            e[7 - i].sub(f[7 - i])
-        }
-    });
-    let a: [L; 16] = core::array::from_fn(|i| {
-        if i < 8 {
-            cc[i].add(d[i])
-        } else {
-            cc[15 - i].sub(d[15 - i])
-        }
-    });
-    for kk in 0..16 {
-        store(kk, a[kk].add(b[kk]));
-        store(kk + 16, a[15 - kk].sub(b[15 - kk]));
     }
 }
 

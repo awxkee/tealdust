@@ -211,6 +211,7 @@ fn ipred_smooth_h_8bpc_sse41_impl(
     let weights = &SM_WEIGHTS[scale];
     let right = tl[o + w + 1] as i16;
     let right_v = _mm_set1_epi16(right);
+    let offsets = _mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7);
 
     let mut off = 0usize;
     for y in 0..h {
@@ -228,26 +229,8 @@ fn ipred_smooth_h_8bpc_sse41_impl(
             let x = ci * 16;
             let xlo = (w - 1 - x) as i16;
             let xhi = (w - 1 - x - 8) as i16;
-            let dist0 = _mm_setr_epi16(
-                xlo,
-                xlo - 1,
-                xlo - 2,
-                xlo - 3,
-                xlo - 4,
-                xlo - 5,
-                xlo - 6,
-                xlo - 7,
-            );
-            let dist1 = _mm_setr_epi16(
-                xhi,
-                xhi - 1,
-                xhi - 2,
-                xhi - 3,
-                xhi - 4,
-                xhi - 5,
-                xhi - 6,
-                xhi - 7,
-            );
+            let dist0 = _mm_sub_epi16(_mm_set1_epi16(xlo), offsets);
+            let dist1 = _mm_sub_epi16(_mm_set1_epi16(xhi), offsets);
             let (wx0, wx1) = load_u8x16_i16x2(wxc);
             let pred0 = _mm_add_epi16(
                 right_v,
@@ -275,7 +258,7 @@ fn ipred_smooth_h_8bpc_sse41_impl(
             .enumerate()
         {
             let x0 = (w - 1 - done - ci * 8) as i16;
-            let dist = _mm_setr_epi16(x0, x0 - 1, x0 - 2, x0 - 3, x0 - 4, x0 - 5, x0 - 6, x0 - 7);
+            let dist = _mm_sub_epi16(_mm_set1_epi16(x0), offsets);
             let wx = load_u8x8_i16_fixed(wxc);
             let pred = _mm_add_epi16(
                 right_v,
@@ -323,6 +306,7 @@ fn ipred_smooth_8bpc_sse41_impl(
     let bottom = tl[o - h - 1] as i16;
     let right_v = _mm_set1_epi16(right);
     let bottom_v = _mm_set1_epi16(bottom);
+    let offsets = _mm_setr_epi16(0, 1, 2, 3, 4, 5, 6, 7);
 
     let mut off = 0usize;
     for y in 0..h {
@@ -345,26 +329,8 @@ fn ipred_smooth_8bpc_sse41_impl(
             let x = ci * 16;
             let xlo = (w - 1 - x) as i16;
             let xhi = (w - 1 - x - 8) as i16;
-            let dist0 = _mm_setr_epi16(
-                xlo,
-                xlo - 1,
-                xlo - 2,
-                xlo - 3,
-                xlo - 4,
-                xlo - 5,
-                xlo - 6,
-                xlo - 7,
-            );
-            let dist1 = _mm_setr_epi16(
-                xhi,
-                xhi - 1,
-                xhi - 2,
-                xhi - 3,
-                xhi - 4,
-                xhi - 5,
-                xhi - 6,
-                xhi - 7,
-            );
+            let dist0 = _mm_sub_epi16(_mm_set1_epi16(xlo), offsets);
+            let dist1 = _mm_sub_epi16(_mm_set1_epi16(xhi), offsets);
             let (a0, a1) = load_u8x16_i16x2(t);
             let (wx0, wx1) = load_u8x16_i16x2(wxc);
 
@@ -446,7 +412,7 @@ fn ipred_smooth_8bpc_sse41_impl(
         {
             let above = load_u8x8_i16_fixed(t);
             let x0 = (w - 1 - done - ci * 8) as i16;
-            let dist = _mm_setr_epi16(x0, x0 - 1, x0 - 2, x0 - 3, x0 - 4, x0 - 5, x0 - 6, x0 - 7);
+            let dist = _mm_sub_epi16(_mm_set1_epi16(x0), offsets);
             let wx = load_u8x8_i16_fixed(wxc);
 
             let pred_ver = _mm_add_epi16(
@@ -570,7 +536,6 @@ fn store_u8x16_fixed(a: &mut [u8; 16], v: __m128i) {
     unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, v) };
 }
 
-/// Horizontal sum of all bytes in `s` (each lane widened to u32).
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn sum_u8_sse41(s: &[u8]) -> u32 {
@@ -1037,7 +1002,7 @@ fn ipred_z1_8bpc_sse41_impl(
     let top_off = 2usize;
     let sz = 1 + w + h;
     let str = if enable_intra_edge_filter && have_top {
-        crate::ipred::get_filter_strength((w + h) as i32, 90 - a, is_sm_t)
+        crate::ipred::filter_strength((w + h) as i32, 90 - a, is_sm_t)
     } else {
         0
     };
@@ -1287,7 +1252,7 @@ fn ipred_z3_8bpc_sse41_impl(
     let left_off = 1 + w + h;
     let sz = 1 + w + h;
     let str = if enable_intra_edge_filter && have_left {
-        crate::ipred::get_filter_strength((w + h) as i32, a - 180, is_sm_l)
+        crate::ipred::filter_strength((w + h) as i32, a - 180, is_sm_l)
     } else {
         0
     };
@@ -1452,7 +1417,7 @@ fn ipred_z2_8bpc_sse41_impl(
     let top_off = 0usize;
     let sz_t = 1 + w;
     let str_t = if enable_intra_edge_filter && have_top {
-        crate::ipred::get_filter_strength((w + h) as i32, a - 90, is_sm_t)
+        crate::ipred::filter_strength((w + h) as i32, a - 90, is_sm_t)
     } else {
         0
     };
@@ -1478,7 +1443,7 @@ fn ipred_z2_8bpc_sse41_impl(
     let left_off: usize = h + 2;
     let sz_l = 1 + h;
     let str_l = if enable_intra_edge_filter && have_left {
-        crate::ipred::get_filter_strength((w + h) as i32, 180 - a, is_sm_l)
+        crate::ipred::filter_strength((w + h) as i32, 180 - a, is_sm_l)
     } else {
         0
     };

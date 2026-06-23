@@ -27,9 +27,403 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use std::sync::OnceLock;
+
 #[inline]
 pub(crate) fn compound_tmp_len(w: usize, h: usize) -> usize {
     (w * h).next_multiple_of(16)
+}
+
+pub(crate) type PrepHbdFn = unsafe fn(&mut [i16], usize, &[u16], usize, usize, usize, u8);
+
+pub(crate) fn prep_hbd_scalar(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    bitdepth: u8,
+) {
+    crate::mc::prep_scalar(
+        <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
+        tmp,
+        tmp_stride,
+        src,
+        src_stride,
+        w,
+        h,
+    );
+}
+
+static PREP_HBD: OnceLock<PrepHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_prep_hbd() -> PrepHbdFn {
+    *PREP_HBD.get_or_init(|| {
+        let mut f = prep_hbd_scalar as PrepHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::prep_hbd_neon as PrepHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::prep_hbd_sse41 as PrepHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::prep_hbd_avx2 as PrepHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn prep_hbd(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    bitdepth: u8,
+) {
+    // SAFETY: resolver only installs kernels when the required CPU feature is present.
+    unsafe { resolve_prep_hbd()(tmp, tmp_stride, src, src_stride, w, h, bitdepth) }
+}
+
+pub(crate) type PutBilinHbdFn =
+    unsafe fn(&mut [u16], usize, &[u16], usize, usize, usize, i32, i32, u8);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn put_bilin_hbd_scalar(
+    dst: &mut [u16],
+    dst_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    bitdepth: u8,
+) {
+    crate::mc::put_bilin_scalar(
+        <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
+        dst,
+        dst_stride,
+        src,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+    );
+}
+
+static PUT_BILIN_HBD: OnceLock<PutBilinHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_put_bilin_hbd() -> PutBilinHbdFn {
+    *PUT_BILIN_HBD.get_or_init(|| {
+        let mut f = put_bilin_hbd_scalar as PutBilinHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::put_bilin_hbd_neon as PutBilinHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::put_bilin_hbd_sse41 as PutBilinHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::put_bilin_hbd_avx2 as PutBilinHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn put_bilin_hbd(
+    dst: &mut [u16],
+    dst_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    bitdepth: u8,
+) {
+    unsafe { resolve_put_bilin_hbd()(dst, dst_stride, src, src_stride, w, h, mx, my, bitdepth) }
+}
+
+pub(crate) type PrepBilinHbdFn =
+    unsafe fn(&mut [i16], usize, &[u16], usize, usize, usize, i32, i32, u8);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prep_bilin_hbd_scalar(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    bitdepth: u8,
+) {
+    crate::mc::prep_bilin_scalar(
+        <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
+        tmp,
+        tmp_stride,
+        src,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+    );
+}
+
+static PREP_BILIN_HBD: OnceLock<PrepBilinHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_prep_bilin_hbd() -> PrepBilinHbdFn {
+    *PREP_BILIN_HBD.get_or_init(|| {
+        let mut f = prep_bilin_hbd_scalar as PrepBilinHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::prep_bilin_hbd_neon as PrepBilinHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::prep_bilin_hbd_sse41 as PrepBilinHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::prep_bilin_hbd_avx2 as PrepBilinHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn prep_bilin_hbd(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    bitdepth: u8,
+) {
+    unsafe { resolve_prep_bilin_hbd()(tmp, tmp_stride, src, src_stride, w, h, mx, my, bitdepth) }
+}
+
+pub(crate) type Put8tapHbdFn =
+    unsafe fn(&mut [u16], usize, &[u16], usize, usize, usize, usize, i32, i32, i32, u8);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn put_8tap_hbd_scalar(
+    dst: &mut [u16],
+    dst_stride: usize,
+    src: &[u16],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+    bitdepth: u8,
+) {
+    crate::mc::put_8tap_scalar(
+        <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
+        dst,
+        dst_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+        filter_type,
+    );
+}
+
+static PUT_8TAP_HBD: OnceLock<Put8tapHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_put_8tap_hbd() -> Put8tapHbdFn {
+    *PUT_8TAP_HBD.get_or_init(|| {
+        let mut f = put_8tap_hbd_scalar as Put8tapHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::put_8tap_hbd_neon as Put8tapHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::put_8tap_hbd_sse41 as Put8tapHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::put_8tap_hbd_avx2 as Put8tapHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn put_8tap_hbd(
+    dst: &mut [u16],
+    dst_stride: usize,
+    src: &[u16],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+    bitdepth: u8,
+) {
+    unsafe {
+        resolve_put_8tap_hbd()(
+            dst,
+            dst_stride,
+            src,
+            src_off,
+            src_stride,
+            w,
+            h,
+            mx,
+            my,
+            filter_type,
+            bitdepth,
+        )
+    }
+}
+
+pub(crate) type Prep8tapHbdFn =
+    unsafe fn(&mut [i16], usize, &[u16], usize, usize, usize, usize, i32, i32, i32, u8);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prep_8tap_hbd_scalar(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+    bitdepth: u8,
+) {
+    crate::mc::prep_8tap_scalar(
+        <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
+        tmp,
+        tmp_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+        filter_type,
+    );
+}
+
+static PREP_8TAP_HBD: OnceLock<Prep8tapHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_prep_8tap_hbd() -> Prep8tapHbdFn {
+    *PREP_8TAP_HBD.get_or_init(|| {
+        let mut f = prep_8tap_hbd_scalar as Prep8tapHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::prep_8tap_hbd_neon as Prep8tapHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::prep_8tap_hbd_sse41 as Prep8tapHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::prep_8tap_hbd_avx2 as Prep8tapHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn prep_8tap_hbd(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+    bitdepth: u8,
+) {
+    unsafe {
+        resolve_prep_8tap_hbd()(
+            tmp,
+            tmp_stride,
+            src,
+            src_off,
+            src_stride,
+            w,
+            h,
+            mx,
+            my,
+            filter_type,
+            bitdepth,
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -3480,7 +3480,6 @@ pub(crate) fn tile_sbrow_init(
 
 pub(crate) fn reset_sb(
     rt: &mut Tile,
-    ra: &[Block],
     sbsz: i32,
     refmv_bank: bool,
     is_key_or_intra: bool,
@@ -3506,21 +3505,27 @@ pub(crate) fn reset_sb(
 
     rt.warp.hits = 0;
 
-    if by == rt.tile_row.start || is_key_or_intra || tip_frame_mode == 2 {
+    let tile_row_start = rt.tile_row.start;
+    if by == tile_row_start || is_key_or_intra || tip_frame_mode == 2 {
         return;
     }
 
     let end_x4 = imin(bx + sbsz, rt.tile_col.end);
+    let ra_off = rt.ra_off;
+    let ra = &rt.ra;
+    let bank = &mut rt.bank;
+    let warp = &mut rt.warp;
+
     let mut x = bx;
     let mut hits = 0;
     while x < end_x4 {
-        let r = &ra[rt.ra_off + (x >> 1) as usize];
+        let r = &ra[ra_off + (x >> 1) as usize];
         let sz4 = crate::tables::BLOCK_DIMENSIONS[r.bs as usize][0] as i32;
         if r.mv[0].y() != INVALID_MV {
             if refmv_bank {
                 let rp = r.r#ref;
                 let mvs = if r.mf & 2 != 0 { &r.lmv } else { &r.mv };
-                mv_bank_add_inner(&mut rt.bank, rp, mvs, r.mf >> 2);
+                mv_bank_add_inner(bank, rp, mvs, r.mf >> 2);
             }
             if r.mf & 2 != 0 {
                 let wmp = WarpedMotionParams {
@@ -3529,7 +3534,7 @@ pub(crate) fn reset_sb(
                     ..WarpedMotionParams::default()
                 };
                 if wmp.wm_type != WarpedMotionType::Invalid {
-                    warp_bank_add(&mut rt.warp, &wmp, r.r#ref.ref_at(0) as usize);
+                    warp_bank_add(warp, &wmp, r.r#ref.ref_at(0) as usize);
                 }
             }
             hits += 1;

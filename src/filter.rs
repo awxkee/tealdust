@@ -45,6 +45,11 @@ pub(crate) fn avg_row<BD: BitDepth>(
             crate::rowops_dispatch::avg_row_8bpc(d8, tmp1, tmp2, n, rnd, sh);
             return;
         }
+    } else if BD::BPC == 16 {
+        if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+            crate::rowops_dispatch::avg_row_hbd(d16, tmp1, tmp2, n, rnd, sh, bd.bitdepth_max());
+            return;
+        }
     }
     let (dc, dr) = dst[..n].as_chunks_mut::<8>();
     let (t1c, t1r) = tmp1[..n].as_chunks::<8>();
@@ -75,6 +80,20 @@ pub(crate) fn w_avg_row<BD: BitDepth>(
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
             crate::rowops_dispatch::w_avg_row_8bpc(d8, tmp1, tmp2, n, weight, rnd, sh);
+            return;
+        }
+    } else if BD::BPC == 16 {
+        if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+            crate::rowops_dispatch::w_avg_row_hbd(
+                d16,
+                tmp1,
+                tmp2,
+                n,
+                weight,
+                rnd,
+                sh,
+                bd.bitdepth_max(),
+            );
             return;
         }
     }
@@ -109,6 +128,20 @@ pub(crate) fn mask_row<BD: BitDepth>(
             crate::rowops_dispatch::mask_row_8bpc(d8, tmp1, tmp2, mask, n, rnd, sh);
             return;
         }
+    } else if BD::BPC == 16 {
+        if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+            crate::rowops_dispatch::mask_row_hbd(
+                d16,
+                tmp1,
+                tmp2,
+                mask,
+                n,
+                rnd,
+                sh,
+                bd.bitdepth_max(),
+            );
+            return;
+        }
     }
     let (dc, dr) = dst[..n].as_chunks_mut::<8>();
     let (t1c, t1r) = tmp1[..n].as_chunks::<8>();
@@ -131,6 +164,10 @@ pub(crate) fn mask_row<BD: BitDepth>(
 pub(crate) fn blend_row<P: Pixel>(dst: &mut [P], tmp: &[P], mask: &[u8], n: usize) {
     if let (Some(t8), Some(d8)) = (P::try_as_u8_slice(tmp), P::try_as_u8_slice_mut(dst)) {
         crate::rowops_dispatch::blend_row_8bpc(d8, t8, mask, n);
+        return;
+    }
+    if let (Some(t16), Some(d16)) = (P::try_as_u16_slice(tmp), P::try_as_u16_slice_mut(dst)) {
+        crate::rowops_dispatch::blend_row_hbd(d16, t16, mask, n);
         return;
     }
     let (dc, dr) = dst[..n].as_chunks_mut::<8>();
@@ -166,6 +203,11 @@ pub(crate) fn morph_row<BD: BitDepth>(
             crate::rowops_dispatch::morph_row_8bpc(d8, alpha, beta, n);
             return;
         }
+    } else if BD::BPC == 16 {
+        if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+            crate::rowops_dispatch::morph_row_hbd(d16, alpha, beta, n, bd.bitdepth_max());
+            return;
+        }
     }
     let (dc, dr) = dst[..n].as_chunks_mut::<8>();
     for d in dc.iter_mut() {
@@ -186,6 +228,11 @@ pub(crate) fn dc_add_row<BD: BitDepth>(bd: BD, dst: &mut [BD::Pixel], dc: i32, n
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst) {
             crate::rowops_dispatch::dc_add_row_8bpc(d8, dc, n);
+            return;
+        }
+    } else if BD::BPC == 16 {
+        if let Some(d16) = <BD::Pixel as crate::pixel::Pixel>::try_as_u16_slice_mut(dst) {
+            crate::rowops_dispatch::dc_add_row_hbd(d16, dc, n, bd.bitdepth_max());
             return;
         }
     }
@@ -224,6 +271,11 @@ pub(crate) fn residual_add_row<BD: BitDepth>(
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst) {
             crate::rowops_dispatch::residual_add_row_8bpc(d8, c, n, rnd, shift);
+            return;
+        }
+    } else if BD::BPC == 16 {
+        if let Some(d16) = <BD::Pixel as crate::pixel::Pixel>::try_as_u16_slice_mut(dst) {
+            crate::rowops_dispatch::residual_add_row_hbd(d16, c, n, rnd, shift, bd.bitdepth_max());
             return;
         }
     }
@@ -290,6 +342,13 @@ pub(crate) fn ns_wiener_fir_run() -> NsWienerFirFn {
                 f = crate::sse::ns_wiener_fir_run_sse41 as NsWienerFirFn;
             }
         }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ns_wiener_fir_run_avx2 as NsWienerFirFn;
+            }
+        }
         f
     })
 }
@@ -308,6 +367,13 @@ pub(crate) fn pc_wiener_fir_run() -> PcWienerFirFn {
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 f = crate::sse::pc_wiener_fir_run_sse41 as PcWienerFirFn;
+            }
+        }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::pc_wiener_fir_run_avx2 as PcWienerFirFn;
             }
         }
         f
@@ -361,6 +427,13 @@ pub(crate) fn ns_wiener_uv_fir_run() -> NsWienerUvFirFn {
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 f = crate::sse::ns_wiener_uv_fir_run_sse41 as NsWienerUvFirFn;
+            }
+        }
+
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ns_wiener_uv_fir_run_avx2 as NsWienerUvFirFn;
             }
         }
         f
@@ -420,6 +493,196 @@ pub(crate) fn pc_wiener_fir_run_scalar(
             s += (a + b) * t.coef;
         }
         dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
+    }
+}
+
+/// High-bit-depth symmetric Wiener FIR tap. Layout mirrors [`WienerTap`], but
+/// samples are native `u16` pixels and the output clamp is supplied by the
+/// caller (`1023` for 10bpc, `4095` for 12bpc).
+pub(crate) struct WienerTapHbd<'a> {
+    pub row_p: &'a [u16],
+    pub row_m: &'a [u16],
+    pub dx: i32,
+    pub coef: i32,
+}
+
+type NsWienerFirHbdFn = fn(&mut [u16], &[u16], usize, &[WienerTapHbd<'_>], usize, i32);
+type PcWienerFirHbdFn = fn(&mut [u16], &[u16], i32, usize, &[WienerTapHbd<'_>], usize, i32);
+
+static NS_WIENER_FIR_HBD: std::sync::OnceLock<NsWienerFirHbdFn> = std::sync::OnceLock::new();
+static PC_WIENER_FIR_HBD: std::sync::OnceLock<PcWienerFirHbdFn> = std::sync::OnceLock::new();
+
+#[inline]
+pub(crate) fn ns_wiener_fir_run_hbd() -> NsWienerFirHbdFn {
+    *NS_WIENER_FIR_HBD.get_or_init(|| {
+        let mut f = ns_wiener_fir_run_hbd_scalar as NsWienerFirHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ns_wiener_fir_run_hbd_neon as NsWienerFirHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ns_wiener_fir_run_hbd_sse41 as NsWienerFirHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ns_wiener_fir_run_hbd_avx2 as NsWienerFirHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn pc_wiener_fir_run_hbd() -> PcWienerFirHbdFn {
+    *PC_WIENER_FIR_HBD.get_or_init(|| {
+        let mut f = pc_wiener_fir_run_hbd_scalar as PcWienerFirHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::pc_wiener_fir_run_hbd_neon as PcWienerFirHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::pc_wiener_fir_run_hbd_sse41 as PcWienerFirHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::pc_wiener_fir_run_hbd_avx2 as PcWienerFirHbdFn;
+            }
+        }
+        f
+    })
+}
+
+pub(crate) fn ns_wiener_fir_run_hbd_scalar(
+    dst: &mut [u16],
+    center: &[u16],
+    col0: usize,
+    taps: &[WienerTapHbd],
+    n: usize,
+    bitdepth_max: i32,
+) {
+    for x in 0..n {
+        let c = col0 + x;
+        let m = center[c] as i32;
+        let mut s = m << 7;
+        for t in taps {
+            let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
+            s += (a + b - 2 * m) * t.coef;
+        }
+        dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
+    }
+}
+
+pub(crate) fn pc_wiener_fir_run_hbd_scalar(
+    dst: &mut [u16],
+    center: &[u16],
+    center_coef: i32,
+    col0: usize,
+    taps: &[WienerTapHbd],
+    n: usize,
+    bitdepth_max: i32,
+) {
+    for x in 0..n {
+        let c = col0 + x;
+        let m = center[c] as i32;
+        let mut s = m * center_coef;
+        for t in taps {
+            let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
+            s += (a + b) * t.coef;
+        }
+        dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
+    }
+}
+
+pub(crate) struct UvLumaTapHbd<'a> {
+    pub(crate) row: &'a [u16],
+    pub(crate) ldx: i32,
+    pub(crate) coef: i32,
+}
+
+type NsWienerUvFirHbdFn = fn(
+    &mut [u16],
+    &[u16],
+    usize,
+    &[WienerTapHbd<'_>],
+    &[u16],
+    usize,
+    &[UvLumaTapHbd<'_>],
+    usize,
+    usize,
+    i32,
+);
+
+static NS_WIENER_UV_FIR_HBD: std::sync::OnceLock<NsWienerUvFirHbdFn> = std::sync::OnceLock::new();
+
+#[inline]
+pub(crate) fn ns_wiener_uv_fir_run_hbd() -> NsWienerUvFirHbdFn {
+    *NS_WIENER_UV_FIR_HBD.get_or_init(|| {
+        let mut f = ns_wiener_uv_fir_run_hbd_scalar as NsWienerUvFirHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ns_wiener_uv_fir_run_hbd_neon as NsWienerUvFirHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ns_wiener_uv_fir_run_hbd_sse41 as NsWienerUvFirHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ns_wiener_uv_fir_run_hbd_avx2 as NsWienerUvFirHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ns_wiener_uv_fir_run_hbd_scalar(
+    dst: &mut [u16],
+    c_center: &[u16],
+    co: usize,
+    ctaps: &[WienerTapHbd],
+    l_center: &[u16],
+    lo: usize,
+    ltaps: &[UvLumaTapHbd],
+    lstep: usize,
+    n: usize,
+    bitdepth_max: i32,
+) {
+    for x in 0..n {
+        let cc = co + x;
+        let m = c_center[cc] as i32;
+        let mut s = m << 7;
+        for t in ctaps {
+            let a = t.row_p[(cc as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(cc as i32 - t.dx) as usize] as i32;
+            s += (a + b - 2 * m) * t.coef;
+        }
+        let lcx = lo + x * lstep;
+        let lc = l_center[lcx] as i32;
+        for t in ltaps {
+            let lv = t.row[(lcx as i32 + t.ldx) as usize] as i32;
+            s += (lv - lc) * t.coef;
+        }
+        dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
     }
 }
 

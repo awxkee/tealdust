@@ -111,7 +111,7 @@ pub(crate) struct TileBounds {
 pub(crate) struct LoopFilterState {
     pub(crate) mask: Vec<Av2Filter>,
     pub(crate) lr_mask: Vec<Av2Restoration>,
-    pub(crate) segmap_uv: std::sync::Arc<Vec<u8>>,
+    pub(crate) segmap_uv: Arc<Vec<u8>>,
     pub(crate) uv_segmap_stride: isize,
     pub(crate) re_sz: i32,
     pub(crate) base_q: i32,
@@ -121,6 +121,24 @@ pub(crate) struct LoopFilterState {
     pub(crate) wiener_idx: usize,
     pub(crate) ns_subclass_class_idx: Option<usize>,
     pub(crate) lr_cdef_line: [Vec<u8>; 3],
+    pub(crate) lr_cdef_line_hbd: [Vec<u16>; 3],
+
+    /// Reusable in-loop filter seam buffers.  These used to be rebuilt with
+    /// hundreds/thousands of small heap allocations every frame in the MT path;
+    /// keeping them on the frame context lets steady-state decode resize only
+    /// when the geometry or chroma layout grows/changes.
+    pub(crate) cdef_line_store: Vec<[Vec<u8>; 3]>,
+    pub(crate) cdef_top_store: Vec<[Vec<u8>; 3]>,
+    pub(crate) lr_db_store: Vec<[Vec<u8>; 3]>,
+    pub(crate) cdef_line_store_hbd: Vec<[Vec<u16>; 3]>,
+    pub(crate) cdef_top_store_hbd: Vec<[Vec<u16>; 3]>,
+    pub(crate) lr_db_store_hbd: Vec<[Vec<u16>; 3]>,
+
+    /// Reusable CCSO luma-padding scratch. `ccso_prep()` grows this only when a
+    /// larger CDEF/CCSO band requires it, avoiding a heap allocation per CCSO
+    /// block in the serial filter path.
+    pub(crate) ccso_tmp_buf: Vec<u8>,
+    pub(crate) ccso_tmp_buf_hbd: Vec<u16>,
 }
 
 #[derive(Default)]

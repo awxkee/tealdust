@@ -28,10 +28,11 @@
  */
 
 use crate::intops::{apply_sign, iclip};
+use crate::pixel::Coeff;
 
-pub(crate) fn stxfm(
+pub(crate) fn stxfm<C: Coeff>(
     cf_out: &mut [i32],
-    cf: &[i32],
+    cf: &[C],
     kernel: &[i8],
     sz: usize,
     eob: usize,
@@ -42,12 +43,12 @@ pub(crate) fn stxfm(
     let min = -128 * (1 + bitdepth_max);
     let max = 128 * (1 + bitdepth_max) - 1;
     let h = eob + 1;
-    for x in 0..sz {
+    for (x, cf_out) in cf_out[..sz].iter_mut().enumerate() {
         let mut sum = 0i32;
-        for y in 0..h {
-            sum += cf[y] * kernel[y * sz + x] as i32;
+        for (y, &cf) in cf[..h].iter().enumerate() {
+            sum += cf.to_i32() * kernel[y * sz + x] as i32;
         }
         sum = apply_sign((sum.abs() + 64) >> 7, sum);
-        cf_out[x] = iclip(sum, min, max);
+        *cf_out = iclip(sum, min, max);
     }
 }

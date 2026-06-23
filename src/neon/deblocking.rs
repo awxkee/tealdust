@@ -83,7 +83,6 @@ pub(crate) fn deblock_apply_8bpc_neon(
     let v255 = vdupq_n_s32(255);
     let three = vdupq_n_s32(3);
     let four = vdupq_n_s32(4);
-    let nsh = vdupq_n_s32(-11);
 
     let d0 = load4_u8_i32(dst, off, stride_line);
     let dm1 = load4_u8_i32(dst, off - stride_tap, stride_line);
@@ -99,10 +98,7 @@ pub(crate) fn deblock_apply_8bpc_neon(
             vdupq_n_s32(crate::deblock::W_MULT[(width_neg - 1) as usize] as i32),
         );
         for j in 0..width_neg {
-            let diff = vshlq_s32(
-                vaddq_s32(vmulq_s32(dn, vdupq_n_s32(width_neg - j)), rnd),
-                nsh,
-            );
+            let diff = vshrq_n_s32::<11>(vaddq_s32(vmulq_s32(dn, vdupq_n_s32(width_neg - j)), rnd));
             let base = off + (-(j as isize) - 1) * stride_tap;
             let cur = load4_u8_i32(dst, base, stride_line);
             let res = vminq_s32(vmaxq_s32(vaddq_s32(cur, diff), zero), v255);
@@ -116,14 +112,103 @@ pub(crate) fn deblock_apply_8bpc_neon(
             vdupq_n_s32(crate::deblock::W_MULT[(width_pos - 1) as usize] as i32),
         );
         for j in 0..width_pos {
-            let diff = vshlq_s32(
-                vaddq_s32(vmulq_s32(dpv, vdupq_n_s32(width_pos - j)), rnd),
-                nsh,
-            );
+            let diff =
+                vshrq_n_s32::<11>(vaddq_s32(vmulq_s32(dpv, vdupq_n_s32(width_pos - j)), rnd));
             let base = off + (j as isize) * stride_tap;
             let cur = load4_u8_i32(dst, base, stride_line);
             let res = vminq_s32(vmaxq_s32(vsubq_s32(cur, diff), zero), v255);
             store4_clip_u8(dst, base, stride_line, res);
+        }
+    }
+}
+
+#[inline(always)]
+fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> int32x4_t {
+    let v = if stride_line == 1 {
+        unsafe { vld1_u16(dst.as_ptr().add(base as usize)) }
+    } else {
+        let arr = [
+            dst[base as usize],
+            dst[(base + stride_line) as usize],
+            dst[(base + 2 * stride_line) as usize],
+            dst[(base + 3 * stride_line) as usize],
+        ];
+        unsafe { vld1_u16(arr.as_ptr()) }
+    };
+    unsafe { vreinterpretq_s32_u32(vmovl_u16(v)) }
+}
+
+#[inline(always)]
+fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: int32x4_t) {
+    let u16x4 = unsafe { vqmovun_s32(v) };
+    if stride_line == 1 {
+        unsafe { vst1_u16(dst.as_mut_ptr().add(base as usize), u16x4) };
+    } else {
+        let mut arr = [0u16; 4];
+        unsafe { vst1_u16(arr.as_mut_ptr(), u16x4) };
+        dst[base as usize] = arr[0];
+        dst[(base + stride_line) as usize] = arr[1];
+        dst[(base + 2 * stride_line) as usize] = arr[2];
+        dst[(base + 3 * stride_line) as usize] = arr[3];
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "neon")]
+pub(crate) fn deblock_apply_hbd_neon(
+    dst: &mut [u16],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    width_neg: i32,
+    width_pos: i32,
+    q_thr_clamp: i32,
+    neg_lossless: bool,
+    pos_lossless: bool,
+    bitdepth_max: i32,
+) {
+    let qc = vdupq_n_s32(q_thr_clamp);
+    let nqc = vdupq_n_s32(-q_thr_clamp);
+    let rnd = vdupq_n_s32(1 << 10);
+    let zero = vdupq_n_s32(0);
+    let vmax = vdupq_n_s32(bitdepth_max);
+    let three = vdupq_n_s32(3);
+    let four = vdupq_n_s32(4);
+
+    let d0 = load4_u16_i32(dst, off, stride_line);
+    let dm1 = load4_u16_i32(dst, off - stride_tap, stride_line);
+    let dp1 = load4_u16_i32(dst, off + stride_tap, stride_line);
+    let dm2 = load4_u16_i32(dst, off - 2 * stride_tap, stride_line);
+    let inner = vsubq_s32(vmulq_s32(three, vsubq_s32(d0, dm1)), vsubq_s32(dp1, dm2));
+    let delta = vminq_s32(vmaxq_s32(vmulq_s32(four, inner), nqc), qc);
+
+    if !neg_lossless {
+        let dn = vmulq_s32(
+            delta,
+            vdupq_n_s32(crate::deblock::W_MULT[(width_neg - 1) as usize] as i32),
+        );
+        for j in 0..width_neg {
+            let diff = vshrq_n_s32::<11>(vaddq_s32(vmulq_s32(dn, vdupq_n_s32(width_neg - j)), rnd));
+            let base = off + (-(j as isize) - 1) * stride_tap;
+            let cur = load4_u16_i32(dst, base, stride_line);
+            let res = vminq_s32(vmaxq_s32(vaddq_s32(cur, diff), zero), vmax);
+            store4_clip_u16(dst, base, stride_line, res);
+        }
+    }
+
+    if !pos_lossless {
+        let dpv = vmulq_s32(
+            delta,
+            vdupq_n_s32(crate::deblock::W_MULT[(width_pos - 1) as usize] as i32),
+        );
+        for j in 0..width_pos {
+            let diff =
+                vshrq_n_s32::<11>(vaddq_s32(vmulq_s32(dpv, vdupq_n_s32(width_pos - j)), rnd));
+            let base = off + (j as isize) * stride_tap;
+            let cur = load4_u16_i32(dst, base, stride_line);
+            let res = vminq_s32(vmaxq_s32(vsubq_s32(cur, diff), zero), vmax);
+            store4_clip_u16(dst, base, stride_line, res);
         }
     }
 }

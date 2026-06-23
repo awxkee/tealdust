@@ -30,6 +30,7 @@
 use crate::cdef::{CDEF_HAVE_BOTTOM, CDEF_HAVE_LEFT, CDEF_HAVE_RIGHT, CDEF_HAVE_TOP};
 use crate::intops::iclip;
 use crate::pixel::{BitDepth, Pixel};
+use std::sync::OnceLock;
 
 pub(crate) static CCSO_POS: [[i8; 2]; 7] = [
     [-1, 0],
@@ -52,6 +53,15 @@ pub(crate) fn ccso_score(diff: i32, quant_step: i32, edge_classifier: u32) -> u3
     1
 }
 
+#[inline(always)]
+pub(crate) fn ccso_offset(i: u8, offset_idxs: &[u8], offset_lut: &[i8]) -> i8 {
+    let byte_idx = (i >> 1) as usize;
+    let half_idx = (i & 1) as usize;
+    let offset_idx = (7 & (offset_idxs[byte_idx] >> (4 * half_idx))) as usize;
+    offset_lut[offset_idx]
+}
+
+#[allow(clippy::too_many_arguments)]
 fn ccso_padding<P: Pixel>(
     tmp: &mut [P],
     tmp_stride: usize,
@@ -92,40 +102,325 @@ fn ccso_padding<P: Pixel>(
     }
 }
 
+pub(crate) struct CcsoPrepSrc<'a, P: Pixel> {
+    pub(crate) src: &'a [P],
+    pub(crate) stride: usize,
+    pub(crate) off: usize,
+    pub(crate) left: &'a [[P; 2]],
+    pub(crate) top: &'a [P],
+    pub(crate) top_off: usize,
+    pub(crate) bottom: &'a [P],
+    pub(crate) bottom_off: usize,
+}
+
+pub(crate) struct CcsoPrepCfg {
+    pub(crate) max_band_log2: u32,
+    pub(crate) ext_filter: usize,
+    pub(crate) quant_step: i32,
+    pub(crate) edge_clf: u32,
+    pub(crate) bo_only: bool,
+}
+
+pub(crate) struct CcsoPrepArea {
+    pub(crate) edges: u8,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) ss_hor: usize,
+    pub(crate) ss_ver: usize,
+}
+
+pub(crate) struct CcsoPrepCtx<'a, P: Pixel> {
+    pub(crate) dst: &'a mut [u8],
+    pub(crate) dst_stride: usize,
+    pub(crate) src: CcsoPrepSrc<'a, P>,
+    pub(crate) tmp_buf: &'a mut Vec<P>,
+    pub(crate) cfg: CcsoPrepCfg,
+    pub(crate) area: CcsoPrepArea,
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn ccso_prep<BD: BitDepth>(
-    bd: BD,
+pub(crate) type CcsoPrep8bpcFn = unsafe fn(
+    &mut [u8],
+    usize,
+    &[u8],
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    u32,
+    isize,
+    i32,
+    u32,
+    bool,
+);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) type CcsoPrepHbdFn = unsafe fn(
+    &mut [u8],
+    usize,
+    &[u16],
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    usize,
+    u32,
+    isize,
+    i32,
+    u32,
+    bool,
+);
+
+pub(crate) type CcsoAdd8bpcFn =
+    unsafe fn(&mut [u8], usize, &[u8], usize, &[u8], &[i8], usize, usize, &[[u16; 4]]);
+
+pub(crate) type CcsoAddHbdFn =
+    unsafe fn(&mut [u16], usize, &[u8], usize, &[u8], &[i8], usize, usize, &[[u16; 4]], i32);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ccso_prep_lut_8bpc_scalar(
     dst: &mut [u8],
     dst_stride: usize,
-    src: &[BD::Pixel],
-    src_stride: usize,
-    src_off: usize,
-    left: &[[BD::Pixel; 2]],
-    top: &[BD::Pixel],
-    top_off: usize,
-    bottom: &[BD::Pixel],
-    bottom_off: usize,
-    max_band_log2: u32,
-    ext_filter: usize,
-    quant_step: i32,
-    edge_clf: u32,
-    bo_only: bool,
-    edges: u8,
+    tmp: &[u8],
+    tmp_stride: usize,
+    o: usize,
     w: usize,
     h: usize,
     ss_hor: usize,
     ss_ver: usize,
+    shift: u32,
+    luma_offset: isize,
+    quant_step: i32,
+    edge_clf: u32,
+    bo_only: bool,
 ) {
+    for (y, dst) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+        let row = o + (y << ss_ver) * tmp_stride;
+        for (x, out) in dst[..w].iter_mut().enumerate() {
+            let ti = row + (x << ss_hor);
+            let c = tmp[ti] as i32;
+            let band = (c as u32 >> shift) as u8;
+            if bo_only {
+                *out = band;
+            } else {
+                let cls0 = ccso_score(
+                    tmp[(ti as isize + luma_offset) as usize] as i32 - c,
+                    quant_step,
+                    edge_clf,
+                );
+                let cls1 = ccso_score(
+                    tmp[(ti as isize - luma_offset) as usize] as i32 - c,
+                    quant_step,
+                    edge_clf,
+                );
+                *out = ((cls0 << 5) | (cls1 << 3)) as u8 | band;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ccso_prep_lut_hbd_scalar(
+    dst: &mut [u8],
+    dst_stride: usize,
+    tmp: &[u16],
+    tmp_stride: usize,
+    o: usize,
+    w: usize,
+    h: usize,
+    ss_hor: usize,
+    ss_ver: usize,
+    shift: u32,
+    luma_offset: isize,
+    quant_step: i32,
+    edge_clf: u32,
+    bo_only: bool,
+) {
+    for (y, dst) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+        let row = o + (y << ss_ver) * tmp_stride;
+        for (x, out) in dst[..w].iter_mut().enumerate() {
+            let ti = row + (x << ss_hor);
+            let c = tmp[ti] as i32;
+            let band = (c as u32 >> shift) as u8;
+            if bo_only {
+                *out = band;
+            } else {
+                let cls0 = ccso_score(
+                    tmp[(ti as isize + luma_offset) as usize] as i32 - c,
+                    quant_step,
+                    edge_clf,
+                );
+                let cls1 = ccso_score(
+                    tmp[(ti as isize - luma_offset) as usize] as i32 - c,
+                    quant_step,
+                    edge_clf,
+                );
+                *out = ((cls0 << 5) | (cls1 << 3)) as u8 | band;
+            }
+        }
+    }
+}
+
+static CCSO_PREP_8BPC: OnceLock<CcsoPrep8bpcFn> = OnceLock::new();
+static CCSO_PREP_HBD: OnceLock<CcsoPrepHbdFn> = OnceLock::new();
+static CCSO_ADD_8BPC: OnceLock<CcsoAdd8bpcFn> = OnceLock::new();
+static CCSO_ADD_HBD: OnceLock<CcsoAddHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_ccso_prep_8bpc() -> CcsoPrep8bpcFn {
+    *CCSO_PREP_8BPC.get_or_init(|| {
+        let mut f = ccso_prep_lut_8bpc_scalar as CcsoPrep8bpcFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ccso_prep_lut_8bpc_neon as CcsoPrep8bpcFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ccso_prep_lut_8bpc_sse41 as CcsoPrep8bpcFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ccso_prep_lut_8bpc_avx2 as CcsoPrep8bpcFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_ccso_prep_hbd() -> CcsoPrepHbdFn {
+    *CCSO_PREP_HBD.get_or_init(|| {
+        let mut f = ccso_prep_lut_hbd_scalar as CcsoPrepHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ccso_prep_lut_hbd_neon as CcsoPrepHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ccso_prep_lut_hbd_sse41 as CcsoPrepHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ccso_prep_lut_hbd_avx2 as CcsoPrepHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_ccso_add_8bpc() -> CcsoAdd8bpcFn {
+    *CCSO_ADD_8BPC.get_or_init(|| {
+        let mut f = ccso_add_8bpc_scalar as CcsoAdd8bpcFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ccso_add_8bpc_neon as CcsoAdd8bpcFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ccso_add_8bpc_sse41 as CcsoAdd8bpcFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ccso_add_8bpc_avx2 as CcsoAdd8bpcFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_ccso_add_hbd() -> CcsoAddHbdFn {
+    *CCSO_ADD_HBD.get_or_init(|| {
+        let mut f = ccso_add_hbd_scalar as CcsoAddHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ccso_add_hbd_neon as CcsoAddHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::ccso_add_hbd_sse41 as CcsoAddHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ccso_add_hbd_avx2 as CcsoAddHbdFn;
+            }
+        }
+        f
+    })
+}
+
+pub(crate) fn ccso_prep<BD: BitDepth>(bd: BD, ctx: CcsoPrepCtx<'_, BD::Pixel>) {
+    let CcsoPrepCtx {
+        dst,
+        dst_stride,
+        src,
+        tmp_buf,
+        cfg,
+        area,
+    } = ctx;
+    let CcsoPrepSrc {
+        src,
+        stride: src_stride,
+        off: src_off,
+        left,
+        top,
+        top_off,
+        bottom,
+        bottom_off,
+    } = src;
+    let CcsoPrepCfg {
+        max_band_log2,
+        ext_filter,
+        quant_step,
+        edge_clf,
+        bo_only,
+    } = cfg;
+    let CcsoPrepArea {
+        edges,
+        w,
+        h,
+        ss_hor,
+        ss_ver,
+    } = area;
+
     let shift = bd.bitdepth() as u32 - max_band_log2;
     let dy = CCSO_POS[ext_filter][0] as isize;
     let dx = CCSO_POS[ext_filter][1] as isize;
     let tmp_stride: usize = 68;
     let luma_offset = dx + dy * tmp_stride as isize;
-    let mut tmp_buf = vec![BD::Pixel::default(); tmp_stride * (h.max(8) * (1 << ss_ver) + 4 + 4)];
+    let tmp_need = tmp_stride * (h.max(8) * (1 << ss_ver) + 4 + 4);
+    if tmp_buf.len() < tmp_need {
+        tmp_buf.resize(tmp_need, BD::Pixel::default());
+    }
+    let tmp_buf = &mut tmp_buf[..tmp_need];
     let o = 2 * tmp_stride + 2;
 
     ccso_padding(
-        &mut tmp_buf,
+        tmp_buf,
         tmp_stride,
         o,
         src,
@@ -141,35 +436,58 @@ pub(crate) fn ccso_prep<BD: BitDepth>(
         edges,
     );
 
-    for y in 0..h {
-        for x in 0..w {
-            let x_luma = x << ss_hor;
-            let ti = o + (y << ss_ver) * tmp_stride + x_luma;
-            let c: i32 = tmp_buf[ti].into();
-            let band = (c as u32 >> shift) as u8;
-            if bo_only {
-                dst[y * dst_stride + x] = band;
-            } else {
-                let cls0 = ccso_score(
-                    Into::<i32>::into(tmp_buf[(ti as isize + luma_offset) as usize]) - c,
-                    quant_step,
-                    edge_clf,
-                );
-                let cls1 = ccso_score(
-                    Into::<i32>::into(tmp_buf[(ti as isize - luma_offset) as usize]) - c,
-                    quant_step,
-                    edge_clf,
-                );
-                dst[y * dst_stride + x] = ((cls0 << 5) | (cls1 << 3)) as u8 | band;
-            }
-        }
+    if let Some(tmp8) = <BD::Pixel as Pixel>::try_as_u8_slice(tmp_buf) {
+        // SAFETY: resolver returns an 8-bit kernel only after feature detection;
+        // the scalar default is always sound and has the same argument layout.
+        unsafe {
+            resolve_ccso_prep_8bpc()(
+                dst,
+                dst_stride,
+                tmp8,
+                tmp_stride,
+                o,
+                w,
+                h,
+                ss_hor,
+                ss_ver,
+                shift,
+                luma_offset,
+                quant_step,
+                edge_clf,
+                bo_only,
+            )
+        };
+        return;
     }
+    if let Some(tmp16) = <BD::Pixel as Pixel>::try_as_u16_slice(tmp_buf) {
+        // SAFETY: same as the 8-bit dispatch, with native-endian u16 storage.
+        unsafe {
+            resolve_ccso_prep_hbd()(
+                dst,
+                dst_stride,
+                tmp16,
+                tmp_stride,
+                o,
+                w,
+                h,
+                ss_hor,
+                ss_ver,
+                shift,
+                luma_offset,
+                quant_step,
+                edge_clf,
+                bo_only,
+            )
+        };
+        return;
+    }
+
+    unreachable!("unsupported CCSO pixel storage");
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn ccso_add<BD: BitDepth>(
-    bd: BD,
-    dst: &mut [BD::Pixel],
+pub(crate) fn ccso_add_8bpc_scalar(
+    dst: &mut [u8],
     dst_stride: usize,
     idx_buf: &[u8],
     idx_stride: usize,
@@ -187,13 +505,9 @@ pub(crate) fn ccso_add<BD: BitDepth>(
             if ll_mask[mi][0] & (1 << bx) == 0 {
                 for y in yy..yy + 4 {
                     for x in xx..xx + 4 {
-                        let i = idx_buf[y * idx_stride + x];
-                        let byte_idx = (i >> 1) as usize;
-                        let half_idx = (i & 1) as usize;
-                        let offset_idx = (7 & (offset_idxs[byte_idx] >> (4 * half_idx))) as usize;
-                        let cur: i32 = dst[y * dst_stride + x].into();
-                        dst[y * dst_stride + x] =
-                            bd.pixel_clip(cur + offset_lut[offset_idx] as i32);
+                        let off = ccso_offset(idx_buf[y * idx_stride + x], offset_idxs, offset_lut);
+                        let cur = dst[y * dst_stride + x] as i32;
+                        dst[y * dst_stride + x] = (cur + off as i32).clamp(0, 255) as u8;
                     }
                 }
             }
@@ -201,4 +515,89 @@ pub(crate) fn ccso_add<BD: BitDepth>(
             bx += 1;
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ccso_add_hbd_scalar(
+    dst: &mut [u16],
+    dst_stride: usize,
+    idx_buf: &[u8],
+    idx_stride: usize,
+    offset_idxs: &[u8],
+    offset_lut: &[i8],
+    w: usize,
+    h: usize,
+    ll_mask: &[[u16; 4]],
+    bitdepth_max: i32,
+) {
+    for yy in (0..h).step_by(4) {
+        let mi = yy >> 2;
+        let mut bx = 0usize;
+        let mut xx = 0usize;
+        while xx < w {
+            if ll_mask[mi][0] & (1 << bx) == 0 {
+                for y in yy..yy + 4 {
+                    for x in xx..xx + 4 {
+                        let off = ccso_offset(idx_buf[y * idx_stride + x], offset_idxs, offset_lut);
+                        let cur = dst[y * dst_stride + x] as i32;
+                        dst[y * dst_stride + x] = (cur + off as i32).clamp(0, bitdepth_max) as u16;
+                    }
+                }
+            }
+            xx += 4;
+            bx += 1;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn ccso_add<BD: BitDepth>(
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    dst_stride: usize,
+    idx_buf: &[u8],
+    idx_stride: usize,
+    offset_idxs: &[u8],
+    offset_lut: &[i8],
+    w: usize,
+    h: usize,
+    ll_mask: &[[u16; 4]],
+) {
+    if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+        // SAFETY: dispatch is guarded by runtime feature detection; scalar default is sound.
+        unsafe {
+            resolve_ccso_add_8bpc()(
+                d8,
+                dst_stride,
+                idx_buf,
+                idx_stride,
+                offset_idxs,
+                offset_lut,
+                w,
+                h,
+                ll_mask,
+            )
+        };
+        return;
+    }
+    if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+        // SAFETY: dispatch is guarded by runtime feature detection; scalar default is sound.
+        unsafe {
+            resolve_ccso_add_hbd()(
+                d16,
+                dst_stride,
+                idx_buf,
+                idx_stride,
+                offset_idxs,
+                offset_lut,
+                w,
+                h,
+                ll_mask,
+                bd.bitdepth_max(),
+            )
+        };
+        return;
+    }
+
+    unreachable!("unsupported CCSO pixel storage");
 }

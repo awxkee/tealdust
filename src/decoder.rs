@@ -276,7 +276,10 @@ impl Decoder {
             };
             match obu::parse_obus(&mut self.ctx, data) {
                 Ok(consumed) => {
-                    assert!(consumed <= self.input.len());
+                    if consumed > self.input.len() {
+                        self.input.unref();
+                        return Err(TealdustError::InvalidData);
+                    }
                     self.input.consume(consumed);
                     if self.input.is_empty() {
                         self.input.unref();

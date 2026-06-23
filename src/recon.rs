@@ -32,6 +32,7 @@ use crate::intops::{apply_sign, iclip, imax, imin, ulog2, umin};
 use crate::levels::{IntraPredMode, Mv, N_BS_SIZES, RefPair, txtp};
 use crate::mc::OpflRegressionData;
 use crate::msac::MsacContext;
+use crate::pixel::Coeff;
 use crate::refmvs::{self, INVALID_TRAJ, TemporalBlock};
 use crate::scan::SCANS;
 use crate::tables::{
@@ -40,14 +41,20 @@ use crate::tables::{
 use crate::warpmv::resolve_divisor_32;
 
 #[inline]
-pub(crate) fn decode_exp_golomb(msac: &mut MsacContext, k: u32) -> u32 {
+pub(crate) fn decode_exp_golomb<const UPDATE_CDF: bool>(
+    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    k: u32,
+) -> u32 {
     let length = msac.decode_unary_bypass(21) + k;
     let x = (1u32 << length) + msac.decode_bools_bypass(length);
     x - (1 << k)
 }
 
 #[inline]
-pub(crate) fn decode_hr(msac: &mut MsacContext, hr_avg: i32) -> i32 {
+pub(crate) fn decode_hr<const UPDATE_CDF: bool>(
+    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    hr_avg: i32,
+) -> i32 {
     let m = ulog2(iclip(hr_avg, 2, 64) as u32) as u32;
     let cmax = imin(m as i32 + 4, 6) as u32;
     let q = msac.decode_unary_bypass(cmax);
@@ -664,14 +671,14 @@ pub(crate) struct DecodeCoefParams<'a> {
 
 use crate::cdf::{CdfCoefContext, CdfModeContext};
 
-pub(crate) fn decode_coefs(
-    msac: &mut MsacContext,
+pub(crate) fn decode_coefs<C: Coeff, const UPDATE_CDF: bool>(
+    msac: &mut MsacContext<'_, UPDATE_CDF>,
     coef: &mut CdfCoefContext,
     mode: &mut CdfModeContext,
     a: &[u8],
     l: &[u8],
     p: &DecodeCoefParams,
-    cf: &mut [i32],
+    cf: &mut [C],
     txtp: &mut u16,
     res_ctx: &mut u8,
     levels_scratch: &mut [i8; 1089],
@@ -1419,7 +1426,7 @@ pub(crate) fn decode_coefs(
         let rc = scan[bob as usize] as usize;
         let x = rc >> shift;
         let y = rc & mask;
-        cf[rc] = tok;
+        cf[rc] = C::from_i32(tok);
         levels[(1 + x) * stride + (y + 1)] = tok as i8;
 
         for i in (bob + 1)..(sz + 1) {
@@ -1435,7 +1442,7 @@ pub(crate) fn decode_coefs(
                 tok += msac.decode_symbol_adapt_n::<3>(coef.br_y_tok_idtx(sz_ctx, hr_ctx as usize))
                     as i32;
             }
-            cf[rc] = tok;
+            cf[rc] = C::from_i32(tok);
             levels[off] = tok as i8;
         }
 
@@ -1443,7 +1450,7 @@ pub(crate) fn decode_coefs(
         dq_shift -= tcq_en as i32;
         for i in bob..(sz + 1) {
             let rc = scan[i as usize] as usize;
-            let tok_val = cf[rc];
+            let tok_val = cf[rc].to_i32();
             if tok_val == 0 {
                 continue;
             }
@@ -1473,7 +1480,7 @@ pub(crate) fn decode_coefs(
                 val = ((tok as u32).wrapping_mul(dq).wrapping_add(4) >> dq_shift) as i32;
             }
             cul_level += tok as u32;
-            cf[rc] = if sign != 0 { -val } else { val };
+            cf[rc] = C::from_i32(if sign != 0 { -val } else { val });
         }
 
         *res_ctx = (cul_level.min(63) | dc_sign_level) as u8;
@@ -1588,7 +1595,7 @@ pub(crate) fn decode_coefs(
                     tok += msac.decode_symbol_adapt_n::<3>(&mut coef.data[o..o + 4]) as i32;
                 }
                 tcq_state = tcq_next_state(tcq_state, tok);
-                cf[if is_stx { eob as usize } else { rc }] = tok;
+                cf[if is_stx { eob as usize } else { rc }] = C::from_i32(tok);
                 let level_tok = tok.min(5) as i8;
                 if $tx_cl == 0 {
                     levels[rc] = level_tok;
@@ -1667,7 +1674,7 @@ pub(crate) fn decode_coefs(
                     }
                     tcq_state = tcq_next_state(tcq_state, tok);
                     levels[off] = tok.min(5) as i8;
-                    cf[if is_stx { i as usize } else { rc }] = tok;
+                    cf[if is_stx { i as usize } else { rc }] = C::from_i32(tok);
                     i -= 1;
                 }
 
@@ -1720,7 +1727,7 @@ pub(crate) fn decode_coefs(
                         y = i as usize >> shift;
                         rc = (x << shift2) | y;
                     }
-                    let tok_val = cf[rc];
+                    let tok_val = cf[rc].to_i32();
                     if tok_val == 0 {
                         tcq_state = tcq_next_state(tcq_state, 0);
                         continue;
@@ -1757,7 +1764,7 @@ pub(crate) fn decode_coefs(
                             (((v as u32).wrapping_mul(ac_dq)).wrapping_add(4) >> dq_shift) as i32;
                     }
                     cul_level += tok as u32;
-                    cf[rc] = if sign != 0 { -ac_val } else { ac_val };
+                    cf[rc] = C::from_i32(if sign != 0 { -ac_val } else { ac_val });
                 }
             }};
         }
@@ -1826,13 +1833,13 @@ pub(crate) fn decode_coefs(
             let dq_val = ((dc_dq * dc_tok) & 0xffffff) >> dq_shift;
             let dq_val = imin(dq_val, cf_max + dc_sign as i32);
             cul_level = dc_tok as u32;
-            cf[0] = if dc_sign != 0 { -dq_val } else { dq_val };
+            cf[0] = C::from_i32(if dc_sign != 0 { -dq_val } else { dq_val });
         } else {
             let dq_val = dc_dq * dc_tok;
             cul_level = dc_tok as u32;
             let dq_val = dq_val >> dq_shift;
             let dq_val = imin(dq_val, cf_max + dc_sign as i32);
-            cf[0] = if dc_sign != 0 { -dq_val } else { dq_val };
+            cf[0] = C::from_i32(if dc_sign != 0 { -dq_val } else { dq_val });
         }
     } else {
         let max_br = if chroma { 5 } else { 8 };
@@ -1853,7 +1860,7 @@ pub(crate) fn decode_coefs(
             dc_val = (((v as u32).wrapping_mul(dc_dq as u32)).wrapping_add(4) >> dq_shift) as i32;
         }
         cul_level += dc_tok as u32;
-        cf[0] = if dc_sign != 0 { -dc_val } else { dc_val };
+        cf[0] = C::from_i32(if dc_sign != 0 { -dc_val } else { dc_val });
     }
 
     *res_ctx = (cul_level.min(63) | dc_sign_level) as u8;

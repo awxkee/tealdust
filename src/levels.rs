@@ -58,6 +58,34 @@ pub(crate) enum TxfmSize {
 pub(crate) const N_TX_SIZES: usize = 5;
 pub(crate) const N_RECT_TX_SIZES: usize = 25;
 pub(crate) const N_TX_1D_TYPES: usize = 7;
+
+pub(crate) mod txsz {
+    pub(crate) const TX_4X4: usize = 0;
+    pub(crate) const TX_8X8: usize = 1;
+    pub(crate) const TX_16X16: usize = 2;
+    pub(crate) const TX_32X32: usize = 3;
+    pub(crate) const TX_64X64: usize = 4;
+    pub(crate) const RTX_4X8: usize = 5;
+    pub(crate) const RTX_8X4: usize = 6;
+    pub(crate) const RTX_8X16: usize = 7;
+    pub(crate) const RTX_16X8: usize = 8;
+    pub(crate) const RTX_16X32: usize = 9;
+    pub(crate) const RTX_32X16: usize = 10;
+    pub(crate) const RTX_32X64: usize = 11;
+    pub(crate) const RTX_64X32: usize = 12;
+    pub(crate) const RTX_4X16: usize = 13;
+    pub(crate) const RTX_16X4: usize = 14;
+    pub(crate) const RTX_8X32: usize = 15;
+    pub(crate) const RTX_32X8: usize = 16;
+    pub(crate) const RTX_16X64: usize = 17;
+    pub(crate) const RTX_64X16: usize = 18;
+    pub(crate) const RTX_4X32: usize = 19;
+    pub(crate) const RTX_32X4: usize = 20;
+    pub(crate) const RTX_8X64: usize = 21;
+    pub(crate) const RTX_64X8: usize = 22;
+    pub(crate) const RTX_4X64: usize = 23;
+    pub(crate) const RTX_64X4: usize = 24;
+}
 // TxfmType encoding: hor_1d[0:2] | tx_class[3:4] | ver_1d[5:7]
 macro_rules! txtp {
     ($hor:expr, $ver:expr, $class:expr) => {

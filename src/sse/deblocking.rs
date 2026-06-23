@@ -85,7 +85,6 @@ pub(crate) fn deblock_apply_8bpc_sse41(
     let v255 = _mm_set1_epi32(255);
     let three = _mm_set1_epi32(3);
     let four = _mm_set1_epi32(4);
-    let shc = _mm_cvtsi32_si128(11);
 
     let d0 = load4_u8_i32(dst, off, stride_line);
     let dm1 = load4_u8_i32(dst, off - stride_tap, stride_line);
@@ -104,10 +103,10 @@ pub(crate) fn deblock_apply_8bpc_sse41(
             _mm_set1_epi32(crate::deblock::W_MULT[(width_neg - 1) as usize] as i32),
         );
         for j in 0..width_neg {
-            let diff = _mm_sra_epi32(
-                _mm_add_epi32(_mm_mullo_epi32(dn, _mm_set1_epi32(width_neg - j)), rnd),
-                shc,
-            );
+            let diff = _mm_srai_epi32::<11>(_mm_add_epi32(
+                _mm_mullo_epi32(dn, _mm_set1_epi32(width_neg - j)),
+                rnd,
+            ));
             let base = off + (-(j as isize) - 1) * stride_tap;
             let cur = load4_u8_i32(dst, base, stride_line);
             let res = _mm_min_epi32(_mm_max_epi32(_mm_add_epi32(cur, diff), zero), v255);
@@ -121,10 +120,10 @@ pub(crate) fn deblock_apply_8bpc_sse41(
             _mm_set1_epi32(crate::deblock::W_MULT[(width_pos - 1) as usize] as i32),
         );
         for j in 0..width_pos {
-            let diff = _mm_sra_epi32(
-                _mm_add_epi32(_mm_mullo_epi32(dpv, _mm_set1_epi32(width_pos - j)), rnd),
-                shc,
-            );
+            let diff = _mm_srai_epi32::<11>(_mm_add_epi32(
+                _mm_mullo_epi32(dpv, _mm_set1_epi32(width_pos - j)),
+                rnd,
+            ));
             let base = off + (j as isize) * stride_tap;
             let cur = load4_u8_i32(dst, base, stride_line);
             let res = _mm_min_epi32(_mm_max_epi32(_mm_sub_epi32(cur, diff), zero), v255);
@@ -133,9 +132,115 @@ pub(crate) fn deblock_apply_8bpc_sse41(
     }
 }
 
+#[inline(always)]
+fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> __m128i {
+    if stride_line == 1 {
+        unsafe {
+            _mm_cvtepu16_epi32(_mm_loadl_epi64(
+                dst.as_ptr().add(base as usize) as *const __m128i
+            ))
+        }
+    } else {
+        unsafe {
+            _mm_setr_epi32(
+                dst[base as usize] as i32,
+                dst[(base + stride_line) as usize] as i32,
+                dst[(base + 2 * stride_line) as usize] as i32,
+                dst[(base + 3 * stride_line) as usize] as i32,
+            )
+        }
+    }
+}
+
+/// Scatter a pre-clipped (`0..=bitdepth_max`) i32x4 back to 4 HBD samples.
+#[inline(always)]
+fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: __m128i) {
+    if stride_line == 1 {
+        let p16 = unsafe { _mm_packus_epi32(v, v) };
+        unsafe {
+            _mm_storel_epi64(dst.as_mut_ptr().add(base as usize) as *mut __m128i, p16);
+        }
+    } else {
+        let mut arr = [0i32; 4];
+        unsafe { _mm_storeu_si128(arr.as_mut_ptr() as *mut __m128i, v) };
+        dst[base as usize] = arr[0] as u16;
+        dst[(base + stride_line) as usize] = arr[1] as u16;
+        dst[(base + 2 * stride_line) as usize] = arr[2] as u16;
+        dst[(base + 3 * stride_line) as usize] = arr[3] as u16;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn deblock_apply_hbd_sse41(
+    dst: &mut [u16],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    width_neg: i32,
+    width_pos: i32,
+    q_thr_clamp: i32,
+    neg_lossless: bool,
+    pos_lossless: bool,
+    bitdepth_max: i32,
+) {
+    let qc = _mm_set1_epi32(q_thr_clamp);
+    let nqc = _mm_set1_epi32(-q_thr_clamp);
+    let rnd = _mm_set1_epi32(1 << 10);
+    let zero = _mm_setzero_si128();
+    let vmax = _mm_set1_epi32(bitdepth_max);
+    let three = _mm_set1_epi32(3);
+    let four = _mm_set1_epi32(4);
+
+    let d0 = load4_u16_i32(dst, off, stride_line);
+    let dm1 = load4_u16_i32(dst, off - stride_tap, stride_line);
+    let dp1 = load4_u16_i32(dst, off + stride_tap, stride_line);
+    let dm2 = load4_u16_i32(dst, off - 2 * stride_tap, stride_line);
+    let inner = _mm_sub_epi32(
+        _mm_mullo_epi32(three, _mm_sub_epi32(d0, dm1)),
+        _mm_sub_epi32(dp1, dm2),
+    );
+    let delta = _mm_min_epi32(_mm_max_epi32(_mm_mullo_epi32(four, inner), nqc), qc);
+
+    if !neg_lossless {
+        let dn = _mm_mullo_epi32(
+            delta,
+            _mm_set1_epi32(crate::deblock::W_MULT[(width_neg - 1) as usize] as i32),
+        );
+        for j in 0..width_neg {
+            let diff = _mm_srai_epi32::<11>(_mm_add_epi32(
+                _mm_mullo_epi32(dn, _mm_set1_epi32(width_neg - j)),
+                rnd,
+            ));
+            let base = off + (-(j as isize) - 1) * stride_tap;
+            let cur = load4_u16_i32(dst, base, stride_line);
+            let res = _mm_min_epi32(_mm_max_epi32(_mm_add_epi32(cur, diff), zero), vmax);
+            store4_clip_u16(dst, base, stride_line, res);
+        }
+    }
+
+    if !pos_lossless {
+        let dpv = _mm_mullo_epi32(
+            delta,
+            _mm_set1_epi32(crate::deblock::W_MULT[(width_pos - 1) as usize] as i32),
+        );
+        for j in 0..width_pos {
+            let diff = _mm_srai_epi32::<11>(_mm_add_epi32(
+                _mm_mullo_epi32(dpv, _mm_set1_epi32(width_pos - j)),
+                rnd,
+            ));
+            let base = off + (j as isize) * stride_tap;
+            let cur = load4_u16_i32(dst, base, stride_line);
+            let res = _mm_min_epi32(_mm_max_epi32(_mm_sub_epi32(cur, diff), zero), vmax);
+            store4_clip_u16(dst, base, stride_line, res);
+        }
+    }
+}
+
 #[cfg(test)]
 mod deblock_sse_tests {
-    use crate::deblock_dispatch::deblock_apply_8bpc_scalar;
+    use crate::deblock_dispatch::{deblock_apply_8bpc_scalar, deblock_apply_hbd_scalar};
 
     // Tiny xorshift RNG for deterministic random configs.
     struct R(u64);
@@ -214,6 +319,71 @@ mod deblock_sse_tests {
                 a, b,
                 "mismatch vertical={vertical} wn={width_neg} wp={width_pos} qc={q_thr_clamp}"
             );
+        }
+    }
+
+    #[test]
+    fn deblock_apply_hbd_sse41_matches_scalar() {
+        if !std::is_x86_feature_detected!("sse4.1") {
+            return;
+        }
+        const W: usize = 64;
+        const H: usize = 64;
+        let mut rng = R(0x243f6a8885a308d3);
+        for &bitdepth_max in &[1023, 4095] {
+            for _ in 0..20_000 {
+                let mut base_buf = vec![0u16; W * H];
+                for b in base_buf.iter_mut() {
+                    *b = (rng.next() % (bitdepth_max as u64 + 1)) as u16;
+                }
+                let vertical = (rng.next() & 1) == 0;
+                let (stride_line, stride_tap): (isize, isize) = if vertical {
+                    (1, W as isize)
+                } else {
+                    (W as isize, 1)
+                };
+                let row = rng.range(16, 40) as isize;
+                let col = rng.range(16, 40) as isize;
+                let off = row * W as isize + col;
+                let width_neg = rng.range(1, 8);
+                let width_pos = rng.range(1, 8);
+                let q_thr_clamp = rng.range(0, 8000);
+                let neg_lossless = (rng.next() & 7) == 0;
+                let pos_lossless = (rng.next() & 7) == 0;
+
+                let mut a = base_buf.clone();
+                let mut b = base_buf.clone();
+                deblock_apply_hbd_scalar(
+                    &mut a,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    width_neg,
+                    width_pos,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                    bitdepth_max,
+                );
+                unsafe {
+                    super::deblock_apply_hbd_sse41(
+                        &mut b,
+                        off,
+                        stride_line,
+                        stride_tap,
+                        width_neg,
+                        width_pos,
+                        q_thr_clamp,
+                        neg_lossless,
+                        pos_lossless,
+                        bitdepth_max,
+                    );
+                }
+                assert_eq!(
+                    a, b,
+                    "hbd mismatch vertical={vertical} wn={width_neg} wp={width_pos} qc={q_thr_clamp} bdmax={bitdepth_max}"
+                );
+            }
         }
     }
 }

@@ -68,6 +68,7 @@ fn load_i8x8_i32x2(a: &[i8; 8]) -> (__m128i, __m128i) {
         )
     }
 }
+
 #[inline(always)]
 fn load_i16x8_i32x2(a: &[i16; 8]) -> (__m128i, __m128i) {
     let v = unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) };
@@ -104,6 +105,26 @@ fn store_i32x8_u8(a: &mut [u8; 8], lo: __m128i, hi: __m128i) {
     let p16 = unsafe { _mm_packs_epi32(lo, hi) };
     let p8 = unsafe { _mm_packus_epi16(p16, p16) };
     unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, p8) };
+}
+
+#[inline(always)]
+fn load_u8x16(a: &[u8; 16]) -> __m128i {
+    unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) }
+}
+
+#[inline(always)]
+fn store_u8x16(a: &mut [u8; 16], v: __m128i) {
+    unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, v) };
+}
+
+#[inline(always)]
+fn load_u8x8(a: &[u8; 8]) -> __m128i {
+    unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) }
+}
+
+#[inline(always)]
+fn store_u8x8(a: &mut [u8; 8], v: __m128i) {
+    unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, v) };
 }
 
 #[inline(always)]
@@ -178,19 +199,41 @@ pub(crate) fn residual_add_row_8bpc_sse41(
 #[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn dc_add_row_8bpc_sse41(dst: &mut [u8], dc: i32, n: usize) {
-    let dc_v = _mm_set1_epi32(dc);
-    let (c8, r8) = dst[..n].as_chunks_mut::<8>();
-    for d in c8.iter_mut() {
-        let (d_lo, d_hi) = load_u8x8_i32x2(&*d);
-        store_i32x8_u8(d, _mm_add_epi32(d_lo, dc_v), _mm_add_epi32(d_hi, dc_v));
+    if dc == 0 {
+        return;
     }
-    let (c4, r4) = r8.as_chunks_mut::<4>();
-    for d in c4.iter_mut() {
-        let dv = load_u8x4_i32(d);
-        store_i32x4_u8(d, _mm_add_epi32(dv, dc_v));
-    }
-    for d in r4.iter_mut() {
-        *d = ((*d as i32) + dc).clamp(0, 255) as u8;
+
+    let amt = if dc > 0 {
+        dc.min(255) as u8
+    } else {
+        dc.saturating_neg().min(255) as u8
+    };
+
+    let (c16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+
+    if dc > 0 {
+        let amt_v = _mm_set1_epi8(amt as i8);
+        for d in c16.iter_mut() {
+            store_u8x16(d, _mm_adds_epu8(load_u8x16(&*d), amt_v));
+        }
+        for d in c8.iter_mut() {
+            store_u8x8(d, _mm_adds_epu8(load_u8x8(&*d), amt_v));
+        }
+        for d in r8.iter_mut() {
+            *d = d.saturating_add(amt);
+        }
+    } else {
+        let amt_v = _mm_set1_epi8(amt as i8);
+        for d in c16.iter_mut() {
+            store_u8x16(d, _mm_subs_epu8(load_u8x16(&*d), amt_v));
+        }
+        for d in c8.iter_mut() {
+            store_u8x8(d, _mm_subs_epu8(load_u8x8(&*d), amt_v));
+        }
+        for d in r8.iter_mut() {
+            *d = d.saturating_sub(amt);
+        }
     }
 }
 
@@ -245,19 +288,18 @@ pub(crate) fn cctx_row_sse41(
     let zero = _mm_setzero_si128();
     let min_v = _mm_set1_epi32(min);
     let max_v = _mm_set1_epi32(max);
-    let sh8 = _mm_cvtsi32_si128(8);
     let rot = |uu: __m128i, vv: __m128i| -> (__m128i, __m128i) {
         {
             let a = _mm_sub_epi32(_mm_mullo_epi32(uu, cosa_v), _mm_mullo_epi32(vv, sina_v));
             let b = _mm_add_epi32(_mm_mullo_epi32(uu, sina_v), _mm_mullo_epi32(vv, cosa_v));
-            let ra = _mm_sra_epi32(
-                _mm_add_epi32(_mm_add_epi32(a, c128), _mm_cmpgt_epi32(zero, a)),
-                sh8,
-            );
-            let rb = _mm_sra_epi32(
-                _mm_add_epi32(_mm_add_epi32(b, c128), _mm_cmpgt_epi32(zero, b)),
-                sh8,
-            );
+            let ra = _mm_srai_epi32::<8>(_mm_add_epi32(
+                _mm_add_epi32(a, c128),
+                _mm_cmpgt_epi32(zero, a),
+            ));
+            let rb = _mm_srai_epi32::<8>(_mm_add_epi32(
+                _mm_add_epi32(b, c128),
+                _mm_cmpgt_epi32(zero, b),
+            ));
             (
                 _mm_min_epi32(_mm_max_epi32(ra, min_v), max_v),
                 _mm_min_epi32(_mm_max_epi32(rb, min_v), max_v),
@@ -478,8 +520,7 @@ pub(crate) fn blend_row_8bpc_sse41(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: u
 pub(crate) fn morph_row_8bpc_sse41(dst: &mut [u8], alpha: i32, beta: i32, n: usize) {
     let a_v = _mm_set1_epi32(alpha);
     let b_v = _mm_set1_epi32(beta);
-    let sh8 = _mm_cvtsi32_si128(8);
-    let f = |d: __m128i| _mm_sra_epi32(_mm_add_epi32(_mm_mullo_epi32(d, a_v), b_v), sh8);
+    let f = |d: __m128i| _mm_srai_epi32::<8>(_mm_add_epi32(_mm_mullo_epi32(d, a_v), b_v));
     let (c8, r8) = dst[..n].as_chunks_mut::<8>();
     for d in c8.iter_mut() {
         let (d0, d1) = load_u8x8_i32x2(&*d);
@@ -504,11 +545,10 @@ pub(crate) fn morph_row_8bpc_sse41(dst: &mut [u8], alpha: i32, beta: i32, n: usi
 pub(crate) fn gdf_add_run_8bpc_sse41(dst: &mut [u8], err: &[i8], scale: i32, n: usize) {
     let sc = _mm_set1_epi32(scale);
     let rnd = _mm_set1_epi32(8);
-    let sh4 = _mm_cvtsi32_si128(4);
     let zero = _mm_setzero_si128();
     let adj = |e: __m128i| {
         let diff = _mm_mullo_epi32(e, sc);
-        let mag = _mm_sra_epi32(_mm_add_epi32(_mm_abs_epi32(diff), rnd), sh4);
+        let mag = _mm_srai_epi32::<4>(_mm_add_epi32(_mm_abs_epi32(diff), rnd));
         _mm_blendv_epi8(mag, _mm_sub_epi32(zero, mag), _mm_cmpgt_epi32(zero, diff))
     };
     let (c8, r8) = dst[..n].as_chunks_mut::<8>();
@@ -1002,6 +1042,77 @@ mod gdf_gradient_sse_test {
                 da, db,
                 "dx={dx} col0={col0} ncells={ncells} d={d} shift={shift}"
             );
+        }
+    }
+}
+
+/// cctx rotate+clip over two i16 coefficient planes, widening only inside the SIMD arithmetic.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn cctx_row_i16_sse41(
+    u: &mut [i16],
+    v: &mut [i16],
+    sina: i32,
+    cosa: i32,
+    sz: usize,
+    min: i32,
+    max: i32,
+) {
+    unsafe {
+        let a_pair = ((cosa as i16 as u16) as u32 | (((-sina) as i16 as u16) as u32) << 16) as i32;
+        let b_pair = ((sina as i16 as u16) as u32 | ((cosa as i16 as u16) as u32) << 16) as i32;
+        let a_pair_v = _mm_set1_epi32(a_pair);
+        let b_pair_v = _mm_set1_epi32(b_pair);
+        let c128 = _mm_set1_epi32(128);
+        let zero = _mm_setzero_si128();
+        let min_v = _mm_set1_epi32(min);
+        let max_v = _mm_set1_epi32(max);
+        let mut i = 0usize;
+        while i + 4 <= sz {
+            let uu16 = _mm_loadl_epi64(u.as_ptr().add(i) as *const __m128i);
+            let vv16 = _mm_loadl_epi64(v.as_ptr().add(i) as *const __m128i);
+            let uv = _mm_unpacklo_epi16(uu16, vv16);
+            let a = _mm_madd_epi16(uv, a_pair_v);
+            let b = _mm_madd_epi16(uv, b_pair_v);
+            let ru = _mm_min_epi32(
+                _mm_max_epi32(
+                    _mm_srai_epi32::<8>(_mm_add_epi32(
+                        _mm_add_epi32(a, c128),
+                        _mm_cmpgt_epi32(zero, a),
+                    )),
+                    min_v,
+                ),
+                max_v,
+            );
+            let rv = _mm_min_epi32(
+                _mm_max_epi32(
+                    _mm_srai_epi32::<8>(_mm_add_epi32(
+                        _mm_add_epi32(b, c128),
+                        _mm_cmpgt_epi32(zero, b),
+                    )),
+                    min_v,
+                ),
+                max_v,
+            );
+            _mm_storel_epi64(
+                u.as_mut_ptr().add(i) as *mut __m128i,
+                _mm_packs_epi32(ru, zero),
+            );
+            _mm_storel_epi64(
+                v.as_mut_ptr().add(i) as *mut __m128i,
+                _mm_packs_epi32(rv, zero),
+            );
+            i += 4;
+        }
+        while i < sz {
+            let ui = u[i] as i32;
+            let vi = v[i] as i32;
+            let a = ui * cosa - vi * sina;
+            let b = ui * sina + vi * cosa;
+            u[i] = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
+            v[i] = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
+            i += 1;
         }
     }
 }

@@ -43,7 +43,7 @@ pub(crate) fn intermediate_bits<BD: BitDepth>(bd: BD) -> i32 {
 
 /// stays `int16_t` for both; the bias keeps HBD prepped values in i16 range.
 #[inline(always)]
-fn prep_bias<BD: BitDepth>(_bd: BD) -> i32 {
+pub(crate) fn prep_bias<BD: BitDepth>(_bd: BD) -> i32 {
     if BD::BPC == 8 { 0 } else { 8192 }
 }
 
@@ -65,6 +65,24 @@ pub(crate) fn put<P: Pixel>(
 }
 
 pub(crate) fn prep<BD: BitDepth>(
+    bd: BD,
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[BD::Pixel],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+) {
+    if BD::BPC == 16 {
+        if let Some(src16) = <BD::Pixel as Pixel>::try_as_u16_slice(src) {
+            crate::mc_dispatch::prep_hbd(tmp, tmp_stride, src16, src_stride, w, h, bd.bitdepth());
+            return;
+        }
+    }
+    prep_scalar(bd, tmp, tmp_stride, src, src_stride, w, h);
+}
+
+pub(crate) fn prep_scalar<BD: BitDepth>(
     bd: BD,
     tmp: &mut [i16],
     tmp_stride: usize,
@@ -358,7 +376,7 @@ pub(crate) fn sad_nxn<P: Pixel>(
     sad >> bd_min8
 }
 
-fn get_h_filter(mx: i32, filter_type: i32, w: usize) -> Option<[i8; 8]> {
+pub(crate) fn get_h_filter(mx: i32, filter_type: i32, w: usize) -> Option<[i8; 8]> {
     if mx == 0 {
         return None;
     }
@@ -372,7 +390,7 @@ fn get_h_filter(mx: i32, filter_type: i32, w: usize) -> Option<[i8; 8]> {
     Some(f)
 }
 
-fn get_v_filter(my: i32, filter_type: i32, h: usize) -> Option<[i8; 8]> {
+pub(crate) fn get_v_filter(my: i32, filter_type: i32, h: usize) -> Option<[i8; 8]> {
     if my == 0 {
         return None;
     }
@@ -451,6 +469,55 @@ pub(crate) fn put_8tap_8bpc(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn put_8tap<BD: BitDepth>(
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    dst_stride: usize,
+    src: &[BD::Pixel],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+) {
+    if BD::BPC == 16 {
+        if let (Some(dst16), Some(src16)) = (
+            <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst),
+            <BD::Pixel as Pixel>::try_as_u16_slice(src),
+        ) {
+            crate::mc_dispatch::put_8tap_hbd(
+                dst16,
+                dst_stride,
+                src16,
+                src_off,
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                filter_type,
+                bd.bitdepth(),
+            );
+            return;
+        }
+    }
+    put_8tap_scalar(
+        bd,
+        dst,
+        dst_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+        filter_type,
+    );
+}
+
+pub(crate) fn put_8tap_scalar<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -550,6 +617,52 @@ pub(crate) fn prep_8tap_8bpc(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prep_8tap<BD: BitDepth>(
+    bd: BD,
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[BD::Pixel],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+) {
+    if BD::BPC == 16 {
+        if let Some(src16) = <BD::Pixel as Pixel>::try_as_u16_slice(src) {
+            crate::mc_dispatch::prep_8tap_hbd(
+                tmp,
+                tmp_stride,
+                src16,
+                src_off,
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                filter_type,
+                bd.bitdepth(),
+            );
+            return;
+        }
+    }
+    prep_8tap_scalar(
+        bd,
+        tmp,
+        tmp_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+        filter_type,
+    );
+}
+
+pub(crate) fn prep_8tap_scalar<BD: BitDepth>(
     bd: BD,
     tmp: &mut [i16],
     tmp_stride: usize,
@@ -760,6 +873,39 @@ pub(crate) fn put_bilin<BD: BitDepth>(
     mx: i32,
     my: i32,
 ) {
+    if BD::BPC == 16 {
+        if let (Some(dst16), Some(src16)) = (
+            <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst),
+            <BD::Pixel as Pixel>::try_as_u16_slice(src),
+        ) {
+            crate::mc_dispatch::put_bilin_hbd(
+                dst16,
+                dst_stride,
+                src16,
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                bd.bitdepth(),
+            );
+            return;
+        }
+    }
+    put_bilin_scalar(bd, dst, dst_stride, src, src_stride, w, h, mx, my);
+}
+
+pub(crate) fn put_bilin_scalar<BD: BitDepth>(
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    dst_stride: usize,
+    src: &[BD::Pixel],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+) {
     let ib = intermediate_bits(bd);
     let intermediate_rnd = (1 << ib) >> 1;
     if mx != 0 {
@@ -831,6 +977,36 @@ pub(crate) fn prep_bilin<BD: BitDepth>(
     mx: i32,
     my: i32,
 ) {
+    if BD::BPC == 16 {
+        if let Some(src16) = <BD::Pixel as Pixel>::try_as_u16_slice(src) {
+            crate::mc_dispatch::prep_bilin_hbd(
+                tmp,
+                tmp_stride,
+                src16,
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                bd.bitdepth(),
+            );
+            return;
+        }
+    }
+    prep_bilin_scalar(bd, tmp, tmp_stride, src, src_stride, w, h, mx, my);
+}
+
+pub(crate) fn prep_bilin_scalar<BD: BitDepth>(
+    bd: BD,
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[BD::Pixel],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+) {
     let ib = intermediate_bits(bd);
     let bias = prep_bias(bd) as i16;
     if mx != 0 {
@@ -871,7 +1047,7 @@ pub(crate) fn prep_bilin<BD: BitDepth>(
             }
         }
     } else {
-        prep(bd, tmp, tmp_stride, src, src_stride, w, h);
+        prep_scalar(bd, tmp, tmp_stride, src, src_stride, w, h);
     }
 }
 

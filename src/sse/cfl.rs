@@ -32,6 +32,7 @@ use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
+use crate::cfl_dispatch::CflApply8;
 const CFL_FLT_TYPE_VSTRIP: u32 = 1;
 const CFL_FLT_TYPE_GAUSS: u32 = 2;
 
@@ -72,96 +73,121 @@ fn pad_bottom(plane: &mut [u8], row0: usize, stride: usize, w: usize, h: usize, 
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn ac8_420(top: __m128i, bot: __m128i, ones: __m128i, dc0v: __m128i) -> (__m128i, __m128i) {
+fn ac8_420_i16(top: __m128i, bot: __m128i, ones: __m128i, dc0v: __m128i) -> __m128i {
     let tsum = _mm_maddubs_epi16(top, ones);
     let bsum = _mm_maddubs_epi16(bot, ones);
     let sum16 = _mm_add_epi16(tsum, bsum);
-    let sum_lo = _mm_cvtepu16_epi32(sum16);
-    let sum_hi = _mm_cvtepu16_epi32(_mm_srli_si128(sum16, 8));
-    let ac_lo = _mm_sub_epi32(_mm_slli_epi32(sum_lo, 1), dc0v);
-    let ac_hi = _mm_sub_epi32(_mm_slli_epi32(sum_hi, 1), dc0v);
-    (ac_lo, ac_hi)
+    _mm_sub_epi16(_mm_slli_epi16(sum16, 1), dc0v)
 }
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn ac8_444(y8: __m128i, dc0v: __m128i) -> (__m128i, __m128i) {
-    let y16 = _mm_cvtepu8_epi16(y8);
-    let y_lo = _mm_cvtepu16_epi32(y16);
-    let y_hi = _mm_cvtepu16_epi32(_mm_srli_si128(y16, 8));
-    let ac_lo = _mm_sub_epi32(_mm_slli_epi32(y_lo, 3), dc0v);
-    let ac_hi = _mm_sub_epi32(_mm_slli_epi32(y_hi, 3), dc0v);
-    (ac_lo, ac_hi)
+fn ac8_444_i16(y8: __m128i, dc0v: __m128i) -> __m128i {
+    let y16 = _mm_unpacklo_epi8(y8, _mm_setzero_si128());
+    _mm_sub_epi16(_mm_slli_epi16(y16, 3), dc0v)
 }
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn ac8_422_uniform(row: __m128i, ones: __m128i, dc0v: __m128i) -> (__m128i, __m128i) {
+fn ac8_422_uniform_i16(row: __m128i, ones: __m128i, dc0v: __m128i) -> __m128i {
     let sum16 = _mm_maddubs_epi16(row, ones);
-    let sum_lo = _mm_cvtepu16_epi32(sum16);
-    let sum_hi = _mm_cvtepu16_epi32(_mm_srli_si128(sum16, 8));
-    let ac_lo = _mm_sub_epi32(_mm_slli_epi32(sum_lo, 2), dc0v);
-    let ac_hi = _mm_sub_epi32(_mm_slli_epi32(sum_hi, 2), dc0v);
-    (ac_lo, ac_hi)
+    _mm_sub_epi16(_mm_slli_epi16(sum16, 2), dc0v)
 }
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn ac8_422_gauss(row: __m128i, even_mask: __m128i, dc0v: __m128i) -> (__m128i, __m128i) {
-    ac8_444(_mm_shuffle_epi8(row, even_mask), dc0v)
+fn ac8_422_gauss_i16(row: __m128i, even_mask: __m128i, dc0v: __m128i) -> __m128i {
+    ac8_444_i16(_mm_shuffle_epi8(row, even_mask), dc0v)
 }
 
-/// Apply alpha to 8 AC lanes and produce 8 clipped bytes in the low 8 bytes.
+/// Apply alpha to 8 i16 AC lanes and produce 8 clipped bytes in the low 8 bytes.
+///
+/// The downsampling/AC stage stays i16; only the alpha multiply widens to i32.
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn apply8(ac_lo: __m128i, ac_hi: __m128i, alpha: i32, dc: i32) -> __m128i {
-    let av = _mm_set1_epi32(alpha);
-    let dcv = _mm_set1_epi32(dc);
-    let r1024 = _mm_set1_epi32(1024);
+fn apply8_i16_ac(
+    ac: __m128i,
+    alpha_v: __m128i,
+    dc_v: __m128i,
+    r1024: __m128i,
+    zero: __m128i,
+) -> __m128i {
+    let alpha16 = _mm_packs_epi32(alpha_v, alpha_v);
 
-    let diff_lo = _mm_mullo_epi32(av, ac_lo);
+    let diff_lo = _mm_madd_epi16(_mm_unpacklo_epi16(ac, zero), alpha16);
     let mag_lo = _mm_srli_epi32(_mm_add_epi32(_mm_abs_epi32(diff_lo), r1024), 11);
-    let val_lo = _mm_add_epi32(dcv, _mm_sign_epi32(mag_lo, diff_lo));
+    let val_lo = _mm_add_epi32(
+        dc_v,
+        _mm_blendv_epi8(
+            mag_lo,
+            _mm_sub_epi32(zero, mag_lo),
+            _mm_cmpgt_epi32(zero, diff_lo),
+        ),
+    );
 
-    let diff_hi = _mm_mullo_epi32(av, ac_hi);
+    let diff_hi = _mm_madd_epi16(_mm_unpackhi_epi16(ac, zero), alpha16);
     let mag_hi = _mm_srli_epi32(_mm_add_epi32(_mm_abs_epi32(diff_hi), r1024), 11);
-    let val_hi = _mm_add_epi32(dcv, _mm_sign_epi32(mag_hi, diff_hi));
+    let val_hi = _mm_add_epi32(
+        dc_v,
+        _mm_blendv_epi8(
+            mag_hi,
+            _mm_sub_epi32(zero, mag_hi),
+            _mm_cmpgt_epi32(zero, diff_hi),
+        ),
+    );
 
     // i32 -> i16 (signed sat) -> u8 (unsigned sat) == clamp(0, 255)
-    _mm_packus_epi16(_mm_packs_epi32(val_lo, val_hi), _mm_setzero_si128())
+    _mm_packus_epi16(_mm_packs_epi32(val_lo, val_hi), zero)
 }
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn apply16_444(src: __m128i, dc0v: __m128i, alpha: i32, dc: i32) -> __m128i {
-    let (lo0, hi0) = ac8_444(src, dc0v);
-    let out0 = apply8(lo0, hi0, alpha, dc);
-    let (lo1, hi1) = ac8_444(_mm_srli_si128(src, 8), dc0v);
-    let out1 = apply8(lo1, hi1, alpha, dc);
+fn apply16_444_i16_ac(
+    src: __m128i,
+    dc0v: __m128i,
+    alpha_v: __m128i,
+    dc_v: __m128i,
+    r1024: __m128i,
+    zero: __m128i,
+) -> __m128i {
+    let out0 = apply8_i16_ac(ac8_444_i16(src, dc0v), alpha_v, dc_v, r1024, zero);
+    let out1 = apply8_i16_ac(
+        ac8_444_i16(_mm_srli_si128(src, 8), dc0v),
+        alpha_v,
+        dc_v,
+        r1024,
+        zero,
+    );
     _mm_unpacklo_epi64(out0, out1)
 }
 
-#[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-fn cfl_apply_420_8bpc_sse41_impl(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
+fn cfl_apply_420_8bpc_sse41_impl(args: CflApply8<'_>) {
+    let CflApply8 {
+        y,
+        u,
+        v,
+        layout,
+        area,
+        params,
+    } = args;
+    let crate::cfl_dispatch::CflLayout {
+        yrow0,
+        urow0,
+        vrow0,
+        ystride,
+        cstride,
+    } = layout;
+    let crate::cfl_dispatch::CflArea { w, h, xlim, ylim } = area;
+    let crate::cfl_dispatch::CflParams {
+        dc0,
+        dc1,
+        dc2,
+        alpha0,
+        alpha1,
+        filter_type: _,
+    } = params;
+
     let do_u = alpha0 != 0;
     let do_v = alpha1 != 0;
     if !do_u && !do_v {
@@ -172,8 +198,16 @@ fn cfl_apply_420_8bpc_sse41_impl(
     let xfull = nfull * 8;
     let lfull = nfull * 16;
 
+    assert!((i16::MIN as i32..=i16::MAX as i32).contains(&dc0));
+
     let ones = _mm_set1_epi8(1);
-    let dc0v = _mm_set1_epi32(dc0);
+    let dc0v = _mm_set1_epi16(dc0 as i16);
+    let alpha0v = _mm_set1_epi32(alpha0);
+    let alpha1v = _mm_set1_epi32(alpha1);
+    let dc1v = _mm_set1_epi32(dc1);
+    let dc2v = _mm_set1_epi32(dc2);
+    let r1024 = _mm_set1_epi32(1024);
+    let zero = _mm_setzero_si128();
 
     let mut yrow = yrow0;
     let mut urow = urow0;
@@ -195,9 +229,9 @@ fn cfl_apply_420_8bpc_sse41_impl(
                     .zip(top.iter())
                     .zip(bot.iter())
                 {
-                    let (lo, hi) = ac8_420(load_u8x16(t), load_u8x16(b), ones, dc0v);
-                    store_u8x8(du, apply8(lo, hi, alpha0, dc1));
-                    store_u8x8(dv, apply8(lo, hi, alpha1, dc2));
+                    let ac = ac8_420_i16(load_u8x16(t), load_u8x16(b), ones, dc0v);
+                    store_u8x8(du, apply8_i16_ac(ac, alpha0v, dc1v, r1024, zero));
+                    store_u8x8(dv, apply8_i16_ac(ac, alpha1v, dc2v, r1024, zero));
                 }
             }
             (true, false) => {
@@ -208,8 +242,8 @@ fn cfl_apply_420_8bpc_sse41_impl(
                     .zip(top.iter())
                     .zip(bot.iter())
                 {
-                    let (lo, hi) = ac8_420(load_u8x16(t), load_u8x16(b), ones, dc0v);
-                    store_u8x8(d, apply8(lo, hi, alpha0, dc1));
+                    let ac = ac8_420_i16(load_u8x16(t), load_u8x16(b), ones, dc0v);
+                    store_u8x8(d, apply8_i16_ac(ac, alpha0v, dc1v, r1024, zero));
                 }
             }
             (false, true) => {
@@ -220,8 +254,8 @@ fn cfl_apply_420_8bpc_sse41_impl(
                     .zip(top.iter())
                     .zip(bot.iter())
                 {
-                    let (lo, hi) = ac8_420(load_u8x16(t), load_u8x16(b), ones, dc0v);
-                    store_u8x8(d, apply8(lo, hi, alpha1, dc2));
+                    let ac = ac8_420_i16(load_u8x16(t), load_u8x16(b), ones, dc0v);
+                    store_u8x8(d, apply8_i16_ac(ac, alpha1v, dc2v, r1024, zero));
                 }
             }
             (false, false) => unreachable!(),
@@ -264,16 +298,16 @@ fn cfl_apply_420_8bpc_sse41_impl(
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn ac8_422<const GAUSS: bool>(
+fn ac8_422_i16<const GAUSS: bool>(
     row: __m128i,
     ones: __m128i,
     even_mask: __m128i,
     dc0v: __m128i,
-) -> (__m128i, __m128i) {
+) -> __m128i {
     if GAUSS {
-        ac8_422_gauss(row, even_mask, dc0v)
+        ac8_422_gauss_i16(row, even_mask, dc0v)
     } else {
-        ac8_422_uniform(row, ones, dc0v)
+        ac8_422_uniform_i16(row, ones, dc0v)
     }
 }
 
@@ -287,27 +321,33 @@ fn cfl_ac_422_scalar_filter<const GAUSS: bool>(y: &[u8], yrow: usize, x: usize, 
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-fn cfl_apply_422_8bpc_sse41_impl<const GAUSS: bool>(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
+fn cfl_apply_422_8bpc_sse41_impl<const GAUSS: bool>(args: CflApply8<'_>) {
+    let CflApply8 {
+        y,
+        u,
+        v,
+        layout,
+        area,
+        params,
+    } = args;
+    let crate::cfl_dispatch::CflLayout {
+        yrow0,
+        urow0,
+        vrow0,
+        ystride,
+        cstride,
+    } = layout;
+    let crate::cfl_dispatch::CflArea { w, h, xlim, ylim } = area;
+    let crate::cfl_dispatch::CflParams {
+        dc0,
+        dc1,
+        dc2,
+        alpha0,
+        alpha1,
+        filter_type: _,
+    } = params;
+
     let do_u = alpha0 != 0;
     let do_v = alpha1 != 0;
     if !do_u && !do_v {
@@ -318,8 +358,16 @@ fn cfl_apply_422_8bpc_sse41_impl<const GAUSS: bool>(
     let xfull = nfull * 8;
     let lfull = nfull * 16;
 
+    assert!((i16::MIN as i32..=i16::MAX as i32).contains(&dc0));
+
     let ones = _mm_set1_epi8(1);
-    let dc0v = _mm_set1_epi32(dc0);
+    let dc0v = _mm_set1_epi16(dc0 as i16);
+    let alpha0v = _mm_set1_epi32(alpha0);
+    let alpha1v = _mm_set1_epi32(alpha1);
+    let dc1v = _mm_set1_epi32(dc1);
+    let dc2v = _mm_set1_epi32(dc2);
+    let r1024 = _mm_set1_epi32(1024);
+    let zero = _mm_setzero_si128();
     let even_mask = _mm_setr_epi8(
         0, 2, 4, 6, 8, 10, 12, 14, -128, -128, -128, -128, -128, -128, -128, -128,
     );
@@ -336,23 +384,23 @@ fn cfl_apply_422_8bpc_sse41_impl<const GAUSS: bool>(
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
 
                 for ((du, dv), yy) in u_chunks.iter_mut().zip(v_chunks.iter_mut()).zip(row.iter()) {
-                    let (lo, hi) = ac8_422::<GAUSS>(load_u8x16(yy), ones, even_mask, dc0v);
-                    store_u8x8(du, apply8(lo, hi, alpha0, dc1));
-                    store_u8x8(dv, apply8(lo, hi, alpha1, dc2));
+                    let ac = ac8_422_i16::<GAUSS>(load_u8x16(yy), ones, even_mask, dc0v);
+                    store_u8x8(du, apply8_i16_ac(ac, alpha0v, dc1v, r1024, zero));
+                    store_u8x8(dv, apply8_i16_ac(ac, alpha1v, dc2v, r1024, zero));
                 }
             }
             (true, false) => {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
                 for (du, yy) in u_chunks.iter_mut().zip(row.iter()) {
-                    let (lo, hi) = ac8_422::<GAUSS>(load_u8x16(yy), ones, even_mask, dc0v);
-                    store_u8x8(du, apply8(lo, hi, alpha0, dc1));
+                    let ac = ac8_422_i16::<GAUSS>(load_u8x16(yy), ones, even_mask, dc0v);
+                    store_u8x8(du, apply8_i16_ac(ac, alpha0v, dc1v, r1024, zero));
                 }
             }
             (false, true) => {
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
                 for (dv, yy) in v_chunks.iter_mut().zip(row.iter()) {
-                    let (lo, hi) = ac8_422::<GAUSS>(load_u8x16(yy), ones, even_mask, dc0v);
-                    store_u8x8(dv, apply8(lo, hi, alpha1, dc2));
+                    let ac = ac8_422_i16::<GAUSS>(load_u8x16(yy), ones, even_mask, dc0v);
+                    store_u8x8(dv, apply8_i16_ac(ac, alpha1v, dc2v, r1024, zero));
                 }
             }
             (false, false) => unreachable!(),
@@ -387,27 +435,33 @@ fn cfl_apply_422_8bpc_sse41_impl<const GAUSS: bool>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-fn cfl_apply_444_8bpc_sse41_impl(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
+fn cfl_apply_444_8bpc_sse41_impl(args: CflApply8<'_>) {
+    let CflApply8 {
+        y,
+        u,
+        v,
+        layout,
+        area,
+        params,
+    } = args;
+    let crate::cfl_dispatch::CflLayout {
+        yrow0,
+        urow0,
+        vrow0,
+        ystride,
+        cstride,
+    } = layout;
+    let crate::cfl_dispatch::CflArea { w, h, xlim, ylim } = area;
+    let crate::cfl_dispatch::CflParams {
+        dc0,
+        dc1,
+        dc2,
+        alpha0,
+        alpha1,
+        filter_type: _,
+    } = params;
+
     let do_u = alpha0 != 0;
     let do_v = alpha1 != 0;
     if !do_u && !do_v {
@@ -417,7 +471,15 @@ fn cfl_apply_444_8bpc_sse41_impl(
     let nfull = xlim / 16;
     let xfull = nfull * 16;
 
-    let dc0v = _mm_set1_epi32(dc0);
+    assert!((i16::MIN as i32..=i16::MAX as i32).contains(&dc0));
+
+    let dc0v = _mm_set1_epi16(dc0 as i16);
+    let alpha0v = _mm_set1_epi32(alpha0);
+    let alpha1v = _mm_set1_epi32(alpha1);
+    let dc1v = _mm_set1_epi32(dc1);
+    let dc2v = _mm_set1_epi32(dc2);
+    let r1024 = _mm_set1_epi32(1024);
+    let zero = _mm_setzero_si128();
 
     let mut yrow = yrow0;
     let mut urow = urow0;
@@ -432,20 +494,26 @@ fn cfl_apply_444_8bpc_sse41_impl(
 
                 for ((du, dv), yy) in u_chunks.iter_mut().zip(v_chunks.iter_mut()).zip(row.iter()) {
                     let yy = load_u8x16(yy);
-                    store_u8x16(du, apply16_444(yy, dc0v, alpha0, dc1));
-                    store_u8x16(dv, apply16_444(yy, dc0v, alpha1, dc2));
+                    store_u8x16(du, apply16_444_i16_ac(yy, dc0v, alpha0v, dc1v, r1024, zero));
+                    store_u8x16(dv, apply16_444_i16_ac(yy, dc0v, alpha1v, dc2v, r1024, zero));
                 }
             }
             (true, false) => {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<16>().0;
                 for (du, yy) in u_chunks.iter_mut().zip(row.iter()) {
-                    store_u8x16(du, apply16_444(load_u8x16(yy), dc0v, alpha0, dc1));
+                    store_u8x16(
+                        du,
+                        apply16_444_i16_ac(load_u8x16(yy), dc0v, alpha0v, dc1v, r1024, zero),
+                    );
                 }
             }
             (false, true) => {
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<16>().0;
                 for (dv, yy) in v_chunks.iter_mut().zip(row.iter()) {
-                    store_u8x16(dv, apply16_444(load_u8x16(yy), dc0v, alpha1, dc2));
+                    store_u8x16(
+                        dv,
+                        apply16_444_i16_ac(load_u8x16(yy), dc0v, alpha1v, dc2v, r1024, zero),
+                    );
                 }
             }
             (false, false) => unreachable!(),
@@ -480,115 +548,18 @@ fn cfl_apply_444_8bpc_sse41_impl(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn cfl_apply_420_8bpc_sse41(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
-    unsafe {
-        cfl_apply_420_8bpc_sse41_impl(
-            y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
-            alpha0, alpha1,
-        )
+pub(crate) fn cfl_apply_420_8bpc_sse41(args: CflApply8<'_>) {
+    unsafe { cfl_apply_420_8bpc_sse41_impl(args) }
+}
+
+pub(crate) fn cfl_apply_422_8bpc_sse41(args: CflApply8<'_>) {
+    match args.params.filter_type {
+        CFL_FLT_TYPE_VSTRIP => crate::cfl_dispatch::cfl_apply_422_8bpc_scalar(args),
+        CFL_FLT_TYPE_GAUSS => unsafe { cfl_apply_422_8bpc_sse41_impl::<true>(args) },
+        _ => unsafe { cfl_apply_422_8bpc_sse41_impl::<false>(args) },
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn cfl_apply_422_8bpc_sse41(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-    filter_type: u32,
-) {
-    match filter_type {
-        CFL_FLT_TYPE_VSTRIP => crate::cfl_dispatch::cfl_apply_422_8bpc_scalar(
-            y,
-            u,
-            v,
-            yrow0,
-            urow0,
-            vrow0,
-            ystride,
-            cstride,
-            w,
-            h,
-            xlim,
-            ylim,
-            dc0,
-            dc1,
-            dc2,
-            alpha0,
-            alpha1,
-            filter_type,
-        ),
-        CFL_FLT_TYPE_GAUSS => unsafe {
-            cfl_apply_422_8bpc_sse41_impl::<true>(
-                y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
-                alpha0, alpha1,
-            )
-        },
-        _ => unsafe {
-            cfl_apply_422_8bpc_sse41_impl::<false>(
-                y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
-                alpha0, alpha1,
-            )
-        },
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn cfl_apply_444_8bpc_sse41(
-    y: &[u8],
-    u: &mut [u8],
-    v: &mut [u8],
-    yrow0: usize,
-    urow0: usize,
-    vrow0: usize,
-    ystride: usize,
-    cstride: usize,
-    w: usize,
-    h: usize,
-    xlim: usize,
-    ylim: usize,
-    dc0: i32,
-    dc1: i32,
-    dc2: i32,
-    alpha0: i32,
-    alpha1: i32,
-) {
-    unsafe {
-        cfl_apply_444_8bpc_sse41_impl(
-            y, u, v, yrow0, urow0, vrow0, ystride, cstride, w, h, xlim, ylim, dc0, dc1, dc2,
-            alpha0, alpha1,
-        )
-    }
+pub(crate) fn cfl_apply_444_8bpc_sse41(args: CflApply8<'_>) {
+    unsafe { cfl_apply_444_8bpc_sse41_impl(args) }
 }
