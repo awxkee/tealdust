@@ -43,6 +43,8 @@ mod looprestoration;
 mod looprestoration_hd;
 #[cfg(target_arch = "x86_64")]
 mod msac;
+#[cfg(target_arch = "x86_64")]
+mod msac512;
 
 pub(crate) use itx::*;
 
@@ -72,3 +74,4 @@ pub(crate) use looprestoration_hd::{
     ns_wiener_fir_run_hbd_avx2, ns_wiener_uv_fir_run_hbd_avx2, pc_wiener_fir_run_hbd_avx2,
 };
 pub(crate) use msac::MsacContextAvx;
+pub(crate) use msac512::MsacContextAvx512;

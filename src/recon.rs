@@ -1948,6 +1948,23 @@ pub(crate) unsafe fn decode_coefs_avx2<C: Coeff, const UPDATE_CDF: bool>(
     decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
 }
 
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
+#[target_feature(enable = "avx512f,avx512dq")]
+pub(crate) unsafe fn decode_coefs_avx512<C: Coeff, const UPDATE_CDF: bool>(
+    msac: &mut crate::avx::MsacContextAvx512<'_, UPDATE_CDF>,
+    coef: &mut CdfCoefContext,
+    mode: &mut CdfModeContext,
+    a: &[u8],
+    l: &[u8],
+    p: &DecodeCoefParams,
+    cf: &mut [C],
+    txtp: &mut u16,
+    res_ctx: &mut u8,
+    levels_scratch: &mut [i8; 1089],
+) -> i32 {
+    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn intrabc_pred<BD: crate::pixel::BitDepth>(
     bd: BD,
