@@ -628,6 +628,66 @@ pub(crate) trait DctWide {
         acc: Self::Acc,
         clip: Self::Clip,
     );
+
+    /// Store four output columns as four contiguous rows after clipping.
+    ///
+    /// Row-pass wide kernels produce one accumulator per output column, with
+    /// lanes representing four/eight source rows. This method fuses the
+    /// clip+transpose boundary that would otherwise be scalar lane stores.
+    unsafe fn store4x4_strided_clip<const HIGH: bool>(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: [Self::Acc; 4],
+        clip: Self::Clip,
+    );
+
+    /// Store eight output columns as eight contiguous rows after clipping.
+    ///
+    /// The default keeps the exact previous behaviour: split the 8x8 tile into
+    /// four SIMD 4x4 stores. AVX2 overrides this with a single true 8x8
+    /// register transpose so the low-bit-depth wide row pass does not bounce
+    /// through two half-tile transpose paths.
+    #[inline(always)]
+    unsafe fn store8x8_strided_clip(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: [Self::Acc; 8],
+        clip: Self::Clip,
+    ) {
+        unsafe {
+            Self::store4x4_strided_clip::<false>(
+                dst,
+                off,
+                stride,
+                [acc[0], acc[1], acc[2], acc[3]],
+                clip,
+            );
+            Self::store4x4_strided_clip::<true>(
+                dst,
+                off + 4 * stride,
+                stride,
+                [acc[0], acc[1], acc[2], acc[3]],
+                clip,
+            );
+            Self::store4x4_strided_clip::<false>(
+                dst,
+                off + 4,
+                stride,
+                [acc[4], acc[5], acc[6], acc[7]],
+                clip,
+            );
+            Self::store4x4_strided_clip::<true>(
+                dst,
+                off + 4 * stride + 4,
+                stride,
+                [acc[4], acc[5], acc[6], acc[7]],
+                clip,
+            );
+        }
+    }
+
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc);
     unsafe fn store4(dst: &mut [i32], off: usize, acc: Self::Acc);
 }

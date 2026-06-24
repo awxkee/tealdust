@@ -225,6 +225,45 @@ impl crate::itx_1d::DctWide for NeonWide {
         }
     }
     #[inline(always)]
+    unsafe fn store4x4_strided_clip<const HIGH: bool>(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: [Self::Acc; 4],
+        clip: Self::Clip,
+    ) {
+        unsafe {
+            #[inline(always)]
+            unsafe fn clip_vec(
+                v: int32x4_t,
+                rnd: int32x4_t,
+                nsh: int32x4_t,
+                minv: int32x4_t,
+                maxv: int32x4_t,
+            ) -> int32x4_t {
+                unsafe { vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32(v, rnd), nsh), minv), maxv) }
+            }
+            let (rnd, nsh, minv, maxv) = clip;
+            let c0 = clip_vec(if HIGH { acc[0].1 } else { acc[0].0 }, rnd, nsh, minv, maxv);
+            let c1 = clip_vec(if HIGH { acc[1].1 } else { acc[1].0 }, rnd, nsh, minv, maxv);
+            let c2 = clip_vec(if HIGH { acc[2].1 } else { acc[2].0 }, rnd, nsh, minv, maxv);
+            let c3 = clip_vec(if HIGH { acc[3].1 } else { acc[3].0 }, rnd, nsh, minv, maxv);
+
+            let t01 = vtrnq_s32(c0, c1);
+            let t23 = vtrnq_s32(c2, c3);
+            let r0 = vcombine_s32(vget_low_s32(t01.0), vget_low_s32(t23.0));
+            let r1 = vcombine_s32(vget_low_s32(t01.1), vget_low_s32(t23.1));
+            let r2 = vcombine_s32(vget_high_s32(t01.0), vget_high_s32(t23.0));
+            let r3 = vcombine_s32(vget_high_s32(t01.1), vget_high_s32(t23.1));
+
+            vst1q_s32(dst.as_mut_ptr().add(off), r0);
+            vst1q_s32(dst.as_mut_ptr().add(off + stride), r1);
+            vst1q_s32(dst.as_mut_ptr().add(off + 2 * stride), r2);
+            vst1q_s32(dst.as_mut_ptr().add(off + 3 * stride), r3);
+        }
+    }
+
+    #[inline(always)]
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
         unsafe {
             vst1q_s32(dst.as_mut_ptr().add(off), acc.0);
@@ -370,6 +409,17 @@ impl crate::itx_1d::DctWide for NeonWideRdm {
     }
 
     #[inline(always)]
+    unsafe fn store4x4_strided_clip<const HIGH: bool>(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: [Self::Acc; 4],
+        clip: Self::Clip,
+    ) {
+        unsafe { NeonWide::store4x4_strided_clip::<HIGH>(dst, off, stride, acc, clip) }
+    }
+
+    #[inline(always)]
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
         unsafe { NeonWide::store8(dst, off, acc) }
     }
@@ -452,6 +502,55 @@ impl DctSimd4 for NeonDct2d {
         unsafe { vst1q_s32(out.as_mut_ptr(), v.0) };
         out
     }
+
+    #[inline(always)]
+    unsafe fn store4x4_clip(
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        off: usize,
+        stride: usize,
+        v: [Self::V; 4],
+        rnd: i32,
+        shift: i32,
+        min: i32,
+        max: i32,
+    ) {
+        debug_assert!(off + 3 + 3 * stride < ITX_TMP_PIXELS);
+        unsafe {
+            #[inline(always)]
+            unsafe fn clip_vec(
+                v: int32x4_t,
+                rnd: int32x4_t,
+                sh: int32x4_t,
+                minv: int32x4_t,
+                maxv: int32x4_t,
+            ) -> int32x4_t {
+                unsafe { vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32(v, rnd), sh), minv), maxv) }
+            }
+
+            let rnd = vdupq_n_s32(rnd);
+            let sh = vdupq_n_s32(-shift);
+            let minv = vdupq_n_s32(min);
+            let maxv = vdupq_n_s32(max);
+
+            let c0 = clip_vec(v[0].0, rnd, sh, minv, maxv);
+            let c1 = clip_vec(v[1].0, rnd, sh, minv, maxv);
+            let c2 = clip_vec(v[2].0, rnd, sh, minv, maxv);
+            let c3 = clip_vec(v[3].0, rnd, sh, minv, maxv);
+
+            // Transpose columns-as-lanes into row vectors.
+            let t01 = vtrnq_s32(c0, c1);
+            let t23 = vtrnq_s32(c2, c3);
+            let r0 = vcombine_s32(vget_low_s32(t01.0), vget_low_s32(t23.0));
+            let r1 = vcombine_s32(vget_low_s32(t01.1), vget_low_s32(t23.1));
+            let r2 = vcombine_s32(vget_high_s32(t01.0), vget_high_s32(t23.0));
+            let r3 = vcombine_s32(vget_high_s32(t01.1), vget_high_s32(t23.1));
+
+            vst1q_s32(tmp.as_mut_ptr().add(off), r0);
+            vst1q_s32(tmp.as_mut_ptr().add(off + stride), r1);
+            vst1q_s32(tmp.as_mut_ptr().add(off + 2 * stride), r2);
+            vst1q_s32(tmp.as_mut_ptr().add(off + 3 * stride), r3);
+        }
+    }
 }
 
 pub(crate) struct NeonDct2dRdm;
@@ -513,6 +612,20 @@ impl DctSimd4 for NeonDct2dRdm {
     #[inline(always)]
     unsafe fn to_array(v: Self::V) -> [i32; 4] {
         unsafe { NeonDct2d::to_array(v) }
+    }
+
+    #[inline(always)]
+    unsafe fn store4x4_clip(
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        off: usize,
+        stride: usize,
+        v: [Self::V; 4],
+        rnd: i32,
+        shift: i32,
+        min: i32,
+        max: i32,
+    ) {
+        unsafe { NeonDct2d::store4x4_clip(tmp, off, stride, v, rnd, shift, min, max) }
     }
 }
 

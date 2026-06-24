@@ -289,6 +289,52 @@ impl crate::itx_1d::DctWide for SseWide {
     }
 
     #[inline(always)]
+    unsafe fn store4x4_strided_clip<const HIGH: bool>(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: [Self::Acc; 4],
+        clip: Self::Clip,
+    ) {
+        unsafe {
+            #[inline(always)]
+            unsafe fn clip_vec(
+                v: __m128i,
+                rnd: __m128i,
+                sh: __m128i,
+                minv: __m128i,
+                maxv: __m128i,
+            ) -> __m128i {
+                unsafe {
+                    _mm_min_epi32(
+                        _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(v, rnd), sh), minv),
+                        maxv,
+                    )
+                }
+            }
+            let (rnd, sh, minv, maxv) = clip;
+            let c0 = clip_vec(if HIGH { acc[0].1 } else { acc[0].0 }, rnd, sh, minv, maxv);
+            let c1 = clip_vec(if HIGH { acc[1].1 } else { acc[1].0 }, rnd, sh, minv, maxv);
+            let c2 = clip_vec(if HIGH { acc[2].1 } else { acc[2].0 }, rnd, sh, minv, maxv);
+            let c3 = clip_vec(if HIGH { acc[3].1 } else { acc[3].0 }, rnd, sh, minv, maxv);
+
+            let t0 = _mm_unpacklo_epi32(c0, c1);
+            let t1 = _mm_unpackhi_epi32(c0, c1);
+            let t2 = _mm_unpacklo_epi32(c2, c3);
+            let t3 = _mm_unpackhi_epi32(c2, c3);
+            let r0 = _mm_unpacklo_epi64(t0, t2);
+            let r1 = _mm_unpackhi_epi64(t0, t2);
+            let r2 = _mm_unpacklo_epi64(t1, t3);
+            let r3 = _mm_unpackhi_epi64(t1, t3);
+
+            _mm_storeu_si128(dst.as_mut_ptr().add(off) as *mut __m128i, r0);
+            _mm_storeu_si128(dst.as_mut_ptr().add(off + stride) as *mut __m128i, r1);
+            _mm_storeu_si128(dst.as_mut_ptr().add(off + 2 * stride) as *mut __m128i, r2);
+            _mm_storeu_si128(dst.as_mut_ptr().add(off + 3 * stride) as *mut __m128i, r3);
+        }
+    }
+
+    #[inline(always)]
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
         unsafe {
             _mm_storeu_si128(dst.as_mut_ptr().add(off) as *mut __m128i, acc.0);
@@ -380,6 +426,64 @@ impl DctSimd4 for SseDct2d {
         let p = out.as_mut_ptr() as *mut __m128i;
         unsafe { _mm_storeu_si128(p, v.0) };
         out
+    }
+
+    #[inline(always)]
+    unsafe fn store4x4_clip(
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        off: usize,
+        stride: usize,
+        v: [Self::V; 4],
+        rnd: i32,
+        shift: i32,
+        min: i32,
+        max: i32,
+    ) {
+        debug_assert!(off + 3 + 3 * stride < ITX_TMP_PIXELS);
+        unsafe {
+            #[inline(always)]
+            unsafe fn clip_vec(
+                v: __m128i,
+                rnd: __m128i,
+                sh: __m128i,
+                minv: __m128i,
+                maxv: __m128i,
+            ) -> __m128i {
+                unsafe {
+                    _mm_min_epi32(
+                        _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(v, rnd), sh), minv),
+                        maxv,
+                    )
+                }
+            }
+
+            let rnd = _mm_set1_epi32(rnd);
+            let sh = _mm_cvtsi32_si128(shift);
+            let minv = _mm_set1_epi32(min);
+            let maxv = _mm_set1_epi32(max);
+
+            let c0 = clip_vec(v[0].0, rnd, sh, minv, maxv);
+            let c1 = clip_vec(v[1].0, rnd, sh, minv, maxv);
+            let c2 = clip_vec(v[2].0, rnd, sh, minv, maxv);
+            let c3 = clip_vec(v[3].0, rnd, sh, minv, maxv);
+
+            // Transpose columns-as-lanes into four row vectors:
+            // cN = [r0cN, r1cN, r2cN, r3cN].
+            let t0 = _mm_unpacklo_epi32(c0, c1);
+            let t1 = _mm_unpackhi_epi32(c0, c1);
+            let t2 = _mm_unpacklo_epi32(c2, c3);
+            let t3 = _mm_unpackhi_epi32(c2, c3);
+            let r0 = _mm_unpacklo_epi64(t0, t2);
+            let r1 = _mm_unpackhi_epi64(t0, t2);
+            let r2 = _mm_unpacklo_epi64(t1, t3);
+            let r3 = _mm_unpackhi_epi64(t1, t3);
+
+            let p = tmp.as_mut_ptr().add(off) as *mut __m128i;
+            _mm_storeu_si128(p, r0);
+            _mm_storeu_si128(tmp.as_mut_ptr().add(off + stride) as *mut __m128i, r1);
+            _mm_storeu_si128(tmp.as_mut_ptr().add(off + 2 * stride) as *mut __m128i, r2);
+            _mm_storeu_si128(tmp.as_mut_ptr().add(off + 3 * stride) as *mut __m128i, r3);
+        }
     }
 }
 

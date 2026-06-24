@@ -143,12 +143,10 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
         let mut vw = r << 47;
         let mut ret: u32 = 0;
         for _ in 0..n_bits {
-            ret <<= 1;
-            if dif >= vw {
-                dif -= vw;
-            } else {
-                ret |= 1;
-            }
+            let ge = u32::from(dif >= vw);
+            let mask = 0u64.wrapping_sub(ge as u64);
+            dif = dif.wrapping_sub(vw & mask);
+            ret = (ret << 1) | (ge ^ 1);
             vw >>= 1;
         }
         self.dif = ((dif + 1) << n_bits) - 1;
@@ -218,16 +216,24 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
         let r = self.rng;
         let dif = self.dif;
         debug_assert!((dif >> 48) < r as u64);
+
         let p = ((f >> 7) << 4) + 8;
-        let mut v = (((r >> 8) * p) >> 7) << 3;
+        let v = (((r >> 8) * p) >> 7) << 3;
         let vw = (v as u64) << 48;
-        let ret = if dif >= vw { 1 } else { 0 };
-        let new_dif = dif - ret as u64 * vw;
-        if ret != 0 {
-            v = r - v;
-        }
-        self.ctx_norm(new_dif, v);
-        (ret == 0) as u32
+
+        // dav2d keeps this branchless with SUB/CMOV.  Express the same state
+        // transition in Rust so LLVM can lower it without a hard branch in the
+        // coefficient hot path.  The returned AV1 bit is one when dif < vw.
+        let ge = u32::from(dif >= vw);
+        let ge_u64 = ge as u64;
+        let ge_mask64 = 0u64.wrapping_sub(ge_u64);
+        let ge_mask32 = 0u32.wrapping_sub(ge);
+
+        let new_dif = dif.wrapping_sub(vw & ge_mask64);
+        let new_rng = (v & !ge_mask32) | ((r - v) & ge_mask32);
+
+        self.ctx_norm(new_dif, new_rng);
+        ge ^ 1
     }
 
     #[inline(always)]
@@ -332,22 +338,14 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
     pub(crate) fn decode_unary_bypass_avx2(&mut self, max_bits: u32) -> u32 {
         debug_assert!(max_bits == 5 || max_bits == 6 || max_bits == 21);
 
-        if max_bits > 6 {
-            return self.decode_unary_bypass_scalar(max_bits);
-        }
-
         if (self.cnt as u32) < max_bits {
             self.ctx_refill();
         }
 
         let ret = msac_unary_bypass_ret_avx2(self.dif, self.rng, max_bits);
         let bits = ret + u32::from(ret < max_bits);
-        let mut dif = self.dif;
-        let mut vw = (self.rng as u64) << 47;
-        for _ in 0..ret {
-            dif -= vw;
-            vw >>= 1;
-        }
+        let dif = self.dif - unary_success_sum(self.rng, ret);
+
         self.dif = ((dif + 1) << bits) - 1;
         self.cnt -= bits as i32;
         ret
@@ -466,22 +464,73 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextAvx<'a, U
 #[repr(C, align(32))]
 struct AlignedAvxI32<T>(T);
 
-static UNARY_MUL32: AlignedAvxI32<[i32; 8]> = AlignedAvxI32([
-    0x8000, 0xc000, 0xe000, 0xf000, 0xf800, 0xfc00, 0xfe00, 0xff00,
+static UNARY_MUL32: AlignedAvxI32<[i32; 16]> = AlignedAvxI32([
+    0x8000, 0xc000, 0xe000, 0xf000, 0xf800, 0xfc00, 0xfe00, 0xff00, 0xff80, 0xffc0, 0xffe0, 0xfff0,
+    0xfff8, 0xfffc, 0xfffe, 0xffff,
 ]);
+
+#[inline(always)]
+fn unary_success_sum(rng: u32, ret: u32) -> u64 {
+    if ret == 0 {
+        0
+    } else {
+        ((rng as u64) * ((1u64 << ret) - 1)) << (48 - ret)
+    }
+}
+
+#[inline(always)]
+fn unary_threshold(rng: u32, bits: u32) -> u64 {
+    debug_assert!((1..=21).contains(&bits));
+    ((rng as u64) * ((1u64 << bits) - 1)) << (48 - bits)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn cmpgt_epu32_avx2(a: __m256i, b: __m256i) -> __m256i {
+    let sign = _mm256_set1_epi32(i32::MIN);
+    _mm256_cmpgt_epi32(_mm256_xor_si256(a, sign), _mm256_xor_si256(b, sign))
+}
 
 #[target_feature(enable = "avx2")]
 fn msac_unary_bypass_ret_avx2(dif: u64, rng: u32, max_bits: u32) -> u32 {
-    debug_assert!(max_bits == 5 || max_bits == 6);
+    debug_assert!(max_bits == 5 || max_bits == 6 || max_bits == 21);
 
-    let r = _mm256_set1_epi32(((rng >> 1) & 0x7fff) as i32);
-    let mul = unsafe { _mm256_load_si256(UNARY_MUL32.0.as_ptr().cast()) };
-    let thresholds = _mm256_mullo_epi32(r, mul);
-    let d = _mm256_set1_epi32((dif >> 33) as i32);
-    let diff = _mm256_sub_epi32(d, thresholds);
-    let fail_mask = _mm256_movemask_ps(_mm256_castsi256_ps(diff)) as u32;
+    let r = _mm256_set1_epi32(rng as i32);
+    let d = _mm256_set1_epi32((dif >> 32) as i32);
 
-    (fail_mask | (1u32 << max_bits)).trailing_zeros()
+    let mul0 = unsafe { _mm256_load_si256(UNARY_MUL32.0.as_ptr().cast()) };
+    let thr0 = _mm256_mullo_epi32(r, mul0);
+    let fail0 = _mm256_movemask_ps(_mm256_castsi256_ps(cmpgt_epu32_avx2(thr0, d))) as u32;
+
+    let limit0 = max_bits.min(8);
+    let ret0 = (fail0 | (1u32 << limit0)).trailing_zeros();
+    if ret0 < limit0 || max_bits <= 8 {
+        return ret0;
+    }
+
+    let mul1 = unsafe { _mm256_load_si256(UNARY_MUL32.0.as_ptr().add(8).cast()) };
+    let thr1 = _mm256_mullo_epi32(r, mul1);
+    let fail1 = _mm256_movemask_ps(_mm256_castsi256_ps(cmpgt_epu32_avx2(thr1, d))) as u32;
+
+    let ret1 = (fail1 | (1u32 << 8)).trailing_zeros();
+    if ret1 < 8 {
+        return 8 + ret1;
+    }
+
+    if max_bits <= 16 {
+        return max_bits;
+    }
+
+    // dav2d handles 17..21 with wider AVX2 qword math.  Rust AVX2 lacks a
+    // compact full u64 multiply/compare sequence, so keep the same threshold
+    // model and finish the five remaining candidates scalar.  This remains an
+    // O(1) tail and avoids the old bit-by-bit loop for the 21-bit path.
+    for bits in 17..=21 {
+        if dif < unary_threshold(rng, bits) {
+            return bits - 1;
+        }
+    }
+    21
 }
 
 #[inline]
@@ -507,6 +556,33 @@ fn load_min_prob<const N: usize>() -> __m128i {
             _mm_loadu_si128(ptr)
         }
     }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn update_cdf_avx2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m128i, rate: u8) {
+    debug_assert!((1..=7).contains(&N));
+    debug_assert!(cdf.len() > N);
+
+    let shift = _mm_cvtsi32_si128(rate as i32);
+    let half = _mm_set1_epi16(0x8000u16 as i16);
+
+    let add_delta = _mm_srl_epi16(_mm_sub_epi16(half, cdf_v), shift);
+    let sub_delta = _mm_srl_epi16(cdf_v, shift);
+    let add_path = _mm_add_epi16(cdf_v, add_delta);
+    let sub_path = _mm_sub_epi16(cdf_v, sub_delta);
+
+    // ge_mask is all-ones for lanes i >= decoded symbol and zero for lanes
+    // i < decoded symbol.  That exactly matches the two AV1 CDF update halves:
+    // before val move toward 32768, at/after val move toward zero.
+    let updated = _mm_or_si128(
+        _mm_and_si128(ge_mask, sub_path),
+        _mm_andnot_si128(ge_mask, add_path),
+    );
+
+    let mut tmp = [0u16; 8];
+    unsafe { _mm_storeu_si128(tmp.as_mut_ptr().cast(), updated) };
+    cdf[..N].copy_from_slice(&tmp[..N]);
 }
 
 #[target_feature(enable = "avx2")]
@@ -565,12 +641,7 @@ fn msac_decode_symbol_adapt_avx2<const UPDATE_CDF: bool, const N: usize>(
         debug_assert!(count <= 32);
         let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
 
-        for cdf_i in cdf[..val].iter_mut() {
-            *cdf_i = cdf_i.wrapping_add((32768u16 - *cdf_i) >> rate);
-        }
-        for cdf_i in cdf[val..N].iter_mut() {
-            *cdf_i = cdf_i.wrapping_sub(*cdf_i >> rate);
-        }
+        update_cdf_avx2::<N>(cdf, cdf_v, cmp, rate);
         cdf[N] = pc + u16::from(count < 32);
     }
 

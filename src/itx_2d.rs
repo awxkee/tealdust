@@ -687,6 +687,37 @@ pub(crate) trait DctSimd4 {
     unsafe fn load_slice(src: &[i32], off: usize) -> Self::V;
     unsafe fn load_slice_i16(src: &[i16], off: usize) -> Self::V;
     unsafe fn to_array(v: Self::V) -> [i32; 4];
+
+    /// Store four row-pass output columns as four contiguous scratch rows.
+    ///
+    /// The row-pass SIMD lanes carry four source rows for one output column.
+    /// The column pass wants row-major scratch, so this is the hot transpose
+    /// boundary. Architecture backends override this with a SIMD 4x4 transpose;
+    /// the fallback is kept only for scalar-like backends and tests.
+    #[inline(always)]
+    unsafe fn store4x4_clip(
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        off: usize,
+        stride: usize,
+        v: [Self::V; 4],
+        rnd: i32,
+        shift: i32,
+        min: i32,
+        max: i32,
+    ) {
+        debug_assert!(off + 3 + 3 * stride < ITX_TMP_PIXELS);
+        let c0 = unsafe { Self::to_array(v[0]) };
+        let c1 = unsafe { Self::to_array(v[1]) };
+        let c2 = unsafe { Self::to_array(v[2]) };
+        let c3 = unsafe { Self::to_array(v[3]) };
+        for r in 0..4 {
+            let row = off + r * stride;
+            tmp[row] = clip_row_value(c0[r], rnd, shift, min, max);
+            tmp[row + 1] = clip_row_value(c1[r], rnd, shift, min, max);
+            tmp[row + 2] = clip_row_value(c2[r], rnd, shift, min, max);
+            tmp[row + 3] = clip_row_value(c3[r], rnd, shift, min, max);
+        }
+    }
 }
 
 pub(crate) trait ItxCoeff: Coeff {
@@ -839,14 +870,80 @@ fn store_row_group_x4_clip<B: DctSimd4, const S: usize>(
     min: i32,
     max: i32,
 ) {
-    unsafe {
-        for (x, &vx) in v.iter().enumerate() {
-            let lanes = B::to_array(vx);
-            tmp[y * ITX_TMP_STRIDE + x] = clip_row_value(lanes[0], rnd, shift, min, max);
-            tmp[(y + 1) * ITX_TMP_STRIDE + x] = clip_row_value(lanes[1], rnd, shift, min, max);
-            tmp[(y + 2) * ITX_TMP_STRIDE + x] = clip_row_value(lanes[2], rnd, shift, min, max);
-            tmp[(y + 3) * ITX_TMP_STRIDE + x] = clip_row_value(lanes[3], rnd, shift, min, max);
+    debug_assert_eq!(S & 3, 0);
+    let base = y * ITX_TMP_STRIDE;
+    let mut x = 0usize;
+    while x + 4 <= S {
+        unsafe {
+            B::store4x4_clip(
+                tmp,
+                base + x,
+                ITX_TMP_STRIDE,
+                [v[x], v[x + 1], v[x + 2], v[x + 3]],
+                rnd,
+                shift,
+                min,
+                max,
+            );
         }
+        x += 4;
+    }
+}
+
+#[inline(always)]
+fn store_row_group_wide_x4_clip<DW: crate::itx_1d::DctWide, const W: usize>(
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    y: usize,
+    out: &[DW::Acc; W],
+    clip: DW::Clip,
+) {
+    debug_assert_eq!(W & 3, 0);
+    let base = y * ITX_TMP_STRIDE;
+    let mut x = 0usize;
+    while x + 4 <= W {
+        unsafe {
+            DW::store4x4_strided_clip::<false>(
+                tmp,
+                base + x,
+                ITX_TMP_STRIDE,
+                [out[x], out[x + 1], out[x + 2], out[x + 3]],
+                clip,
+            );
+        }
+        x += 4;
+    }
+}
+
+#[inline(always)]
+fn store_row_group_wide_x8_clip<DW: crate::itx_1d::DctWide, const W: usize>(
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    y: usize,
+    out: &[DW::Acc; W],
+    clip: DW::Clip,
+) {
+    debug_assert_eq!(W & 7, 0);
+    let base = y * ITX_TMP_STRIDE;
+    let mut x = 0usize;
+    while x + 8 <= W {
+        unsafe {
+            DW::store8x8_strided_clip(
+                tmp,
+                base + x,
+                ITX_TMP_STRIDE,
+                [
+                    out[x],
+                    out[x + 1],
+                    out[x + 2],
+                    out[x + 3],
+                    out[x + 4],
+                    out[x + 5],
+                    out[x + 6],
+                    out[x + 7],
+                ],
+                clip,
+            );
+        }
+        x += 8;
     }
 }
 
@@ -877,32 +974,39 @@ fn process_row_group_itx_wide_x4<
         }
     });
     let clip = B::Wide::make_clip(rnd, shift, min, max);
-    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
-        B::Wide::store4_strided_clip(tmp, y * ITX_TMP_STRIDE + m, ITX_TMP_STRIDE, acc, clip);
-    };
-    match (W, KIND) {
-        (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], store),
-        (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], store),
-        (16, TX_KIND_ADST) => {
-            crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], store, &ADST16_KW, false)
+    let zero = B::Wide::zero();
+    let mut out = [zero; W];
+    {
+        let mut store = |m: usize, acc: <B::Wide as DctWide>::Acc| out[m] = acc;
+        match (W, KIND) {
+            (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], &mut store),
+            (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], &mut store),
+            (16, TX_KIND_ADST) => {
+                crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &ADST16_KW, false)
+            }
+            (16, TX_KIND_FLIPADST) => {
+                crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &FLIPADST16_KW, false)
+            }
+            (8, TX_KIND_DCT) => {
+                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &DCT8_KW, false)
+            }
+            (8, TX_KIND_ADST) => {
+                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, false)
+            }
+            (8, TX_KIND_FLIPADST) => {
+                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, true)
+            }
+            (4, TX_KIND_DCT) => crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], &mut store, &DCT4_KW),
+            (4, TX_KIND_ADST) => {
+                crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], &mut store, &ADST4_KW)
+            }
+            (4, TX_KIND_FLIPADST) => {
+                crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], &mut store, &FLIPADST4_KW)
+            }
+            _ => unreachable!(),
         }
-        (16, TX_KIND_FLIPADST) => {
-            crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], store, &FLIPADST16_KW, false)
-        }
-        (8, TX_KIND_DCT) => crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &DCT8_KW, false),
-        (8, TX_KIND_ADST) => {
-            crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &ADST8_KW, false)
-        }
-        (8, TX_KIND_FLIPADST) => {
-            crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &ADST8_KW, true)
-        }
-        (4, TX_KIND_DCT) => crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], store, &DCT4_KW),
-        (4, TX_KIND_ADST) => crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], store, &ADST4_KW),
-        (4, TX_KIND_FLIPADST) => {
-            crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], store, &FLIPADST4_KW)
-        }
-        _ => unreachable!(),
     }
+    store_row_group_wide_x4_clip::<B::Wide, W>(tmp, y, &out, clip);
 }
 
 #[inline(always)]
@@ -935,25 +1039,17 @@ fn process_row_group_x4<B: DctSimd4, const S: usize, C: ItxCoeff>(
         }
         16 => {
             let load = |j: usize| unsafe { C::load_simd4::<B>(coeff, y + j * 16) };
-            let store = |m: usize, v: B::V| {
-                let l = unsafe { B::to_array(v) };
-                tmp[y * ITX_TMP_STRIDE + m] = clip_row_value(l[0], rnd, shift, min, max);
-                tmp[(y + 1) * ITX_TMP_STRIDE + m] = clip_row_value(l[1], rnd, shift, min, max);
-                tmp[(y + 2) * ITX_TMP_STRIDE + m] = clip_row_value(l[2], rnd, shift, min, max);
-                tmp[(y + 3) * ITX_TMP_STRIDE + m] = clip_row_value(l[3], rnd, shift, min, max);
-            };
-            crate::itx_1d::dct16_flat_bylane::<B::V>(load, store);
+            let zero = unsafe { B::zero() };
+            let mut out = [zero; 16];
+            crate::itx_1d::dct16_flat_bylane::<B::V>(load, |m, v| out[m] = v);
+            store_row_group_x4_clip::<B, 16>(tmp, y, &out, rnd, shift, min, max);
         }
         32 => {
             let load = |j: usize| unsafe { C::load_simd4::<B>(coeff, y + j * 32) };
-            let store = |m: usize, v: B::V| {
-                let l = unsafe { B::to_array(v) };
-                tmp[y * ITX_TMP_STRIDE + m] = clip_row_value(l[0], rnd, shift, min, max);
-                tmp[(y + 1) * ITX_TMP_STRIDE + m] = clip_row_value(l[1], rnd, shift, min, max);
-                tmp[(y + 2) * ITX_TMP_STRIDE + m] = clip_row_value(l[2], rnd, shift, min, max);
-                tmp[(y + 3) * ITX_TMP_STRIDE + m] = clip_row_value(l[3], rnd, shift, min, max);
-            };
-            crate::itx_1d::dct32_flat::<B::V>(load, store);
+            let zero = unsafe { B::zero() };
+            let mut out = [zero; 32];
+            crate::itx_1d::dct32_flat::<B::V>(load, |m, v| out[m] = v);
+            store_row_group_x4_clip::<B, 32>(tmp, y, &out, rnd, shift, min, max);
         }
         _ => unreachable!(),
     }
@@ -973,14 +1069,17 @@ fn process_row_group_wide_x8<B: DctSimd4, const S: usize, C: ItxCoeff>(
     let s: [<B::Wide as DctWide>::In; S] =
         core::array::from_fn(|j| unsafe { C::load_wide8::<B::Wide>(coeff, y + j * S) });
     let clip = B::Wide::make_clip(rnd, shift, min, max);
-    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
-        B::Wide::store8_strided_clip(tmp, y * ITX_TMP_STRIDE + m, ITX_TMP_STRIDE, acc, clip);
-    };
-    match S {
-        16 => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], store),
-        32 => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], store),
-        _ => unreachable!(),
+    let zero = B::Wide::zero();
+    let mut out = [zero; S];
+    {
+        let mut store = |m: usize, acc: <B::Wide as DctWide>::Acc| out[m] = acc;
+        match S {
+            16 => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], &mut store),
+            32 => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], &mut store),
+            _ => unreachable!(),
+        }
     }
+    store_row_group_wide_x8_clip::<B::Wide, S>(tmp, y, &out, clip);
 }
 
 #[inline(always)]
@@ -1400,27 +1499,32 @@ fn process_row_group_itx_wide_x8<
         }
     });
     let clip = B::Wide::make_clip(rnd, shift, min, max);
-    let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
-        B::Wide::store8_strided_clip(tmp, y * ITX_TMP_STRIDE + m, ITX_TMP_STRIDE, acc, clip);
-    };
-    match (W, KIND) {
-        (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], store),
-        (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], store),
-        (16, TX_KIND_ADST) => {
-            crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], store, &ADST16_KW, false)
+    let zero = B::Wide::zero();
+    let mut out = [zero; W];
+    {
+        let mut store = |m: usize, acc: <B::Wide as DctWide>::Acc| out[m] = acc;
+        match (W, KIND) {
+            (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], &mut store),
+            (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], &mut store),
+            (16, TX_KIND_ADST) => {
+                crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &ADST16_KW, false)
+            }
+            (16, TX_KIND_FLIPADST) => {
+                crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &FLIPADST16_KW, false)
+            }
+            (8, TX_KIND_DCT) => {
+                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &DCT8_KW, false)
+            }
+            (8, TX_KIND_ADST) => {
+                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, false)
+            }
+            (8, TX_KIND_FLIPADST) => {
+                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, true)
+            }
+            _ => unreachable!(),
         }
-        (16, TX_KIND_FLIPADST) => {
-            crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], store, &FLIPADST16_KW, false)
-        }
-        (8, TX_KIND_DCT) => crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &DCT8_KW, false),
-        (8, TX_KIND_ADST) => {
-            crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &ADST8_KW, false)
-        }
-        (8, TX_KIND_FLIPADST) => {
-            crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], store, &ADST8_KW, true)
-        }
-        _ => unreachable!(),
     }
+    store_row_group_wide_x8_clip::<B::Wide, W>(tmp, y, &out, clip);
 }
 
 #[inline(always)]
@@ -2067,13 +2171,6 @@ fn process_row_group_rect_x4<B: DctSimd4, const W: usize, const H: usize, C: Itx
         }
         32 => {
             let load = |j: usize| unsafe { C::load_simd4::<B>(coeff, y + j * H) };
-            let store = |m: usize, v: B::V| {
-                let l = unsafe { B::to_array(v) };
-                tmp[y * ITX_TMP_STRIDE + m] = clip_row_value(l[0], rnd, shift, min, max);
-                tmp[(y + 1) * ITX_TMP_STRIDE + m] = clip_row_value(l[1], rnd, shift, min, max);
-                tmp[(y + 2) * ITX_TMP_STRIDE + m] = clip_row_value(l[2], rnd, shift, min, max);
-                tmp[(y + 3) * ITX_TMP_STRIDE + m] = clip_row_value(l[3], rnd, shift, min, max);
-            };
             let mut row = [unsafe { B::zero() }; 32];
             for j in 0..32 {
                 row[j] = load(j);
@@ -2081,7 +2178,10 @@ fn process_row_group_rect_x4<B: DctSimd4, const W: usize, const H: usize, C: Itx
                     row[j] = unsafe { B::rect2_scale(row[j]) };
                 }
             }
-            crate::itx_1d::dct32_flat::<B::V>(|j| row[j], store);
+            let zero = unsafe { B::zero() };
+            let mut out = [zero; 32];
+            crate::itx_1d::dct32_flat::<B::V>(|j| row[j], |m, v| out[m] = v);
+            store_row_group_x4_clip::<B, 32>(tmp, y, &out, rnd, shift, min, max);
         }
         _ => unreachable!(),
     }

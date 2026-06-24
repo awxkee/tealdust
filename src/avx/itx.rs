@@ -290,6 +290,139 @@ impl crate::itx_1d::DctWide for AvxWide {
     }
 
     #[inline(always)]
+    unsafe fn store4x4_strided_clip<const HIGH: bool>(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: [Self::Acc; 4],
+        clip: Self::Clip,
+    ) {
+        unsafe {
+            #[inline(always)]
+            unsafe fn clip_lane<const HIGH: bool>(
+                v: __m256i,
+                rnd: __m256i,
+                sh: __m128i,
+                minv: __m256i,
+                maxv: __m256i,
+            ) -> __m128i {
+                unsafe {
+                    let v = _mm256_min_epi32(
+                        _mm256_max_epi32(_mm256_sra_epi32(_mm256_add_epi32(v, rnd), sh), minv),
+                        maxv,
+                    );
+                    if HIGH {
+                        _mm256_extracti128_si256::<1>(v)
+                    } else {
+                        _mm256_castsi256_si128(v)
+                    }
+                }
+            }
+            let (rnd, sh, minv, maxv) = clip;
+            let c0 = clip_lane::<HIGH>(acc[0], rnd, sh, minv, maxv);
+            let c1 = clip_lane::<HIGH>(acc[1], rnd, sh, minv, maxv);
+            let c2 = clip_lane::<HIGH>(acc[2], rnd, sh, minv, maxv);
+            let c3 = clip_lane::<HIGH>(acc[3], rnd, sh, minv, maxv);
+
+            let t0 = _mm_unpacklo_epi32(c0, c1);
+            let t1 = _mm_unpackhi_epi32(c0, c1);
+            let t2 = _mm_unpacklo_epi32(c2, c3);
+            let t3 = _mm_unpackhi_epi32(c2, c3);
+            let r0 = _mm_unpacklo_epi64(t0, t2);
+            let r1 = _mm_unpackhi_epi64(t0, t2);
+            let r2 = _mm_unpacklo_epi64(t1, t3);
+            let r3 = _mm_unpackhi_epi64(t1, t3);
+
+            _mm_storeu_si128(dst.as_mut_ptr().add(off) as *mut __m128i, r0);
+            _mm_storeu_si128(dst.as_mut_ptr().add(off + stride) as *mut __m128i, r1);
+            _mm_storeu_si128(dst.as_mut_ptr().add(off + 2 * stride) as *mut __m128i, r2);
+            _mm_storeu_si128(dst.as_mut_ptr().add(off + 3 * stride) as *mut __m128i, r3);
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn store8x8_strided_clip(
+        dst: &mut [i32],
+        off: usize,
+        stride: usize,
+        acc: [Self::Acc; 8],
+        clip: Self::Clip,
+    ) {
+        debug_assert!(off + 7 + 7 * stride < dst.len());
+        unsafe {
+            #[inline(always)]
+            unsafe fn clip_vec(
+                v: __m256i,
+                rnd: __m256i,
+                sh: __m128i,
+                minv: __m256i,
+                maxv: __m256i,
+            ) -> __m256i {
+                unsafe {
+                    _mm256_min_epi32(
+                        _mm256_max_epi32(_mm256_sra_epi32(_mm256_add_epi32(v, rnd), sh), minv),
+                        maxv,
+                    )
+                }
+            }
+
+            #[inline(always)]
+            unsafe fn store_row(dst: &mut [i32], off: usize, v: __m256i) {
+                unsafe { _mm256_storeu_si256(dst.as_mut_ptr().add(off) as *mut __m256i, v) };
+            }
+
+            let (rnd, sh, minv, maxv) = clip;
+            let c0 = clip_vec(acc[0], rnd, sh, minv, maxv);
+            let c1 = clip_vec(acc[1], rnd, sh, minv, maxv);
+            let c2 = clip_vec(acc[2], rnd, sh, minv, maxv);
+            let c3 = clip_vec(acc[3], rnd, sh, minv, maxv);
+            let c4 = clip_vec(acc[4], rnd, sh, minv, maxv);
+            let c5 = clip_vec(acc[5], rnd, sh, minv, maxv);
+            let c6 = clip_vec(acc[6], rnd, sh, minv, maxv);
+            let c7 = clip_vec(acc[7], rnd, sh, minv, maxv);
+
+            // cN is one output column with lanes [r0cN..r7cN]. First build
+            // 4-column row fragments in each 128-bit lane, then join low/high
+            // halves from columns 0..3 and 4..7 into eight full rows.
+            let t0 = _mm256_unpacklo_epi32(c0, c1);
+            let t1 = _mm256_unpackhi_epi32(c0, c1);
+            let t2 = _mm256_unpacklo_epi32(c2, c3);
+            let t3 = _mm256_unpackhi_epi32(c2, c3);
+            let t4 = _mm256_unpacklo_epi32(c4, c5);
+            let t5 = _mm256_unpackhi_epi32(c4, c5);
+            let t6 = _mm256_unpacklo_epi32(c6, c7);
+            let t7 = _mm256_unpackhi_epi32(c6, c7);
+
+            let a0 = _mm256_unpacklo_epi64(t0, t2);
+            let a1 = _mm256_unpackhi_epi64(t0, t2);
+            let a2 = _mm256_unpacklo_epi64(t1, t3);
+            let a3 = _mm256_unpackhi_epi64(t1, t3);
+            let a4 = _mm256_unpacklo_epi64(t4, t6);
+            let a5 = _mm256_unpackhi_epi64(t4, t6);
+            let a6 = _mm256_unpacklo_epi64(t5, t7);
+            let a7 = _mm256_unpackhi_epi64(t5, t7);
+
+            let r0 = _mm256_permute2x128_si256::<0x20>(a0, a4);
+            let r1 = _mm256_permute2x128_si256::<0x20>(a1, a5);
+            let r2 = _mm256_permute2x128_si256::<0x20>(a2, a6);
+            let r3 = _mm256_permute2x128_si256::<0x20>(a3, a7);
+            let r4 = _mm256_permute2x128_si256::<0x31>(a0, a4);
+            let r5 = _mm256_permute2x128_si256::<0x31>(a1, a5);
+            let r6 = _mm256_permute2x128_si256::<0x31>(a2, a6);
+            let r7 = _mm256_permute2x128_si256::<0x31>(a3, a7);
+
+            store_row(dst, off, r0);
+            store_row(dst, off + stride, r1);
+            store_row(dst, off + 2 * stride, r2);
+            store_row(dst, off + 3 * stride, r3);
+            store_row(dst, off + 4 * stride, r4);
+            store_row(dst, off + 5 * stride, r5);
+            store_row(dst, off + 6 * stride, r6);
+            store_row(dst, off + 7 * stride, r7);
+        }
+    }
+
+    #[inline(always)]
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
         unsafe { _mm256_storeu_si256(dst.as_mut_ptr().add(off) as *mut __m256i, acc) };
     }
@@ -381,6 +514,64 @@ impl DctSimd4 for AvxDct2d {
         let p = out.as_mut_ptr() as *mut __m128i;
         unsafe { _mm_storeu_si128(p, v.0) };
         out
+    }
+
+    #[inline(always)]
+    unsafe fn store4x4_clip(
+        tmp: &mut [i32; ITX_TMP_PIXELS],
+        off: usize,
+        stride: usize,
+        v: [Self::V; 4],
+        rnd: i32,
+        shift: i32,
+        min: i32,
+        max: i32,
+    ) {
+        debug_assert!(off + 3 + 3 * stride < ITX_TMP_PIXELS);
+        unsafe {
+            #[inline(always)]
+            unsafe fn clip_vec(
+                v: __m128i,
+                rnd: __m128i,
+                sh: __m128i,
+                minv: __m128i,
+                maxv: __m128i,
+            ) -> __m128i {
+                unsafe {
+                    _mm_min_epi32(
+                        _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32(v, rnd), sh), minv),
+                        maxv,
+                    )
+                }
+            }
+
+            let rnd = _mm_set1_epi32(rnd);
+            let sh = _mm_cvtsi32_si128(shift);
+            let minv = _mm_set1_epi32(min);
+            let maxv = _mm_set1_epi32(max);
+
+            let c0 = clip_vec(v[0].0, rnd, sh, minv, maxv);
+            let c1 = clip_vec(v[1].0, rnd, sh, minv, maxv);
+            let c2 = clip_vec(v[2].0, rnd, sh, minv, maxv);
+            let c3 = clip_vec(v[3].0, rnd, sh, minv, maxv);
+
+            // Transpose columns-as-lanes into four row vectors:
+            // cN = [r0cN, r1cN, r2cN, r3cN].
+            let t0 = _mm_unpacklo_epi32(c0, c1);
+            let t1 = _mm_unpackhi_epi32(c0, c1);
+            let t2 = _mm_unpacklo_epi32(c2, c3);
+            let t3 = _mm_unpackhi_epi32(c2, c3);
+            let r0 = _mm_unpacklo_epi64(t0, t2);
+            let r1 = _mm_unpackhi_epi64(t0, t2);
+            let r2 = _mm_unpacklo_epi64(t1, t3);
+            let r3 = _mm_unpackhi_epi64(t1, t3);
+
+            let p = tmp.as_mut_ptr().add(off) as *mut __m128i;
+            _mm_storeu_si128(p, r0);
+            _mm_storeu_si128(tmp.as_mut_ptr().add(off + stride) as *mut __m128i, r1);
+            _mm_storeu_si128(tmp.as_mut_ptr().add(off + 2 * stride) as *mut __m128i, r2);
+            _mm_storeu_si128(tmp.as_mut_ptr().add(off + 3 * stride) as *mut __m128i, r3);
+        }
     }
 }
 

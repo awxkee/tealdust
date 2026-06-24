@@ -145,12 +145,10 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         let mut vw = r << 47;
         let mut ret: u32 = 0;
         for _ in 0..n_bits {
-            ret <<= 1;
-            if dif >= vw {
-                dif -= vw;
-            } else {
-                ret |= 1;
-            }
+            let ge = u32::from(dif >= vw);
+            let mask = 0u64.wrapping_sub(ge as u64);
+            dif = dif.wrapping_sub(vw & mask);
+            ret = (ret << 1) | (ge ^ 1);
             vw >>= 1;
         }
         self.dif = ((dif + 1) << n_bits) - 1;
@@ -220,16 +218,24 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         let r = self.rng;
         let dif = self.dif;
         debug_assert!((dif >> 48) < r as u64);
+
         let p = ((f >> 7) << 4) + 8;
-        let mut v = (((r >> 8) * p) >> 7) << 3;
+        let v = (((r >> 8) * p) >> 7) << 3;
         let vw = (v as u64) << 48;
-        let ret = if dif >= vw { 1 } else { 0 };
-        let new_dif = dif - ret as u64 * vw;
-        if ret != 0 {
-            v = r - v;
-        }
-        self.ctx_norm(new_dif, v);
-        (ret == 0) as u32
+
+        // dav2d keeps this branchless with SUB/CMOV.  Express the same state
+        // transition in Rust so LLVM can lower it without a hard branch in the
+        // coefficient hot path.  The returned AV1 bit is one when dif < vw.
+        let ge = u32::from(dif >= vw);
+        let ge_u64 = ge as u64;
+        let ge_mask64 = 0u64.wrapping_sub(ge_u64);
+        let ge_mask32 = 0u32.wrapping_sub(ge);
+
+        let new_dif = dif.wrapping_sub(vw & ge_mask64);
+        let new_rng = (v & !ge_mask32) | ((r - v) & ge_mask32);
+
+        self.ctx_norm(new_dif, new_rng);
+        ge ^ 1
     }
 
     #[inline(always)]
@@ -439,7 +445,8 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse2")]
 fn load_cdf<const N: usize>(cdf: &[u16]) -> __m128i {
     unsafe {
         if N <= 4 {
@@ -450,7 +457,8 @@ fn load_cdf<const N: usize>(cdf: &[u16]) -> __m128i {
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse2")]
 fn load_min_prob<const N: usize>() -> __m128i {
     let ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
     unsafe {
@@ -460,6 +468,33 @@ fn load_min_prob<const N: usize>() -> __m128i {
             _mm_loadu_si128(ptr)
         }
     }
+}
+
+#[inline]
+#[target_feature(enable = "sse2")]
+fn update_cdf_sse2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m128i, rate: u8) {
+    debug_assert!((1..=7).contains(&N));
+    debug_assert!(cdf.len() > N);
+
+    let shift = _mm_cvtsi32_si128(rate as i32);
+    let half = _mm_set1_epi16(0x8000u16 as i16);
+
+    let add_delta = _mm_srl_epi16(_mm_sub_epi16(half, cdf_v), shift);
+    let sub_delta = _mm_srl_epi16(cdf_v, shift);
+    let add_path = _mm_add_epi16(cdf_v, add_delta);
+    let sub_path = _mm_sub_epi16(cdf_v, sub_delta);
+
+    // ge_mask is all-ones for lanes i >= decoded symbol and zero for lanes
+    // i < decoded symbol.  That exactly matches the two AV1 CDF update halves:
+    // before val move toward 32768, at/after val move toward zero.
+    let updated = _mm_or_si128(
+        _mm_and_si128(ge_mask, sub_path),
+        _mm_andnot_si128(ge_mask, add_path),
+    );
+
+    let mut tmp = [0u16; 8];
+    unsafe { _mm_storeu_si128(tmp.as_mut_ptr().cast(), updated) };
+    cdf[..N].copy_from_slice(&tmp[..N]);
 }
 
 #[target_feature(enable = "sse2")]
@@ -518,12 +553,7 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize>(
         debug_assert!(count <= 32);
         let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
 
-        for cdf_i in cdf[..val].iter_mut() {
-            *cdf_i = cdf_i.wrapping_add((32768u16 - *cdf_i) >> rate);
-        }
-        for cdf_i in cdf[val..N].iter_mut() {
-            *cdf_i = cdf_i.wrapping_sub(*cdf_i >> rate);
-        }
+        update_cdf_sse2::<N>(cdf, cdf_v, cmp, rate);
         cdf[N] = pc + u16::from(count < 32);
     }
 

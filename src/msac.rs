@@ -379,12 +379,10 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         let mut vw = r << 47;
         let mut ret: u32 = 0;
         for _ in 0..n_bits {
-            ret <<= 1;
-            if dif >= vw {
-                dif -= vw;
-            } else {
-                ret |= 1;
-            }
+            let ge = u32::from(dif >= vw);
+            let mask = 0u64.wrapping_sub(ge as u64);
+            dif = dif.wrapping_sub(vw & mask);
+            ret = (ret << 1) | (ge ^ 1);
             vw >>= 1;
         }
         self.dif = ((dif + 1) << n_bits) - 1;
@@ -449,16 +447,21 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         let r = self.rng;
         let dif = self.dif;
         debug_assert!((dif >> 48) < r as u64);
+
         let p = ((f >> 7) << 4) + 8;
-        let mut v = (((r >> 8) * p) >> 7) << 3;
+        let v = (((r >> 8) * p) >> 7) << 3;
         let vw = (v as u64) << 48;
-        let ret = if dif >= vw { 1 } else { 0 };
-        let new_dif = dif - ret as u64 * vw;
-        if ret != 0 {
-            v = r - v;
-        }
-        self.ctx_norm(new_dif, v);
-        (ret == 0) as u32
+
+        let ge = u32::from(dif >= vw);
+        let ge_u64 = ge as u64;
+        let ge_mask64 = 0u64.wrapping_sub(ge_u64);
+        let ge_mask32 = 0u32.wrapping_sub(ge);
+
+        let new_dif = dif.wrapping_sub(vw & ge_mask64);
+        let new_rng = (v & !ge_mask32) | ((r - v) & ge_mask32);
+
+        self.ctx_norm(new_dif, new_rng);
+        ge ^ 1
     }
 
     #[inline(always)]
