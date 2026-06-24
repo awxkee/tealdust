@@ -36,7 +36,7 @@ use crate::levels::{
     Av2Block, BlockSize, InterPredMode, MotionMode, Mv, MvXY, RefPair, TIP_FRAME, TxPartition,
 };
 
-use crate::msac::MsacContext;
+use crate::msac::MsacReader;
 use crate::pixel::Pixel;
 
 use crate::tables::{BLOCK_DIMENSIONS, TXFM_DIMENSIONS};
@@ -618,9 +618,13 @@ pub(crate) fn opfl_pred_luma<BD: crate::pixel::BitDepth>(
 /// is reconstructed from one synthesized skip_txfm TIP block whose motion comes
 /// from the projected temporal-MV grid (`rp_proj`). No bits are read.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn tip_frame_recon_sb<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool>(
+pub(crate) fn tip_frame_recon_sb<
+    BD: crate::pixel::BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
     recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     a: &mut BlockContext,
     l: &mut BlockContext,
@@ -751,9 +755,13 @@ where
 /// Residual decode is identical to compound (`inter_luma_tx_walk` /
 /// `inter_chroma_residual_8bpc`).
 #[allow(clippy::too_many_arguments)]
-fn recon_b_inter_tip<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool>(
+fn recon_b_inter_tip<
+    BD: crate::pixel::BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
     recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     a: &mut BlockContext,
     l: &mut BlockContext,
@@ -1921,9 +1929,13 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
 /// residual transforms. Compound (ref pair), interintra blend, TIP and scaled
 /// references are deferred.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn recon_b_inter<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool>(
+pub(crate) fn recon_b_inter<
+    BD: crate::pixel::BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
     recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     a: &mut BlockContext,
     l: &mut BlockContext,
@@ -2399,9 +2411,13 @@ where
 /// we perform the whole chroma (MC + residual) at the read stage so the MSAC
 /// ordering (chroma coefs follow the first luma sub-block) matches the C decoder.
 #[allow(clippy::too_many_arguments)]
-fn recon_b_inter_split<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool>(
+fn recon_b_inter_split<
+    BD: crate::pixel::BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
     recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     a: &mut BlockContext,
     l: &mut BlockContext,
@@ -2556,9 +2572,13 @@ where
 /// load-bearing for the per-4x4 coefficient neighbour context (and hence the
 /// entropy stream). A naive raster tiling desyncs for non-square partitions.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn inter_luma_tx_walk<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool>(
+pub(crate) fn inter_luma_tx_walk<
+    BD: crate::pixel::BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
     recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     a: &mut BlockContext,
     l: &mut BlockContext,

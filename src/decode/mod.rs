@@ -33,7 +33,7 @@ use crate::internal::{LoopFilterState, NsWienerBank, ScalableMotionParams};
 use crate::intops::{imax, imin};
 use crate::levels::{Av2Block, BlockSize, Mv, RefPair, TIP_FRAME};
 
-use crate::msac::MsacContext;
+use crate::msac::{MsacBackend, MsacReader};
 
 use crate::pixel::BitDepth;
 use crate::quantizer::dq_lookup;
@@ -1156,12 +1156,18 @@ pub struct ReconCtx<'a, 'f, BD: BitDepth> {
 /// This used to be a 30+ argument function. Keeping the frequently-mutated
 /// frame/tile state in one named packet makes the call sites audit-able without
 /// changing the hot decode path after inlining.
-pub(crate) struct DecodeTileSbrowEntropyCtx<'a, 'm, 'f, BD: BitDepth, const UPDATE_CDF: bool> {
+pub(crate) struct DecodeTileSbrowEntropyCtx<
+    'a,
+    'f,
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+> {
     pub(crate) bd: BD,
     pub(crate) fi: &'a SbFrameInfo,
     pub(crate) frame_hdr: &'a FrameHeader,
     pub(crate) ts: &'a mut crate::internal::TileState,
-    pub(crate) msac: &'a mut MsacContext<'m, UPDATE_CDF>,
+    pub(crate) msac: &'a mut M,
     pub(crate) a_arr: &'a mut [BlockContext],
     pub(crate) lf_mask: &'a mut [crate::lf_mask::Av2Filter],
     pub(crate) lr_mask: &'a mut [crate::lf_mask::Av2Restoration],
@@ -1200,8 +1206,12 @@ pub(crate) struct DecodeTileSbrowEntropyCtx<'a, 'm, 'f, BD: BitDepth, const UPDA
 ///
 /// for the single-pass, single-thread case. Reads per-superblock restoration
 /// info and CDEF index reset, then drives `decode_sb` across the row.
-pub(crate) fn decode_tile_sbrow_entropy<BD: BitDepth, const UPDATE_CDF: bool>(
-    ctx: DecodeTileSbrowEntropyCtx<'_, '_, '_, BD, UPDATE_CDF>,
+pub(crate) fn decode_tile_sbrow_entropy<
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
+    ctx: DecodeTileSbrowEntropyCtx<'_, '_, BD, UPDATE_CDF, M>,
 ) -> Result<(), ()>
 where
     BD::Coef: DecodeCoeff,
@@ -1726,13 +1736,44 @@ pub fn decode_frame_main(
     pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
     if fc.frame_hdr.disable_cdf_update != 0 {
-        decode_frame_main_inner::<false>(fc, n_passes, n_tc, pool)
+        decode_frame_main_select::<false>(fc, n_passes, n_tc, pool)
     } else {
-        decode_frame_main_inner::<true>(fc, n_passes, n_tc, pool)
+        decode_frame_main_select::<true>(fc, n_passes, n_tc, pool)
     }
 }
 
-fn decode_frame_main_inner<const UPDATE_CDF: bool>(
+#[inline]
+fn decode_frame_main_select<const UPDATE_CDF: bool>(
+    fc: &mut crate::internal::FrameContext,
+    n_passes: i32,
+    n_tc: i32,
+    pool: Option<&crate::mtpool::ThreadPool>,
+) -> Result<(), ()> {
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+    {
+        if std::is_x86_feature_detected!("avx2") {
+            return decode_frame_main_inner::<UPDATE_CDF, crate::msac::AvxMsacBackend>(
+                fc, n_passes, n_tc, pool,
+            );
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        return decode_frame_main_inner::<UPDATE_CDF, crate::msac::SseMsacBackend>(
+            fc, n_passes, n_tc, pool,
+        );
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        decode_frame_main_inner::<UPDATE_CDF, crate::msac::ScalarMsacBackend>(
+            fc, n_passes, n_tc, pool,
+        )
+    }
+}
+
+fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     fc: &mut crate::internal::FrameContext,
     n_passes: i32,
     n_tc: i32,
@@ -2363,52 +2404,56 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool>(
                                         part_w.clear();
                                         reset_context(&mut l, keyframe, is_tip);
                                         // Resume this tile's parked entropy state for sbrow `s`.
-                                        let mut msac = MsacContext::<UPDATE_CDF>::resume(
-                                            &buf,
-                                            ts[ts_idx].msac_state,
-                                        );
-                                        let sbrow_res =
-                                            decode_tile_sbrow_entropy(DecodeTileSbrowEntropyCtx {
-                                                bd: bd_local,
-                                                fi,
-                                                frame_hdr,
-                                                ts: &mut ts[ts_idx],
-                                                msac: &mut msac,
-                                                a_arr: &mut *a,
-                                                lf_mask: &mut *mask,
-                                                lr_mask: &mut *lr_mask,
-                                                l: &mut l,
-                                                dst_y: &mut *dst_y,
-                                                dst_u: &mut *dst_u,
-                                                dst_v: &mut *dst_v,
-                                                cf: &mut *cf,
-                                                recon_scratch: &mut recon_scratch,
-                                                recon_edge: &mut recon_edge,
-                                                recon_frame,
-                                                cur_segmap: &mut cur_segmap[..],
-                                                prev_segmap: prev_segmap_ref,
-                                                segmap_uv: &mut *segmap_uv,
-                                                segmap_uv_stride: uv_segmap_stride,
-                                                cur_ccsomap: &mut cur_ccsomap[..],
-                                                prev_ccsomap: prev_ccsomap_ref,
-                                                part_w: &mut part_w,
-                                                part_r: &part_r,
-                                                by,
-                                                sb256w,
-                                                pass: crate::internal::PASS_ALL,
-                                                root_bs,
-                                                c_root_bs,
-                                                rt: &mut rt,
-                                                rf: rf_imm,
-                                                cur_mvs: &mut *cur_mvs,
-                                                refp: refp_pics,
-                                                svc: svc_v,
-                                                seq_hdr,
-                                                frm_hdr: frame_hdr,
-                                                masks,
-                                            });
-                                        // Park the advanced entropy state + buffer back.
-                                        ts[ts_idx].msac_state = msac.save();
+                                        let (sbrow_res, saved_msac_state) = {
+                                            let mut msac = B::resume(&buf, ts[ts_idx].msac_state);
+                                            let sbrow_res = decode_tile_sbrow_entropy(
+                                                DecodeTileSbrowEntropyCtx {
+                                                    bd: bd_local,
+                                                    fi,
+                                                    frame_hdr,
+                                                    ts: &mut ts[ts_idx],
+                                                    msac: &mut msac,
+                                                    a_arr: &mut *a,
+                                                    lf_mask: &mut *mask,
+                                                    lr_mask: &mut *lr_mask,
+                                                    l: &mut l,
+                                                    dst_y: &mut *dst_y,
+                                                    dst_u: &mut *dst_u,
+                                                    dst_v: &mut *dst_v,
+                                                    cf: &mut *cf,
+                                                    recon_scratch: &mut recon_scratch,
+                                                    recon_edge: &mut recon_edge,
+                                                    recon_frame,
+                                                    cur_segmap: &mut cur_segmap[..],
+                                                    prev_segmap: prev_segmap_ref,
+                                                    segmap_uv: &mut *segmap_uv,
+                                                    segmap_uv_stride: uv_segmap_stride,
+                                                    cur_ccsomap: &mut cur_ccsomap[..],
+                                                    prev_ccsomap: prev_ccsomap_ref,
+                                                    part_w: &mut part_w,
+                                                    part_r: &part_r,
+                                                    by,
+                                                    sb256w,
+                                                    pass: crate::internal::PASS_ALL,
+                                                    root_bs,
+                                                    c_root_bs,
+                                                    rt: &mut rt,
+                                                    rf: rf_imm,
+                                                    cur_mvs: &mut *cur_mvs,
+                                                    refp: refp_pics,
+                                                    svc: svc_v,
+                                                    seq_hdr,
+                                                    frm_hdr: frame_hdr,
+                                                    masks,
+                                                },
+                                            );
+                                            let saved_msac_state = msac.save();
+                                            (sbrow_res, saved_msac_state)
+                                        };
+                                        // Park the advanced entropy state + buffer back. The MSAC
+                                        // context is dropped before moving `buf` back into the tile
+                                        // state, so the borrowed buffer cannot outlive this scope.
+                                        ts[ts_idx].msac_state = saved_msac_state;
                                         ts[ts_idx].msac_buf = buf;
                                         if sbrow_res.is_err() {
                                             got_err.store(true, Relaxed);
@@ -2789,10 +2834,8 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool>(
                     }
                     // The buffers Vec now owns the tile data; build the symbol decoders
                     // borrowing from it (read-only) so they persist across the sby loop.
-                    let mut msacs: Vec<MsacContext<'_, UPDATE_CDF>> = bufs
-                        .iter()
-                        .map(|b| MsacContext::<UPDATE_CDF>::new(b))
-                        .collect();
+                    let mut msacs: Vec<<B as MsacBackend<UPDATE_CDF>>::Ctx<'_>> =
+                        bufs.iter().map(|b| B::new(b)).collect();
                     let mut part_ws: Vec<Vec<u8>> = (0..cols).map(|_| Vec::new()).collect();
                     let part_r: Vec<u8> = Vec::new();
 

@@ -32,7 +32,7 @@ use crate::headers::{AdaptiveBoolean, FrameHeader, MAX_SEGMENTS, RestorationType
 use crate::internal::LoopFilterState;
 use crate::intops::imin;
 
-use crate::msac::MsacContext;
+use crate::msac::MsacContextScalar;
 
 pub(crate) fn decode_frame_init(
     frame_hdr: &FrameHeader,
@@ -200,7 +200,7 @@ pub(crate) fn setup_tile(
     ts.msac_buf = data.to_vec();
     // Seed the resumable entropy state so every sbrow — including the first —
     // restores uniformly from `ts.msac_state` (sbrow-granularity scheduling).
-    ts.msac_state = MsacContext::<true>::new(&ts.msac_buf).save();
+    ts.msac_state = MsacContextScalar::<true>::new(&ts.msac_buf).save();
     ts.tile_start_off = tile_start_off;
 
     setup_tile_bounds(

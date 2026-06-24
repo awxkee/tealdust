@@ -32,6 +32,7 @@ use crate::env::{get_partition_ctx, get_partition2_ctx};
 use crate::internal::Pass;
 use crate::intops::{iclip, imax, imin};
 use crate::levels::{BlockPartition, BlockSize};
+use crate::msac::MsacReader;
 
 /// Whether a chroma sub-block of `cw4`×`ch4` (4px units, already subsampled) is a
 /// valid plane block size, mirroring AVM `get_plane_block_size`/`ss_size_lookup`.
@@ -53,8 +54,8 @@ fn chroma_sub_valid(cw4: i32, ch4: i32) -> bool {
     if aspect >= 4 { mx <= 16 } else { mx <= 64 }
 }
 
-pub(crate) fn decode_partition<const UPDATE_CDF: bool>(
-    ctx: &mut SbCtx<'_, '_, UPDATE_CDF>,
+pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    ctx: &mut SbCtx<'_, UPDATE_CDF, M>,
     pass: u8,
     lbs: BlockSize,
     cbs: BlockSize,

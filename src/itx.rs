@@ -53,6 +53,15 @@ use crate::pixel::{BitDepth, Coeff};
 use crate::scan::LAST_EOB_PER_COL;
 use crate::tables::{TX_SHIFT, TXFM_DIMENSIONS};
 
+macro_rules! call_itx {
+    ($f:expr, $($arg:expr),+ $(,)?) => {{
+        // SAFETY: ITX resolvers only install x86 target-feature kernels after
+        // the corresponding runtime CPU feature check succeeds. Scalar and
+        // NEON entries are valid under the current target configuration.
+        unsafe { ($f)($($arg),+) }
+    }};
+}
+
 const TX_TYPE_LOW8_MASK: u32 = 0xFF;
 const TX_TYPE_KIND_MASK: u32 = 0x7;
 const TX_TYPE_CLASS_SHIFT: u32 = 3;
@@ -319,7 +328,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 match tx {
                     txsz::TX_4X4 => {
                         let f = crate::itx_2d::idct_dequant_4x4_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -332,7 +342,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_8X8 => {
                         let f = crate::itx_2d::idct_dequant_8x8_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -345,7 +356,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_16X16 => {
                         let f = crate::itx_2d::idct_dequant_16x16_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -358,7 +370,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_32X32 => {
                         let f = crate::itx_2d::idct_dequant_32x32_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -371,7 +384,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_64X64 => {
                         let f = crate::itx_2d::idct_dequant_64x64_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -402,7 +416,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 match tx {
                     txsz::TX_4X4 => {
                         let f = crate::itx_2d::idct_dequant_4x4(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -415,7 +430,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_8X8 => {
                         let f = crate::itx_2d::idct_dequant_8x8(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -428,7 +444,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_16X16 => {
                         let f = crate::itx_2d::idct_dequant_16x16(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -441,7 +458,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_32X32 => {
                         let f = crate::itx_2d::idct_dequant_32x32(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -454,7 +472,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_64X64 => {
                         let f = crate::itx_2d::idct_dequant_64x64(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -497,7 +516,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 match tx {
                     txsz::RTX_4X8 => {
                         let f = crate::itx_2d::idct_dequant_4x8_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -510,7 +530,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X4 => {
                         let f = crate::itx_2d::idct_dequant_8x4_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -523,7 +544,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X16 => {
                         let f = crate::itx_2d::idct_dequant_8x16_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -536,7 +558,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X8 => {
                         let f = crate::itx_2d::idct_dequant_16x8_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -549,7 +572,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X32 => {
                         let f = crate::itx_2d::idct_dequant_16x32_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -562,7 +586,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_32X16 => {
                         let f = crate::itx_2d::idct_dequant_32x16_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -575,7 +600,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_4X16 => {
                         let f = crate::itx_2d::idct_dequant_4x16_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -588,7 +614,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X4 => {
                         let f = crate::itx_2d::idct_dequant_16x4_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -601,7 +628,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X32 => {
                         let f = crate::itx_2d::idct_dequant_8x32_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -614,7 +642,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_32X8 => {
                         let f = crate::itx_2d::idct_dequant_32x8_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -627,7 +656,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_4X32 => {
                         let f = crate::itx_2d::idct_dequant_4x32_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -640,7 +670,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_32X4 => {
                         let f = crate::itx_2d::idct_dequant_32x4_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -653,7 +684,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_32X64 => {
                         let f = crate::itx_2d::idct_dequant_32x32_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -666,7 +698,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_64X32 => {
                         let f = crate::itx_2d::idct_dequant_32x32_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -679,7 +712,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X64 => {
                         let f = crate::itx_2d::idct_dequant_16x32_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -692,7 +726,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_64X16 => {
                         let f = crate::itx_2d::idct_dequant_32x16_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -705,7 +740,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X64 => {
                         let f = crate::itx_2d::idct_dequant_8x32_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -718,7 +754,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_64X8 => {
                         let f = crate::itx_2d::idct_dequant_32x8_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -731,7 +768,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_4X64 => {
                         let f = crate::itx_2d::idct_dequant_4x32_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -744,7 +782,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_64X4 => {
                         let f = crate::itx_2d::idct_dequant_32x4_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -776,7 +815,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 match tx {
                     txsz::RTX_4X8 => {
                         let f = crate::itx_2d::idct_dequant_4x8(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -789,7 +829,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X4 => {
                         let f = crate::itx_2d::idct_dequant_8x4(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -802,7 +843,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X16 => {
                         let f = crate::itx_2d::idct_dequant_8x16(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -815,7 +857,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X8 => {
                         let f = crate::itx_2d::idct_dequant_16x8(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -828,7 +871,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X32 => {
                         let f = crate::itx_2d::idct_dequant_16x32(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -841,7 +885,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_32X16 => {
                         let f = crate::itx_2d::idct_dequant_32x16(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -854,7 +899,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_4X16 => {
                         let f = crate::itx_2d::idct_dequant_4x16(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -867,7 +913,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X4 => {
                         let f = crate::itx_2d::idct_dequant_16x4(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -880,7 +927,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X32 => {
                         let f = crate::itx_2d::idct_dequant_8x32(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -893,7 +941,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_32X8 => {
                         let f = crate::itx_2d::idct_dequant_32x8(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -906,7 +955,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_4X32 => {
                         let f = crate::itx_2d::idct_dequant_4x32(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -919,7 +969,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_32X4 => {
                         let f = crate::itx_2d::idct_dequant_32x4(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -932,7 +983,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_32X64 => {
                         let f = crate::itx_2d::idct_dequant_32x32(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -945,7 +997,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_64X32 => {
                         let f = crate::itx_2d::idct_dequant_32x32(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -958,7 +1011,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X64 => {
                         let f = crate::itx_2d::idct_dequant_16x32(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -971,7 +1025,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_64X16 => {
                         let f = crate::itx_2d::idct_dequant_32x16(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -984,7 +1039,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X64 => {
                         let f = crate::itx_2d::idct_dequant_8x32(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -997,7 +1053,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_64X8 => {
                         let f = crate::itx_2d::idct_dequant_32x8(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1010,7 +1067,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_4X64 => {
                         let f = crate::itx_2d::idct_dequant_4x32(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1023,7 +1081,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_64X4 => {
                         let f = crate::itx_2d::idct_dequant_32x4(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1065,7 +1124,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 match tx {
                     txsz::TX_4X4 => {
                         let f = crate::itx_2d::iadst_dequant_4x4_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -1080,7 +1140,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_8X8 => {
                         let f = crate::itx_2d::iadst_dequant_8x8_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -1095,7 +1156,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_16X16 => {
                         let f = crate::itx_2d::iadst_dequant_16x16_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -1128,7 +1190,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 match tx {
                     txsz::TX_4X4 => {
                         let f = crate::itx_2d::iadst_dequant_4x4(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1143,7 +1206,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_8X8 => {
                         let f = crate::itx_2d::iadst_dequant_8x8(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1158,7 +1222,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::TX_16X16 => {
                         let f = crate::itx_2d::iadst_dequant_16x16(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1203,7 +1268,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 match tx {
                     txsz::RTX_4X8 => {
                         let f = crate::itx_2d::iadst_dequant_4x8_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -1218,7 +1284,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X4 => {
                         let f = crate::itx_2d::iadst_dequant_8x4_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -1233,7 +1300,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X16 => {
                         let f = crate::itx_2d::iadst_dequant_8x16_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -1248,7 +1316,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X8 => {
                         let f = crate::itx_2d::iadst_dequant_16x8_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -1263,7 +1332,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_4X16 => {
                         let f = crate::itx_2d::iadst_dequant_4x16_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -1278,7 +1348,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X4 => {
                         let f = crate::itx_2d::iadst_dequant_16x4_i16();
-                        f(
+                        call_itx!(
+                            f,
                             coeff16,
                             tmp.as_mut_array(),
                             eob,
@@ -1311,7 +1382,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 match tx {
                     txsz::RTX_4X8 => {
                         let f = crate::itx_2d::iadst_dequant_4x8(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1326,7 +1398,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X4 => {
                         let f = crate::itx_2d::iadst_dequant_8x4(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1341,7 +1414,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_8X16 => {
                         let f = crate::itx_2d::iadst_dequant_8x16(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1356,7 +1430,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X8 => {
                         let f = crate::itx_2d::iadst_dequant_16x8(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1371,7 +1446,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_4X16 => {
                         let f = crate::itx_2d::iadst_dequant_4x16(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,
@@ -1386,7 +1462,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     }
                     txsz::RTX_16X4 => {
                         let f = crate::itx_2d::iadst_dequant_16x4(hbd);
-                        f(
+                        call_itx!(
+                            f,
                             coeff32,
                             tmp.as_mut_array(),
                             eob,

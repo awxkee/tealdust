@@ -31,11 +31,26 @@ use std::sync::OnceLock;
 
 use crate::pixel::BitDepth;
 
-pub(crate) type IntraPred8Fn =
-    fn(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, width: usize, height: usize, angle: i32);
+macro_rules! call_ipred {
+    ($f:expr, $($arg:expr),+ $(,)?) => {{
+        // SAFETY: intra-pred resolvers only install target-feature kernels
+        // after the corresponding runtime CPU feature check succeeds.
+        unsafe { ($f)($($arg),+) }
+    }};
+}
+
+pub(crate) type IntraPred8Fn = unsafe fn(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    width: usize,
+    height: usize,
+    angle: i32,
+);
 
 pub(crate) type SmoothPred8Fn =
-    fn(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, width: usize, height: usize);
+    unsafe fn(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, width: usize, height: usize);
 
 pub(crate) trait IntraPred8Backend {
     fn ipred_v(
@@ -223,24 +238,24 @@ static IPRED_SMOOTH_H_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_v() -> IntraPred8Fn {
     *IPRED_V_8BPC.get_or_init(|| {
-        let mut f = ipred_v_scalar as IntraPred8Fn;
+        let mut f: IntraPred8Fn = ipred_v_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_v_8bpc_neon as IntraPred8Fn;
+                f = crate::neon::ipred_v_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_v_8bpc_sse41 as IntraPred8Fn;
+                f = crate::sse::ipred_v_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_v_8bpc_avx2 as IntraPred8Fn;
+                f = crate::avx::ipred_v_8bpc_avx2;
             }
         }
         f
@@ -250,24 +265,24 @@ fn resolve_ipred_v() -> IntraPred8Fn {
 #[inline]
 fn resolve_ipred_h() -> IntraPred8Fn {
     *IPRED_H_8BPC.get_or_init(|| {
-        let mut f = ipred_h_scalar as IntraPred8Fn;
+        let mut f: IntraPred8Fn = ipred_h_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_h_8bpc_neon as IntraPred8Fn;
+                f = crate::neon::ipred_h_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_h_8bpc_sse41 as IntraPred8Fn;
+                f = crate::sse::ipred_h_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_h_8bpc_avx2 as IntraPred8Fn;
+                f = crate::avx::ipred_h_8bpc_avx2;
             }
         }
         f
@@ -277,24 +292,24 @@ fn resolve_ipred_h() -> IntraPred8Fn {
 #[inline]
 fn resolve_ipred_smooth() -> SmoothPred8Fn {
     *IPRED_SMOOTH_8BPC.get_or_init(|| {
-        let mut f = ipred_smooth_scalar as SmoothPred8Fn;
+        let mut f: SmoothPred8Fn = ipred_smooth_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_smooth_8bpc_neon as SmoothPred8Fn;
+                f = crate::neon::ipred_smooth_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_smooth_8bpc_sse41 as SmoothPred8Fn;
+                f = crate::sse::ipred_smooth_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_smooth_8bpc_avx2 as SmoothPred8Fn;
+                f = crate::avx::ipred_smooth_8bpc_avx2;
             }
         }
         f
@@ -304,24 +319,24 @@ fn resolve_ipred_smooth() -> SmoothPred8Fn {
 #[inline]
 fn resolve_ipred_smooth_v() -> SmoothPred8Fn {
     *IPRED_SMOOTH_V_8BPC.get_or_init(|| {
-        let mut f = ipred_smooth_v_scalar as SmoothPred8Fn;
+        let mut f: SmoothPred8Fn = ipred_smooth_v_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_smooth_v_8bpc_neon as SmoothPred8Fn;
+                f = crate::neon::ipred_smooth_v_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_smooth_v_8bpc_sse41 as SmoothPred8Fn;
+                f = crate::sse::ipred_smooth_v_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_smooth_v_8bpc_avx2 as SmoothPred8Fn;
+                f = crate::avx::ipred_smooth_v_8bpc_avx2;
             }
         }
         f
@@ -331,24 +346,24 @@ fn resolve_ipred_smooth_v() -> SmoothPred8Fn {
 #[inline]
 fn resolve_ipred_smooth_h() -> SmoothPred8Fn {
     *IPRED_SMOOTH_H_8BPC.get_or_init(|| {
-        let mut f = ipred_smooth_h_scalar as SmoothPred8Fn;
+        let mut f: SmoothPred8Fn = ipred_smooth_h_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_smooth_h_8bpc_neon as SmoothPred8Fn;
+                f = crate::neon::ipred_smooth_h_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_smooth_h_8bpc_sse41 as SmoothPred8Fn;
+                f = crate::sse::ipred_smooth_h_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_smooth_h_8bpc_avx2 as SmoothPred8Fn;
+                f = crate::avx::ipred_smooth_h_8bpc_avx2;
             }
         }
         f
@@ -365,7 +380,7 @@ pub(crate) fn ipred_v(
     height: usize,
     angle: i32,
 ) {
-    resolve_ipred_v()(dst, stride, tl, o, width, height, angle);
+    call_ipred!(resolve_ipred_v(), dst, stride, tl, o, width, height, angle);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -378,11 +393,11 @@ pub(crate) fn ipred_h(
     height: usize,
     angle: i32,
 ) {
-    resolve_ipred_h()(dst, stride, tl, o, width, height, angle);
+    call_ipred!(resolve_ipred_h(), dst, stride, tl, o, width, height, angle);
 }
 
 pub(crate) fn ipred_smooth(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, w: usize, h: usize) {
-    resolve_ipred_smooth()(dst, stride, tl, o, w, h);
+    call_ipred!(resolve_ipred_smooth(), dst, stride, tl, o, w, h);
 }
 
 pub(crate) fn ipred_smooth_v(
@@ -393,7 +408,7 @@ pub(crate) fn ipred_smooth_v(
     w: usize,
     h: usize,
 ) {
-    resolve_ipred_smooth_v()(dst, stride, tl, o, w, h);
+    call_ipred!(resolve_ipred_smooth_v(), dst, stride, tl, o, w, h);
 }
 
 pub(crate) fn ipred_smooth_h(
@@ -404,10 +419,10 @@ pub(crate) fn ipred_smooth_h(
     w: usize,
     h: usize,
 ) {
-    resolve_ipred_smooth_h()(dst, stride, tl, o, w, h);
+    call_ipred!(resolve_ipred_smooth_h(), dst, stride, tl, o, w, h);
 }
 
-pub(crate) type DcPred128Fn = fn(dst: &mut [u8], stride: usize, width: usize, height: usize);
+pub(crate) type DcPred128Fn = unsafe fn(dst: &mut [u8], stride: usize, width: usize, height: usize);
 
 #[inline]
 pub(crate) fn ipred_dc_scalar(
@@ -461,24 +476,24 @@ static IPRED_DC_128_8BPC: OnceLock<DcPred128Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_dc() -> IntraPred8Fn {
     *IPRED_DC_8BPC.get_or_init(|| {
-        let mut f = ipred_dc_scalar as IntraPred8Fn;
+        let mut f: IntraPred8Fn = ipred_dc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dc_8bpc_neon as IntraPred8Fn;
+                f = crate::neon::ipred_dc_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_dc_8bpc_sse41 as IntraPred8Fn;
+                f = crate::sse::ipred_dc_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dc_8bpc_avx2 as IntraPred8Fn;
+                f = crate::avx::ipred_dc_8bpc_avx2;
             }
         }
         f
@@ -488,24 +503,24 @@ fn resolve_ipred_dc() -> IntraPred8Fn {
 #[inline]
 fn resolve_ipred_dc_top() -> IntraPred8Fn {
     *IPRED_DC_TOP_8BPC.get_or_init(|| {
-        let mut f = ipred_dc_top_scalar as IntraPred8Fn;
+        let mut f: IntraPred8Fn = ipred_dc_top_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dc_top_8bpc_neon as IntraPred8Fn;
+                f = crate::neon::ipred_dc_top_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_dc_top_8bpc_sse41 as IntraPred8Fn;
+                f = crate::sse::ipred_dc_top_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dc_top_8bpc_avx2 as IntraPred8Fn;
+                f = crate::avx::ipred_dc_top_8bpc_avx2;
             }
         }
         f
@@ -515,24 +530,24 @@ fn resolve_ipred_dc_top() -> IntraPred8Fn {
 #[inline]
 fn resolve_ipred_dc_left() -> IntraPred8Fn {
     *IPRED_DC_LEFT_8BPC.get_or_init(|| {
-        let mut f = ipred_dc_left_scalar as IntraPred8Fn;
+        let mut f: IntraPred8Fn = ipred_dc_left_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dc_left_8bpc_neon as IntraPred8Fn;
+                f = crate::neon::ipred_dc_left_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_dc_left_8bpc_sse41 as IntraPred8Fn;
+                f = crate::sse::ipred_dc_left_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dc_left_8bpc_avx2 as IntraPred8Fn;
+                f = crate::avx::ipred_dc_left_8bpc_avx2;
             }
         }
         f
@@ -542,24 +557,24 @@ fn resolve_ipred_dc_left() -> IntraPred8Fn {
 #[inline]
 fn resolve_ipred_dc_128() -> DcPred128Fn {
     *IPRED_DC_128_8BPC.get_or_init(|| {
-        let mut f = ipred_dc_128_scalar as DcPred128Fn;
+        let mut f: DcPred128Fn = ipred_dc_128_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dc_128_8bpc_neon as DcPred128Fn;
+                f = crate::neon::ipred_dc_128_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_dc_128_8bpc_sse41 as DcPred128Fn;
+                f = crate::sse::ipred_dc_128_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dc_128_8bpc_avx2 as DcPred128Fn;
+                f = crate::avx::ipred_dc_128_8bpc_avx2;
             }
         }
         f
@@ -576,7 +591,7 @@ pub(crate) fn ipred_dc(
     height: usize,
     angle: i32,
 ) {
-    resolve_ipred_dc()(dst, stride, tl, o, width, height, angle);
+    call_ipred!(resolve_ipred_dc(), dst, stride, tl, o, width, height, angle);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -589,7 +604,16 @@ pub(crate) fn ipred_dc_top(
     height: usize,
     angle: i32,
 ) {
-    resolve_ipred_dc_top()(dst, stride, tl, o, width, height, angle);
+    call_ipred!(
+        resolve_ipred_dc_top(),
+        dst,
+        stride,
+        tl,
+        o,
+        width,
+        height,
+        angle
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -602,11 +626,20 @@ pub(crate) fn ipred_dc_left(
     height: usize,
     angle: i32,
 ) {
-    resolve_ipred_dc_left()(dst, stride, tl, o, width, height, angle);
+    call_ipred!(
+        resolve_ipred_dc_left(),
+        dst,
+        stride,
+        tl,
+        o,
+        width,
+        height,
+        angle
+    );
 }
 
 pub(crate) fn ipred_dc_128(dst: &mut [u8], stride: usize, width: usize, height: usize) {
-    resolve_ipred_dc_128()(dst, stride, width, height);
+    call_ipred!(resolve_ipred_dc_128(), dst, stride, width, height);
 }
 
 #[inline]
@@ -626,24 +659,24 @@ static IPRED_PAETH_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_paeth() -> SmoothPred8Fn {
     *IPRED_PAETH_8BPC.get_or_init(|| {
-        let mut f = ipred_paeth_scalar as SmoothPred8Fn;
+        let mut f: SmoothPred8Fn = ipred_paeth_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_paeth_8bpc_neon as SmoothPred8Fn;
+                f = crate::neon::ipred_paeth_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_paeth_8bpc_sse41 as SmoothPred8Fn;
+                f = crate::sse::ipred_paeth_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_paeth_8bpc_avx2 as SmoothPred8Fn;
+                f = crate::avx::ipred_paeth_8bpc_avx2;
             }
         }
         f
@@ -651,10 +684,10 @@ fn resolve_ipred_paeth() -> SmoothPred8Fn {
 }
 
 pub(crate) fn ipred_paeth(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, w: usize, h: usize) {
-    resolve_ipred_paeth()(dst, stride, tl, o, w, h);
+    call_ipred!(resolve_ipred_paeth(), dst, stride, tl, o, w, h);
 }
 
-pub(crate) type Z1Pred8Fn = fn(
+pub(crate) type Z1Pred8Fn = unsafe fn(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -701,24 +734,24 @@ static IPRED_Z1_8BPC: OnceLock<Z1Pred8Fn> = OnceLock::new();
 fn resolve_ipred_z1() -> Z1Pred8Fn {
     *IPRED_Z1_8BPC.get_or_init(|| {
         #[allow(unused_mut)]
-        let mut f = ipred_z1_scalar as Z1Pred8Fn;
+        let mut f: Z1Pred8Fn = ipred_z1_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_z1_8bpc_neon as Z1Pred8Fn;
+                f = crate::neon::ipred_z1_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_z1_8bpc_sse41 as Z1Pred8Fn;
+                f = crate::sse::ipred_z1_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_z1_8bpc_avx2 as Z1Pred8Fn;
+                f = crate::avx::ipred_z1_8bpc_avx2;
             }
         }
         f
@@ -738,7 +771,8 @@ pub(crate) fn ipred_z1(
     max_height: i32,
     ibp_weights: &[[[u8; 16]; 16]; 7],
 ) {
-    resolve_ipred_z1()(
+    call_ipred!(
+        resolve_ipred_z1(),
         dst,
         stride,
         tl,
@@ -786,24 +820,24 @@ static IPRED_Z3_8BPC: OnceLock<Z1Pred8Fn> = OnceLock::new();
 fn resolve_ipred_z3() -> Z1Pred8Fn {
     *IPRED_Z3_8BPC.get_or_init(|| {
         #[allow(unused_mut)]
-        let mut f = ipred_z3_scalar as Z1Pred8Fn;
+        let mut f: Z1Pred8Fn = ipred_z3_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_z3_8bpc_neon as Z1Pred8Fn;
+                f = crate::neon::ipred_z3_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_z3_8bpc_sse41 as Z1Pred8Fn;
+                f = crate::sse::ipred_z3_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_z3_8bpc_avx2 as Z1Pred8Fn;
+                f = crate::avx::ipred_z3_8bpc_avx2;
             }
         }
         f
@@ -823,7 +857,8 @@ pub(crate) fn ipred_z3(
     max_height: i32,
     ibp_weights: &[[[u8; 16]; 16]; 7],
 ) {
-    resolve_ipred_z3()(
+    call_ipred!(
+        resolve_ipred_z3(),
         dst,
         stride,
         tl,
@@ -837,7 +872,7 @@ pub(crate) fn ipred_z3(
     );
 }
 
-pub(crate) type Z2Pred8Fn = fn(
+pub(crate) type Z2Pred8Fn = unsafe fn(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -871,24 +906,24 @@ static IPRED_Z2_8BPC: OnceLock<Z2Pred8Fn> = OnceLock::new();
 fn resolve_ipred_z2() -> Z2Pred8Fn {
     *IPRED_Z2_8BPC.get_or_init(|| {
         #[allow(unused_mut)]
-        let mut f = ipred_z2_scalar as Z2Pred8Fn;
+        let mut f: Z2Pred8Fn = ipred_z2_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_z2_8bpc_neon as Z2Pred8Fn;
+                f = crate::neon::ipred_z2_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_z2_8bpc_sse41 as Z2Pred8Fn;
+                f = crate::sse::ipred_z2_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_z2_8bpc_avx2 as Z2Pred8Fn;
+                f = crate::avx::ipred_z2_8bpc_avx2;
             }
         }
         f
@@ -907,10 +942,21 @@ pub(crate) fn ipred_z2(
     max_width: i32,
     max_height: i32,
 ) {
-    resolve_ipred_z2()(dst, stride, tl, o, w, h, angle, max_width, max_height);
+    call_ipred!(
+        resolve_ipred_z2(),
+        dst,
+        stride,
+        tl,
+        o,
+        w,
+        h,
+        angle,
+        max_width,
+        max_height
+    );
 }
 
-pub(crate) type IntraPredHbdFn = fn(
+pub(crate) type IntraPredHbdFn = unsafe fn(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -921,7 +967,7 @@ pub(crate) type IntraPredHbdFn = fn(
     bitdepth_max: u16,
 );
 
-pub(crate) type SmoothPredHbdFn = fn(
+pub(crate) type SmoothPredHbdFn = unsafe fn(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -932,9 +978,9 @@ pub(crate) type SmoothPredHbdFn = fn(
 );
 
 pub(crate) type DcPred128HbdFn =
-    fn(dst: &mut [u16], stride: usize, width: usize, height: usize, bitdepth_max: u16);
+    unsafe fn(dst: &mut [u16], stride: usize, width: usize, height: usize, bitdepth_max: u16);
 
-pub(crate) type Z1PredHbdFn = fn(
+pub(crate) type Z1PredHbdFn = unsafe fn(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -948,7 +994,7 @@ pub(crate) type Z1PredHbdFn = fn(
     bitdepth_max: u16,
 );
 
-pub(crate) type Z2PredHbdFn = fn(
+pub(crate) type Z2PredHbdFn = unsafe fn(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -1281,23 +1327,23 @@ static IPRED_Z3_HBD: OnceLock<Z1PredHbdFn> = OnceLock::new();
 macro_rules! resolve_hbd_ipred {
     ($lock:ident, $scalar:path, $sse:path, $avx:path, $neon:path, $ty:ty) => {{
         *$lock.get_or_init(|| {
-            let mut f = $scalar as $ty;
+            let mut f: $ty = $scalar;
             #[cfg(target_arch = "aarch64")]
             {
                 if std::arch::is_aarch64_feature_detected!("neon") {
-                    f = $neon as $ty;
+                    f = $neon;
                 }
             }
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             {
                 if std::is_x86_feature_detected!("sse4.1") {
-                    f = $sse as $ty;
+                    f = $sse;
                 }
             }
             #[cfg(all(target_arch = "x86_64", feature = "avx"))]
             {
                 if std::is_x86_feature_detected!("avx2") {
-                    f = $avx as $ty;
+                    f = $avx;
                 }
             }
             f
@@ -1377,13 +1423,17 @@ fn resolve_ipred_dc_128_hbd() -> DcPred128HbdFn {
     )
 }
 
+// The AVX HBD smooth/paeth entries currently delegate to the SSE4.1 kernels.
+// Resolve directly to the SSE target-feature body on AVX2 CPUs to avoid an
+// extra AVX wrapper call in the hot intra-prediction dispatch.
+
 #[inline]
 fn resolve_ipred_paeth_hbd() -> SmoothPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_PAETH_HBD,
         ipred_paeth_hbd_scalar,
         crate::sse::ipred_paeth_hbd_sse41,
-        crate::avx::ipred_paeth_hbd_avx2,
+        crate::sse::ipred_paeth_hbd_sse41,
         crate::neon::ipred_paeth_hbd_neon,
         SmoothPredHbdFn
     )
@@ -1395,7 +1445,7 @@ fn resolve_ipred_smooth_hbd() -> SmoothPredHbdFn {
         IPRED_SMOOTH_HBD,
         ipred_smooth_hbd_scalar,
         crate::sse::ipred_smooth_hbd_sse41,
-        crate::avx::ipred_smooth_hbd_avx2,
+        crate::sse::ipred_smooth_hbd_sse41,
         crate::neon::ipred_smooth_hbd_neon,
         SmoothPredHbdFn
     )
@@ -1407,7 +1457,7 @@ fn resolve_ipred_smooth_v_hbd() -> SmoothPredHbdFn {
         IPRED_SMOOTH_V_HBD,
         ipred_smooth_v_hbd_scalar,
         crate::sse::ipred_smooth_v_hbd_sse41,
-        crate::avx::ipred_smooth_v_hbd_avx2,
+        crate::sse::ipred_smooth_v_hbd_sse41,
         crate::neon::ipred_smooth_v_hbd_neon,
         SmoothPredHbdFn
     )
@@ -1419,7 +1469,7 @@ fn resolve_ipred_smooth_h_hbd() -> SmoothPredHbdFn {
         IPRED_SMOOTH_H_HBD,
         ipred_smooth_h_hbd_scalar,
         crate::sse::ipred_smooth_h_hbd_sse41,
-        crate::avx::ipred_smooth_h_hbd_avx2,
+        crate::sse::ipred_smooth_h_hbd_sse41,
         crate::neon::ipred_smooth_h_hbd_neon,
         SmoothPredHbdFn
     )
@@ -1481,20 +1531,20 @@ pub(crate) fn dispatch_ipred_hbd(
     use crate::levels::*;
     let d = &mut dst[dst_off..];
     match m {
-        0 /* DcPred */ => resolve_ipred_dc_hbd()(d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        _ if m == DC_128_PRED => resolve_ipred_dc_128_hbd()(d, stride, w, h, bitdepth_max),
-        _ if m == TOP_DC_PRED => resolve_ipred_dc_top_hbd()(d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        _ if m == LEFT_DC_PRED => resolve_ipred_dc_left_hbd()(d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        2 /* HorPred */ => resolve_ipred_h_hbd()(d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        1 /* VertPred */ => resolve_ipred_v_hbd()(d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        12 /* PaethPred */ => resolve_ipred_paeth_hbd()(d, stride, edge, edge_o, w, h, bitdepth_max),
-        9 /* SmoothPred */ => resolve_ipred_smooth_hbd()(d, stride, edge, edge_o, w, h, bitdepth_max),
-        10 /* SmoothVPred */ => resolve_ipred_smooth_v_hbd()(d, stride, edge, edge_o, w, h, bitdepth_max),
-        11 /* SmoothHPred */ => resolve_ipred_smooth_h_hbd()(d, stride, edge, edge_o, w, h, bitdepth_max),
-        _ if m == Z1_PRED => resolve_ipred_z1_hbd()(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights, bitdepth_max),
-        _ if m == Z2_PRED => resolve_ipred_z2_hbd()(d, stride, edge, edge_o, w, h, angle, max_w, max_h, bitdepth_max),
-        _ if m == Z3_PRED => resolve_ipred_z3_hbd()(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights, bitdepth_max),
+        0 /* DcPred */ => call_ipred!(resolve_ipred_dc_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
+        _ if m == DC_128_PRED => call_ipred!(resolve_ipred_dc_128_hbd(), d, stride, w, h, bitdepth_max),
+        _ if m == TOP_DC_PRED => call_ipred!(resolve_ipred_dc_top_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
+        _ if m == LEFT_DC_PRED => call_ipred!(resolve_ipred_dc_left_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
+        2 /* HorPred */ => call_ipred!(resolve_ipred_h_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
+        1 /* VertPred */ => call_ipred!(resolve_ipred_v_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
+        12 /* PaethPred */ => call_ipred!(resolve_ipred_paeth_hbd(), d, stride, edge, edge_o, w, h, bitdepth_max),
+        9 /* SmoothPred */ => call_ipred!(resolve_ipred_smooth_hbd(), d, stride, edge, edge_o, w, h, bitdepth_max),
+        10 /* SmoothVPred */ => call_ipred!(resolve_ipred_smooth_v_hbd(), d, stride, edge, edge_o, w, h, bitdepth_max),
+        11 /* SmoothHPred */ => call_ipred!(resolve_ipred_smooth_h_hbd(), d, stride, edge, edge_o, w, h, bitdepth_max),
+        _ if m == Z1_PRED => call_ipred!(resolve_ipred_z1_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights, bitdepth_max),
+        _ if m == Z2_PRED => call_ipred!(resolve_ipred_z2_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, bitdepth_max),
+        _ if m == Z3_PRED => call_ipred!(resolve_ipred_z3_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights, bitdepth_max),
         _ if m == DIP_PRED => crate::ipred::ipred_dip(crate::pixel::BitDepth16::new(bitdepth), d, stride, edge, edge_o, w, h, angle),
-        _ => resolve_ipred_dc_128_hbd()(d, stride, w, h, bitdepth_max),
+        _ => call_ipred!(resolve_ipred_dc_128_hbd(), d, stride, w, h, bitdepth_max),
     }
 }

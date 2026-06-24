@@ -96,7 +96,7 @@ fn splat_fill_avx2(dst: &mut [u16], stride: usize, off: usize, w: usize, h: usiz
 }
 
 #[target_feature(enable = "avx2")]
-fn ipred_v_hbd_avx2_impl(
+pub(crate) fn ipred_v_hbd_avx2(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -138,7 +138,7 @@ fn ipred_v_hbd_avx2_impl(
 }
 
 #[target_feature(enable = "avx2")]
-fn ipred_h_hbd_avx2_impl(
+pub(crate) fn ipred_h_hbd_avx2(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -173,7 +173,7 @@ fn ipred_h_hbd_avx2_impl(
 }
 
 #[target_feature(enable = "avx2")]
-fn ipred_dc_128_hbd_avx2_impl(
+pub(crate) fn ipred_dc_128_hbd_avx2(
     dst: &mut [u16],
     stride: usize,
     w: usize,
@@ -184,7 +184,7 @@ fn ipred_dc_128_hbd_avx2_impl(
 }
 
 #[target_feature(enable = "avx2")]
-fn ipred_dc_top_hbd_avx2_impl(
+pub(crate) fn ipred_dc_top_hbd_avx2(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -204,7 +204,7 @@ fn ipred_dc_top_hbd_avx2_impl(
 }
 
 #[target_feature(enable = "avx2")]
-fn ipred_dc_left_hbd_avx2_impl(
+pub(crate) fn ipred_dc_left_hbd_avx2(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -224,7 +224,7 @@ fn ipred_dc_left_hbd_avx2_impl(
 }
 
 #[target_feature(enable = "avx2")]
-fn ipred_dc_hbd_avx2_impl(
+pub(crate) fn ipred_dc_hbd_avx2(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -246,121 +246,6 @@ fn ipred_dc_hbd_avx2_impl(
         crate::ipred::fast_div32_dc(sum, n).min(bitdepth_max as u32)
     } as u16;
     splat_fill_avx2(dst, stride, 0, w, h, dc);
-}
-
-pub(crate) fn ipred_v_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_v_hbd_avx2_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_h_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_h_hbd_avx2_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_dc_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_dc_hbd_avx2_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_dc_top_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_dc_top_hbd_avx2_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_dc_left_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_dc_left_hbd_avx2_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_dc_128_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_dc_128_hbd_avx2_impl(dst, stride, w, h, bitdepth_max) }
-}
-
-pub(crate) fn ipred_paeth_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    crate::sse::ipred_paeth_hbd_sse41(dst, stride, tl, o, w, h, bitdepth_max)
-}
-pub(crate) fn ipred_smooth_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    crate::sse::ipred_smooth_hbd_sse41(dst, stride, tl, o, w, h, bitdepth_max)
-}
-pub(crate) fn ipred_smooth_v_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    crate::sse::ipred_smooth_v_hbd_sse41(dst, stride, tl, o, w, h, bitdepth_max)
-}
-pub(crate) fn ipred_smooth_h_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    crate::sse::ipred_smooth_h_hbd_sse41(dst, stride, tl, o, w, h, bitdepth_max)
 }
 
 #[inline(always)]
@@ -452,7 +337,7 @@ fn z1_luma_row_hbd_avx2(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
-fn ipred_z1_hbd_avx2_impl(
+pub(crate) fn ipred_z1_hbd_avx2(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -630,7 +515,7 @@ fn z3_luma_col_hbd_avx2(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
-fn ipred_z3_hbd_avx2_impl(
+pub(crate) fn ipred_z3_hbd_avx2(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -768,7 +653,7 @@ fn z2_top_span_hbd_avx2(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
-fn ipred_z2_hbd_avx2_impl(
+pub(crate) fn ipred_z2_hbd_avx2(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -882,96 +767,5 @@ fn ipred_z2_hbd_avx2_impl(
             let f = &crate::ipred::DR_INTERP_FILTER[shift];
             z2_top_span_hbd_avx2(&filt, top_off, xpos, f, dst_row, x, w, bitdepth_max);
         }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z1_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-    bitdepth_max: u16,
-) {
-    unsafe {
-        ipred_z1_hbd_avx2_impl(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle,
-            max_width,
-            max_height,
-            ibp_weights,
-            bitdepth_max,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z3_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-    bitdepth_max: u16,
-) {
-    unsafe {
-        ipred_z3_hbd_avx2_impl(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle,
-            max_width,
-            max_height,
-            ibp_weights,
-            bitdepth_max,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z2_hbd_avx2(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    bitdepth_max: u16,
-) {
-    unsafe {
-        ipred_z2_hbd_avx2_impl(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle,
-            max_width,
-            max_height,
-            bitdepth_max,
-        )
     }
 }

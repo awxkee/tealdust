@@ -34,7 +34,7 @@ use crate::env::BlockContext;
 use crate::intops::{iclip, imax, imin};
 use crate::levels::{Av2Block, BlockSize, CompInterPredMode, MotionMode, Mv, RefPair};
 
-use crate::msac::MsacContext;
+use crate::msac::MsacReader;
 
 use crate::pixel::Pixel;
 
@@ -45,9 +45,16 @@ use crate::tables::{BLOCK_DIMENSIONS, TXFM_DIMENSIONS};
 /// fi`) that every function in the tree passed identically, so each call moves
 /// one pointer instead of seven. Each function reborrows the fields into locals
 /// of the original names, leaving its body unchanged.
-pub(crate) struct ReconBCtx<'r, 'a, 'f, 'm, BD: BitDepth, const UPDATE_CDF: bool> {
+pub(crate) struct ReconBCtx<
+    'r,
+    'a,
+    'f,
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+> {
     pub(crate) recon: &'r mut ReconCtx<'a, 'f, BD>,
-    pub(crate) msac: &'r mut MsacContext<'m, UPDATE_CDF>,
+    pub(crate) msac: &'r mut M,
     pub(crate) cdf_m: &'r mut CdfModeContext,
     pub(crate) a: &'r mut BlockContext,
     pub(crate) l: &'r mut BlockContext,
@@ -55,8 +62,8 @@ pub(crate) struct ReconBCtx<'r, 'a, 'f, 'm, BD: BitDepth, const UPDATE_CDF: bool
     pub(crate) fi: &'r SbFrameInfo,
 }
 
-pub(crate) fn recon_b_intra<BD: BitDepth, const UPDATE_CDF: bool>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD, UPDATE_CDF>,
+pub(crate) fn recon_b_intra<BD: BitDepth, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    rb: &mut ReconBCtx<'_, '_, '_, BD, UPDATE_CDF, M>,
     bx: i32,
     by: i32,
     cbx: i32,
@@ -85,8 +92,12 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn recon_b_intra_phase<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD, UPDATE_CDF>,
+pub(crate) fn recon_b_intra_phase<
+    BD: crate::pixel::BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
+    rb: &mut ReconBCtx<'_, '_, '_, BD, UPDATE_CDF, M>,
     bx: i32,
     by: i32,
     cbx: i32,
@@ -1437,9 +1448,13 @@ pub(crate) fn inter_emu_edge_8bpc<BD: crate::pixel::BitDepth>(
 /// (`intra = false`), applies the optional secondary transform, then the inverse
 /// transform add. Mirrors the residual tail of `recon_b_luma_tx` for inter.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn inter_residual_tx_8bpc<BD: BitDepth, const UPDATE_CDF: bool>(
+pub(crate) fn inter_residual_tx_8bpc<
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
     recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     a: &mut BlockContext,
     l: &mut BlockContext,
@@ -1513,8 +1528,7 @@ where
         } else {
             (&a.ccoef[pl - 1][bx4..], &l.ccoef[pl - 1][by4..])
         };
-        let eob = crate::recon::decode_coefs(
-            msac,
+        let eob = msac.decode_coefs(
             recon.cdf_coef,
             cdf_m,
             acoef,
@@ -1692,9 +1706,13 @@ where
 /// U and V coefficients together, so it cannot be done in the per-plane
 /// `inter_residual_tx_8bpc`. The chroma prediction is already in dst_u/dst_v.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn inter_chroma_residual_8bpc<BD: BitDepth, const UPDATE_CDF: bool>(
+pub(crate) fn inter_chroma_residual_8bpc<
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
     recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     a: &mut BlockContext,
     l: &mut BlockContext,
@@ -1811,8 +1829,7 @@ where
                         };
                         let acoef = &a.ccoef[pl][bx4..];
                         let lcoef = &l.ccoef[pl][by4..];
-                        let e = crate::recon::decode_coefs(
-                            msac,
+                        let e = msac.decode_coefs(
                             recon.cdf_coef,
                             cdf_m,
                             acoef,
@@ -2492,9 +2509,13 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
 /// handled elsewhere. After blend, the parsed residual is added with the same
 /// per-TU walk as the single-ref path.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn recon_b_inter_compound<BD: BitDepth, const UPDATE_CDF: bool>(
+pub(crate) fn recon_b_inter_compound<
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
     recon: &mut ReconCtx<BD>,
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     a: &mut BlockContext,
     l: &mut BlockContext,

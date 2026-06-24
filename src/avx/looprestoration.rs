@@ -69,7 +69,7 @@ fn finish(dst: &mut [u8], slo: __m128i, shi: __m128i) {
 }
 
 #[target_feature(enable = "avx2")]
-fn ns_wiener_fir_run_avx2_impl(
+pub(crate) fn ns_wiener_fir_run_avx2(
     dst: &mut [u8],
     center: &[u8],
     col0: usize,
@@ -120,7 +120,7 @@ fn ns_wiener_fir_run_avx2_impl(
 }
 
 #[target_feature(enable = "avx2")]
-fn pc_wiener_fir_run_avx2_impl(
+pub(crate) fn pc_wiener_fir_run_avx2(
     dst: &mut [u8],
     center: &[u8],
     center_coef: i32,
@@ -164,30 +164,8 @@ fn pc_wiener_fir_run_avx2_impl(
     }
 }
 
-/// Safe entry point. Only assigned in the dispatcher under an
-/// `is_x86_feature_detected!("avx2")` guard, so the feature is present.
-pub(crate) fn ns_wiener_fir_run_avx2(
-    dst: &mut [u8],
-    center: &[u8],
-    col0: usize,
-    taps: &[WienerTap],
-    n: usize,
-) {
-    unsafe { ns_wiener_fir_run_avx2_impl(dst, center, col0, taps, n) }
-}
-
-/// Safe entry point. See [`ns_wiener_fir_run_avx2`].
-pub(crate) fn pc_wiener_fir_run_avx2(
-    dst: &mut [u8],
-    center: &[u8],
-    center_coef: i32,
-    col0: usize,
-    taps: &[WienerTap],
-    n: usize,
-) {
-    unsafe { pc_wiener_fir_run_avx2_impl(dst, center, center_coef, col0, taps, n) }
-}
-
+// Safe entry point. Only assigned in the dispatcher under an
+// `is_x86_feature_detected!("avx2")` guard, so the feature is present.
 use crate::filter::UvLumaTap;
 
 /// 4 consecutive `u8` -> i32x4.
@@ -231,7 +209,7 @@ unsafe fn finish4(dst: &mut [u8], x: usize, s: __m128i) {
 }
 
 #[target_feature(enable = "avx2")]
-fn ns_wiener_uv_fir_run_avx2_impl(
+pub(crate) fn ns_wiener_uv_fir_run_avx2(
     dst: &mut [u8],
     c_center: &[u8],
     co: usize,
@@ -290,22 +268,6 @@ fn ns_wiener_uv_fir_run_avx2_impl(
 }
 
 /// Safe entry point. See [`ns_wiener_fir_run_avx2`].
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ns_wiener_uv_fir_run_avx2(
-    dst: &mut [u8],
-    c_center: &[u8],
-    co: usize,
-    ctaps: &[WienerTap],
-    l_center: &[u8],
-    lo: usize,
-    ltaps: &[UvLumaTap],
-    lstep: usize,
-    n: usize,
-) {
-    unsafe {
-        ns_wiener_uv_fir_run_avx2_impl(dst, c_center, co, ctaps, l_center, lo, ltaps, lstep, n)
-    }
-}
 
 #[cfg(test)]
 mod uv_fir_sse_tests {
@@ -368,9 +330,11 @@ mod uv_fir_sse_tests {
             ns_wiener_uv_fir_run_scalar(
                 &mut a, &c_rows[2], co, &ctaps, &l_rows[2], lo, &ltaps, lstep, n,
             );
-            super::ns_wiener_uv_fir_run_avx2(
-                &mut b, &c_rows[2], co, &ctaps, &l_rows[2], lo, &ltaps, lstep, n,
-            );
+            unsafe {
+                super::ns_wiener_uv_fir_run_avx2(
+                    &mut b, &c_rows[2], co, &ctaps, &l_rows[2], lo, &ltaps, lstep, n,
+                );
+            }
             assert_eq!(a, b, "mismatch lstep={lstep} n={n}");
         }
     }

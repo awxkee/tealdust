@@ -27,150 +27,10 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-pub(crate) static MSAC_RATE: [[u8; 3]; 125] = [
-    [4, 5, 6],
-    [4, 5, 5],
-    [4, 5, 4],
-    [4, 5, 7],
-    [4, 5, 7],
-    [4, 4, 6],
-    [4, 4, 5],
-    [4, 4, 4],
-    [4, 4, 7],
-    [4, 4, 7],
-    [4, 3, 6],
-    [4, 3, 5],
-    [4, 3, 4],
-    [4, 3, 7],
-    [4, 3, 7],
-    [4, 6, 6],
-    [4, 6, 5],
-    [4, 6, 4],
-    [4, 6, 7],
-    [4, 6, 7],
-    [4, 6, 6],
-    [4, 6, 5],
-    [4, 6, 4],
-    [4, 6, 7],
-    [4, 6, 7],
-    [3, 5, 6],
-    [3, 5, 5],
-    [3, 5, 4],
-    [3, 5, 7],
-    [3, 5, 7],
-    [3, 4, 6],
-    [3, 4, 5],
-    [3, 4, 4],
-    [3, 4, 7],
-    [3, 4, 7],
-    [3, 3, 6],
-    [3, 3, 5],
-    [3, 3, 4],
-    [3, 3, 7],
-    [3, 3, 7],
-    [3, 6, 6],
-    [3, 6, 5],
-    [3, 6, 4],
-    [3, 6, 7],
-    [3, 6, 7],
-    [3, 6, 6],
-    [3, 6, 5],
-    [3, 6, 4],
-    [3, 6, 7],
-    [3, 6, 7],
-    [2, 5, 6],
-    [2, 5, 5],
-    [2, 5, 4],
-    [2, 5, 7],
-    [2, 5, 7],
-    [2, 4, 6],
-    [2, 4, 5],
-    [2, 4, 4],
-    [2, 4, 7],
-    [2, 4, 7],
-    [2, 3, 6],
-    [2, 3, 5],
-    [2, 3, 4],
-    [2, 3, 7],
-    [2, 3, 7],
-    [2, 6, 6],
-    [2, 6, 5],
-    [2, 6, 4],
-    [2, 6, 7],
-    [2, 6, 7],
-    [2, 6, 6],
-    [2, 6, 5],
-    [2, 6, 4],
-    [2, 6, 7],
-    [2, 6, 7],
-    [5, 5, 6],
-    [5, 5, 5],
-    [5, 5, 4],
-    [5, 5, 7],
-    [5, 5, 7],
-    [5, 4, 6],
-    [5, 4, 5],
-    [5, 4, 4],
-    [5, 4, 7],
-    [5, 4, 7],
-    [5, 3, 6],
-    [5, 3, 5],
-    [5, 3, 4],
-    [5, 3, 7],
-    [5, 3, 7],
-    [5, 6, 6],
-    [5, 6, 5],
-    [5, 6, 4],
-    [5, 6, 7],
-    [5, 6, 7],
-    [5, 6, 6],
-    [5, 6, 5],
-    [5, 6, 4],
-    [5, 6, 7],
-    [5, 6, 7],
-    [5, 5, 6],
-    [5, 5, 5],
-    [5, 5, 4],
-    [5, 5, 7],
-    [5, 5, 7],
-    [5, 4, 6],
-    [5, 4, 5],
-    [5, 4, 4],
-    [5, 4, 7],
-    [5, 4, 7],
-    [5, 3, 6],
-    [5, 3, 5],
-    [5, 3, 4],
-    [5, 3, 7],
-    [5, 3, 7],
-    [5, 6, 6],
-    [5, 6, 5],
-    [5, 6, 4],
-    [5, 6, 7],
-    [5, 6, 7],
-    [5, 6, 6],
-    [5, 6, 5],
-    [5, 6, 4],
-    [5, 6, 7],
-    [5, 6, 7],
-];
+use crate::msac::{MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState};
+use core::arch::x86_64::*;
 
-#[repr(align(16))]
-struct Aligned<T>(T);
-
-static MSAC_MIN_PROB_INNER: Aligned<[[u16; 8]; 7]> = Aligned([
-    [63, 65535, 65535, 65535, 65535, 65535, 65535, 65535],
-    [47, 87, 65535, 65535, 65535, 65535, 65535, 65535],
-    [31, 63, 95, 65535, 65535, 65535, 65535, 65535],
-    [31, 55, 79, 103, 65535, 65535, 65535, 65535],
-    [23, 47, 63, 87, 111, 65535, 65535, 65535],
-    [23, 39, 55, 79, 95, 111, 65535, 65535],
-    [15, 31, 47, 63, 79, 95, 111, 65535],
-]);
-
-pub(crate) static MSAC_MIN_PROB: &[[u16; 8]; 7] = &MSAC_MIN_PROB_INNER.0;
-
-pub(crate) struct MsacContextScalar<'a, const UPDATE_CDF: bool> {
+pub(crate) struct MsacContextAvx<'a, const UPDATE_CDF: bool> {
     pub(crate) buf_pos: usize,
     pub(crate) buf: &'a [u8],
     pub(crate) dif: u64,
@@ -178,102 +38,8 @@ pub(crate) struct MsacContextScalar<'a, const UPDATE_CDF: bool> {
     pub(crate) cnt: i32,
 }
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct MsacState {
-    pub(crate) buf_pos: usize,
-    pub(crate) dif: u64,
-    pub(crate) rng: u32,
-    pub(crate) cnt: i32,
-}
-
-pub(crate) type MsacContext<'a, const UPDATE_CDF: bool> = MsacContextScalar<'a, UPDATE_CDF>;
-
-pub(crate) struct ScalarMsacBackend;
-
-#[cfg(target_arch = "x86_64")]
-pub(crate) struct SseMsacBackend;
-
-#[cfg(all(target_arch = "x86_64", feature = "avx"))]
-pub(crate) struct AvxMsacBackend;
-
-pub(crate) trait MsacBackend<const UPDATE_CDF: bool> {
-    type Ctx<'a>: MsacReader<UPDATE_CDF> + 'a
-    where
-        Self: 'a;
-
-    fn new<'a>(data: &'a [u8]) -> Self::Ctx<'a>;
-    fn resume<'a>(data: &'a [u8], st: MsacState) -> Self::Ctx<'a>;
-}
-
-impl<const UPDATE_CDF: bool> MsacBackend<UPDATE_CDF> for ScalarMsacBackend {
-    type Ctx<'a> = MsacContextScalar<'a, UPDATE_CDF>;
-
+impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
     #[inline(always)]
-    fn new<'a>(data: &'a [u8]) -> Self::Ctx<'a> {
-        MsacContextScalar::new(data)
-    }
-
-    #[inline(always)]
-    fn resume<'a>(data: &'a [u8], st: MsacState) -> Self::Ctx<'a> {
-        MsacContextScalar::resume(data, st)
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-impl<const UPDATE_CDF: bool> MsacBackend<UPDATE_CDF> for SseMsacBackend {
-    type Ctx<'a> = crate::sse::MsacContextSse<'a, UPDATE_CDF>;
-
-    #[inline(always)]
-    fn new<'a>(data: &'a [u8]) -> Self::Ctx<'a> {
-        crate::sse::MsacContextSse::new(data)
-    }
-
-    #[inline(always)]
-    fn resume<'a>(data: &'a [u8], st: MsacState) -> Self::Ctx<'a> {
-        crate::sse::MsacContextSse::resume(data, st)
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", feature = "avx"))]
-impl<const UPDATE_CDF: bool> MsacBackend<UPDATE_CDF> for AvxMsacBackend {
-    type Ctx<'a> = crate::avx::MsacContextAvx<'a, UPDATE_CDF>;
-
-    #[inline(always)]
-    fn new<'a>(data: &'a [u8]) -> Self::Ctx<'a> {
-        crate::avx::MsacContextAvx::new(data)
-    }
-
-    #[inline(always)]
-    fn resume<'a>(data: &'a [u8], st: MsacState) -> Self::Ctx<'a> {
-        crate::avx::MsacContextAvx::resume(data, st)
-    }
-}
-
-pub(crate) trait MsacReader<const UPDATE_CDF: bool> {
-    fn save(&self) -> MsacState;
-    fn decode_bools_bypass(&mut self, n_bits: u32) -> u32;
-    fn decode_bool_bypass(&mut self) -> u32;
-    fn decode_unary_bypass(&mut self, max_bits: u32) -> u32;
-    fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32;
-    fn decode_symbol_adapt_n<const N: usize>(&mut self, cdf: &mut [u16]) -> u32;
-    fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32;
-    fn decode_uniform(&mut self, n: u32) -> u32;
-    fn decode_coefs<C: crate::pixel::Coeff>(
-        &mut self,
-        coef: &mut crate::cdf::CdfCoefContext,
-        mode: &mut crate::cdf::CdfModeContext,
-        a: &[u8],
-        l: &[u8],
-        p: &crate::recon::DecodeCoefParams,
-        cf: &mut [C],
-        txtp: &mut u16,
-        res_ctx: &mut u8,
-        levels_scratch: &mut [i8; 1089],
-    ) -> i32;
-    fn cnt(&self) -> i32;
-}
-
-impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
     pub(crate) fn new(data: &'a [u8]) -> Self {
         let mut s = Self {
             buf_pos: 0,
@@ -286,7 +52,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         s
     }
 
-    /// Snapshot the resumable state (everything but the buffer borrow).
+    #[inline(always)]
     pub(crate) fn save(&self) -> MsacState {
         MsacState {
             buf_pos: self.buf_pos,
@@ -296,9 +62,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
     }
 
-    /// Rebuild a live context from an owned buffer plus a prior snapshot. No
-    /// `ctx_refill` here: the snapshot already reflects a refilled state, so this
-    /// is a pure restore (re-running refill would consume extra bytes).
+    #[inline(always)]
     pub(crate) fn resume(data: &'a [u8], st: MsacState) -> Self {
         Self {
             buf_pos: st.buf_pos,
@@ -309,7 +73,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn ctx_refill(&mut self) {
         let start = self.buf_pos;
         let len = self.buf.len();
@@ -329,7 +93,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         if available >= 8 {
             let chunk = &self.buf[start..start + 8];
             let val = u64::from_be_bytes(chunk.try_into().unwrap());
-
             let refill = (val >> (56 - c)) & (u64::MAX << (c & 7));
 
             self.dif ^= refill;
@@ -350,7 +113,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn ctx_norm(&mut self, dif: u64, rng: u32) {
         debug_assert!(rng <= 65535 && rng > 0);
 
@@ -366,6 +129,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
     }
 
+    #[inline(always)]
     pub(crate) fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
         debug_assert!(n_bits > 0 && n_bits <= 32);
         if (self.cnt as u32) < n_bits {
@@ -392,7 +156,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         ret
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn decode_bool_bypass(&mut self) -> u32 {
         if self.cnt < 1 {
             self.ctx_refill();
@@ -406,7 +170,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
 
         let ge = (dif >= vw) as u64;
         let mask = 0u64.wrapping_sub(ge);
-
         let dif = dif - (vw & mask);
 
         self.dif = ((dif + 1) << 1) - 1;
@@ -415,7 +178,8 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         (ge as u32) ^ 1
     }
 
-    pub(crate) fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
+    #[inline(always)]
+    pub(crate) fn decode_unary_bypass_scalar(&mut self, max_bits: u32) -> u32 {
         debug_assert!(max_bits == 5 || max_bits == 6 || max_bits == 21);
         if (self.cnt as u32) < max_bits {
             self.ctx_refill();
@@ -444,7 +208,12 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         ret
     }
 
-    #[inline]
+    #[inline(always)]
+    pub(crate) fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
+        self.decode_unary_bypass_scalar(max_bits)
+    }
+
+    #[inline(always)]
     fn decode_bool_raw(&mut self, f: u32) -> u32 {
         let r = self.rng;
         let dif = self.dif;
@@ -462,31 +231,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
     }
 
     #[inline(always)]
-    pub(crate) fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
-        // Keep the dynamic interface for non-hot call sites, but dispatch to
-        // the fixed-size implementation so the actual decoder body is shared
-        // and monomorphized where possible.
-        match n_symbols {
-            1 => self.decode_symbol_adapt_n::<1>(cdf),
-            2 => self.decode_symbol_adapt_n::<2>(cdf),
-            3 => self.decode_symbol_adapt_n::<3>(cdf),
-            4 => self.decode_symbol_adapt_n::<4>(cdf),
-            5 => self.decode_symbol_adapt_n::<5>(cdf),
-            6 => self.decode_symbol_adapt_n::<6>(cdf),
-            7 => self.decode_symbol_adapt_n::<7>(cdf),
-            _ => unreachable!("invalid MSAC symbol count"),
-        }
-    }
-
-    /// Fixed-symbol-count variant of [`Self::decode_symbol_adapt`].
-    ///
-    /// This keeps the public safe slice interface, but removes the hot runtime
-    /// `match n_symbols`/`try_into` scaffolding at call sites where the symbol
-    /// count is known statically. The generated code is intentionally written
-    /// with a fixed maximum stack array instead of `[T; N + k]`, so it stays on
-    /// stable Rust without generic-const-expr requirements.
-    #[inline(always)]
-    pub(crate) fn decode_symbol_adapt_n<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
+    pub(crate) fn decode_symbol_adapt_n_scalar<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
         debug_assert!((1..=7).contains(&N));
 
         if cdf.len() <= N {
@@ -497,11 +242,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         let c = (self.dif >> 48) as u32;
         let r = self.rng >> 8;
 
-        // Branchy interval search. The previous version computed every range
-        // boundary into a stack array, then scanned all boundaries with masks.
-        // In the coefficient hot path symbol 0/1 dominate, so most calls only
-        // need one or two boundaries. This mirrors the usual entropy decoder
-        // shape more closely and avoids a lot of multiply/shift work.
         let mut u = self.rng;
         let mut v = 0u32;
         let mut val_usize = N;
@@ -533,9 +273,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         if UPDATE_CDF {
             let pc = cdf[N];
             let count = (pc & 0xFF) as u8;
-
             debug_assert!(count <= 32);
-
             let rate =
                 MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
 
@@ -552,7 +290,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         val_usize as u32
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
         let bit = self.decode_bool_raw(cdf[0] as u32);
 
@@ -571,6 +309,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         bit
     }
 
+    #[inline(always)]
     pub(crate) fn decode_uniform(&mut self, n: u32) -> u32 {
         debug_assert!(n > 0);
         let l = crate::intops::ulog2(n) + 1;
@@ -584,52 +323,108 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
     }
 
-    /// Current internal bit count. Used to detect symbol-decoder overread
-    /// (`cnt <= -15` after decoding a tile superblock row).
+    #[inline(always)]
     pub(crate) fn cnt(&self) -> i32 {
         self.cnt
     }
+
+    #[target_feature(enable = "avx2")]
+    pub(crate) fn decode_unary_bypass_avx2(&mut self, max_bits: u32) -> u32 {
+        debug_assert!(max_bits == 5 || max_bits == 6 || max_bits == 21);
+
+        if max_bits > 6 {
+            return self.decode_unary_bypass_scalar(max_bits);
+        }
+
+        if (self.cnt as u32) < max_bits {
+            self.ctx_refill();
+        }
+
+        let ret = msac_unary_bypass_ret_avx2(self.dif, self.rng, max_bits);
+        let bits = ret + u32::from(ret < max_bits);
+        let mut dif = self.dif;
+        let mut vw = (self.rng as u64) << 47;
+        for _ in 0..ret {
+            dif -= vw;
+            vw >>= 1;
+        }
+        self.dif = ((dif + 1) << bits) - 1;
+        self.cnt -= bits as i32;
+        ret
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(crate) fn decode_symbol_adapt_avx2(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
+        match n_symbols {
+            1 => self.decode_symbol_adapt_n_avx2::<1>(cdf),
+            2 => self.decode_symbol_adapt_n_avx2::<2>(cdf),
+            3 => self.decode_symbol_adapt_n_avx2::<3>(cdf),
+            4 => self.decode_symbol_adapt_n_avx2::<4>(cdf),
+            5 => self.decode_symbol_adapt_n_avx2::<5>(cdf),
+            6 => self.decode_symbol_adapt_n_avx2::<6>(cdf),
+            7 => self.decode_symbol_adapt_n_avx2::<7>(cdf),
+            _ => unreachable!("invalid MSAC symbol count"),
+        }
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(crate) fn decode_symbol_adapt_n_avx2<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
+        debug_assert!((1..=7).contains(&N));
+
+        if cdf.len() <= N {
+            return 0;
+        }
+
+        if N <= 2 || (N <= 4 && cdf.len() < 4) || (N > 4 && cdf.len() < 8) {
+            return self.decode_symbol_adapt_n_scalar::<N>(cdf);
+        }
+
+        msac_decode_symbol_adapt_avx2::<UPDATE_CDF, N>(self, cdf)
+    }
 }
 
-impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextScalar<'a, UPDATE_CDF> {
+impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextAvx<'a, UPDATE_CDF> {
     #[inline(always)]
     fn save(&self) -> MsacState {
-        MsacContextScalar::save(self)
+        MsacContextAvx::save(self)
     }
 
     #[inline(always)]
     fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
-        MsacContextScalar::decode_bools_bypass(self, n_bits)
+        MsacContextAvx::decode_bools_bypass(self, n_bits)
     }
 
     #[inline(always)]
     fn decode_bool_bypass(&mut self) -> u32 {
-        MsacContextScalar::decode_bool_bypass(self)
+        MsacContextAvx::decode_bool_bypass(self)
     }
 
     #[inline(always)]
     fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
-        MsacContextScalar::decode_unary_bypass(self, max_bits)
+        // SAFETY: this backend is only constructed after the AVX2 runtime guard.
+        unsafe { MsacContextAvx::decode_unary_bypass_avx2(self, max_bits) }
     }
 
     #[inline(always)]
     fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
-        MsacContextScalar::decode_symbol_adapt(self, cdf, n_symbols)
+        // SAFETY: this backend is only constructed after the AVX2 runtime guard.
+        unsafe { MsacContextAvx::decode_symbol_adapt_avx2(self, cdf, n_symbols) }
     }
 
     #[inline(always)]
     fn decode_symbol_adapt_n<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
-        MsacContextScalar::decode_symbol_adapt_n::<N>(self, cdf)
+        // SAFETY: this backend is only constructed after the AVX2 runtime guard.
+        unsafe { MsacContextAvx::decode_symbol_adapt_n_avx2::<N>(self, cdf) }
     }
 
     #[inline(always)]
     fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
-        MsacContextScalar::decode_bool_adapt(self, cdf)
+        MsacContextAvx::decode_bool_adapt(self, cdf)
     }
 
     #[inline(always)]
     fn decode_uniform(&mut self, n: u32) -> u32 {
-        MsacContextScalar::decode_uniform(self, n)
+        MsacContextAvx::decode_uniform(self, n)
     }
 
     #[inline(always)]
@@ -645,22 +440,139 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextScalar<'a
         res_ctx: &mut u8,
         levels_scratch: &mut [i8; 1089],
     ) -> i32 {
-        crate::recon::decode_coefs_scalar(
-            self,
-            coef,
-            mode,
-            a,
-            l,
-            p,
-            cf,
-            txtp,
-            res_ctx,
-            levels_scratch,
-        )
+        // SAFETY: this backend is only constructed after the AVX2 runtime guard.
+        unsafe {
+            crate::recon::decode_coefs_avx2(
+                self,
+                coef,
+                mode,
+                a,
+                l,
+                p,
+                cf,
+                txtp,
+                res_ctx,
+                levels_scratch,
+            )
+        }
     }
 
     #[inline(always)]
     fn cnt(&self) -> i32 {
-        MsacContextScalar::cnt(self)
+        MsacContextAvx::cnt(self)
     }
+}
+
+#[repr(C, align(32))]
+struct AlignedAvxI32<T>(T);
+
+static UNARY_MUL32: AlignedAvxI32<[i32; 8]> = AlignedAvxI32([
+    0x8000, 0xc000, 0xe000, 0xf000, 0xf800, 0xfc00, 0xfe00, 0xff00,
+]);
+
+#[target_feature(enable = "avx2")]
+fn msac_unary_bypass_ret_avx2(dif: u64, rng: u32, max_bits: u32) -> u32 {
+    debug_assert!(max_bits == 5 || max_bits == 6);
+
+    let r = _mm256_set1_epi32(((rng >> 1) & 0x7fff) as i32);
+    let mul = unsafe { _mm256_load_si256(UNARY_MUL32.0.as_ptr().cast()) };
+    let thresholds = _mm256_mullo_epi32(r, mul);
+    let d = _mm256_set1_epi32((dif >> 33) as i32);
+    let diff = _mm256_sub_epi32(d, thresholds);
+    let fail_mask = _mm256_movemask_ps(_mm256_castsi256_ps(diff)) as u32;
+
+    (fail_mask | (1u32 << max_bits)).trailing_zeros()
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_cdf<const N: usize>(cdf: &[u16]) -> __m128i {
+    unsafe {
+        if N <= 4 {
+            _mm_loadl_epi64(cdf.as_ptr().cast::<__m128i>())
+        } else {
+            _mm_loadu_si128(cdf.as_ptr().cast::<__m128i>())
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_min_prob<const N: usize>() -> __m128i {
+    let ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
+    unsafe {
+        if N <= 4 {
+            _mm_loadl_epi64(ptr)
+        } else {
+            _mm_loadu_si128(ptr)
+        }
+    }
+}
+
+#[target_feature(enable = "avx2")]
+fn msac_decode_symbol_adapt_avx2<const UPDATE_CDF: bool, const N: usize>(
+    s: &mut MsacContextAvx<'_, UPDATE_CDF>,
+    cdf: &mut [u16],
+) -> u32 {
+    let cdf_v = load_cdf::<N>(cdf);
+    let min_prob = load_min_prob::<N>();
+    let c = (s.dif >> 48) as u16;
+    let r = s.rng >> 8;
+
+    let p = _mm_subs_epu16(_mm_or_si128(cdf_v, _mm_set1_epi16(127)), min_prob);
+    let scale = _mm_set1_epi16(((r << 6) & 0xffff) as i16);
+    let boundaries_v = _mm_slli_epi16(_mm_mulhi_epu16(p, scale), 3);
+    let cmp = _mm_cmpeq_epi16(
+        _mm_subs_epu16(boundaries_v, _mm_set1_epi16(c as i16)),
+        _mm_setzero_si128(),
+    );
+
+    let mut mask = (_mm_movemask_epi8(cmp) as u32) & 0x5555;
+    mask &= if N >= 8 {
+        u32::MAX
+    } else {
+        (1u32 << (N * 2)) - 1
+    };
+
+    let mut boundaries = [0u16; 8];
+    unsafe {
+        _mm_storeu_si128(boundaries.as_mut_ptr().cast(), boundaries_v);
+    }
+
+    let (val, v, u) = if mask != 0 {
+        let i = (mask.trailing_zeros() >> 1) as usize;
+        let v = boundaries[i] as u32;
+        let u = if i == 0 {
+            s.rng
+        } else {
+            boundaries[i - 1] as u32
+        };
+        (i, v, u)
+    } else {
+        let p_raw = (cdf[N] | 127) as i32 - MSAC_MIN_PROB[N - 1][N] as i32;
+        let p = p_raw.max(0) as u32;
+        let v = ((r * p) >> 10) << 3;
+        (N, v, boundaries[N - 1] as u32)
+    };
+
+    debug_assert!(u <= s.rng);
+    debug_assert!(u >= v);
+    s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
+
+    if UPDATE_CDF {
+        let pc = cdf[N];
+        let count = (pc & 0xff) as u8;
+        debug_assert!(count <= 32);
+        let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
+
+        for cdf_i in cdf[..val].iter_mut() {
+            *cdf_i = cdf_i.wrapping_add((32768u16 - *cdf_i) >> rate);
+        }
+        for cdf_i in cdf[val..N].iter_mut() {
+            *cdf_i = cdf_i.wrapping_sub(*cdf_i >> rate);
+        }
+        cdf[N] = pc + u16::from(count < 32);
+    }
+
+    val as u32
 }

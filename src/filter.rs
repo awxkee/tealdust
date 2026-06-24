@@ -320,8 +320,8 @@ pub(crate) struct WienerTap<'a> {
     pub coef: i32,
 }
 
-type NsWienerFirFn = fn(&mut [u8], &[u8], usize, &[WienerTap<'_>], usize);
-type PcWienerFirFn = fn(&mut [u8], &[u8], i32, usize, &[WienerTap<'_>], usize);
+type NsWienerFirFn = unsafe fn(&mut [u8], &[u8], usize, &[WienerTap<'_>], usize);
+type PcWienerFirFn = unsafe fn(&mut [u8], &[u8], i32, usize, &[WienerTap<'_>], usize);
 
 static NS_WIENER_FIR: std::sync::OnceLock<NsWienerFirFn> = std::sync::OnceLock::new();
 static PC_WIENER_FIR: std::sync::OnceLock<PcWienerFirFn> = std::sync::OnceLock::new();
@@ -329,24 +329,24 @@ static PC_WIENER_FIR: std::sync::OnceLock<PcWienerFirFn> = std::sync::OnceLock::
 #[inline]
 pub(crate) fn ns_wiener_fir_run() -> NsWienerFirFn {
     *NS_WIENER_FIR.get_or_init(|| {
-        let mut f = ns_wiener_fir_run_scalar as NsWienerFirFn;
+        let mut f: NsWienerFirFn = ns_wiener_fir_run_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ns_wiener_fir_run_neon as NsWienerFirFn;
+                f = crate::neon::ns_wiener_fir_run_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ns_wiener_fir_run_sse41 as NsWienerFirFn;
+                f = crate::sse::ns_wiener_fir_run_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ns_wiener_fir_run_avx2 as NsWienerFirFn;
+                f = crate::avx::ns_wiener_fir_run_avx2;
             }
         }
         f
@@ -356,24 +356,24 @@ pub(crate) fn ns_wiener_fir_run() -> NsWienerFirFn {
 #[inline]
 pub(crate) fn pc_wiener_fir_run() -> PcWienerFirFn {
     *PC_WIENER_FIR.get_or_init(|| {
-        let mut f = pc_wiener_fir_run_scalar as PcWienerFirFn;
+        let mut f: PcWienerFirFn = pc_wiener_fir_run_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::pc_wiener_fir_run_neon as PcWienerFirFn;
+                f = crate::neon::pc_wiener_fir_run_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::pc_wiener_fir_run_sse41 as PcWienerFirFn;
+                f = crate::sse::pc_wiener_fir_run_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::pc_wiener_fir_run_avx2 as PcWienerFirFn;
+                f = crate::avx::pc_wiener_fir_run_avx2;
             }
         }
         f
@@ -408,32 +408,41 @@ pub(crate) struct UvLumaTap<'a> {
     pub(crate) coef: i32,
 }
 
-type NsWienerUvFirFn =
-    fn(&mut [u8], &[u8], usize, &[WienerTap<'_>], &[u8], usize, &[UvLumaTap<'_>], usize, usize);
+type NsWienerUvFirFn = unsafe fn(
+    &mut [u8],
+    &[u8],
+    usize,
+    &[WienerTap<'_>],
+    &[u8],
+    usize,
+    &[UvLumaTap<'_>],
+    usize,
+    usize,
+);
 
 static NS_WIENER_UV_FIR: std::sync::OnceLock<NsWienerUvFirFn> = std::sync::OnceLock::new();
 
 #[inline]
 pub(crate) fn ns_wiener_uv_fir_run() -> NsWienerUvFirFn {
     *NS_WIENER_UV_FIR.get_or_init(|| {
-        let mut f = ns_wiener_uv_fir_run_scalar as NsWienerUvFirFn;
+        let mut f: NsWienerUvFirFn = ns_wiener_uv_fir_run_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ns_wiener_uv_fir_run_neon as NsWienerUvFirFn;
+                f = crate::neon::ns_wiener_uv_fir_run_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ns_wiener_uv_fir_run_sse41 as NsWienerUvFirFn;
+                f = crate::sse::ns_wiener_uv_fir_run_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ns_wiener_uv_fir_run_avx2 as NsWienerUvFirFn;
+                f = crate::avx::ns_wiener_uv_fir_run_avx2;
             }
         }
         f
@@ -506,8 +515,8 @@ pub(crate) struct WienerTapHbd<'a> {
     pub coef: i32,
 }
 
-type NsWienerFirHbdFn = fn(&mut [u16], &[u16], usize, &[WienerTapHbd<'_>], usize, i32);
-type PcWienerFirHbdFn = fn(&mut [u16], &[u16], i32, usize, &[WienerTapHbd<'_>], usize, i32);
+type NsWienerFirHbdFn = unsafe fn(&mut [u16], &[u16], usize, &[WienerTapHbd<'_>], usize, i32);
+type PcWienerFirHbdFn = unsafe fn(&mut [u16], &[u16], i32, usize, &[WienerTapHbd<'_>], usize, i32);
 
 static NS_WIENER_FIR_HBD: std::sync::OnceLock<NsWienerFirHbdFn> = std::sync::OnceLock::new();
 static PC_WIENER_FIR_HBD: std::sync::OnceLock<PcWienerFirHbdFn> = std::sync::OnceLock::new();
@@ -515,23 +524,23 @@ static PC_WIENER_FIR_HBD: std::sync::OnceLock<PcWienerFirHbdFn> = std::sync::Onc
 #[inline]
 pub(crate) fn ns_wiener_fir_run_hbd() -> NsWienerFirHbdFn {
     *NS_WIENER_FIR_HBD.get_or_init(|| {
-        let mut f = ns_wiener_fir_run_hbd_scalar as NsWienerFirHbdFn;
+        let mut f: NsWienerFirHbdFn = ns_wiener_fir_run_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ns_wiener_fir_run_hbd_neon as NsWienerFirHbdFn;
+                f = crate::neon::ns_wiener_fir_run_hbd_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ns_wiener_fir_run_hbd_sse41 as NsWienerFirHbdFn;
+                f = crate::sse::ns_wiener_fir_run_hbd_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ns_wiener_fir_run_hbd_avx2 as NsWienerFirHbdFn;
+                f = crate::avx::ns_wiener_fir_run_hbd_avx2;
             }
         }
         f
@@ -541,23 +550,23 @@ pub(crate) fn ns_wiener_fir_run_hbd() -> NsWienerFirHbdFn {
 #[inline]
 pub(crate) fn pc_wiener_fir_run_hbd() -> PcWienerFirHbdFn {
     *PC_WIENER_FIR_HBD.get_or_init(|| {
-        let mut f = pc_wiener_fir_run_hbd_scalar as PcWienerFirHbdFn;
+        let mut f: PcWienerFirHbdFn = pc_wiener_fir_run_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::pc_wiener_fir_run_hbd_neon as PcWienerFirHbdFn;
+                f = crate::neon::pc_wiener_fir_run_hbd_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::pc_wiener_fir_run_hbd_sse41 as PcWienerFirHbdFn;
+                f = crate::sse::pc_wiener_fir_run_hbd_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::pc_wiener_fir_run_hbd_avx2 as PcWienerFirHbdFn;
+                f = crate::avx::pc_wiener_fir_run_hbd_avx2;
             }
         }
         f
@@ -613,7 +622,7 @@ pub(crate) struct UvLumaTapHbd<'a> {
     pub(crate) coef: i32,
 }
 
-type NsWienerUvFirHbdFn = fn(
+type NsWienerUvFirHbdFn = unsafe fn(
     &mut [u16],
     &[u16],
     usize,
@@ -631,23 +640,23 @@ static NS_WIENER_UV_FIR_HBD: std::sync::OnceLock<NsWienerUvFirHbdFn> = std::sync
 #[inline]
 pub(crate) fn ns_wiener_uv_fir_run_hbd() -> NsWienerUvFirHbdFn {
     *NS_WIENER_UV_FIR_HBD.get_or_init(|| {
-        let mut f = ns_wiener_uv_fir_run_hbd_scalar as NsWienerUvFirHbdFn;
+        let mut f: NsWienerUvFirHbdFn = ns_wiener_uv_fir_run_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ns_wiener_uv_fir_run_hbd_neon as NsWienerUvFirHbdFn;
+                f = crate::neon::ns_wiener_uv_fir_run_hbd_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ns_wiener_uv_fir_run_hbd_sse41 as NsWienerUvFirHbdFn;
+                f = crate::sse::ns_wiener_uv_fir_run_hbd_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ns_wiener_uv_fir_run_hbd_avx2 as NsWienerUvFirHbdFn;
+                f = crate::avx::ns_wiener_uv_fir_run_hbd_avx2;
             }
         }
         f
@@ -777,7 +786,8 @@ mod wiener_scalar_proof {
             let mut d_ref = vec![0u8; n];
             let mut d_dsp = vec![0u8; n];
             ns_wiener_fir_run_scalar(&mut d_ref, &center, col0, &taps, n);
-            f(&mut d_dsp, &center, col0, &taps, n);
+            // SAFETY: resolver selected this function after runtime CPU feature detection.
+            unsafe { f(&mut d_dsp, &center, col0, &taps, n) };
             assert_eq!(d_ref, d_dsp, "ns dispatch mismatch n={} taps={}", n, n_taps);
         }
     }
@@ -815,7 +825,8 @@ mod wiener_scalar_proof {
             let mut d_ref = vec![0u8; n];
             let mut d_dsp = vec![0u8; n];
             pc_wiener_fir_run_scalar(&mut d_ref, &center, center_coef, col0, &taps, n);
-            f(&mut d_dsp, &center, center_coef, col0, &taps, n);
+            // SAFETY: resolver selected this function after runtime CPU feature detection.
+            unsafe { f(&mut d_dsp, &center, center_coef, col0, &taps, n) };
             assert_eq!(d_ref, d_dsp, "pc dispatch mismatch n={} taps={}", n, n_taps);
         }
     }

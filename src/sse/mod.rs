@@ -41,6 +41,8 @@ mod ipred_hd;
 mod itx;
 mod looprestoration;
 mod looprestoration_hd;
+#[cfg(target_arch = "x86_64")]
+mod msac;
 
 pub(crate) use itx::*;
 
@@ -73,3 +75,5 @@ pub(crate) use looprestoration::{
 pub(crate) use looprestoration_hd::{
     ns_wiener_fir_run_hbd_sse41, ns_wiener_uv_fir_run_hbd_sse41, pc_wiener_fir_run_hbd_sse41,
 };
+#[cfg(target_arch = "x86_64")]
+pub(crate) use msac::MsacContextSse;

@@ -122,7 +122,7 @@ fn apply4_i32_ac(ac: __m128i, alpha: i32, dc_v: __m128i) -> __m128i {
 }
 
 #[target_feature(enable = "sse4.1")]
-fn cfl_apply_420_hbd_sse41_impl(args: CflApplyHbd<'_>) {
+pub(crate) fn cfl_apply_420_hbd_sse41(args: CflApplyHbd<'_>) {
     let CflApplyHbd {
         y,
         u,
@@ -363,7 +363,7 @@ fn cfl_apply_422_hbd_sse41_impl<const GAUSS: bool>(args: CflApplyHbd<'_>) {
 }
 
 #[target_feature(enable = "sse4.1")]
-fn cfl_apply_444_hbd_sse41_impl(args: CflApplyHbd<'_>) {
+pub(crate) fn cfl_apply_444_hbd_sse41(args: CflApplyHbd<'_>) {
     let CflApplyHbd {
         y,
         u,
@@ -463,18 +463,11 @@ fn cfl_apply_444_hbd_sse41_impl(args: CflApplyHbd<'_>) {
     }
 }
 
-pub(crate) fn cfl_apply_420_hbd_sse41(args: CflApplyHbd<'_>) {
-    unsafe { cfl_apply_420_hbd_sse41_impl(args) }
-}
-
+#[target_feature(enable = "sse4.1")]
 pub(crate) fn cfl_apply_422_hbd_sse41(args: CflApplyHbd<'_>) {
     match args.params.filter_type {
         CFL_FLT_TYPE_VSTRIP => crate::cfl_dispatch::cfl_apply_422_hbd_scalar(args),
-        CFL_FLT_TYPE_GAUSS => unsafe { cfl_apply_422_hbd_sse41_impl::<true>(args) },
-        _ => unsafe { cfl_apply_422_hbd_sse41_impl::<false>(args) },
+        CFL_FLT_TYPE_GAUSS => cfl_apply_422_hbd_sse41_impl::<true>(args),
+        _ => cfl_apply_422_hbd_sse41_impl::<false>(args),
     }
-}
-
-pub(crate) fn cfl_apply_444_hbd_sse41(args: CflApplyHbd<'_>) {
-    unsafe { cfl_apply_444_hbd_sse41_impl(args) }
 }

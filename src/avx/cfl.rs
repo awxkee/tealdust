@@ -212,7 +212,7 @@ fn apply32_444_i16_ac(
 }
 
 #[target_feature(enable = "avx2")]
-fn cfl_apply_420_8bpc_avx2_impl(args: CflApply8<'_>) {
+pub(crate) fn cfl_apply_420_8bpc_avx2(args: CflApply8<'_>) {
     let CflApply8 {
         y,
         u,
@@ -472,7 +472,7 @@ fn cfl_apply_422_8bpc_avx2_impl<const GAUSS: bool>(args: CflApply8<'_>) {
 }
 
 #[target_feature(enable = "avx2")]
-fn cfl_apply_444_8bpc_avx2_impl(args: CflApply8<'_>) {
+pub(crate) fn cfl_apply_444_8bpc_avx2(args: CflApply8<'_>) {
     let CflApply8 {
         y,
         u,
@@ -584,18 +584,11 @@ fn cfl_apply_444_8bpc_avx2_impl(args: CflApply8<'_>) {
     }
 }
 
-pub(crate) fn cfl_apply_420_8bpc_avx2(args: CflApply8<'_>) {
-    unsafe { cfl_apply_420_8bpc_avx2_impl(args) }
-}
-
+#[target_feature(enable = "avx2")]
 pub(crate) fn cfl_apply_422_8bpc_avx2(args: CflApply8<'_>) {
     match args.params.filter_type {
         CFL_FLT_TYPE_VSTRIP => crate::cfl_dispatch::cfl_apply_422_8bpc_scalar(args),
-        CFL_FLT_TYPE_GAUSS => unsafe { cfl_apply_422_8bpc_avx2_impl::<true>(args) },
-        _ => unsafe { cfl_apply_422_8bpc_avx2_impl::<false>(args) },
+        CFL_FLT_TYPE_GAUSS => cfl_apply_422_8bpc_avx2_impl::<true>(args),
+        _ => cfl_apply_422_8bpc_avx2_impl::<false>(args),
     }
-}
-
-pub(crate) fn cfl_apply_444_8bpc_avx2(args: CflApply8<'_>) {
-    unsafe { cfl_apply_444_8bpc_avx2_impl(args) }
 }

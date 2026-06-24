@@ -35,11 +35,12 @@ use crate::levels::{
     Av2Block, BlockSize, CFL_PRED, CompInterPredMode, InterPredMode, MotionMode, Mv, MvXY,
     N_BS_SIZES, RefPair, TIP_FRAME,
 };
+use crate::msac::MsacReader;
 
 use crate::tables::BLOCK_DIMENSIONS;
 
-pub(crate) fn decode_b<BD: BitDepth, const UPDATE_CDF: bool>(
-    ctx: &mut SbCtx<'_, '_, UPDATE_CDF>,
+pub(crate) fn decode_b<BD: BitDepth, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    ctx: &mut SbCtx<'_, UPDATE_CDF, M>,
     recon: &mut ReconCtx<BD>,
     pass: u8,
     lbs: BlockSize,

@@ -42,7 +42,7 @@ fn sra_i16(v: __m128i, shift: i32) -> __m128i {
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_v_8bpc_sse41_impl(
+pub(crate) fn ipred_v_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -88,7 +88,7 @@ fn ipred_v_8bpc_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_h_8bpc_sse41_impl(
+pub(crate) fn ipred_h_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -120,7 +120,7 @@ fn ipred_h_8bpc_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_smooth_v_8bpc_sse41_impl(
+pub(crate) fn ipred_smooth_v_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -191,7 +191,7 @@ fn ipred_smooth_v_8bpc_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_smooth_h_8bpc_sse41_impl(
+pub(crate) fn ipred_smooth_h_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -282,7 +282,7 @@ fn ipred_smooth_h_8bpc_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_smooth_8bpc_sse41_impl(
+pub(crate) fn ipred_smooth_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -467,63 +467,6 @@ fn ipred_smooth_8bpc_sse41_impl(
     }
 }
 
-pub(crate) fn ipred_v_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-    angle: i32,
-) {
-    unsafe { ipred_v_8bpc_sse41_impl(dst, stride, tl, o, width, height, angle) }
-}
-
-pub(crate) fn ipred_h_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-    angle: i32,
-) {
-    unsafe { ipred_h_8bpc_sse41_impl(dst, stride, tl, o, width, height, angle) }
-}
-
-pub(crate) fn ipred_smooth_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-) {
-    unsafe { ipred_smooth_8bpc_sse41_impl(dst, stride, tl, o, width, height) }
-}
-
-pub(crate) fn ipred_smooth_v_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-) {
-    unsafe { ipred_smooth_v_8bpc_sse41_impl(dst, stride, tl, o, width, height) }
-}
-
-pub(crate) fn ipred_smooth_h_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-) {
-    unsafe { ipred_smooth_h_8bpc_sse41_impl(dst, stride, tl, o, width, height) }
-}
-
 use crate::levels::ANGLE_IBP_FLAG;
 
 #[inline(always)]
@@ -570,12 +513,12 @@ fn splat_fill_sse41(dst: &mut [u8], stride: usize, off: usize, w: usize, h: usiz
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_dc_128_8bpc_sse41_impl(dst: &mut [u8], stride: usize, w: usize, h: usize) {
+pub(crate) fn ipred_dc_128_8bpc_sse41(dst: &mut [u8], stride: usize, w: usize, h: usize) {
     splat_fill_sse41(dst, stride, 0, w, h, 128);
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_dc_top_8bpc_sse41_impl(
+pub(crate) fn ipred_dc_top_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -593,7 +536,7 @@ fn ipred_dc_top_8bpc_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_dc_left_8bpc_sse41_impl(
+pub(crate) fn ipred_dc_left_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -613,7 +556,7 @@ fn ipred_dc_left_8bpc_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_dc_8bpc_sse41_impl(
+pub(crate) fn ipred_dc_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -633,46 +576,6 @@ fn ipred_dc_8bpc_sse41_impl(
         crate::ipred::fast_div32_dc(sum, n_pel).min(255)
     } as u8;
     splat_fill_sse41(dst, stride, 0, w, h, dc);
-}
-
-pub(crate) fn ipred_dc_128_8bpc_sse41(dst: &mut [u8], stride: usize, w: usize, h: usize) {
-    unsafe { ipred_dc_128_8bpc_sse41_impl(dst, stride, w, h) }
-}
-
-pub(crate) fn ipred_dc_top_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-) {
-    unsafe { ipred_dc_top_8bpc_sse41_impl(dst, stride, tl, o, w, h, angle) }
-}
-
-pub(crate) fn ipred_dc_left_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-) {
-    unsafe { ipred_dc_left_8bpc_sse41_impl(dst, stride, tl, o, w, h, angle) }
-}
-
-pub(crate) fn ipred_dc_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-) {
-    unsafe { ipred_dc_8bpc_sse41_impl(dst, stride, tl, o, w, h, angle) }
 }
 
 #[inline(always)]
@@ -707,7 +610,7 @@ fn store_i16x8x2_u8_fixed(a: &mut [u8; 16], lo: __m128i, hi: __m128i) {
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_paeth_8bpc_sse41_impl(
+pub(crate) fn ipred_paeth_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -785,17 +688,6 @@ fn ipred_paeth_8bpc_sse41_impl(
         }
         off += stride;
     }
-}
-
-pub(crate) fn ipred_paeth_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-) {
-    unsafe { ipred_paeth_8bpc_sse41_impl(dst, stride, tl, o, w, h) }
 }
 
 /// Load 8 bytes and zero-extend to two i32x4 lanes (low 4, high 4).
@@ -959,7 +851,7 @@ fn z1_luma_row_sse41(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-fn ipred_z1_8bpc_sse41_impl(
+pub(crate) fn ipred_z1_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -1039,35 +931,6 @@ fn ipred_z1_8bpc_sse41_impl(
         let dst_row = &mut dst[y * stride..y * stride + w];
         z1_luma_row_sse41(&filt, top_off, base0, max_base_x, fill, f, dst_row, w);
         ypos += dx;
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z1_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-) {
-    unsafe {
-        ipred_z1_8bpc_sse41_impl(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle,
-            max_width,
-            max_height,
-            ibp_weights,
-        )
     }
 }
 
@@ -1210,7 +1073,7 @@ fn z3_luma_col_sse41(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-fn ipred_z3_8bpc_sse41_impl(
+pub(crate) fn ipred_z3_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -1289,35 +1152,6 @@ fn ipred_z3_8bpc_sse41_impl(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z3_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-) {
-    unsafe {
-        ipred_z3_8bpc_sse41_impl(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle,
-            max_width,
-            max_height,
-            ibp_weights,
-        )
-    }
-}
-
 /// Fill `dst_row[x_start..w]` from the top reference; `xpos0` is `xpos` at
 /// `x_start` and `f`/`shift` are constant across the span.
 #[inline]
@@ -1384,7 +1218,7 @@ fn z2_top_span_sse41(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-fn ipred_z2_8bpc_sse41_impl(
+pub(crate) fn ipred_z2_8bpc_sse41(
     dst: &mut [u8],
     stride: usize,
     tl: &[u8],
@@ -1496,21 +1330,6 @@ fn ipred_z2_8bpc_sse41_impl(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z2_8bpc_sse41(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-) {
-    unsafe { ipred_z2_8bpc_sse41_impl(dst, stride, tl, o, w, h, angle, max_width, max_height) }
-}
-
 #[cfg(test)]
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod tests {
@@ -1562,7 +1381,9 @@ mod tests {
             let mut a = vec![0u8; stride * h];
             let mut b = vec![0u8; stride * h];
             crate::ipred::ipred_paeth_8bpc(&mut a, stride, &tl, o, w, h);
-            ipred_paeth_8bpc_sse41(&mut b, stride, &tl, o, w, h);
+            unsafe {
+                ipred_paeth_8bpc_sse41(&mut b, stride, &tl, o, w, h);
+            }
             assert_eq!(a, b, "paeth mismatch w={} h={}", w, h);
         }
     }
@@ -1580,25 +1401,33 @@ mod tests {
             let mut a = vec![0u8; stride * h];
             let mut b = vec![0u8; stride * h];
             crate::ipred::ipred_dc_8bpc(&mut a, stride, &tl, o, w, h, angle);
-            ipred_dc_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            unsafe {
+                ipred_dc_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            }
             assert_eq!(a, b, "dc mismatch w={} h={}", w, h);
 
             let mut a = vec![0u8; stride * h];
             let mut b = vec![0u8; stride * h];
             crate::ipred::ipred_dc_top_8bpc(&mut a, stride, &tl, o, w, h, angle);
-            ipred_dc_top_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            unsafe {
+                ipred_dc_top_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            }
             assert_eq!(a, b, "dc_top mismatch w={} h={}", w, h);
 
             let mut a = vec![0u8; stride * h];
             let mut b = vec![0u8; stride * h];
             crate::ipred::ipred_dc_left_8bpc(&mut a, stride, &tl, o, w, h, angle);
-            ipred_dc_left_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            unsafe {
+                ipred_dc_left_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            }
             assert_eq!(a, b, "dc_left mismatch w={} h={}", w, h);
 
             let mut a = vec![0u8; stride * h];
             let mut b = vec![0u8; stride * h];
             crate::ipred::ipred_dc_128_8bpc(&mut a, stride, w, h);
-            ipred_dc_128_8bpc_sse41(&mut b, stride, w, h);
+            unsafe {
+                ipred_dc_128_8bpc_sse41(&mut b, stride, w, h);
+            }
             assert_eq!(a, b, "dc_128 mismatch w={} h={}", w, h);
         }
     }
@@ -1614,7 +1443,7 @@ mod tests {
             let cases: &[(
                 &str,
                 fn(&mut [u8], usize, &[u8], usize, usize, usize),
-                fn(&mut [u8], usize, &[u8], usize, usize, usize),
+                unsafe fn(&mut [u8], usize, &[u8], usize, usize, usize),
             )] = &[
                 (
                     "smooth",
@@ -1636,7 +1465,9 @@ mod tests {
                 let mut a = vec![0u8; stride * h];
                 let mut b = vec![0u8; stride * h];
                 scalar(&mut a, stride, &tl, o, w, h);
-                simd(&mut b, stride, &tl, o, w, h);
+                unsafe {
+                    simd(&mut b, stride, &tl, o, w, h);
+                }
                 assert_eq!(a, b, "{} mismatch w={} h={}", name, w, h);
             }
         }
@@ -1654,13 +1485,17 @@ mod tests {
             let mut a = vec![0u8; stride * h];
             let mut b = vec![0u8; stride * h];
             crate::ipred::ipred_v_8bpc(&mut a, stride, &tl, o, w, h, angle);
-            ipred_v_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            unsafe {
+                ipred_v_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            }
             assert_eq!(a, b, "v mismatch w={} h={}", w, h);
 
             let mut a = vec![0u8; stride * h];
             let mut b = vec![0u8; stride * h];
             crate::ipred::ipred_h_8bpc(&mut a, stride, &tl, o, w, h, angle);
-            ipred_h_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            unsafe {
+                ipred_h_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            }
             assert_eq!(a, b, "h mismatch w={} h={}", w, h);
         }
     }
@@ -1686,13 +1521,17 @@ mod tests {
             let mut a = vec![0u8; stride * h];
             let mut b = vec![0u8; stride * h];
             crate::ipred::ipred_v_8bpc(&mut a, stride, &tl, o, w, h, angle);
-            ipred_v_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            unsafe {
+                ipred_v_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            }
             assert_eq!(a, b, "v_mrl mismatch w={} h={}", w, h);
 
             let mut a = vec![0u8; stride * h];
             let mut b = vec![0u8; stride * h];
             crate::ipred::ipred_h_8bpc(&mut a, stride, &tl, o, w, h, angle);
-            ipred_h_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            unsafe {
+                ipred_h_8bpc_sse41(&mut b, stride, &tl, o, w, h, angle);
+            }
             assert_eq!(a, b, "h_mrl mismatch w={} h={}", w, h);
         }
     }
@@ -1728,7 +1567,9 @@ mod tests {
                     crate::ipred::ipred_z1_8bpc(
                         &mut sa, stride, &tl, o, w, h, angle, maxd, maxd, &ibp,
                     );
-                    ipred_z1_8bpc_sse41(&mut sb, stride, &tl, o, w, h, angle, maxd, maxd, &ibp);
+                    unsafe {
+                        ipred_z1_8bpc_sse41(&mut sb, stride, &tl, o, w, h, angle, maxd, maxd, &ibp);
+                    }
                     assert_eq!(
                         sa, sb,
                         "z1 mismatch w={} h={} a={} extra={:#x}",
@@ -1769,7 +1610,9 @@ mod tests {
                     crate::ipred::ipred_z3_8bpc(
                         &mut sa, stride, &tl, o, w, h, angle, maxd, maxd, &ibp,
                     );
-                    ipred_z3_8bpc_sse41(&mut sb, stride, &tl, o, w, h, angle, maxd, maxd, &ibp);
+                    unsafe {
+                        ipred_z3_8bpc_sse41(&mut sb, stride, &tl, o, w, h, angle, maxd, maxd, &ibp);
+                    }
                     assert_eq!(
                         sa, sb,
                         "z3 mismatch w={} h={} a={} extra={:#x}",
@@ -1809,7 +1652,9 @@ mod tests {
                     let mut sa = vec![0u8; stride * h];
                     let mut sb = vec![0u8; stride * h];
                     crate::ipred::ipred_z2_8bpc(&mut sa, stride, &tl, o, w, h, angle, maxd, maxd);
-                    ipred_z2_8bpc_sse41(&mut sb, stride, &tl, o, w, h, angle, maxd, maxd);
+                    unsafe {
+                        ipred_z2_8bpc_sse41(&mut sb, stride, &tl, o, w, h, angle, maxd, maxd);
+                    }
                     assert_eq!(
                         sa, sb,
                         "z2 mismatch w={} h={} a={} extra={:#x}",

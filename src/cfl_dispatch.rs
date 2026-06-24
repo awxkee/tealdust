@@ -78,8 +78,8 @@ pub(crate) struct CflApplyHbd<'a> {
     pub(crate) bitdepth_max: i32,
 }
 
-pub(crate) type CflApplyFn = for<'a> fn(CflApply8<'a>);
-pub(crate) type CflApplyHbdFn = for<'a> fn(CflApplyHbd<'a>);
+pub(crate) type CflApplyFn = for<'a> unsafe fn(CflApply8<'a>);
+pub(crate) type CflApplyHbdFn = for<'a> unsafe fn(CflApplyHbd<'a>);
 
 #[inline(always)]
 fn predict_one(dc: i32, alpha: i32, ac: i32) -> u8 {
@@ -660,24 +660,24 @@ static CFL_APPLY_444_HBD: OnceLock<CflApplyHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_cfl_apply_420() -> CflApplyFn {
     *CFL_APPLY_420_8BPC.get_or_init(|| {
-        let mut f = cfl_apply_420_8bpc_scalar as CflApplyFn;
+        let mut f: CflApplyFn = cfl_apply_420_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cfl_apply_420_8bpc_neon as CflApplyFn;
+                f = crate::neon::cfl_apply_420_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cfl_apply_420_8bpc_sse41 as CflApplyFn;
+                f = crate::sse::cfl_apply_420_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cfl_apply_420_8bpc_avx2 as CflApplyFn;
+                f = crate::avx::cfl_apply_420_8bpc_avx2;
             }
         }
         f
@@ -687,24 +687,24 @@ fn resolve_cfl_apply_420() -> CflApplyFn {
 #[inline]
 fn resolve_cfl_apply_422() -> CflApplyFn {
     *CFL_APPLY_422_8BPC.get_or_init(|| {
-        let mut f = cfl_apply_422_8bpc_scalar as CflApplyFn;
+        let mut f: CflApplyFn = cfl_apply_422_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cfl_apply_422_8bpc_neon as CflApplyFn;
+                f = crate::neon::cfl_apply_422_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cfl_apply_422_8bpc_sse41 as CflApplyFn;
+                f = crate::sse::cfl_apply_422_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cfl_apply_422_8bpc_avx2 as CflApplyFn;
+                f = crate::avx::cfl_apply_422_8bpc_avx2;
             }
         }
         f
@@ -714,24 +714,24 @@ fn resolve_cfl_apply_422() -> CflApplyFn {
 #[inline]
 fn resolve_cfl_apply_444() -> CflApplyFn {
     *CFL_APPLY_444_8BPC.get_or_init(|| {
-        let mut f = cfl_apply_444_8bpc_scalar as CflApplyFn;
+        let mut f: CflApplyFn = cfl_apply_444_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cfl_apply_444_8bpc_neon as CflApplyFn;
+                f = crate::neon::cfl_apply_444_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cfl_apply_444_8bpc_sse41 as CflApplyFn;
+                f = crate::sse::cfl_apply_444_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cfl_apply_444_8bpc_avx2 as CflApplyFn;
+                f = crate::avx::cfl_apply_444_8bpc_avx2;
             }
         }
         f
@@ -740,39 +740,45 @@ fn resolve_cfl_apply_444() -> CflApplyFn {
 
 #[inline]
 pub(crate) fn cfl_apply_420_8bpc(args: CflApply8<'_>) {
-    resolve_cfl_apply_420()(args);
+    // SAFETY: the resolver only installs a target-feature entry after the
+    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
+    unsafe { resolve_cfl_apply_420()(args) };
 }
 
 #[inline]
 pub(crate) fn cfl_apply_422_8bpc(args: CflApply8<'_>) {
-    resolve_cfl_apply_422()(args);
+    // SAFETY: the resolver only installs a target-feature entry after the
+    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
+    unsafe { resolve_cfl_apply_422()(args) };
 }
 
 #[inline]
 pub(crate) fn cfl_apply_444_8bpc(args: CflApply8<'_>) {
-    resolve_cfl_apply_444()(args);
+    // SAFETY: the resolver only installs a target-feature entry after the
+    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
+    unsafe { resolve_cfl_apply_444()(args) };
 }
 
 #[inline]
 fn resolve_cfl_apply_420_hbd() -> CflApplyHbdFn {
     *CFL_APPLY_420_HBD.get_or_init(|| {
-        let mut f = cfl_apply_420_hbd_scalar as CflApplyHbdFn;
+        let mut f: CflApplyHbdFn = cfl_apply_420_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cfl_apply_420_hbd_neon as CflApplyHbdFn;
+                f = crate::neon::cfl_apply_420_hbd_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cfl_apply_420_hbd_sse41 as CflApplyHbdFn;
+                f = crate::sse::cfl_apply_420_hbd_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cfl_apply_420_hbd_avx2 as CflApplyHbdFn;
+                f = crate::avx::cfl_apply_420_hbd_avx2;
             }
         }
         f
@@ -782,23 +788,23 @@ fn resolve_cfl_apply_420_hbd() -> CflApplyHbdFn {
 #[inline]
 fn resolve_cfl_apply_422_hbd() -> CflApplyHbdFn {
     *CFL_APPLY_422_HBD.get_or_init(|| {
-        let mut f = cfl_apply_422_hbd_scalar as CflApplyHbdFn;
+        let mut f: CflApplyHbdFn = cfl_apply_422_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cfl_apply_422_hbd_neon as CflApplyHbdFn;
+                f = crate::neon::cfl_apply_422_hbd_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cfl_apply_422_hbd_sse41 as CflApplyHbdFn;
+                f = crate::sse::cfl_apply_422_hbd_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cfl_apply_422_hbd_avx2 as CflApplyHbdFn;
+                f = crate::avx::cfl_apply_422_hbd_avx2;
             }
         }
         f
@@ -808,23 +814,23 @@ fn resolve_cfl_apply_422_hbd() -> CflApplyHbdFn {
 #[inline]
 fn resolve_cfl_apply_444_hbd() -> CflApplyHbdFn {
     *CFL_APPLY_444_HBD.get_or_init(|| {
-        let mut f = cfl_apply_444_hbd_scalar as CflApplyHbdFn;
+        let mut f: CflApplyHbdFn = cfl_apply_444_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cfl_apply_444_hbd_neon as CflApplyHbdFn;
+                f = crate::neon::cfl_apply_444_hbd_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cfl_apply_444_hbd_sse41 as CflApplyHbdFn;
+                f = crate::sse::cfl_apply_444_hbd_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cfl_apply_444_hbd_avx2 as CflApplyHbdFn;
+                f = crate::avx::cfl_apply_444_hbd_avx2;
             }
         }
         f
@@ -833,15 +839,21 @@ fn resolve_cfl_apply_444_hbd() -> CflApplyHbdFn {
 
 #[inline]
 pub(crate) fn cfl_apply_420_hbd(args: CflApplyHbd<'_>) {
-    resolve_cfl_apply_420_hbd()(args);
+    // SAFETY: the resolver only installs a target-feature entry after the
+    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
+    unsafe { resolve_cfl_apply_420_hbd()(args) };
 }
 
 #[inline]
 pub(crate) fn cfl_apply_422_hbd(args: CflApplyHbd<'_>) {
-    resolve_cfl_apply_422_hbd()(args);
+    // SAFETY: the resolver only installs a target-feature entry after the
+    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
+    unsafe { resolve_cfl_apply_422_hbd()(args) };
 }
 
 #[inline]
 pub(crate) fn cfl_apply_444_hbd(args: CflApplyHbd<'_>) {
-    resolve_cfl_apply_444_hbd()(args);
+    // SAFETY: the resolver only installs a target-feature entry after the
+    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
+    unsafe { resolve_cfl_apply_444_hbd()(args) };
 }

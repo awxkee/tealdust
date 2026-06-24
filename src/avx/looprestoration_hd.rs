@@ -97,7 +97,7 @@ fn finish4_u16(dst: &mut [u16], x: usize, s: __m128i, bitdepth_max: i32) {
 }
 
 #[target_feature(enable = "avx2")]
-fn ns_wiener_fir_run_hbd_avx2_impl(
+pub(crate) fn ns_wiener_fir_run_hbd_avx2(
     dst: &mut [u16],
     center: &[u16],
     col0: usize,
@@ -142,7 +142,7 @@ fn ns_wiener_fir_run_hbd_avx2_impl(
 }
 
 #[target_feature(enable = "avx2")]
-fn pc_wiener_fir_run_hbd_avx2_impl(
+pub(crate) fn pc_wiener_fir_run_hbd_avx2(
     dst: &mut [u16],
     center: &[u16],
     center_coef: i32,
@@ -184,34 +184,9 @@ fn pc_wiener_fir_run_hbd_avx2_impl(
     }
 }
 
-pub(crate) fn ns_wiener_fir_run_hbd_avx2(
-    dst: &mut [u16],
-    center: &[u16],
-    col0: usize,
-    taps: &[WienerTapHbd],
-    n: usize,
-    bitdepth_max: i32,
-) {
-    unsafe { ns_wiener_fir_run_hbd_avx2_impl(dst, center, col0, taps, n, bitdepth_max) }
-}
-
-pub(crate) fn pc_wiener_fir_run_hbd_avx2(
-    dst: &mut [u16],
-    center: &[u16],
-    center_coef: i32,
-    col0: usize,
-    taps: &[WienerTapHbd],
-    n: usize,
-    bitdepth_max: i32,
-) {
-    unsafe {
-        pc_wiener_fir_run_hbd_avx2_impl(dst, center, center_coef, col0, taps, n, bitdepth_max)
-    }
-}
-
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
-fn ns_wiener_uv_fir_run_hbd_avx2_impl(
+pub(crate) fn ns_wiener_uv_fir_run_hbd_avx2(
     dst: &mut [u16],
     c_center: &[u16],
     co: usize,
@@ -265,34 +240,5 @@ fn ns_wiener_uv_fir_run_hbd_avx2_impl(
         }
         dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
         x += 1;
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ns_wiener_uv_fir_run_hbd_avx2(
-    dst: &mut [u16],
-    c_center: &[u16],
-    co: usize,
-    ctaps: &[WienerTapHbd],
-    l_center: &[u16],
-    lo: usize,
-    ltaps: &[UvLumaTapHbd],
-    lstep: usize,
-    n: usize,
-    bitdepth_max: i32,
-) {
-    unsafe {
-        ns_wiener_uv_fir_run_hbd_avx2_impl(
-            dst,
-            c_center,
-            co,
-            ctaps,
-            l_center,
-            lo,
-            ltaps,
-            lstep,
-            n,
-            bitdepth_max,
-        )
     }
 }

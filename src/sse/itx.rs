@@ -584,7 +584,7 @@ impl Adst2dBackend for SseDct2d {
 }
 
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_4x4_sse41_impl(
+pub(crate) fn idct_dequant_4x4_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -607,7 +607,7 @@ fn idct_dequant_4x4_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_8x8_sse41_impl(
+pub(crate) fn idct_dequant_8x8_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -630,7 +630,7 @@ fn idct_dequant_8x8_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_16x16_sse41_impl(
+pub(crate) fn idct_dequant_16x16_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -653,7 +653,7 @@ fn idct_dequant_16x16_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_32x32_sse41_impl(
+pub(crate) fn idct_dequant_32x32_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -676,7 +676,7 @@ fn idct_dequant_32x32_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_64x64_sse41_impl(
+pub(crate) fn idct_dequant_64x64_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -698,128 +698,8 @@ fn idct_dequant_64x64_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_4x4_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_4x4_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
-pub(crate) fn idct_dequant_8x8_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_8x8_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
-pub(crate) fn idct_dequant_16x16_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_16x16_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
-pub(crate) fn idct_dequant_32x32_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_32x32_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
-pub(crate) fn idct_dequant_64x64_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_64x64_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn iadst_dequant_4x4_sse41_impl(
+pub(crate) fn iadst_dequant_4x4_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -846,7 +726,7 @@ fn iadst_dequant_4x4_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn iadst_dequant_8x8_sse41_impl(
+pub(crate) fn iadst_dequant_8x8_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -873,7 +753,7 @@ fn iadst_dequant_8x8_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn iadst_dequant_16x16_sse41_impl(
+pub(crate) fn iadst_dequant_16x16_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -899,116 +779,8 @@ fn iadst_dequant_16x16_sse41_impl(
     );
 }
 
-pub(crate) fn iadst_dequant_4x4_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    unsafe {
-        iadst_dequant_4x4_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        )
-    }
-}
-
-pub(crate) fn iadst_dequant_8x8_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    unsafe {
-        iadst_dequant_8x8_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        )
-    }
-}
-
-pub(crate) fn iadst_dequant_16x16_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    unsafe {
-        iadst_dequant_16x16_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        )
-    }
-}
-
-pub(crate) fn idct_dequant_4x8_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_4x8_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_4x8_sse41_impl(
+pub(crate) fn idct_dequant_4x8_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1030,32 +802,8 @@ fn idct_dequant_4x8_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_8x4_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_8x4_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_8x4_sse41_impl(
+pub(crate) fn idct_dequant_8x4_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1077,32 +825,8 @@ fn idct_dequant_8x4_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_8x16_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_8x16_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_8x16_sse41_impl(
+pub(crate) fn idct_dequant_8x16_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1124,32 +848,8 @@ fn idct_dequant_8x16_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_16x8_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_16x8_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_16x8_sse41_impl(
+pub(crate) fn idct_dequant_16x8_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1171,32 +871,8 @@ fn idct_dequant_16x8_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_16x32_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_16x32_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_16x32_sse41_impl(
+pub(crate) fn idct_dequant_16x32_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1218,32 +894,8 @@ fn idct_dequant_16x32_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_32x16_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_32x16_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_32x16_sse41_impl(
+pub(crate) fn idct_dequant_32x16_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1265,32 +917,8 @@ fn idct_dequant_32x16_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_4x16_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_4x16_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_4x16_sse41_impl(
+pub(crate) fn idct_dequant_4x16_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1312,32 +940,8 @@ fn idct_dequant_4x16_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_16x4_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_16x4_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_16x4_sse41_impl(
+pub(crate) fn idct_dequant_16x4_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1359,32 +963,8 @@ fn idct_dequant_16x4_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_8x32_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_8x32_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_8x32_sse41_impl(
+pub(crate) fn idct_dequant_8x32_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1406,32 +986,8 @@ fn idct_dequant_8x32_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_32x8_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_32x8_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_32x8_sse41_impl(
+pub(crate) fn idct_dequant_32x8_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1453,32 +1009,8 @@ fn idct_dequant_32x8_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_4x32_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_4x32_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_4x32_sse41_impl(
+pub(crate) fn idct_dequant_4x32_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1500,32 +1032,8 @@ fn idct_dequant_4x32_sse41_impl(
     );
 }
 
-pub(crate) fn idct_dequant_32x4_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    unsafe {
-        idct_dequant_32x4_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn idct_dequant_32x4_sse41_impl(
+pub(crate) fn idct_dequant_32x4_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1547,36 +1055,8 @@ fn idct_dequant_32x4_sse41_impl(
     );
 }
 
-pub(crate) fn iadst_dequant_4x8_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    unsafe {
-        iadst_dequant_4x8_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn iadst_dequant_4x8_sse41_impl(
+pub(crate) fn iadst_dequant_4x8_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1602,36 +1082,8 @@ fn iadst_dequant_4x8_sse41_impl(
     );
 }
 
-pub(crate) fn iadst_dequant_8x4_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    unsafe {
-        iadst_dequant_8x4_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn iadst_dequant_8x4_sse41_impl(
+pub(crate) fn iadst_dequant_8x4_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1657,36 +1109,8 @@ fn iadst_dequant_8x4_sse41_impl(
     );
 }
 
-pub(crate) fn iadst_dequant_8x16_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    unsafe {
-        iadst_dequant_8x16_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn iadst_dequant_8x16_sse41_impl(
+pub(crate) fn iadst_dequant_8x16_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1712,36 +1136,8 @@ fn iadst_dequant_8x16_sse41_impl(
     );
 }
 
-pub(crate) fn iadst_dequant_16x8_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    unsafe {
-        iadst_dequant_16x8_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn iadst_dequant_16x8_sse41_impl(
+pub(crate) fn iadst_dequant_16x8_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1767,36 +1163,8 @@ fn iadst_dequant_16x8_sse41_impl(
     );
 }
 
-pub(crate) fn iadst_dequant_4x16_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    unsafe {
-        iadst_dequant_4x16_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn iadst_dequant_4x16_sse41_impl(
+pub(crate) fn iadst_dequant_4x16_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1822,36 +1190,8 @@ fn iadst_dequant_4x16_sse41_impl(
     );
 }
 
-pub(crate) fn iadst_dequant_16x4_sse41(
-    coeff: &mut [i32],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    unsafe {
-        iadst_dequant_16x4_sse41_impl(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        )
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
-fn iadst_dequant_16x4_sse41_impl(
+pub(crate) fn iadst_dequant_16x4_sse41(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1882,7 +1222,7 @@ fn iadst_dequant_16x4_sse41_impl(
 macro_rules! idct_i16_fn {
     ($pub:ident, $imp:ident, $n:expr, $s:expr) => {
         #[target_feature(enable = "sse4.1")]
-        fn $imp(
+        pub(crate) fn $pub(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -1903,35 +1243,12 @@ macro_rules! idct_i16_fn {
                 row_clip_max,
             );
         }
-        pub(crate) fn $pub(
-            coeff: &mut [i16],
-            tmp: &mut [i32; ITX_TMP_PIXELS],
-            eob: i32,
-            tx: usize,
-            is_rect2: bool,
-            shift0: i32,
-            row_clip_min: i32,
-            row_clip_max: i32,
-        ) {
-            unsafe {
-                $imp(
-                    coeff,
-                    tmp,
-                    eob,
-                    tx,
-                    is_rect2,
-                    shift0,
-                    row_clip_min,
-                    row_clip_max,
-                )
-            }
-        }
     };
 }
 macro_rules! iadst_i16_fn {
     ($pub:ident, $imp:ident, $n:expr, $s:expr) => {
         #[target_feature(enable = "sse4.1")]
-        fn $imp(
+        pub(crate) fn $pub(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -1956,39 +1273,12 @@ macro_rules! iadst_i16_fn {
                 second_kind,
             );
         }
-        pub(crate) fn $pub(
-            coeff: &mut [i16],
-            tmp: &mut [i32; ITX_TMP_PIXELS],
-            eob: i32,
-            tx: usize,
-            is_rect2: bool,
-            shift0: i32,
-            row_clip_min: i32,
-            row_clip_max: i32,
-            first_kind: usize,
-            second_kind: usize,
-        ) {
-            unsafe {
-                $imp(
-                    coeff,
-                    tmp,
-                    eob,
-                    tx,
-                    is_rect2,
-                    shift0,
-                    row_clip_min,
-                    row_clip_max,
-                    first_kind,
-                    second_kind,
-                )
-            }
-        }
     };
 }
 macro_rules! idct_rect_i16_fn {
     ($pub:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
         #[target_feature(enable = "sse4.1")]
-        fn $imp(
+        pub(crate) fn $pub(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -2009,35 +1299,12 @@ macro_rules! idct_rect_i16_fn {
                 row_clip_max,
             );
         }
-        pub(crate) fn $pub(
-            coeff: &mut [i16],
-            tmp: &mut [i32; ITX_TMP_PIXELS],
-            eob: i32,
-            tx: usize,
-            is_rect2: bool,
-            shift0: i32,
-            row_clip_min: i32,
-            row_clip_max: i32,
-        ) {
-            unsafe {
-                $imp(
-                    coeff,
-                    tmp,
-                    eob,
-                    tx,
-                    is_rect2,
-                    shift0,
-                    row_clip_min,
-                    row_clip_max,
-                )
-            }
-        }
     };
 }
 macro_rules! iadst_rect_i16_fn {
     ($pub:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
         #[target_feature(enable = "sse4.1")]
-        fn $imp(
+        pub(crate) fn $pub(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -2061,33 +1328,6 @@ macro_rules! iadst_rect_i16_fn {
                 first_kind,
                 second_kind,
             );
-        }
-        pub(crate) fn $pub(
-            coeff: &mut [i16],
-            tmp: &mut [i32; ITX_TMP_PIXELS],
-            eob: i32,
-            tx: usize,
-            is_rect2: bool,
-            shift0: i32,
-            row_clip_min: i32,
-            row_clip_max: i32,
-            first_kind: usize,
-            second_kind: usize,
-        ) {
-            unsafe {
-                $imp(
-                    coeff,
-                    tmp,
-                    eob,
-                    tx,
-                    is_rect2,
-                    shift0,
-                    row_clip_min,
-                    row_clip_max,
-                    first_kind,
-                    second_kind,
-                )
-            }
         }
     };
 }

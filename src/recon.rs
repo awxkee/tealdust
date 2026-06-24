@@ -31,7 +31,7 @@ use crate::headers::PixelLayout;
 use crate::intops::{apply_sign, iclip, imax, imin, ulog2, umin};
 use crate::levels::{IntraPredMode, Mv, N_BS_SIZES, RefPair, txtp};
 use crate::mc::OpflRegressionData;
-use crate::msac::MsacContext;
+use crate::msac::MsacReader;
 use crate::pixel::Coeff;
 use crate::refmvs::{self, INVALID_TRAJ, TemporalBlock};
 use crate::scan::SCANS;
@@ -40,9 +40,9 @@ use crate::tables::{
 };
 use crate::warpmv::resolve_divisor_32;
 
-#[inline]
-pub(crate) fn decode_exp_golomb<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+#[inline(always)]
+pub(crate) fn decode_exp_golomb<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     k: u32,
 ) -> u32 {
     let length = msac.decode_unary_bypass(21) + k;
@@ -50,9 +50,9 @@ pub(crate) fn decode_exp_golomb<const UPDATE_CDF: bool>(
     x - (1 << k)
 }
 
-#[inline]
-pub(crate) fn decode_hr<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+#[inline(always)]
+pub(crate) fn decode_hr<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     hr_avg: i32,
 ) -> i32 {
     let m = ulog2(iclip(hr_avg, 2, 64) as u32) as u32;
@@ -671,18 +671,30 @@ pub(crate) struct DecodeCoefParams<'a> {
 
 use crate::cdf::{CdfCoefContext, CdfModeContext};
 
-pub(crate) fn decode_coefs<C: Coeff, const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
-    coef: &mut CdfCoefContext,
-    mode: &mut CdfModeContext,
-    a: &[u8],
-    l: &[u8],
-    p: &DecodeCoefParams,
-    cf: &mut [C],
-    txtp: &mut u16,
-    res_ctx: &mut u8,
-    levels_scratch: &mut [i8; 1089],
-) -> i32 {
+macro_rules! decode_coefs_impl {
+    (
+        $msac:expr,
+        $coef:expr,
+        $mode:expr,
+        $a:expr,
+        $l:expr,
+        $p:expr,
+        $cf:expr,
+        $txtp:expr,
+        $res_ctx:expr,
+        $levels_scratch:expr
+    ) => {{
+        let msac = $msac;
+        let coef = $coef;
+        let mode = $mode;
+        let a = $a;
+        let l = $l;
+        let p = $p;
+        let cf = $cf;
+        let txtp = $txtp;
+        let res_ctx = $res_ctx;
+        let levels_scratch = $levels_scratch;
+
     let t_dim = &TXFM_DIMENSIONS[p.tx];
     let chroma = p.plane != 0;
     let cf_max = !((!127u32) << p.bitdepth) as i32;
@@ -1865,6 +1877,75 @@ pub(crate) fn decode_coefs<C: Coeff, const UPDATE_CDF: bool>(
 
     *res_ctx = (cul_level.min(63) | dc_sign_level) as u8;
     eob
+
+    }};
+}
+
+#[allow(dead_code)]
+#[inline(always)]
+pub(crate) fn decode_coefs<C: Coeff, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
+    coef: &mut CdfCoefContext,
+    mode: &mut CdfModeContext,
+    a: &[u8],
+    l: &[u8],
+    p: &DecodeCoefParams,
+    cf: &mut [C],
+    txtp: &mut u16,
+    res_ctx: &mut u8,
+    levels_scratch: &mut [i8; 1089],
+) -> i32 {
+    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+}
+
+#[inline(always)]
+pub(crate) fn decode_coefs_scalar<C: Coeff, const UPDATE_CDF: bool>(
+    msac: &mut crate::msac::MsacContextScalar<'_, UPDATE_CDF>,
+    coef: &mut CdfCoefContext,
+    mode: &mut CdfModeContext,
+    a: &[u8],
+    l: &[u8],
+    p: &DecodeCoefParams,
+    cf: &mut [C],
+    txtp: &mut u16,
+    res_ctx: &mut u8,
+    levels_scratch: &mut [i8; 1089],
+) -> i32 {
+    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "sse2")]
+pub(crate) unsafe fn decode_coefs_sse2<C: Coeff, const UPDATE_CDF: bool>(
+    msac: &mut crate::sse::MsacContextSse<'_, UPDATE_CDF>,
+    coef: &mut CdfCoefContext,
+    mode: &mut CdfModeContext,
+    a: &[u8],
+    l: &[u8],
+    p: &DecodeCoefParams,
+    cf: &mut [C],
+    txtp: &mut u16,
+    res_ctx: &mut u8,
+    levels_scratch: &mut [i8; 1089],
+) -> i32 {
+    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+}
+
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn decode_coefs_avx2<C: Coeff, const UPDATE_CDF: bool>(
+    msac: &mut crate::avx::MsacContextAvx<'_, UPDATE_CDF>,
+    coef: &mut CdfCoefContext,
+    mode: &mut CdfModeContext,
+    a: &[u8],
+    l: &[u8],
+    p: &DecodeCoefParams,
+    cf: &mut [C],
+    txtp: &mut u16,
+    res_ctx: &mut u8,
+    levels_scratch: &mut [i8; 1089],
+) -> i32 {
+    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -638,13 +638,17 @@ pub(crate) fn ns_wiener_single_y_8bpc(
             }
             let x0 = bx_start << 2;
             let n = (bx - bx_start) << 2;
-            (crate::filter::ns_wiener_fir_run())(
-                &mut dst_row[x0..x0 + n],
-                refs[4],
-                o + x0,
-                &taps,
-                n,
-            );
+            // SAFETY: filter FIR resolver only returns target-feature kernels after
+            // the corresponding runtime CPU feature check succeeds.
+            unsafe {
+                (crate::filter::ns_wiener_fir_run())(
+                    &mut dst_row[x0..x0 + n],
+                    refs[4],
+                    o + x0,
+                    &taps,
+                    n,
+                );
+            }
         }
 
         for r in 0..8 {
@@ -909,13 +913,17 @@ fn wiener_multi_8bpc(
                             coef: filter[i] as i32,
                         }
                     });
-                    (crate::filter::ns_wiener_fir_run())(
-                        &mut dst_row[x0..x0 + n],
-                        refs[4],
-                        col0,
-                        &taps,
-                        n,
-                    );
+                    // SAFETY: filter FIR resolver only returns target-feature kernels after
+                    // the corresponding runtime CPU feature check succeeds.
+                    unsafe {
+                        (crate::filter::ns_wiener_fir_run())(
+                            &mut dst_row[x0..x0 + n],
+                            refs[4],
+                            col0,
+                            &taps,
+                            n,
+                        );
+                    }
                 } else if let Some(fp) = filters_pretrained {
                     let filter = &fp[cls as usize];
                     let taps: [crate::filter::WienerTap; 12] = core::array::from_fn(|i| {
@@ -928,14 +936,18 @@ fn wiener_multi_8bpc(
                             coef: filter[i] as i32,
                         }
                     });
-                    (crate::filter::pc_wiener_fir_run())(
-                        &mut dst_row[x0..x0 + n],
-                        refs[4],
-                        filter[12] as i32,
-                        col0,
-                        &taps,
-                        n,
-                    );
+                    // SAFETY: filter FIR resolver only returns target-feature kernels after
+                    // the corresponding runtime CPU feature check succeeds.
+                    unsafe {
+                        (crate::filter::pc_wiener_fir_run())(
+                            &mut dst_row[x0..x0 + n],
+                            refs[4],
+                            filter[12] as i32,
+                            col0,
+                            &taps,
+                            n,
+                        );
+                    }
                 }
             }
 
@@ -1309,17 +1321,21 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
             }
             let x0 = bx_start << 2;
             let n = (bx - bx_start) << 2;
-            (crate::filter::ns_wiener_uv_fir_run())(
-                &mut dst_row[x0..x0 + n],
-                c_refs[2],
-                o + x0,
-                &ctaps,
-                l_refs[2],
-                o + (x0 << ss_hor),
-                &ltaps,
-                lstep,
-                n,
-            );
+            // SAFETY: filter FIR resolver only returns target-feature kernels after
+            // the corresponding runtime CPU feature check succeeds.
+            unsafe {
+                (crate::filter::ns_wiener_uv_fir_run())(
+                    &mut dst_row[x0..x0 + n],
+                    c_refs[2],
+                    o + x0,
+                    &ctaps,
+                    l_refs[2],
+                    o + (x0 << ss_hor),
+                    &ltaps,
+                    lstep,
+                    n,
+                );
+            }
         }
 
         for r in 0..4 {
@@ -2652,14 +2668,18 @@ pub(crate) fn ns_wiener_single_y_hbd(
             }
             let x0 = bx_start << 2;
             let n = (bx - bx_start) << 2;
-            (crate::filter::ns_wiener_fir_run_hbd())(
-                &mut dst_row[x0..x0 + n],
-                refs[4],
-                o + x0,
-                &taps,
-                n,
-                bitdepth_max,
-            );
+            // SAFETY: filter FIR resolver only returns target-feature kernels after
+            // the corresponding runtime CPU feature check succeeds.
+            unsafe {
+                (crate::filter::ns_wiener_fir_run_hbd())(
+                    &mut dst_row[x0..x0 + n],
+                    refs[4],
+                    o + x0,
+                    &taps,
+                    n,
+                    bitdepth_max,
+                );
+            }
         }
 
         for r in 0..8 {
@@ -2935,14 +2955,18 @@ fn wiener_multi_hbd(
                             coef: filter[i] as i32,
                         }
                     });
-                    (crate::filter::ns_wiener_fir_run_hbd())(
-                        &mut dst_row[x0..x0 + n],
-                        refs[4],
-                        col0,
-                        &taps,
-                        n,
-                        bitdepth_max,
-                    );
+                    // SAFETY: filter FIR resolver only returns target-feature kernels after
+                    // the corresponding runtime CPU feature check succeeds.
+                    unsafe {
+                        (crate::filter::ns_wiener_fir_run_hbd())(
+                            &mut dst_row[x0..x0 + n],
+                            refs[4],
+                            col0,
+                            &taps,
+                            n,
+                            bitdepth_max,
+                        );
+                    }
                 } else if let Some(fp) = filters_pretrained {
                     let filter = &fp[cls as usize];
                     let taps: [crate::filter::WienerTapHbd; 12] = core::array::from_fn(|i| {
@@ -2955,15 +2979,19 @@ fn wiener_multi_hbd(
                             coef: filter[i] as i32,
                         }
                     });
-                    (crate::filter::pc_wiener_fir_run_hbd())(
-                        &mut dst_row[x0..x0 + n],
-                        refs[4],
-                        filter[12] as i32,
-                        col0,
-                        &taps,
-                        n,
-                        bitdepth_max,
-                    );
+                    // SAFETY: filter FIR resolver only returns target-feature kernels after
+                    // the corresponding runtime CPU feature check succeeds.
+                    unsafe {
+                        (crate::filter::pc_wiener_fir_run_hbd())(
+                            &mut dst_row[x0..x0 + n],
+                            refs[4],
+                            filter[12] as i32,
+                            col0,
+                            &taps,
+                            n,
+                            bitdepth_max,
+                        );
+                    }
                 }
             }
 
@@ -3341,18 +3369,22 @@ pub(crate) fn ns_wiener_single_uv_hbd(
             }
             let x0 = bx_start << 2;
             let n = (bx - bx_start) << 2;
-            (crate::filter::ns_wiener_uv_fir_run_hbd())(
-                &mut dst_row[x0..x0 + n],
-                c_refs[2],
-                o + x0,
-                &ctaps,
-                l_refs[2],
-                o + (x0 << ss_hor),
-                &ltaps,
-                lstep,
-                n,
-                bitdepth_max,
-            );
+            // SAFETY: filter FIR resolver only returns target-feature kernels after
+            // the corresponding runtime CPU feature check succeeds.
+            unsafe {
+                (crate::filter::ns_wiener_uv_fir_run_hbd())(
+                    &mut dst_row[x0..x0 + n],
+                    c_refs[2],
+                    o + x0,
+                    &ctaps,
+                    l_refs[2],
+                    o + (x0 << ss_hor),
+                    &ltaps,
+                    lstep,
+                    n,
+                    bitdepth_max,
+                );
+            }
         }
 
         for r in 0..4 {

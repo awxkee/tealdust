@@ -132,7 +132,7 @@ fn splat_fill_sse41(dst: &mut [u16], stride: usize, off: usize, w: usize, h: usi
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_v_hbd_sse41_impl(
+pub(crate) fn ipred_v_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -174,7 +174,7 @@ fn ipred_v_hbd_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_h_hbd_sse41_impl(
+pub(crate) fn ipred_h_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -209,7 +209,7 @@ fn ipred_h_hbd_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_dc_128_hbd_sse41_impl(
+pub(crate) fn ipred_dc_128_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     w: usize,
@@ -220,7 +220,7 @@ fn ipred_dc_128_hbd_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_dc_top_hbd_sse41_impl(
+pub(crate) fn ipred_dc_top_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -249,7 +249,7 @@ fn ipred_dc_top_hbd_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_dc_left_hbd_sse41_impl(
+pub(crate) fn ipred_dc_left_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -278,7 +278,7 @@ fn ipred_dc_left_hbd_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_dc_hbd_sse41_impl(
+pub(crate) fn ipred_dc_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -303,7 +303,7 @@ fn ipred_dc_hbd_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_smooth_v_hbd_sse41_impl(
+pub(crate) fn ipred_smooth_v_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -361,7 +361,7 @@ fn ipred_smooth_v_hbd_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_smooth_h_hbd_sse41_impl(
+pub(crate) fn ipred_smooth_h_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -419,7 +419,7 @@ fn ipred_smooth_h_hbd_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_smooth_hbd_sse41_impl(
+pub(crate) fn ipred_smooth_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -515,7 +515,7 @@ fn ipred_smooth_hbd_sse41_impl(
 }
 
 #[target_feature(enable = "sse4.1")]
-fn ipred_paeth_hbd_sse41_impl(
+pub(crate) fn ipred_paeth_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -566,120 +566,6 @@ fn ipred_paeth_hbd_sse41_impl(
         }
         off += stride;
     }
-}
-
-pub(crate) fn ipred_v_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_v_hbd_sse41_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_h_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_h_hbd_sse41_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_dc_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_dc_hbd_sse41_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_dc_top_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_dc_top_hbd_sse41_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_dc_left_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_dc_left_hbd_sse41_impl(dst, stride, tl, o, w, h, angle, bitdepth_max) }
-}
-pub(crate) fn ipred_dc_128_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_dc_128_hbd_sse41_impl(dst, stride, w, h, bitdepth_max) }
-}
-pub(crate) fn ipred_paeth_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_paeth_hbd_sse41_impl(dst, stride, tl, o, w, h, bitdepth_max) }
-}
-pub(crate) fn ipred_smooth_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_smooth_hbd_sse41_impl(dst, stride, tl, o, w, h, bitdepth_max) }
-}
-pub(crate) fn ipred_smooth_v_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_smooth_v_hbd_sse41_impl(dst, stride, tl, o, w, h, bitdepth_max) }
-}
-pub(crate) fn ipred_smooth_h_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    bitdepth_max: u16,
-) {
-    unsafe { ipred_smooth_h_hbd_sse41_impl(dst, stride, tl, o, w, h, bitdepth_max) }
 }
 
 #[inline(always)]
@@ -770,7 +656,7 @@ fn z1_luma_row_hbd_sse41(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-fn ipred_z1_hbd_sse41_impl(
+pub(crate) fn ipred_z1_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -932,7 +818,7 @@ fn z3_luma_col_hbd_sse41(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-fn ipred_z3_hbd_sse41_impl(
+pub(crate) fn ipred_z3_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -1070,7 +956,7 @@ fn z2_top_span_hbd_sse41(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-fn ipred_z2_hbd_sse41_impl(
+pub(crate) fn ipred_z2_hbd_sse41(
     dst: &mut [u16],
     stride: usize,
     tl: &[u16],
@@ -1187,96 +1073,5 @@ fn ipred_z2_hbd_sse41_impl(
             let f = &crate::ipred::DR_INTERP_FILTER[shift];
             z2_top_span_hbd_sse41(&filt, top_off, xpos, f, dst_row, x, w, bitdepth_max);
         }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z1_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-    bitdepth_max: u16,
-) {
-    unsafe {
-        ipred_z1_hbd_sse41_impl(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle,
-            max_width,
-            max_height,
-            ibp_weights,
-            bitdepth_max,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z3_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-    bitdepth_max: u16,
-) {
-    unsafe {
-        ipred_z3_hbd_sse41_impl(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle,
-            max_width,
-            max_height,
-            ibp_weights,
-            bitdepth_max,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z2_hbd_sse41(
-    dst: &mut [u16],
-    stride: usize,
-    tl: &[u16],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    bitdepth_max: u16,
-) {
-    unsafe {
-        ipred_z2_hbd_sse41_impl(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle,
-            max_width,
-            max_height,
-            bitdepth_max,
-        )
     }
 }

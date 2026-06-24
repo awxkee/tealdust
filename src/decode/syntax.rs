@@ -33,7 +33,7 @@ use crate::internal::NsWienerBank;
 use crate::intops::{iclip, imax, imin, inv_recenter};
 use crate::levels::{BlockSize, INVALID_MV, Mv, MvXY, N_BS_SIZES, TxPartition};
 use crate::lf_mask::Av2RestorationUnit;
-use crate::msac::MsacContext;
+use crate::msac::MsacReader;
 use crate::pal::pal_idx_finish;
 
 use crate::refmvs;
@@ -451,8 +451,8 @@ pub(crate) static PARTITION_SUBB: [PartitionConstants; N_BS_SIZES] = {
 
 // indexed by inter_mode - CompInterPredMode::NearMvNewMv
 
-pub(crate) fn read_wedge_idx<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+pub(crate) fn read_wedge_idx<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
 ) -> i8 {
     let quad = msac.decode_symbol_adapt(cdf_m.wedge_quad(), 3) as usize;
@@ -465,8 +465,8 @@ pub(crate) fn read_wedge_idx<const UPDATE_CDF: bool>(
     WEDGE_ANGLE_DIST2IDX[angle][dist]
 }
 
-pub(crate) fn decode_4way<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+pub(crate) fn decode_4way<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     r: i32,
     cdf: &mut [u16],
     n_bits: i32,
@@ -484,8 +484,8 @@ pub(crate) fn decode_4way<const UPDATE_CDF: bool>(
     }
 }
 
-pub(crate) fn read_mv_residual<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+pub(crate) fn read_mv_residual<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     cdf_mv: &mut CdfMvContext,
     shell_tip: &mut [u16],
     mv_prec: i32,
@@ -574,8 +574,8 @@ pub(crate) fn read_mv_residual<const UPDATE_CDF: bool>(
     }
 }
 
-pub(crate) fn read_mv_full<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+pub(crate) fn read_mv_full<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     cdf_mv: &mut CdfMvContext,
     mv_prec: i32,
 ) -> Mv {
@@ -586,8 +586,8 @@ pub(crate) fn read_mv_full<const UPDATE_CDF: bool>(
     mv
 }
 
-pub(crate) fn read_amvd<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+pub(crate) fn read_amvd<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
 ) -> Mv {
     let joint = msac.decode_symbol_adapt(cdf_m.amvd_joint(), 3) as i32;
@@ -609,8 +609,8 @@ pub(crate) fn read_amvd<const UPDATE_CDF: bool>(
     Mv::from_xy(y, x)
 }
 
-pub(crate) fn read_pal_indices<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+pub(crate) fn read_pal_indices<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     pal_out: &mut [u8],
     scratch: &mut [u8],
@@ -765,8 +765,8 @@ pub(crate) fn read_pal_indices<const UPDATE_CDF: bool>(
 /// - `a_cache`/`l_cache`: number of valid cache entries above / left
 ///   (`t->a->pal_sz[bx4]` gated by `by4 & 15`, and `t->l.pal_sz[by4]`).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn read_pal_plane<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+pub(crate) fn read_pal_plane<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     pal: &mut [u16; 8],
     a_pal: &[u16; 8],
@@ -948,8 +948,8 @@ pub(crate) fn read_pal_plane<const UPDATE_CDF: bool>(
     pal_sz as u8
 }
 
-pub(crate) fn read_tx_part<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+pub(crate) fn read_tx_part<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     b: &mut crate::levels::Av2Block,
     bs: BlockSize,
@@ -1012,8 +1012,8 @@ pub(crate) fn read_tx_part<const UPDATE_CDF: bool>(
     }
 }
 
-pub(crate) fn read_restoration_info<const UPDATE_CDF: bool>(
-    msac: &mut MsacContext<'_, UPDATE_CDF>,
+pub(crate) fn read_restoration_info<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
     cdf_m: &mut CdfModeContext,
     bank: &mut NsWienerBank,
     lr: &mut Av2RestorationUnit,

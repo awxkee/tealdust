@@ -36,15 +36,19 @@ use crate::internal::Pass;
 use crate::intops::{imax, imin};
 use crate::levels::{Av2Block, BlockPartition, BlockSize, CFL_PRED, TxPartition};
 
-use crate::msac::MsacContext;
+use crate::msac::MsacReader;
 
 use crate::pixel::Pixel;
 
 use crate::tables::{BLOCK_DIMENSIONS, TXFM_DIMENSIONS};
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn recon_b_intra_luma_phase<BD: BitDepth, const UPDATE_CDF: bool>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD, UPDATE_CDF>,
+pub(crate) fn recon_b_intra_luma_phase<
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
+    rb: &mut ReconBCtx<'_, '_, '_, BD, UPDATE_CDF, M>,
     bx: i32,
     by: i32,
     _bx4: usize,
@@ -80,8 +84,12 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn recon_b_intra_luma_geom_phase<BD: BitDepth, const UPDATE_CDF: bool>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD, UPDATE_CDF>,
+pub(crate) fn recon_b_intra_luma_geom_phase<
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
+    rb: &mut ReconBCtx<'_, '_, '_, BD, UPDATE_CDF, M>,
     bx: i32,
     by: i32,
     geom_bs: usize,
@@ -671,8 +679,12 @@ pub(crate) fn chroma_phase_intersect(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn recon_b_intra_chroma_phase<BD: BitDepth, const UPDATE_CDF: bool>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD, UPDATE_CDF>,
+pub(crate) fn recon_b_intra_chroma_phase<
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
+    rb: &mut ReconBCtx<'_, '_, '_, BD, UPDATE_CDF, M>,
     cbx: i32,
     cby: i32,
     cbs: BlockSize,
@@ -832,8 +844,7 @@ where
                         ss_ver: ss_ver != 0,
                     };
 
-                    let eob = crate::recon::decode_coefs(
-                        msac,
+                    let eob = msac.decode_coefs(
                         recon.cdf_coef,
                         cdf_m,
                         acoef,
@@ -1416,8 +1427,12 @@ fn cfl_predict_8bpc<BD: crate::pixel::BitDepth>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn recon_b_luma_tx_phase<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool>(
-    rb: &mut ReconBCtx<'_, '_, '_, '_, BD, UPDATE_CDF>,
+fn recon_b_luma_tx_phase<
+    BD: crate::pixel::BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+>(
+    rb: &mut ReconBCtx<'_, '_, '_, BD, UPDATE_CDF, M>,
     tx: usize,
     bx: i32,
     by: i32,
@@ -1538,8 +1553,7 @@ where
             ss_ver: recon.frame.ss_ver != 0,
         };
 
-        let eob = crate::recon::decode_coefs(
-            msac,
+        let eob = msac.decode_coefs(
             recon.cdf_coef,
             cdf_m,
             &a.lcoef[bx4..],
@@ -2113,7 +2127,7 @@ pub(crate) fn mc_w_mask<BD: crate::pixel::BitDepth>(
 /// call) and keeps the call sites legible. It is deliberately NOT generic over
 /// `BitDepth` -- the bit-depth-dependent `recon` stays a separate argument --
 /// so the non-generic `decode_partition` can borrow from it as well.
-pub(crate) struct SbCtx<'a, 'm, const UPDATE_CDF: bool> {
+pub(crate) struct SbCtx<'a, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>> {
     pub(crate) fi: &'a SbFrameInfo,
     pub(crate) bx: &'a mut i32,
     pub(crate) by: &'a mut i32,
@@ -2123,7 +2137,7 @@ pub(crate) struct SbCtx<'a, 'm, const UPDATE_CDF: bool> {
     pub(crate) sdp_cfl_disallowed: &'a mut i32,
     pub(crate) a: &'a mut BlockContext,
     pub(crate) l: &'a mut BlockContext,
-    pub(crate) msac: &'a mut MsacContext<'m, UPDATE_CDF>,
+    pub(crate) msac: &'a mut M,
     pub(crate) cdf_m: &'a mut CdfModeContext,
     pub(crate) cdf_dmv: &'a mut CdfMvContext,
     pub(crate) part_w: &'a mut Vec<u8>,
@@ -2132,8 +2146,8 @@ pub(crate) struct SbCtx<'a, 'm, const UPDATE_CDF: bool> {
     pub(crate) part_r_idx: &'a mut usize,
 }
 
-pub fn decode_sb<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool>(
-    ctx: &mut SbCtx<'_, '_, UPDATE_CDF>,
+pub fn decode_sb<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    ctx: &mut SbCtx<'_, UPDATE_CDF, M>,
     recon: &mut ReconCtx<BD>,
     pass: u8,
     lbs: BlockSize,
