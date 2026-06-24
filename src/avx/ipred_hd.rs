@@ -648,7 +648,7 @@ fn ipred_z3_hbd_avx2_impl(
     let is_luma = angle & ANGLE_IS_LUMA != 0;
     let enable_ibp = angle & ANGLE_IBP_FLAG != 0;
     let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
-    if mrl_mul || enable_ibp || !is_luma || mrl_idx != 0 || h > 64 || h < 8 {
+    if mrl_mul || enable_ibp || !is_luma || mrl_idx != 0 || !(8..=64).contains(&h) {
         return crate::sse::ipred_z3_hbd_sse41(
             dst,
             stride,

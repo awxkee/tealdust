@@ -107,47 +107,45 @@ fn ns_wiener_fir_run_hbd_sse41_impl(
     n: usize,
     bitdepth_max: i32,
 ) {
-    unsafe {
-        let mut x = 0usize;
-        while x + 8 <= n {
-            let c = col0 + x;
-            debug_assert!(c + 8 <= center.len());
-            let (mlo, mhi) = load8_u16_i32(&center[c..]);
-            let mut slo = _mm_slli_epi32(mlo, 7);
-            let mut shi = _mm_slli_epi32(mhi, 7);
-            let two_mlo = _mm_add_epi32(mlo, mlo);
-            let two_mhi = _mm_add_epi32(mhi, mhi);
-            for t in taps {
-                let cp = (c as i32 + t.dx) as usize;
-                let cm = (c as i32 - t.dx) as usize;
-                debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8_u16_i32(&t.row_p[cp..]);
-                let (blo, bhi) = load8_u16_i32(&t.row_m[cm..]);
-                let coef = _mm_set1_epi32(t.coef);
-                slo = _mm_add_epi32(
-                    slo,
-                    _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(alo, blo), two_mlo), coef),
-                );
-                shi = _mm_add_epi32(
-                    shi,
-                    _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(ahi, bhi), two_mhi), coef),
-                );
-            }
-            finish8_u16(&mut dst[x..], slo, shi, bitdepth_max);
-            x += 8;
+    let mut x = 0usize;
+    while x + 8 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 8 <= center.len());
+        let (mlo, mhi) = load8_u16_i32(&center[c..]);
+        let mut slo = _mm_slli_epi32(mlo, 7);
+        let mut shi = _mm_slli_epi32(mhi, 7);
+        let two_mlo = _mm_add_epi32(mlo, mlo);
+        let two_mhi = _mm_add_epi32(mhi, mhi);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
+            let (alo, ahi) = load8_u16_i32(&t.row_p[cp..]);
+            let (blo, bhi) = load8_u16_i32(&t.row_m[cm..]);
+            let coef = _mm_set1_epi32(t.coef);
+            slo = _mm_add_epi32(
+                slo,
+                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(alo, blo), two_mlo), coef),
+            );
+            shi = _mm_add_epi32(
+                shi,
+                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(ahi, bhi), two_mhi), coef),
+            );
         }
-        while x < n {
-            let c = col0 + x;
-            let m = center[c] as i32;
-            let mut s = m << 7;
-            for t in taps {
-                let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
-                let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
-                s += (a + b - 2 * m) * t.coef;
-            }
-            dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
-            x += 1;
+        finish8_u16(&mut dst[x..], slo, shi, bitdepth_max);
+        x += 8;
+    }
+    while x < n {
+        let c = col0 + x;
+        let m = center[c] as i32;
+        let mut s = m << 7;
+        for t in taps {
+            let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
+            s += (a + b - 2 * m) * t.coef;
         }
+        dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
+        x += 1;
     }
 }
 
@@ -161,40 +159,38 @@ fn pc_wiener_fir_run_hbd_sse41_impl(
     n: usize,
     bitdepth_max: i32,
 ) {
-    unsafe {
-        let mut x = 0usize;
-        while x + 8 <= n {
-            let c = col0 + x;
-            debug_assert!(c + 8 <= center.len());
-            let (mlo, mhi) = load8_u16_i32(&center[c..]);
-            let cc = _mm_set1_epi32(center_coef);
-            let mut slo = _mm_mullo_epi32(mlo, cc);
-            let mut shi = _mm_mullo_epi32(mhi, cc);
-            for t in taps {
-                let cp = (c as i32 + t.dx) as usize;
-                let cm = (c as i32 - t.dx) as usize;
-                debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-                let (alo, ahi) = load8_u16_i32(&t.row_p[cp..]);
-                let (blo, bhi) = load8_u16_i32(&t.row_m[cm..]);
-                let coef = _mm_set1_epi32(t.coef);
-                slo = _mm_add_epi32(slo, _mm_mullo_epi32(_mm_add_epi32(alo, blo), coef));
-                shi = _mm_add_epi32(shi, _mm_mullo_epi32(_mm_add_epi32(ahi, bhi), coef));
-            }
-            finish8_u16(&mut dst[x..], slo, shi, bitdepth_max);
-            x += 8;
+    let mut x = 0usize;
+    while x + 8 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 8 <= center.len());
+        let (mlo, mhi) = load8_u16_i32(&center[c..]);
+        let cc = _mm_set1_epi32(center_coef);
+        let mut slo = _mm_mullo_epi32(mlo, cc);
+        let mut shi = _mm_mullo_epi32(mhi, cc);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
+            let (alo, ahi) = load8_u16_i32(&t.row_p[cp..]);
+            let (blo, bhi) = load8_u16_i32(&t.row_m[cm..]);
+            let coef = _mm_set1_epi32(t.coef);
+            slo = _mm_add_epi32(slo, _mm_mullo_epi32(_mm_add_epi32(alo, blo), coef));
+            shi = _mm_add_epi32(shi, _mm_mullo_epi32(_mm_add_epi32(ahi, bhi), coef));
         }
-        while x < n {
-            let c = col0 + x;
-            let m = center[c] as i32;
-            let mut s = m * center_coef;
-            for t in taps {
-                let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
-                let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
-                s += (a + b) * t.coef;
-            }
-            dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
-            x += 1;
+        finish8_u16(&mut dst[x..], slo, shi, bitdepth_max);
+        x += 8;
+    }
+    while x < n {
+        let c = col0 + x;
+        let m = center[c] as i32;
+        let mut s = m * center_coef;
+        for t in taps {
+            let a = t.row_p[(c as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(c as i32 - t.dx) as usize] as i32;
+            s += (a + b) * t.coef;
         }
+        dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
+        x += 1;
     }
 }
 

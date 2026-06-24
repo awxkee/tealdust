@@ -158,15 +158,14 @@ fn round_scalar(v: i32, rnd: i32, shift: i32) -> i32 {
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn bilin_u16x8(src: &[u16], base: usize, stride: usize, mxy: i32) -> __m256i {
-    unsafe {
-        let a16 = load_u16x8(unsafe { src.get_unchecked(base..) });
-        let b16 = load_u16x8(unsafe { src.get_unchecked(base + stride..) });
-        let a = _mm256_cvtepu16_epi32(a16);
-        let diff = _mm_sub_epi16(b16, a16);
-        _mm256_add_epi32(_mm256_slli_epi32::<4>(a), mul_i16x8_n_s32(diff, mxy))
-    }
+    let a16 = load_u16x8(unsafe { src.get_unchecked(base..) });
+    let b16 = load_u16x8(unsafe { src.get_unchecked(base + stride..) });
+    let a = _mm256_cvtepu16_epi32(a16);
+    let diff = _mm_sub_epi16(b16, a16);
+    _mm256_add_epi32(_mm256_slli_epi32::<4>(a), mul_i16x8_n_s32(diff, mxy))
 }
 
 #[inline(always)]
