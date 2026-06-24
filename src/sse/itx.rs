@@ -39,40 +39,48 @@ use crate::itx_2d::{
 pub(crate) struct SseI32x4(__m128i);
 
 impl crate::itx_1d::DctLane for SseI32x4 {
-    #[inline(always)]
-    fn zero() -> Self {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn zero() -> Self {
         SseI32x4(unsafe { _mm_setzero_si128() })
     }
-    #[inline(always)]
-    fn add(self, o: Self) -> Self {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn add(self, o: Self) -> Self {
         SseI32x4(unsafe { _mm_add_epi32(self.0, o.0) })
     }
-    #[inline(always)]
-    fn sub(self, o: Self) -> Self {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn sub(self, o: Self) -> Self {
         SseI32x4(unsafe { _mm_sub_epi32(self.0, o.0) })
     }
-    #[inline(always)]
-    fn mul(self, k: Self) -> Self {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn mul(self, k: Self) -> Self {
         SseI32x4(unsafe { _mm_mullo_epi32(self.0, k.0) })
     }
-    #[inline(always)]
-    fn dup_load(table: &[i32], idx: usize) -> Self {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn dup_load(table: &[i32], idx: usize) -> Self {
         // SAFETY: callers index within the kernel tables.
         SseI32x4(unsafe { _mm_set1_epi32(*table.get_unchecked(idx)) })
     }
-    #[inline(always)]
-    fn mul_add(self, x: Self, k: Self) -> Self {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn mul_add(self, x: Self, k: Self) -> Self {
         // SSE has no integer FMA: multiply-low then add.
         SseI32x4(unsafe { _mm_add_epi32(self.0, _mm_mullo_epi32(x.0, k.0)) })
     }
     type Coeffs = __m128i;
-    #[inline(always)]
-    fn load_coeffs(table: &[i32], idx: usize) -> __m128i {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn load_coeffs(table: &[i32], idx: usize) -> __m128i {
         // SAFETY: callers index a 4-wide group within the kernel tables.
         unsafe { _mm_loadu_si128(table.as_ptr().add(idx) as *const __m128i) }
     }
-    #[inline(always)]
-    fn mul_add_lane<const LANE: i32>(self, x: Self, c: __m128i) -> Self {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn mul_add_lane<const LANE: i32>(self, x: Self, c: __m128i) -> Self {
         // SSE has no by-lane multiply: broadcast lane LANE, then mul-add.
         let bc = unsafe {
             match LANE {
@@ -93,78 +101,81 @@ impl crate::itx_1d::DctWide for SseWide {
     type Acc = (__m128i, __m128i);
     type Coeffs = __m128i;
     type Clip = (__m128i, __m128i, __m128i, __m128i);
-    #[inline(always)]
-    fn zero() -> Self::Acc {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn zero() -> Self::Acc {
         unsafe { (_mm_setzero_si128(), _mm_setzero_si128()) }
     }
-    #[inline(always)]
-    fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc {
         unsafe { (_mm_add_epi32(a.0, b.0), _mm_add_epi32(a.1, b.1)) }
     }
-    #[inline(always)]
-    fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc {
-        unsafe { (_mm_sub_epi32(a.0, b.0), _mm_sub_epi32(a.1, b.1)) }
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+        (_mm_sub_epi32(a.0, b.0), _mm_sub_epi32(a.1, b.1))
     }
-    #[inline(always)]
-    fn load_coeffs(table: &[i16], idx: usize) -> __m128i {
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn load_coeffs(table: &[i16], idx: usize) -> __m128i {
         unsafe { _mm_loadu_si128(table.as_ptr().add(idx) as *const __m128i) }
     }
-    #[inline(always)]
-    fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: __m128i, c: __m128i) -> Self::Acc {
-        unsafe {
-            // Fallback single-tap widening MAC. The paired path below is used by
-            // the hot ITX kernels; keep this for the generic default and odd
-            // future callers.
-            let raw = match LANE {
-                0 => _mm_extract_epi16(c, 0),
-                1 => _mm_extract_epi16(c, 1),
-                2 => _mm_extract_epi16(c, 2),
-                3 => _mm_extract_epi16(c, 3),
-                4 => _mm_extract_epi16(c, 4),
-                5 => _mm_extract_epi16(c, 5),
-                6 => _mm_extract_epi16(c, 6),
-                _ => _mm_extract_epi16(c, 7),
-            };
-            let k = _mm_set1_epi32((raw as i16) as i32);
-            let xlo = _mm_unpacklo_epi16(x, _mm_setzero_si128());
-            let xhi = _mm_unpackhi_epi16(x, _mm_setzero_si128());
-            (
-                _mm_add_epi32(acc.0, _mm_madd_epi16(xlo, k)),
-                _mm_add_epi32(acc.1, _mm_madd_epi16(xhi, k)),
-            )
-        }
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: __m128i, c: __m128i) -> Self::Acc {
+        // Fallback single-tap widening MAC. The paired path below is used by
+        // the hot ITX kernels; keep this for the generic default and odd
+        // future callers.
+        let raw = match LANE {
+            0 => _mm_extract_epi16(c, 0),
+            1 => _mm_extract_epi16(c, 1),
+            2 => _mm_extract_epi16(c, 2),
+            3 => _mm_extract_epi16(c, 3),
+            4 => _mm_extract_epi16(c, 4),
+            5 => _mm_extract_epi16(c, 5),
+            6 => _mm_extract_epi16(c, 6),
+            _ => _mm_extract_epi16(c, 7),
+        };
+        let k = _mm_set1_epi32((raw as i16) as i32);
+        let xlo = _mm_unpacklo_epi16(x, _mm_setzero_si128());
+        let xhi = _mm_unpackhi_epi16(x, _mm_setzero_si128());
+        (
+            _mm_add_epi32(acc.0, _mm_madd_epi16(xlo, k)),
+            _mm_add_epi32(acc.1, _mm_madd_epi16(xhi, k)),
+        )
     }
-    #[inline(always)]
-    fn mul_add_pair<const LANE0: i32, const LANE1: i32>(
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn mul_add_pair<const LANE0: i32, const LANE1: i32>(
         acc: Self::Acc,
         x0: __m128i,
         x1: __m128i,
         c: __m128i,
     ) -> Self::Acc {
-        unsafe {
-            let _ = LANE1;
-            debug_assert_eq!(LANE1, LANE0 + 1);
-            debug_assert_eq!(LANE0 & 1, 0);
+        let _ = LANE1;
+        debug_assert_eq!(LANE1, LANE0 + 1);
+        debug_assert_eq!(LANE0 & 1, 0);
 
-            // c is eight i16 coefficients. Replicate an adjacent i16 pair as
-            // [c0, c1, c0, c1, ...], then use madd_epi16 on interleaved source
-            // pairs: x0[i] * c0 + x1[i] * c1. This halves the number of madds
-            // and avoids the extract+broadcast sequence in the single-lane path.
-            let k01 = match LANE0 {
-                0 => _mm_shuffle_epi32(c, 0x00),
-                2 => _mm_shuffle_epi32(c, 0x55),
-                4 => _mm_shuffle_epi32(c, 0xaa),
-                _ => _mm_shuffle_epi32(c, 0xff),
-            };
-            let xlo = _mm_unpacklo_epi16(x0, x1);
-            let xhi = _mm_unpackhi_epi16(x0, x1);
-            (
-                _mm_add_epi32(acc.0, _mm_madd_epi16(xlo, k01)),
-                _mm_add_epi32(acc.1, _mm_madd_epi16(xhi, k01)),
-            )
-        }
+        // c is eight i16 coefficients. Replicate an adjacent i16 pair as
+        // [c0, c1, c0, c1, ...], then use madd_epi16 on interleaved source
+        // pairs: x0[i] * c0 + x1[i] * c1. This halves the number of madds
+        // and avoids the extract+broadcast sequence in the single-lane path.
+        let k01 = match LANE0 {
+            0 => _mm_shuffle_epi32(c, 0x00),
+            2 => _mm_shuffle_epi32(c, 0x55),
+            4 => _mm_shuffle_epi32(c, 0xaa),
+            _ => _mm_shuffle_epi32(c, 0xff),
+        };
+        let xlo = _mm_unpacklo_epi16(x0, x1);
+        let xhi = _mm_unpackhi_epi16(x0, x1);
+        (
+            _mm_add_epi32(acc.0, _mm_madd_epi16(xlo, k01)),
+            _mm_add_epi32(acc.1, _mm_madd_epi16(xhi, k01)),
+        )
     }
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load8_narrow(src: &[i32], off: usize) -> __m128i {
         unsafe {
             let lo = _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i);
@@ -172,7 +183,8 @@ impl crate::itx_1d::DctWide for SseWide {
             _mm_packs_epi32(lo, hi)
         }
     }
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load8_rect2_narrow(src: &[i32], off: usize) -> __m128i {
         unsafe {
             let lo = _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i);
@@ -180,47 +192,53 @@ impl crate::itx_1d::DctWide for SseWide {
             _mm_mulhrs_epi16(_mm_packs_epi32(lo, hi), _mm_set1_epi16(0x5a80))
         }
     }
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load4_narrow(src: &[i32], off: usize) -> __m128i {
         unsafe {
             let lo = _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i);
             _mm_packs_epi32(lo, _mm_setzero_si128())
         }
     }
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load4_rect2_narrow(src: &[i32], off: usize) -> __m128i {
         unsafe { _mm_mulhrs_epi16(Self::load4_narrow(src, off), _mm_set1_epi16(0x5a80)) }
     }
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load8_i16(src: &[i16], off: usize) -> __m128i {
         debug_assert!(off + 8 <= src.len());
         unsafe { _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i) }
     }
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load8_rect2_i16(src: &[i16], off: usize) -> __m128i {
         unsafe { _mm_mulhrs_epi16(Self::load8_i16(src, off), _mm_set1_epi16(0x5a80)) }
     }
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load4_i16(src: &[i16], off: usize) -> __m128i {
         debug_assert!(off + 4 <= src.len());
         unsafe { _mm_loadl_epi64(src.as_ptr().add(off) as *const __m128i) }
     }
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load4_rect2_i16(src: &[i16], off: usize) -> __m128i {
         unsafe { _mm_mulhrs_epi16(Self::load4_i16(src, off), _mm_set1_epi16(0x5a80)) }
     }
-    #[inline(always)]
-    fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
-        unsafe {
-            (
-                _mm_set1_epi32(rnd),
-                _mm_cvtsi32_si128(shift),
-                _mm_set1_epi32(min),
-                _mm_set1_epi32(max),
-            )
-        }
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
+    unsafe fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
+        (
+            _mm_set1_epi32(rnd),
+            _mm_cvtsi32_si128(shift),
+            _mm_set1_epi32(min),
+            _mm_set1_epi32(max),
+        )
     }
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn store8_strided_clip(
         dst: &mut [i32],
         off: usize,
@@ -259,7 +277,8 @@ impl crate::itx_1d::DctWide for SseWide {
         }
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn store4_strided_clip(
         dst: &mut [i32],
         off: usize,
@@ -287,7 +306,8 @@ impl crate::itx_1d::DctWide for SseWide {
         }
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn store4x4_strided_clip<const HIGH: bool>(
         dst: &mut [i32],
         off: usize,
@@ -333,7 +353,8 @@ impl crate::itx_1d::DctWide for SseWide {
         }
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc) {
         unsafe {
             _mm_storeu_si128(dst.as_mut_ptr().add(off) as *mut __m128i, acc.0);
@@ -341,7 +362,8 @@ impl crate::itx_1d::DctWide for SseWide {
         }
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn store4(dst: &mut [i32], off: usize, acc: Self::Acc) {
         unsafe {
             _mm_storeu_si128(dst.as_mut_ptr().add(off) as *mut __m128i, acc.0);
@@ -355,71 +377,80 @@ impl DctSimd4 for SseDct2d {
     type V = SseI32x4;
     type Wide = SseWide;
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn zero() -> Self::V {
         SseI32x4(unsafe { _mm_setzero_si128() })
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn splat(v: i32) -> Self::V {
         SseI32x4(unsafe { _mm_set1_epi32(v) })
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn add(a: Self::V, b: Self::V) -> Self::V {
         SseI32x4(unsafe { _mm_add_epi32(a.0, b.0) })
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn sub(a: Self::V, b: Self::V) -> Self::V {
         SseI32x4(unsafe { _mm_sub_epi32(a.0, b.0) })
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn mul(a: Self::V, b: Self::V) -> Self::V {
         SseI32x4(unsafe { _mm_mullo_epi32(a.0, b.0) })
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn rect2_scale(a: Self::V) -> Self::V {
-        unsafe {
-            let scaled = _mm_add_epi32(
-                _mm_mullo_epi32(a.0, _mm_set1_epi32(181)),
-                _mm_set1_epi32(128),
-            );
-            SseI32x4(_mm_srai_epi32::<8>(scaled))
-        }
+        let scaled = _mm_add_epi32(
+            _mm_mullo_epi32(a.0, _mm_set1_epi32(181)),
+            _mm_set1_epi32(128),
+        );
+        SseI32x4(_mm_srai_epi32::<8>(scaled))
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load(tmp: &[i32; ITX_TMP_PIXELS], off: usize) -> Self::V {
         debug_assert!(off + 4 <= ITX_TMP_PIXELS);
         let p = unsafe { tmp.as_ptr().add(off) as *const __m128i };
         SseI32x4(unsafe { _mm_loadu_si128(p) })
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn store(tmp: &mut [i32; ITX_TMP_PIXELS], off: usize, v: Self::V) {
         debug_assert!(off + 4 <= ITX_TMP_PIXELS);
         let p = unsafe { tmp.as_mut_ptr().add(off) as *mut __m128i };
         unsafe { _mm_storeu_si128(p, v.0) };
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load_slice(src: &[i32], off: usize) -> Self::V {
         debug_assert!(off + 4 <= src.len());
         let p = unsafe { src.as_ptr().add(off) as *const __m128i };
         SseI32x4(unsafe { _mm_loadu_si128(p) })
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn load_slice_i16(src: &[i16], off: usize) -> Self::V {
         debug_assert!(off + 4 <= src.len());
         let p = unsafe { src.as_ptr().add(off) as *const __m128i };
         SseI32x4(unsafe { _mm_cvtepi16_epi32(_mm_loadl_epi64(p)) })
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn to_array(v: Self::V) -> [i32; 4] {
         let mut out = [0i32; 4];
         let p = out.as_mut_ptr() as *mut __m128i;
@@ -427,7 +458,8 @@ impl DctSimd4 for SseDct2d {
         out
     }
 
-    #[inline(always)]
+    #[inline]
+    #[target_feature(enable = "sse4.1")]
     unsafe fn store4x4_clip(
         tmp: &mut [i32; ITX_TMP_PIXELS],
         off: usize,

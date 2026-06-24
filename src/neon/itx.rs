@@ -84,23 +84,27 @@ impl crate::itx_1d::DctWide for NeonWide {
     type Coeffs = int16x8_t;
     type Clip = (int32x4_t, int32x4_t, int32x4_t, int32x4_t);
     #[inline(always)]
-    fn zero() -> Self::Acc {
+    unsafe fn zero() -> Self::Acc {
         unsafe { (vdupq_n_s32(0), vdupq_n_s32(0)) }
     }
     #[inline(always)]
-    fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+    unsafe fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc {
         unsafe { (vaddq_s32(a.0, b.0), vaddq_s32(a.1, b.1)) }
     }
     #[inline(always)]
-    fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+    unsafe fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc {
         unsafe { (vsubq_s32(a.0, b.0), vsubq_s32(a.1, b.1)) }
     }
     #[inline(always)]
-    fn load_coeffs(table: &[i16], idx: usize) -> int16x8_t {
+    unsafe fn load_coeffs(table: &[i16], idx: usize) -> int16x8_t {
         unsafe { vld1q_s16(table.as_ptr().add(idx)) }
     }
     #[inline(always)]
-    fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: int16x8_t, c: int16x8_t) -> Self::Acc {
+    unsafe fn mul_add_lane<const LANE: i32>(
+        acc: Self::Acc,
+        x: int16x8_t,
+        c: int16x8_t,
+    ) -> Self::Acc {
         unsafe {
             (
                 vmlal_laneq_s16::<LANE>(acc.0, vget_low_s16(x), c),
@@ -173,7 +177,7 @@ impl crate::itx_1d::DctWide for NeonWide {
         }
     }
     #[inline(always)]
-    fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
+    unsafe fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
         unsafe {
             (
                 vdupq_n_s32(rnd),
@@ -318,27 +322,31 @@ impl crate::itx_1d::DctWide for NeonWideRdm {
     type Clip = (int32x4_t, int32x4_t, int32x4_t, int32x4_t);
 
     #[inline(always)]
-    fn zero() -> Self::Acc {
+    unsafe fn zero() -> Self::Acc {
         NeonWide::zero()
     }
 
     #[inline(always)]
-    fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+    unsafe fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc {
         NeonWide::add(a, b)
     }
 
     #[inline(always)]
-    fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc {
+    unsafe fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc {
         NeonWide::sub(a, b)
     }
 
     #[inline(always)]
-    fn load_coeffs(table: &[i16], idx: usize) -> Self::Coeffs {
+    unsafe fn load_coeffs(table: &[i16], idx: usize) -> Self::Coeffs {
         NeonWide::load_coeffs(table, idx)
     }
 
     #[inline(always)]
-    fn mul_add_lane<const LANE: i32>(acc: Self::Acc, x: Self::In, c: Self::Coeffs) -> Self::Acc {
+    unsafe fn mul_add_lane<const LANE: i32>(
+        acc: Self::Acc,
+        x: Self::In,
+        c: Self::Coeffs,
+    ) -> Self::Acc {
         NeonWide::mul_add_lane::<LANE>(acc, x, c)
     }
 
@@ -382,7 +390,7 @@ impl crate::itx_1d::DctWide for NeonWideRdm {
     }
 
     #[inline(always)]
-    fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
+    unsafe fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip {
         NeonWide::make_clip(rnd, shift, min, max)
     }
 

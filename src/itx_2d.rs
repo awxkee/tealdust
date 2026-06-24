@@ -966,47 +966,54 @@ fn process_row_group_itx_wide_x4<
 ) {
     use crate::itx_1d::DctWide;
     debug_assert!(C::USE_WIDE_16BIT);
-    let s: [<B::Wide as DctWide>::In; W] = crate::itx_1d::build_array(|x| unsafe {
+    let s: [<B::Wide as DctWide>::In; W] = core::array::from_fn(|x| unsafe {
         if RECT2 {
             C::load_wide4_rect2::<B::Wide>(coeff, y + x * H)
         } else {
             C::load_wide4::<B::Wide>(coeff, y + x * H)
         }
     });
-    let clip = B::Wide::make_clip(rnd, shift, min, max);
-    let zero = B::Wide::zero();
-    let mut out = [zero; W];
-    {
-        let mut store = |m: usize, acc: <B::Wide as DctWide>::Acc| out[m] = acc;
-        match (W, KIND) {
-            (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], &mut store),
-            (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], &mut store),
-            (16, TX_KIND_ADST) => {
-                crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &ADST16_KW, false)
+    unsafe {
+        let clip = B::Wide::make_clip(rnd, shift, min, max);
+        let zero = B::Wide::zero();
+        let mut out = [zero; W];
+        {
+            let mut store = |m: usize, acc: <B::Wide as DctWide>::Acc| out[m] = acc;
+            match (W, KIND) {
+                (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], &mut store),
+                (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], &mut store),
+                (16, TX_KIND_ADST) => {
+                    crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &ADST16_KW, false)
+                }
+                (16, TX_KIND_FLIPADST) => crate::itx_1d::adst16_wide::<B::Wide>(
+                    |j| s[j],
+                    &mut store,
+                    &FLIPADST16_KW,
+                    false,
+                ),
+                (8, TX_KIND_DCT) => {
+                    crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &DCT8_KW, false)
+                }
+                (8, TX_KIND_ADST) => {
+                    crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, false)
+                }
+                (8, TX_KIND_FLIPADST) => {
+                    crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, true)
+                }
+                (4, TX_KIND_DCT) => {
+                    crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], &mut store, &DCT4_KW)
+                }
+                (4, TX_KIND_ADST) => {
+                    crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], &mut store, &ADST4_KW)
+                }
+                (4, TX_KIND_FLIPADST) => {
+                    crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], &mut store, &FLIPADST4_KW)
+                }
+                _ => unreachable!(),
             }
-            (16, TX_KIND_FLIPADST) => {
-                crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &FLIPADST16_KW, false)
-            }
-            (8, TX_KIND_DCT) => {
-                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &DCT8_KW, false)
-            }
-            (8, TX_KIND_ADST) => {
-                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, false)
-            }
-            (8, TX_KIND_FLIPADST) => {
-                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, true)
-            }
-            (4, TX_KIND_DCT) => crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], &mut store, &DCT4_KW),
-            (4, TX_KIND_ADST) => {
-                crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], &mut store, &ADST4_KW)
-            }
-            (4, TX_KIND_FLIPADST) => {
-                crate::itx_1d::mat4_wide::<B::Wide>(|j| s[j], &mut store, &FLIPADST4_KW)
-            }
-            _ => unreachable!(),
         }
+        store_row_group_wide_x4_clip::<B::Wide, W>(tmp, y, &out, clip);
     }
-    store_row_group_wide_x4_clip::<B::Wide, W>(tmp, y, &out, clip);
 }
 
 #[inline(always)]
@@ -1067,19 +1074,21 @@ fn process_row_group_wide_x8<B: DctSimd4, const S: usize, C: ItxCoeff>(
 ) {
     use crate::itx_1d::DctWide;
     let s: [<B::Wide as DctWide>::In; S] =
-        crate::itx_1d::build_array(|j| unsafe { C::load_wide8::<B::Wide>(coeff, y + j * S) });
-    let clip = B::Wide::make_clip(rnd, shift, min, max);
-    let zero = B::Wide::zero();
-    let mut out = [zero; S];
-    {
-        let mut store = |m: usize, acc: <B::Wide as DctWide>::Acc| out[m] = acc;
-        match S {
-            16 => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], &mut store),
-            32 => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], &mut store),
-            _ => unreachable!(),
+        core::array::from_fn(|j| unsafe { C::load_wide8::<B::Wide>(coeff, y + j * S) });
+    unsafe {
+        let clip = B::Wide::make_clip(rnd, shift, min, max);
+        let zero = B::Wide::zero();
+        let mut out = [zero; S];
+        {
+            let mut store = |m: usize, acc: <B::Wide as DctWide>::Acc| out[m] = acc;
+            match S {
+                16 => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], &mut store),
+                32 => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], &mut store),
+                _ => unreachable!(),
+            }
         }
+        store_row_group_wide_x8_clip::<B::Wide, S>(tmp, y, &out, clip);
     }
-    store_row_group_wide_x8_clip::<B::Wide, S>(tmp, y, &out, clip);
 }
 
 #[inline(always)]
@@ -1491,40 +1500,45 @@ fn process_row_group_itx_wide_x8<
     max: i32,
 ) {
     use crate::itx_1d::DctWide;
-    let s: [<B::Wide as DctWide>::In; W] = crate::itx_1d::build_array(|x| unsafe {
+    let s: [<B::Wide as DctWide>::In; W] = core::array::from_fn(|x| unsafe {
         if RECT2 {
             C::load_wide8_rect2::<B::Wide>(coeff, y + x * H)
         } else {
             C::load_wide8::<B::Wide>(coeff, y + x * H)
         }
     });
-    let clip = B::Wide::make_clip(rnd, shift, min, max);
-    let zero = B::Wide::zero();
-    let mut out = [zero; W];
-    {
-        let mut store = |m: usize, acc: <B::Wide as DctWide>::Acc| out[m] = acc;
-        match (W, KIND) {
-            (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], &mut store),
-            (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], &mut store),
-            (16, TX_KIND_ADST) => {
-                crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &ADST16_KW, false)
+    unsafe {
+        let clip = B::Wide::make_clip(rnd, shift, min, max);
+        let zero = B::Wide::zero();
+        let mut out = [zero; W];
+        {
+            let mut store = |m: usize, acc: <B::Wide as DctWide>::Acc| out[m] = acc;
+            match (W, KIND) {
+                (32, TX_KIND_DCT) => crate::itx_1d::dct32_wide::<B::Wide>(|j| s[j], &mut store),
+                (16, TX_KIND_DCT) => crate::itx_1d::dct16_wide::<B::Wide>(|j| s[j], &mut store),
+                (16, TX_KIND_ADST) => {
+                    crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &ADST16_KW, false)
+                }
+                (16, TX_KIND_FLIPADST) => crate::itx_1d::adst16_wide::<B::Wide>(
+                    |j| s[j],
+                    &mut store,
+                    &FLIPADST16_KW,
+                    false,
+                ),
+                (8, TX_KIND_DCT) => {
+                    crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &DCT8_KW, false)
+                }
+                (8, TX_KIND_ADST) => {
+                    crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, false)
+                }
+                (8, TX_KIND_FLIPADST) => {
+                    crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, true)
+                }
+                _ => unreachable!(),
             }
-            (16, TX_KIND_FLIPADST) => {
-                crate::itx_1d::adst16_wide::<B::Wide>(|j| s[j], &mut store, &FLIPADST16_KW, false)
-            }
-            (8, TX_KIND_DCT) => {
-                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &DCT8_KW, false)
-            }
-            (8, TX_KIND_ADST) => {
-                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, false)
-            }
-            (8, TX_KIND_FLIPADST) => {
-                crate::itx_1d::adst8_wide::<B::Wide>(|j| s[j], &mut store, &ADST8_KW, true)
-            }
-            _ => unreachable!(),
         }
+        store_row_group_wide_x8_clip::<B::Wide, W>(tmp, y, &out, clip);
     }
-    store_row_group_wide_x8_clip::<B::Wide, W>(tmp, y, &out, clip);
 }
 
 #[inline(always)]
@@ -1612,7 +1626,7 @@ fn itx_1d_wide_x4<B: DctSimd4, const S: usize, const KIND: usize>(
     let stride = ITX_TMP_STRIDE;
     let s: [<B::Wide as DctWide>::In; S] = {
         let src: &[i32] = &tmp[..];
-        crate::itx_1d::build_array(|j| unsafe { B::Wide::load4_narrow(src, x + j * stride) })
+        core::array::from_fn(|j| unsafe { B::Wide::load4_narrow(src, x + j * stride) })
     };
     let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
         B::Wide::store4(tmp, x + m * stride, acc)
@@ -1679,7 +1693,7 @@ fn itx_1d_wide_x8<B: DctSimd4, const S: usize, const KIND: usize>(
     }
     let s: [<B::Wide as DctWide>::In; S] = {
         let src: &[i32] = &tmp[..];
-        crate::itx_1d::build_array(|j| unsafe { B::Wide::load8_narrow(src, x + j * ITX_TMP_STRIDE) })
+        core::array::from_fn(|j| unsafe { B::Wide::load8_narrow(src, x + j * ITX_TMP_STRIDE) })
     };
     let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
         B::Wide::store8(tmp, x + m * ITX_TMP_STRIDE, acc)
@@ -1912,7 +1926,7 @@ fn dct_1d_wide_x8<W: crate::itx_1d::DctWide, const S: usize>(
     let stride = ITX_TMP_STRIDE;
     let s: [W::In; S] = {
         let src: &[i32] = &tmp[..];
-        crate::itx_1d::build_array(|j| unsafe { W::load8_narrow(src, x + j * stride) })
+        core::array::from_fn(|j| unsafe { W::load8_narrow(src, x + j * stride) })
     };
     let store = |m: usize, acc: W::Acc| unsafe { W::store8(tmp, x + m * stride, acc) };
     match S {
