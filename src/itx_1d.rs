@@ -535,6 +535,7 @@ pub(crate) fn dct16_flat_bylane<L: DctLane>(
     }
 }
 
+#[inline(always)]
 pub(crate) fn dct16_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl FnMut(usize, L)) {
     let kv = |idx: usize| L::dup_load(&crate::itx_2d::DCT16_DENSE_KERNEL, idx);
     let z = L::zero();

@@ -1800,6 +1800,76 @@ pub(crate) fn itx_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usize
     });
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn itx_dequant_simd4_core_sse41<
+    B: DctSimd4,
+    const N: usize,
+    const S: usize,
+    C: ItxCoeff,
+>(
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    debug_assert!(is_dct_adst_kind(first_kind));
+    debug_assert!(is_dct_adst_kind(second_kind));
+    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
+        itx_dequant_simd4_core_mono::<B, N, S, C, FK, SK>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        )
+    });
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+pub(crate) fn itx_dequant_simd4_core_avx2<
+    B: DctSimd4,
+    const N: usize,
+    const S: usize,
+    C: ItxCoeff,
+>(
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    debug_assert!(is_dct_adst_kind(first_kind));
+    debug_assert!(is_dct_adst_kind(second_kind));
+    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
+        itx_dequant_simd4_core_mono::<B, N, S, C, FK, SK>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        )
+    });
+}
+
 #[inline(always)]
 fn dct_1d_x4<B: DctSimd4, const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: usize) {
     match S {
@@ -1868,6 +1938,124 @@ pub(crate) fn idct_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usiz
         // cases that reuse the square 32x32 core. Keep them on the same
         // SIMD row pipeline as true rectangular transforms instead of falling
         // back to scalar rows.
+        idct_dequant_rows_rect_dct_simd4::<B, N, S, S, C>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    } else {
+        idct_dequant_rows_dct_simd4::<B, N, S, C>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    }
+
+    let mut x = 0usize;
+    if C::USE_WIDE_16BIT && (S == 16 || S == 32) {
+        while x + 8 <= S {
+            dct_1d_wide_x8::<B::Wide, S>(tmp, x);
+            x += 8;
+        }
+    }
+    while x + 4 <= S {
+        if !(C::USE_WIDE_16BIT && itx_1d_wide_x4::<B, S, TX_KIND_DCT>(tmp, x)) {
+            dct_1d_x4::<B, S>(tmp, x);
+        }
+        x += 4;
+    }
+    while x < S {
+        dct_1d::<S>(&mut tmp[x..], ITX_TMP_STRIDE);
+        x += 1;
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn idct_dequant_simd4_core_sse41<
+    B: DctSimd4,
+    const N: usize,
+    const S: usize,
+    C: ItxCoeff,
+>(
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    if is_rect2 {
+        idct_dequant_rows_rect_dct_simd4::<B, N, S, S, C>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    } else {
+        idct_dequant_rows_dct_simd4::<B, N, S, C>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    }
+
+    let mut x = 0usize;
+    if C::USE_WIDE_16BIT && (S == 16 || S == 32) {
+        while x + 8 <= S {
+            dct_1d_wide_x8::<B::Wide, S>(tmp, x);
+            x += 8;
+        }
+    }
+    while x + 4 <= S {
+        if !(C::USE_WIDE_16BIT && itx_1d_wide_x4::<B, S, TX_KIND_DCT>(tmp, x)) {
+            dct_1d_x4::<B, S>(tmp, x);
+        }
+        x += 4;
+    }
+    while x < S {
+        dct_1d::<S>(&mut tmp[x..], ITX_TMP_STRIDE);
+        x += 1;
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+pub(crate) fn idct_dequant_simd4_core_avx2<
+    B: DctSimd4,
+    const N: usize,
+    const S: usize,
+    C: ItxCoeff,
+>(
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    if is_rect2 {
         idct_dequant_rows_rect_dct_simd4::<B, N, S, S, C>(
             coeff,
             tmp,
@@ -2383,6 +2571,68 @@ pub(crate) fn idct_dequant_rect_simd4_core<
     rect_col_pass::<B, W, H, C>(tmp);
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn idct_dequant_rect_simd4_core_sse41<
+    B: DctSimd4,
+    const N: usize,
+    const W: usize,
+    const H: usize,
+    C: ItxCoeff,
+>(
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    idct_dequant_rows_rect_dct_simd4::<B, N, W, H, C>(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+    );
+    rect_col_pass::<B, W, H, C>(tmp);
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+pub(crate) fn idct_dequant_rect_simd4_core_avx2<
+    B: DctSimd4,
+    const N: usize,
+    const W: usize,
+    const H: usize,
+    C: ItxCoeff,
+>(
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    idct_dequant_rows_rect_dct_simd4::<B, N, W, H, C>(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+    );
+    rect_col_pass::<B, W, H, C>(tmp);
+}
+
 /// Pure-scalar rectangular DCT_DCT core (the universal fallback). The column
 /// pass uses the scalar `dct_1d`, matching the generic path exactly.
 pub(crate) fn idct_dequant_rect_scalar_core<
@@ -2730,6 +2980,78 @@ fn itx_dequant_rect_simd4_core_mono<
 /// SIMD-structured kind-aware rectangular core (used by NEON/SSE).
 #[inline(always)]
 pub(crate) fn itx_dequant_rect_simd4_core<
+    B: DctSimd4,
+    const N: usize,
+    const W: usize,
+    const H: usize,
+    C: ItxCoeff,
+>(
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    debug_assert!(is_dct_adst_kind(first_kind));
+    debug_assert!(is_dct_adst_kind(second_kind));
+    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
+        itx_dequant_rect_simd4_core_mono::<B, N, W, H, C, FK, SK>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        )
+    });
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn itx_dequant_rect_simd4_core_sse41<
+    B: DctSimd4,
+    const N: usize,
+    const W: usize,
+    const H: usize,
+    C: ItxCoeff,
+>(
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    debug_assert!(is_dct_adst_kind(first_kind));
+    debug_assert!(is_dct_adst_kind(second_kind));
+    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
+        itx_dequant_rect_simd4_core_mono::<B, N, W, H, C, FK, SK>(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        )
+    });
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+pub(crate) fn itx_dequant_rect_simd4_core_avx2<
     B: DctSimd4,
     const N: usize,
     const W: usize,

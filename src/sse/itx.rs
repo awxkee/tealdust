@@ -32,8 +32,7 @@ use std::arch::x86::*;
 use std::arch::x86_64::*;
 
 use crate::itx_2d::{
-    Adst2dBackend, Dct2dBackend, DctSimd4, ITX_TMP_PIXELS, idct_dequant_simd4_core,
-    itx_dequant_simd4_core,
+    DctSimd4, ITX_TMP_PIXELS, idct_dequant_simd4_core_sse41, itx_dequant_simd4_core_sse41,
 };
 
 #[derive(Clone, Copy)]
@@ -487,206 +486,6 @@ impl DctSimd4 for SseDct2d {
     }
 }
 
-impl Dct2dBackend for SseDct2d {
-    #[inline(always)]
-    fn idct_dequant_4x4(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        idct_dequant_simd4_core::<Self, 16, 4, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    #[inline(always)]
-    fn idct_dequant_8x8(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        idct_dequant_simd4_core::<Self, 64, 8, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    #[inline(always)]
-    fn idct_dequant_16x16(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        idct_dequant_simd4_core::<Self, 256, 16, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    #[inline(always)]
-    fn idct_dequant_32x32(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        idct_dequant_simd4_core::<Self, 1024, 32, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    #[inline(always)]
-    fn idct_dequant_64x64(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        idct_dequant_simd4_core::<Self, 1024, 32, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-}
-
-impl Adst2dBackend for SseDct2d {
-    #[inline(always)]
-    fn iadst_dequant_4x4(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-        first_kind: usize,
-        second_kind: usize,
-    ) {
-        itx_dequant_simd4_core::<Self, 16, 4, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        );
-    }
-
-    #[inline(always)]
-    fn iadst_dequant_8x8(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-        first_kind: usize,
-        second_kind: usize,
-    ) {
-        itx_dequant_simd4_core::<Self, 64, 8, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        );
-    }
-
-    #[inline(always)]
-    fn iadst_dequant_16x16(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-        first_kind: usize,
-        second_kind: usize,
-    ) {
-        itx_dequant_simd4_core::<Self, 256, 16, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        );
-    }
-}
-
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_4x4_sse41(
     coeff: &mut [i32],
@@ -698,7 +497,7 @@ pub(crate) fn idct_dequant_4x4_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    SseDct2d::idct_dequant_4x4(
+    crate::itx_2d::idct_dequant_simd4_core_sse41::<SseDct2d, 16, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -721,7 +520,7 @@ pub(crate) fn idct_dequant_8x8_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    SseDct2d::idct_dequant_8x8(
+    crate::itx_2d::idct_dequant_simd4_core_sse41::<SseDct2d, 64, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -744,7 +543,7 @@ pub(crate) fn idct_dequant_16x16_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    SseDct2d::idct_dequant_16x16(
+    crate::itx_2d::idct_dequant_simd4_core_sse41::<SseDct2d, 256, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -767,7 +566,7 @@ pub(crate) fn idct_dequant_32x32_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    SseDct2d::idct_dequant_32x32(
+    crate::itx_2d::idct_dequant_simd4_core_sse41::<SseDct2d, 1024, 32, i32>(
         coeff,
         tmp,
         eob,
@@ -790,7 +589,7 @@ pub(crate) fn idct_dequant_64x64_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    SseDct2d::idct_dequant_64x64(
+    crate::itx_2d::idct_dequant_simd4_core_sse41::<SseDct2d, 1024, 32, i32>(
         coeff,
         tmp,
         eob,
@@ -815,7 +614,7 @@ pub(crate) fn iadst_dequant_4x4_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    SseDct2d::iadst_dequant_4x4(
+    crate::itx_2d::itx_dequant_simd4_core_sse41::<SseDct2d, 16, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -842,7 +641,7 @@ pub(crate) fn iadst_dequant_8x8_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    SseDct2d::iadst_dequant_8x8(
+    crate::itx_2d::itx_dequant_simd4_core_sse41::<SseDct2d, 64, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -869,7 +668,7 @@ pub(crate) fn iadst_dequant_16x16_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    SseDct2d::iadst_dequant_16x16(
+    crate::itx_2d::itx_dequant_simd4_core_sse41::<SseDct2d, 256, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -894,7 +693,7 @@ pub(crate) fn idct_dequant_4x8_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 32, 4, 8, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 32, 4, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -917,7 +716,7 @@ pub(crate) fn idct_dequant_8x4_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 32, 8, 4, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 32, 8, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -940,7 +739,7 @@ pub(crate) fn idct_dequant_8x16_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 8, 16, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 128, 8, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -963,7 +762,7 @@ pub(crate) fn idct_dequant_16x8_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 16, 8, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 128, 16, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -986,7 +785,7 @@ pub(crate) fn idct_dequant_16x32_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 512, 16, 32, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 512, 16, 32, i32>(
         coeff,
         tmp,
         eob,
@@ -1009,7 +808,7 @@ pub(crate) fn idct_dequant_32x16_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 512, 32, 16, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 512, 32, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -1032,7 +831,7 @@ pub(crate) fn idct_dequant_4x16_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 64, 4, 16, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 64, 4, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -1055,7 +854,7 @@ pub(crate) fn idct_dequant_16x4_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 64, 16, 4, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 64, 16, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -1078,7 +877,7 @@ pub(crate) fn idct_dequant_8x32_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 256, 8, 32, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 256, 8, 32, i32>(
         coeff,
         tmp,
         eob,
@@ -1101,7 +900,7 @@ pub(crate) fn idct_dequant_32x8_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 256, 32, 8, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 256, 32, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -1124,7 +923,7 @@ pub(crate) fn idct_dequant_4x32_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 4, 32, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 128, 4, 32, i32>(
         coeff,
         tmp,
         eob,
@@ -1147,7 +946,7 @@ pub(crate) fn idct_dequant_32x4_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, 128, 32, 4, i32>(
+    crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<SseDct2d, 128, 32, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -1172,7 +971,7 @@ pub(crate) fn iadst_dequant_4x8_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 32, 4, 8, i32>(
+    crate::itx_2d::itx_dequant_rect_simd4_core_sse41::<SseDct2d, 32, 4, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -1199,7 +998,7 @@ pub(crate) fn iadst_dequant_8x4_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 32, 8, 4, i32>(
+    crate::itx_2d::itx_dequant_rect_simd4_core_sse41::<SseDct2d, 32, 8, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -1226,7 +1025,7 @@ pub(crate) fn iadst_dequant_8x16_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 128, 8, 16, i32>(
+    crate::itx_2d::itx_dequant_rect_simd4_core_sse41::<SseDct2d, 128, 8, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -1253,7 +1052,7 @@ pub(crate) fn iadst_dequant_16x8_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 128, 16, 8, i32>(
+    crate::itx_2d::itx_dequant_rect_simd4_core_sse41::<SseDct2d, 128, 16, 8, i32>(
         coeff,
         tmp,
         eob,
@@ -1280,7 +1079,7 @@ pub(crate) fn iadst_dequant_4x16_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 64, 4, 16, i32>(
+    crate::itx_2d::itx_dequant_rect_simd4_core_sse41::<SseDct2d, 64, 4, 16, i32>(
         coeff,
         tmp,
         eob,
@@ -1307,7 +1106,7 @@ pub(crate) fn iadst_dequant_16x4_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, 64, 16, 4, i32>(
+    crate::itx_2d::itx_dequant_rect_simd4_core_sse41::<SseDct2d, 64, 16, 4, i32>(
         coeff,
         tmp,
         eob,
@@ -1336,7 +1135,7 @@ macro_rules! idct_i16_fn {
             row_clip_min: i32,
             row_clip_max: i32,
         ) {
-            idct_dequant_simd4_core::<SseDct2d, { $n }, { $s }, i16>(
+            idct_dequant_simd4_core_sse41::<SseDct2d, { $n }, { $s }, i16>(
                 coeff,
                 tmp,
                 eob,
@@ -1364,7 +1163,7 @@ macro_rules! iadst_i16_fn {
             first_kind: usize,
             second_kind: usize,
         ) {
-            itx_dequant_simd4_core::<SseDct2d, { $n }, { $s }, i16>(
+            itx_dequant_simd4_core_sse41::<SseDct2d, { $n }, { $s }, i16>(
                 coeff,
                 tmp,
                 eob,
@@ -1392,7 +1191,13 @@ macro_rules! idct_rect_i16_fn {
             row_clip_min: i32,
             row_clip_max: i32,
         ) {
-            crate::itx_2d::idct_dequant_rect_simd4_core::<SseDct2d, { $n }, { $w }, { $h }, i16>(
+            crate::itx_2d::idct_dequant_rect_simd4_core_sse41::<
+                SseDct2d,
+                { $n },
+                { $w },
+                { $h },
+                i16,
+            >(
                 coeff,
                 tmp,
                 eob,
@@ -1420,7 +1225,7 @@ macro_rules! iadst_rect_i16_fn {
             first_kind: usize,
             second_kind: usize,
         ) {
-            crate::itx_2d::itx_dequant_rect_simd4_core::<SseDct2d, { $n }, { $w }, { $h }, i16>(
+            crate::itx_2d::itx_dequant_rect_simd4_core_sse41::<SseDct2d, { $n }, { $w }, { $h }, i16>(
                 coeff,
                 tmp,
                 eob,
