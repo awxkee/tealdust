@@ -966,7 +966,7 @@ fn process_row_group_itx_wide_x4<
 ) {
     use crate::itx_1d::DctWide;
     debug_assert!(C::USE_WIDE_16BIT);
-    let s: [<B::Wide as DctWide>::In; W] = core::array::from_fn(|x| unsafe {
+    let s: [<B::Wide as DctWide>::In; W] = crate::itx_1d::build_array(|x| unsafe {
         if RECT2 {
             C::load_wide4_rect2::<B::Wide>(coeff, y + x * H)
         } else {
@@ -1067,7 +1067,7 @@ fn process_row_group_wide_x8<B: DctSimd4, const S: usize, C: ItxCoeff>(
 ) {
     use crate::itx_1d::DctWide;
     let s: [<B::Wide as DctWide>::In; S] =
-        core::array::from_fn(|j| unsafe { C::load_wide8::<B::Wide>(coeff, y + j * S) });
+        crate::itx_1d::build_array(|j| unsafe { C::load_wide8::<B::Wide>(coeff, y + j * S) });
     let clip = B::Wide::make_clip(rnd, shift, min, max);
     let zero = B::Wide::zero();
     let mut out = [zero; S];
@@ -1491,7 +1491,7 @@ fn process_row_group_itx_wide_x8<
     max: i32,
 ) {
     use crate::itx_1d::DctWide;
-    let s: [<B::Wide as DctWide>::In; W] = core::array::from_fn(|x| unsafe {
+    let s: [<B::Wide as DctWide>::In; W] = crate::itx_1d::build_array(|x| unsafe {
         if RECT2 {
             C::load_wide8_rect2::<B::Wide>(coeff, y + x * H)
         } else {
@@ -1612,7 +1612,7 @@ fn itx_1d_wide_x4<B: DctSimd4, const S: usize, const KIND: usize>(
     let stride = ITX_TMP_STRIDE;
     let s: [<B::Wide as DctWide>::In; S] = {
         let src: &[i32] = &tmp[..];
-        core::array::from_fn(|j| unsafe { B::Wide::load4_narrow(src, x + j * stride) })
+        crate::itx_1d::build_array(|j| unsafe { B::Wide::load4_narrow(src, x + j * stride) })
     };
     let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
         B::Wide::store4(tmp, x + m * stride, acc)
@@ -1679,7 +1679,7 @@ fn itx_1d_wide_x8<B: DctSimd4, const S: usize, const KIND: usize>(
     }
     let s: [<B::Wide as DctWide>::In; S] = {
         let src: &[i32] = &tmp[..];
-        core::array::from_fn(|j| unsafe { B::Wide::load8_narrow(src, x + j * ITX_TMP_STRIDE) })
+        crate::itx_1d::build_array(|j| unsafe { B::Wide::load8_narrow(src, x + j * ITX_TMP_STRIDE) })
     };
     let store = |m: usize, acc: <B::Wide as DctWide>::Acc| unsafe {
         B::Wide::store8(tmp, x + m * ITX_TMP_STRIDE, acc)
@@ -1912,7 +1912,7 @@ fn dct_1d_wide_x8<W: crate::itx_1d::DctWide, const S: usize>(
     let stride = ITX_TMP_STRIDE;
     let s: [W::In; S] = {
         let src: &[i32] = &tmp[..];
-        core::array::from_fn(|j| unsafe { W::load8_narrow(src, x + j * stride) })
+        crate::itx_1d::build_array(|j| unsafe { W::load8_narrow(src, x + j * stride) })
     };
     let store = |m: usize, acc: W::Acc| unsafe { W::store8(tmp, x + m * stride, acc) };
     match S {

@@ -29,6 +29,7 @@
 
 use crate::levels::{N_TX_1D_TYPES, N_TX_SIZES};
 use std::convert::TryInto;
+use std::mem::MaybeUninit;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct I32x8([i32; 8]);
@@ -475,7 +476,7 @@ pub(crate) fn dct16_flat_bylane<L: DctLane>(
     use crate::itx_2d::{DCT16_KB, DCT16_KD, DCT16_KF, DCT16_KG};
     let z = L::zero();
     // b[m]: 8 odd taps j=2k+1, 2 groups of 4. KB[m*8+k]=K[(2k+1)*16+m].
-    let b: [L; 8] = core::array::from_fn(|m| {
+    let b: [L; 8] = build_array(|m| {
         let mut acc = z;
         let base = m * 8;
         let mut grp = 0;
@@ -491,7 +492,7 @@ pub(crate) fn dct16_flat_bylane<L: DctLane>(
         acc
     });
     // d[m]: 4 taps j=4k+2, one group. KD[m*4+k]=K[(4k+2)*16+m].
-    let d: [L; 4] = core::array::from_fn(|m| {
+    let d: [L; 4] = build_array(|m| {
         let c = L::load_coeffs(&DCT16_KD, m * 4);
         z.mul_add_lane::<0>(load(2), c)
             .mul_add_lane::<1>(load(6), c)
@@ -515,14 +516,14 @@ pub(crate) fn dct16_flat_bylane<L: DctLane>(
             .mul_add_lane::<3>(load(8), cg),
     ];
     // --- identical butterfly tail to dct16_flat ---
-    let cc: [L; 4] = core::array::from_fn(|i| {
+    let cc: [L; 4] = build_array(|i| {
         if i < 2 {
             g[i].add(f[i])
         } else {
             g[3 - i].sub(f[3 - i])
         }
     });
-    let a: [L; 8] = core::array::from_fn(|i| {
+    let a: [L; 8] = build_array(|i| {
         if i < 4 {
             cc[i].add(d[i])
         } else {
@@ -539,7 +540,7 @@ pub(crate) fn dct16_flat_bylane<L: DctLane>(
 pub(crate) fn dct16_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl FnMut(usize, L)) {
     let kv = |idx: usize| L::dup_load(&crate::itx_2d::DCT16_DENSE_KERNEL, idx);
     let z = L::zero();
-    let b: [L; 8] = core::array::from_fn(|m| {
+    let b: [L; 8] = build_array(|m| {
         let mut acc = z;
         let mut j = 1;
         while j < 16 {
@@ -548,7 +549,7 @@ pub(crate) fn dct16_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl 
         }
         acc
     });
-    let d: [L; 4] = core::array::from_fn(|m| {
+    let d: [L; 4] = build_array(|m| {
         let mut acc = z;
         let mut j = 2;
         while j < 16 {
@@ -567,14 +568,14 @@ pub(crate) fn dct16_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl 
         load(0).mul(kv(0)).mul_add(load(8), kv(8 * 16)),
         load(0).mul(kv(1)).mul_add(load(8), kv(8 * 16 + 1)),
     ];
-    let cc: [L; 4] = core::array::from_fn(|i| {
+    let cc: [L; 4] = build_array(|i| {
         if i < 2 {
             g[i].add(f[i])
         } else {
             g[3 - i].sub(f[3 - i])
         }
     });
-    let a: [L; 8] = core::array::from_fn(|i| {
+    let a: [L; 8] = build_array(|i| {
         if i < 4 {
             cc[i].add(d[i])
         } else {
@@ -699,7 +700,7 @@ pub(crate) fn dct32_wide<W: DctWide>(
 ) {
     use crate::itx_2d::{DCT32_KBW, DCT32_KDW, DCT32_KFW, DCT32_KGW, DCT32_KHW};
     let z = W::zero();
-    let b: [W::Acc; 16] = core::array::from_fn(|m| {
+    let b: [W::Acc; 16] = build_array(|m| {
         let mut acc = z;
         let base = m * 16;
         let mut grp = 0;
@@ -714,7 +715,7 @@ pub(crate) fn dct32_wide<W: DctWide>(
         }
         acc
     });
-    let d: [W::Acc; 8] = core::array::from_fn(|m| {
+    let d: [W::Acc; 8] = build_array(|m| {
         let c = W::load_coeffs(&DCT32_KDW, m * 8);
         let mut acc = z;
         acc = W::mul_add_pair::<0, 1>(acc, load(2), load(6), c);
@@ -723,7 +724,7 @@ pub(crate) fn dct32_wide<W: DctWide>(
         acc = W::mul_add_pair::<6, 7>(acc, load(26), load(30), c);
         acc
     });
-    let f: [W::Acc; 4] = core::array::from_fn(|m| {
+    let f: [W::Acc; 4] = build_array(|m| {
         let c = W::load_coeffs(&DCT32_KFW, m * 8);
         let mut acc = z;
         acc = W::mul_add_pair::<0, 1>(acc, load(4), load(12), c);
@@ -746,14 +747,14 @@ pub(crate) fn dct32_wide<W: DctWide>(
         W::sub(g[1], h[1]),
         W::sub(g[0], h[0]),
     ];
-    let cc: [W::Acc; 8] = core::array::from_fn(|i| {
+    let cc: [W::Acc; 8] = build_array(|i| {
         if i < 4 {
             W::add(e[i], f[i])
         } else {
             W::sub(e[7 - i], f[7 - i])
         }
     });
-    let a: [W::Acc; 16] = core::array::from_fn(|i| {
+    let a: [W::Acc; 16] = build_array(|i| {
         if i < 8 {
             W::add(cc[i], d[i])
         } else {
@@ -788,7 +789,7 @@ pub(crate) fn dct16_wide<W: DctWide>(
 ) {
     use crate::itx_2d::{DCT16_KBW, DCT16_KDW, DCT16_KFW, DCT16_KGW};
     let z = W::zero();
-    let b: [W::Acc; 8] = core::array::from_fn(|m| {
+    let b: [W::Acc; 8] = build_array(|m| {
         let c = W::load_coeffs(&DCT16_KBW, m * 8);
         let mut acc = z;
         acc = W::mul_add_pair::<0, 1>(acc, load(1), load(3), c);
@@ -797,7 +798,7 @@ pub(crate) fn dct16_wide<W: DctWide>(
         acc = W::mul_add_pair::<6, 7>(acc, load(13), load(15), c);
         acc
     });
-    let d: [W::Acc; 4] = core::array::from_fn(|m| {
+    let d: [W::Acc; 4] = build_array(|m| {
         let c = W::load_coeffs(&DCT16_KDW, m * 8);
         let mut acc = z;
         acc = W::mul_add_pair::<0, 1>(acc, load(2), load(6), c);
@@ -814,14 +815,14 @@ pub(crate) fn dct16_wide<W: DctWide>(
         W::mul_add_pair::<0, 1>(z, load(0), load(8), cg),
         W::mul_add_pair::<2, 3>(z, load(0), load(8), cg),
     ];
-    let cc: [W::Acc; 4] = core::array::from_fn(|i| {
+    let cc: [W::Acc; 4] = build_array(|i| {
         if i < 2 {
             W::add(g[i], f[i])
         } else {
             W::sub(g[3 - i], f[3 - i])
         }
     });
-    let a: [W::Acc; 8] = core::array::from_fn(|i| {
+    let a: [W::Acc; 8] = build_array(|i| {
         if i < 4 {
             W::add(cc[i], d[i])
         } else {
@@ -881,7 +882,7 @@ pub(crate) fn adst16_wide<W: DctWide>(
 pub(crate) fn dct32_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl FnMut(usize, L)) {
     let kv = |idx: usize| L::dup_load(&crate::itx_2d::DCT32_DENSE_KERNEL, idx);
     let z = L::zero();
-    let b: [L; 16] = core::array::from_fn(|m| {
+    let b: [L; 16] = build_array(|m| {
         let mut acc = z;
         let mut j = 1;
         while j < 32 {
@@ -890,7 +891,7 @@ pub(crate) fn dct32_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl 
         }
         acc
     });
-    let d: [L; 8] = core::array::from_fn(|m| {
+    let d: [L; 8] = build_array(|m| {
         let mut acc = z;
         let mut j = 2;
         while j < 32 {
@@ -899,7 +900,7 @@ pub(crate) fn dct32_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl 
         }
         acc
     });
-    let f: [L; 4] = core::array::from_fn(|m| {
+    let f: [L; 4] = build_array(|m| {
         let mut acc = load(4).mul(kv(4 * 32 + m));
         acc = acc.mul_add(load(12), kv(12 * 32 + m));
         acc = acc.mul_add(load(20), kv(20 * 32 + m));
@@ -922,14 +923,14 @@ pub(crate) fn dct32_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl 
         g[1].sub(h[1]),
         g[0].sub(h[0]),
     ];
-    let cc: [L; 8] = core::array::from_fn(|i| {
+    let cc: [L; 8] = build_array(|i| {
         if i < 4 {
             e[i].add(f[i])
         } else {
             e[7 - i].sub(f[7 - i])
         }
     });
-    let a: [L; 16] = core::array::from_fn(|i| {
+    let a: [L; 16] = build_array(|i| {
         if i < 8 {
             cc[i].add(d[i])
         } else {
@@ -1080,6 +1081,30 @@ fn inv_identity32_1d(c: &mut [i32], stride: usize) {
 
 /// `(&mut [i32], base, stride)` — vectorized 1-D transform over 8 columns.
 pub(crate) type Itx1dFnX8 = fn(&mut [i32], usize, usize);
+
+/// Inlinable replacement for `build_array`. std's `from_fn` routes through
+/// `try_from_fn` + `NeverShortCircuit` drop-guard machinery that the inliner declines
+/// to inline on some toolchains; when the closure contains AVX2 intrinsics that breaks
+/// `#[target_feature]` propagation (the intrinsics fall out of the avx2 context and are
+/// emitted as out-of-line calls unless `-Ctarget-cpu=native` makes avx2 the baseline).
+/// This builder is `#[inline(always)]` and trivial, so the closure body is codegen'd in
+/// the caller's feature context. Closures here are infallible SIMD math; on (impossible)
+/// panic the partially-built array's elements (Copy SIMD types, no Drop) simply leak.
+#[inline(always)]
+pub(crate) fn build_array<T, const N: usize>(
+    mut f: impl FnMut(usize) -> T,
+) -> [T; N] {
+    let mut a: [MaybeUninit<T>; N] = [const { MaybeUninit::uninit() }; N];
+    let mut i = 0;
+    while i < N {
+        a[i] = MaybeUninit::new(f(i));
+        i += 1;
+    }
+    unsafe {
+        // All elements were initialized above.
+        core::ptr::read((&a as *const [MaybeUninit<T>; N]).cast::<[T; N]>())
+    }
+}
 
 #[inline(always)]
 fn ldx8(c: &[i32], off: usize) -> I32x8 {
