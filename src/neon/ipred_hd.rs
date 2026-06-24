@@ -435,7 +435,7 @@ fn z1_luma_row_hbd_neon(
             + f.b as i32 * filt[bi] as i32
             + f.c as i32 * filt[bi + 1] as i32
             + f.d as i32 * filt[bi + 2] as i32;
-        dst_row[x] = (((v + 64) >> 7).clamp(0, bitdepth_max as i32)) as u16;
+        dst_row[x] = ((v + 64) >> 7).clamp(0, bitdepth_max as i32) as u16;
         x += 1;
     }
     dst_row[n_filter..w].fill(fill);

@@ -97,7 +97,7 @@ pub(crate) fn ns_wiener_fir_run_neon(
         }
         x += 8;
     }
-    // Scalar tail (identical arithmetic to the vector body).
+
     while x < n {
         let c = col0 + x;
         let m = center[c] as i32;

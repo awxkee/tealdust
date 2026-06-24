@@ -479,8 +479,8 @@ fn dct_1d_x8<const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: usize) -> bool 
         _ => return false,
     };
 
-    if let Some(f8) = TX1D_FNS_X8[tx_size][0] {
-        f8(tmp, x, ITX_TMP_STRIDE);
+    if let Some(f8) = crate::itx_1d::tx1d_x8_dispatch(tx_size, 0) {
+        unsafe { f8(tmp, x, ITX_TMP_STRIDE) };
         true
     } else {
         false
@@ -631,9 +631,9 @@ fn itx_dequant_scalar_core_mono<
     }
 
     let mut x = 0usize;
-    if let Some(f8) = TX1D_FNS_X8[tx_size_idx::<S>()][SECOND_KIND] {
+    if let Some(f8) = crate::itx_1d::tx1d_x8_dispatch(tx_size_idx::<S>(), SECOND_KIND) {
         while x + 8 <= S {
-            f8(tmp, x, ITX_TMP_STRIDE);
+            unsafe { f8(tmp, x, ITX_TMP_STRIDE) };
             x += 8;
         }
     }
