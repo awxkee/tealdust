@@ -180,6 +180,39 @@ fn add_tmp_to_dst<BD: BitDepth>(
     shift: i32,
     dpcm_flag: u8,
 ) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        // If a transform did have to fall back to the tmp path on 8bpc
+        // AArch64, keep the final residual add/writeback on NEON instead of
+        // dropping into the scalar expansion loops below. The fully fused
+        // NEON ITX path above still avoids tmp entirely for DCT/ADST/FLIPADST
+        // pairs; this is the safety net for identity/H/V/DPCM-0 fallback
+        // shapes.
+        if BD::BPC == 8 && dpcm_flag == 0 {
+            if let Some(dst8) = <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst) {
+                if std::arch::is_aarch64_feature_detected!("neon") {
+                    if unsafe {
+                        crate::neon::add_tmp_to_dst_8bpc_neon(
+                            dst8,
+                            dst_off,
+                            stride,
+                            tmp.as_slice(),
+                            ITX_TMP_STRIDE,
+                            w,
+                            h,
+                            sw,
+                            sh,
+                            rnd,
+                            shift,
+                        )
+                    } {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     if w > sw {
         if h > sh {
             for (ty, y) in (0..h).step_by(2).enumerate() {
@@ -323,21 +356,98 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
     let shift0 = tx_sh[0] as i32;
     let shift1 = tx_sh[1] as i32;
 
+    // Hot square 8bpc DCT16/DCT32 fused paths.  Put the dedicated butterfly
+    // writers before the broad fused dispatchers so the hot DCT_DCT path is
+    // never swallowed by a generic dense route.
+    #[cfg(target_arch = "aarch64")]
+    if BD::BPC == 8
+        && tx_type_low8(txtp) == txtp_kind::DCT_DCT as u32
+        && tx_type_has_no_extension(txtp)
+        && t_dim.lw == t_dim.lh
+        && (tx == txsz::TX_16X16 || tx == txsz::TX_32X32)
+        && !force_generic_itx()
+    {
+        if let (Some(coeff16), Some(dst8)) = (
+            C::try_as_i16_slice_mut(coeff),
+            <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst),
+        ) {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                unsafe {
+                    if std::arch::is_aarch64_feature_detected!("rdm") {
+                        if tx == txsz::TX_16X16 {
+                            crate::neon::idct_dequant_16x16_i16_neon_rdm_fused_8bpc(
+                                coeff16,
+                                dst8,
+                                dst_off,
+                                stride,
+                                eob,
+                                tx,
+                                is_rect2,
+                                shift0,
+                                row_clip_min,
+                                row_clip_max,
+                                shift1,
+                            );
+                        } else {
+                            crate::neon::idct_dequant_32x32_i16_neon_rdm_fused_8bpc(
+                                coeff16,
+                                dst8,
+                                dst_off,
+                                stride,
+                                eob,
+                                tx,
+                                is_rect2,
+                                shift0,
+                                row_clip_min,
+                                row_clip_max,
+                                shift1,
+                            );
+                        }
+                    } else if tx == txsz::TX_16X16 {
+                        crate::neon::idct_dequant_16x16_i16_neon_fused_8bpc(
+                            coeff16,
+                            dst8,
+                            dst_off,
+                            stride,
+                            eob,
+                            tx,
+                            is_rect2,
+                            shift0,
+                            row_clip_min,
+                            row_clip_max,
+                            shift1,
+                        );
+                    } else {
+                        crate::neon::idct_dequant_32x32_i16_neon_fused_8bpc(
+                            coeff16,
+                            dst8,
+                            dst_off,
+                            stride,
+                            eob,
+                            tx,
+                            is_rect2,
+                            shift0,
+                            row_clip_min,
+                            row_clip_max,
+                            shift1,
+                        );
+                    }
+                }
+                return;
+            }
+        }
+    }
+
     #[cfg(target_arch = "aarch64")]
     {
-        // NEON 8bpc path owns the complete ITX + final residual add/writeback.
-        // Keep this before the generic tmp-based dispatch so DCT, ADST,
-        // FLIPADST, square, rectangular, 64-expanded and RDM-capable cases do
-        // not materialize an i32 tmp tile only to reload it in add_tmp_to_dst.
-        let can_fuse_neon_8bpc = BD::BPC == 8
-            && tx_type_has_no_extension(txtp)
-            && tx_type_class(txtp) == 0
-            && crate::itx_2d::is_dct_adst_kind(first_kind)
-            && crate::itx_2d::is_dct_adst_kind(second_kind)
-            && ((first_kind == crate::itx_2d::TX_KIND_DCT
-                && second_kind == crate::itx_2d::TX_KIND_DCT)
-                || (t_dim.lw <= 2 && t_dim.lh <= 2))
-            && !force_generic_itx();
+        // Try NEON first for every 8bpc no-extension transform.  The backend
+        // returns false for shapes/kinds that do not have a direct fused ITX
+        // body yet, and add_tmp_to_dst() has an AArch64 NEON writeback safety
+        // net for those fallbacks.  This keeps the fused path at the top of
+        // the 8-bit route instead of silently letting later tmp-based branches
+        // win.
+        let can_fuse_neon_8bpc =
+            BD::BPC == 8 && tx_type_has_no_extension(txtp) && !force_generic_itx();
         if can_fuse_neon_8bpc {
             if let (Some(coeff16), Some(dst8)) = (
                 C::try_as_i16_slice_mut(coeff),
@@ -391,6 +501,102 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
         }
     }
 
+    // Hot square 8bpc DCT16/DCT32 fused paths must run before the broad
+    // AVX2 fused dispatcher.  The broad route is intentionally generic and
+    // can otherwise shadow these shape-specific dav2d-style writers.  SSE has
+    // no broad fused dispatcher today, but this keeps the priority explicit.
+    if BD::BPC == 8
+        && tx_type_low8(txtp) == txtp_kind::DCT_DCT as u32
+        && tx_type_has_no_extension(txtp)
+        && t_dim.lw == t_dim.lh
+        && (tx == txsz::TX_16X16 || tx == txsz::TX_32X32)
+        && !force_generic_itx()
+    {
+        if let (Some(coeff16), Some(dst8)) = (
+            C::try_as_i16_slice_mut(coeff),
+            <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst),
+        ) {
+            #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+            {
+                if std::is_x86_feature_detected!("avx2") {
+                    if tx == txsz::TX_16X16 {
+                        unsafe {
+                            crate::avx::idct_dequant_16x16_i16_avx2_fused_8bpc(
+                                coeff16,
+                                dst8,
+                                dst_off,
+                                stride,
+                                eob,
+                                tx,
+                                is_rect2,
+                                shift0,
+                                row_clip_min,
+                                row_clip_max,
+                                shift1,
+                            )
+                        };
+                    } else {
+                        unsafe {
+                            crate::avx::idct_dequant_32x32_i16_avx2_fused_8bpc(
+                                coeff16,
+                                dst8,
+                                dst_off,
+                                stride,
+                                eob,
+                                tx,
+                                is_rect2,
+                                shift0,
+                                row_clip_min,
+                                row_clip_max,
+                                shift1,
+                            )
+                        };
+                    }
+                    return;
+                }
+            }
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                if std::is_x86_feature_detected!("sse4.1") {
+                    if tx == txsz::TX_16X16 {
+                        unsafe {
+                            crate::sse::idct_dequant_16x16_i16_sse41_fused_8bpc(
+                                coeff16,
+                                dst8,
+                                dst_off,
+                                stride,
+                                eob,
+                                tx,
+                                is_rect2,
+                                shift0,
+                                row_clip_min,
+                                row_clip_max,
+                                shift1,
+                            )
+                        };
+                    } else {
+                        unsafe {
+                            crate::sse::idct_dequant_32x32_i16_sse41_fused_8bpc(
+                                coeff16,
+                                dst8,
+                                dst_off,
+                                stride,
+                                eob,
+                                tx,
+                                is_rect2,
+                                shift0,
+                                row_clip_min,
+                                row_clip_max,
+                                shift1,
+                            )
+                        };
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
     #[cfg(all(target_arch = "x86_64", feature = "avx"))]
     {
         // AVX2 8bpc path owns the complete ITX + final residual add/writeback.
@@ -399,9 +605,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
         // 64-expanded optimized i16 transforms.
         let can_fuse_avx2_8bpc = BD::BPC == 8
             && tx_type_has_no_extension(txtp)
-            && tx_type_class(txtp) == 0
-            && crate::itx_2d::is_dct_adst_kind(first_kind)
-            && crate::itx_2d::is_dct_adst_kind(second_kind)
+            && crate::itx_2d::is_itx_dense_kind(first_kind)
+            && crate::itx_2d::is_itx_dense_kind(second_kind)
             && !force_generic_itx();
         if can_fuse_avx2_8bpc {
             if let (Some(coeff16), Some(dst8)) = (
@@ -442,94 +647,6 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
     {
         if BD::BPC == 8 {
             if let Some(coeff16) = C::try_as_i16_slice_mut(coeff) {
-                // Hot 8bpc square DCT16/DCT32 path: fuse the second ITX pass
-                // with the final clipped add/writeback.  This matches the
-                // dav2d-style write_* structure and avoids writing a full i32
-                // tmp tile only to reload it row-by-row immediately after.
-                if !force_generic_itx() && (tx == txsz::TX_16X16 || tx == txsz::TX_32X32) {
-                    if let Some(dst8) = <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst)
-                    {
-                        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
-                        {
-                            if std::is_x86_feature_detected!("avx2") {
-                                if tx == txsz::TX_16X16 {
-                                    unsafe {
-                                        crate::avx::idct_dequant_16x16_i16_avx2_fused_8bpc(
-                                            coeff16,
-                                            dst8,
-                                            dst_off,
-                                            stride,
-                                            eob,
-                                            tx,
-                                            is_rect2,
-                                            shift0,
-                                            row_clip_min,
-                                            row_clip_max,
-                                            shift1,
-                                        )
-                                    };
-                                } else {
-                                    unsafe {
-                                        crate::avx::idct_dequant_32x32_i16_avx2_fused_8bpc(
-                                            coeff16,
-                                            dst8,
-                                            dst_off,
-                                            stride,
-                                            eob,
-                                            tx,
-                                            is_rect2,
-                                            shift0,
-                                            row_clip_min,
-                                            row_clip_max,
-                                            shift1,
-                                        )
-                                    };
-                                }
-                                return;
-                            }
-                        }
-                        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-                        {
-                            if std::is_x86_feature_detected!("sse4.1") {
-                                if tx == txsz::TX_16X16 {
-                                    unsafe {
-                                        crate::sse::idct_dequant_16x16_i16_sse41_fused_8bpc(
-                                            coeff16,
-                                            dst8,
-                                            dst_off,
-                                            stride,
-                                            eob,
-                                            tx,
-                                            is_rect2,
-                                            shift0,
-                                            row_clip_min,
-                                            row_clip_max,
-                                            shift1,
-                                        )
-                                    };
-                                } else {
-                                    unsafe {
-                                        crate::sse::idct_dequant_32x32_i16_sse41_fused_8bpc(
-                                            coeff16,
-                                            dst8,
-                                            dst_off,
-                                            stride,
-                                            eob,
-                                            tx,
-                                            is_rect2,
-                                            shift0,
-                                            row_clip_min,
-                                            row_clip_max,
-                                            shift1,
-                                        )
-                                    };
-                                }
-                                return;
-                            }
-                        }
-                    }
-                }
-
                 let handled = with_itx_scratch(&mut *tmp_buf, |tmp| {
                     let mut handled = true;
 

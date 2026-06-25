@@ -238,10 +238,10 @@ fn sse41_store4x4_i32_clip(
                 )
             }};
         }
-        let c0 = clip!(v[0]);
-        let c1 = clip!(v[1]);
-        let c2 = clip!(v[2]);
-        let c3 = clip!(v[3]);
+        let c0 = clip!(v0);
+        let c1 = clip!(v1);
+        let c2 = clip!(v2);
+        let c3 = clip!(v3);
         let t0 = _mm_unpacklo_epi32(c0, c1);
         let t1 = _mm_unpackhi_epi32(c0, c1);
         let t2 = _mm_unpacklo_epi32(c2, c3);
@@ -262,7 +262,10 @@ fn sse41_store4x4_i32_clip(
 fn sse41_store4x4_i16_clip<const STRIDE: usize>(
     scratch: &mut [i16],
     off: usize,
-    v: &[__m128i; 4],
+    v0: __m128i,
+    v1: __m128i,
+    v2: __m128i,
+    v3: __m128i,
     rnd: __m128i,
     sh: __m128i,
     minv: __m128i,
@@ -655,12 +658,31 @@ fn tx8_coeff(kind: usize, out: usize, input: usize) -> i32 {
 }
 
 #[inline]
+fn sse41_identity_coeff(n: usize, out: usize, input: usize) -> i32 {
+    if out != input {
+        0
+    } else {
+        match n {
+            4 => 128,
+            8 => 181,
+            16 => 256,
+            32 => 362,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[inline]
 fn sse41_tx_dense_coeff(kind: usize, n: usize, out: usize, input: usize) -> i32 {
     match (kind, n) {
         (crate::itx_2d::TX_KIND_DCT, 4) => crate::itx_2d::DCT4_KW[out * 8 + input] as i32,
         (crate::itx_2d::TX_KIND_DCT, 8) => crate::itx_2d::DCT8_KW[out * 8 + input] as i32,
         (crate::itx_2d::TX_KIND_DCT, 16) => crate::itx_2d::DCT16_DENSE_KERNEL[input * 16 + out],
         (crate::itx_2d::TX_KIND_DCT, 32) => crate::itx_2d::DCT32_DENSE_KERNEL[input * 32 + out],
+        (crate::itx_2d::TX_KIND_IDENTITY, 4)
+        | (crate::itx_2d::TX_KIND_IDENTITY, 8)
+        | (crate::itx_2d::TX_KIND_IDENTITY, 16)
+        | (crate::itx_2d::TX_KIND_IDENTITY, 32) => sse41_identity_coeff(n, out, input),
         (crate::itx_2d::TX_KIND_ADST, 4) => crate::itx_1d::ADST4_KERNEL_ROWS[out][input] as i32,
         (crate::itx_2d::TX_KIND_ADST, 8) => crate::itx_1d::ADST8_KERNEL_ROWS[out][input] as i32,
         (crate::itx_2d::TX_KIND_ADST, 16) => crate::itx_1d::ADST16_KERNEL_ROWS[out][input] as i32,
@@ -688,6 +710,14 @@ fn sse41_tx_dense_coeff_pair(kind: usize, n: usize, out: usize, input: usize) ->
         }
         (crate::itx_2d::TX_KIND_DCT, 32) => {
             (&crate::itx_2d::DCT32_DENSE_PAIR_X4, out * 16 + (input >> 1))
+        }
+        (crate::itx_2d::TX_KIND_IDENTITY, 4)
+        | (crate::itx_2d::TX_KIND_IDENTITY, 8)
+        | (crate::itx_2d::TX_KIND_IDENTITY, 16)
+        | (crate::itx_2d::TX_KIND_IDENTITY, 32) => {
+            let k0 = sse41_identity_coeff(n, out, input) as i16;
+            let k1 = sse41_identity_coeff(n, out, input + 1) as i16;
+            return sse41_coeff_pair_from_scalars_i16(k0, k1);
         }
         (crate::itx_2d::TX_KIND_ADST, 4) => (&crate::itx_2d::ADST4_KP_X4, out * 2 + (input >> 1)),
         (crate::itx_2d::TX_KIND_ADST, 8) => (&crate::itx_2d::ADST8_KP_X4, out * 4 + (input >> 1)),
@@ -720,6 +750,12 @@ unsafe fn sse41_load4_i16_coeff_packed_const<const IS_RECT2: bool>(
         v = _mm_mulhrs_epi16(v, _mm_set1_epi16(0x5a80));
     }
     v
+}
+
+#[target_feature(enable = "sse4.1")]
+#[inline]
+fn sse41_coeff_pair_from_scalars_i16(k0: i16, k1: i16) -> __m128i {
+    unsafe { _mm_set1_epi32(((k1 as u16 as i32) << 16) | (k0 as u16 as i32)) }
 }
 
 #[target_feature(enable = "sse4.1")]
@@ -2167,11 +2203,13 @@ fn idct_dequant_dct_i16_sse41_impl_const<const N: usize, const IS_RECT2: bool>(
                 let out = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
                 let mut x = 0usize;
                 while x < 16 {
-                    let g = [out[x], out[x + 1], out[x + 2], out[x + 3]];
                     sse41_store4x4_i16_clip::<16>(
                         &mut scratch,
                         y * 16 + x,
-                        &g,
+                        out[x],
+                        out[x + 1],
+                        out[x + 2],
+                        out[x + 3],
                         rnd,
                         sh,
                         minv,
@@ -2183,11 +2221,13 @@ fn idct_dequant_dct_i16_sse41_impl_const<const N: usize, const IS_RECT2: bool>(
                 let out = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
                 let mut x = 0usize;
                 while x < 32 {
-                    let g = [out[x], out[x + 1], out[x + 2], out[x + 3]];
                     sse41_store4x4_i16_clip::<32>(
                         &mut scratch,
                         y * 32 + x,
-                        &g,
+                        out[x],
+                        out[x + 1],
+                        out[x + 2],
+                        out[x + 3],
                         rnd,
                         sh,
                         minv,
@@ -2319,11 +2359,13 @@ fn idct_dequant_dct_i16_sse41_fused_8bpc_impl_const<const N: usize, const IS_REC
                 let out = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
                 let mut x = 0usize;
                 while x < 16 {
-                    let g = [out[x], out[x + 1], out[x + 2], out[x + 3]];
                     sse41_store4x4_i16_clip::<16>(
                         &mut scratch,
                         y * 16 + x,
-                        &g,
+                        out[x],
+                        out[x + 1],
+                        out[x + 2],
+                        out[x + 3],
                         rnd,
                         sh,
                         minv,
@@ -2335,11 +2377,13 @@ fn idct_dequant_dct_i16_sse41_fused_8bpc_impl_const<const N: usize, const IS_REC
                 let out = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
                 let mut x = 0usize;
                 while x < 32 {
-                    let g = [out[x], out[x + 1], out[x + 2], out[x + 3]];
                     sse41_store4x4_i16_clip::<32>(
                         &mut scratch,
                         y * 32 + x,
-                        &g,
+                        out[x],
+                        out[x + 1],
+                        out[x + 2],
+                        out[x + 3],
                         rnd,
                         sh,
                         minv,
@@ -2716,16 +2760,36 @@ fn tx_dequant_dense_sse41_i16_impl_const<
                 let out = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
                 let mut m = 0usize;
                 while m < 16 {
-                    let g = [out[m], out[m + 1], out[m + 2], out[m + 3]];
-                    sse41_store4x4_i16_clip::<W>(&mut scratch, y * W + m, &g, rnd, sh, minv, maxv);
+                    sse41_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        out[m],
+                        out[m + 1],
+                        out[m + 2],
+                        out[m + 3],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
                     m += 4;
                 }
             } else if first_kind == crate::itx_2d::TX_KIND_DCT && W == 32 {
                 let out = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
                 let mut m = 0usize;
                 while m < 32 {
-                    let g = [out[m], out[m + 1], out[m + 2], out[m + 3]];
-                    sse41_store4x4_i16_clip::<W>(&mut scratch, y * W + m, &g, rnd, sh, minv, maxv);
+                    sse41_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        out[m],
+                        out[m + 1],
+                        out[m + 2],
+                        out[m + 3],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
                     m += 4;
                 }
             } else {
@@ -2759,8 +2823,18 @@ fn tx_dequant_dense_sse41_i16_impl_const<
                         );
                         j += 2;
                     }
-                    let g = [a0, a1, a2, a3];
-                    sse41_store4x4_i16_clip::<W>(&mut scratch, y * W + m, &g, rnd, sh, minv, maxv);
+                    sse41_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        a0,
+                        a1,
+                        a2,
+                        a3,
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
                     m += 4;
                 }
             }

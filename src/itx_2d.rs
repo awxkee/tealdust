@@ -614,12 +614,21 @@ pub(crate) type IadstDequantI16Fn<const N: usize> = unsafe fn(
 );
 
 pub(crate) const TX_KIND_DCT: usize = 0;
+pub(crate) const TX_KIND_IDENTITY: usize = 1;
 pub(crate) const TX_KIND_ADST: usize = 2;
 pub(crate) const TX_KIND_FLIPADST: usize = 3;
 
 #[inline(always)]
 pub(crate) fn is_dct_adst_kind(kind: usize) -> bool {
     matches!(kind, TX_KIND_DCT | TX_KIND_ADST | TX_KIND_FLIPADST)
+}
+
+#[inline(always)]
+pub(crate) fn is_itx_dense_kind(kind: usize) -> bool {
+    matches!(
+        kind,
+        TX_KIND_DCT | TX_KIND_IDENTITY | TX_KIND_ADST | TX_KIND_FLIPADST
+    )
 }
 
 macro_rules! dispatch_dct_adst_pair {
