@@ -593,22 +593,23 @@ fn msac_decode_symbol_adapt_avx512<const UPDATE_CDF: bool, const N: usize>(
     let mask_lanes = if N == 4 { N } else { N + 1 };
     let mask = ((_mm_movemask_epi8(cmp) as u32) & 0x5555) & ((1u32 << (mask_lanes * 2)) - 1);
 
-    let mut boundaries = [0u16; 8];
+    let mut bounds = core::mem::MaybeUninit::<[u16; 9]>::uninit();
+    let bounds_ptr = bounds.as_mut_ptr().cast::<u16>();
     unsafe {
-        _mm_storeu_si128(boundaries.as_mut_ptr().cast(), boundaries_v);
+        bounds_ptr.write(s.rng as u16);
+        _mm_storeu_si128(bounds_ptr.add(1).cast(), boundaries_v);
     }
+
+    let initialized = unsafe { bounds.assume_init() };
 
     let (val, v, u) = if N == 4 && mask == 0 {
         // cdf[4] was not loaded; its min_prob sentinel would have produced v=0.
-        (N, 0, boundaries[N - 1] as u32)
+        let u = initialized[N] as u32;
+        (N, 0, u)
     } else {
         let i = (mask.trailing_zeros() >> 1) as usize;
-        let v = boundaries[i] as u32;
-        let u = if i == 0 {
-            s.rng
-        } else {
-            boundaries[i - 1] as u32
-        };
+        let u = initialized[i] as u32;
+        let v = initialized[i + 1] as u32;
         (i, v, u)
     };
 
