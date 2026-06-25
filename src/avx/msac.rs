@@ -27,9 +27,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use crate::avx::msac512::{AlignedSse8, AlignedSse9};
 use crate::msac::{MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState};
 use core::arch::x86_64::*;
-use crate::avx::msac512::AlignedSse9;
 
 pub(crate) struct MsacContextAvx<'a, const UPDATE_CDF: bool> {
     pub(crate) buf_pos: usize,
@@ -581,9 +581,10 @@ fn update_cdf_avx2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m
         _mm_andnot_si128(ge_mask, add_path),
     );
 
-    let mut tmp = [0u16; 8];
-    unsafe { _mm_storeu_si128(tmp.as_mut_ptr().cast(), updated) };
-    cdf[..N].copy_from_slice(&tmp[..N]);
+    let mut tmp = core::mem::MaybeUninit::<AlignedSse8>::uninit();
+    unsafe { _mm_store_si128(tmp.as_mut_ptr().cast(), updated) };
+    let initialized = (unsafe { tmp.assume_init() }).0;
+    cdf[..N].copy_from_slice(&initialized[..N]);
 }
 
 #[target_feature(enable = "avx2")]
@@ -626,6 +627,7 @@ fn msac_decode_symbol_adapt_avx2<const UPDATE_CDF: bool, const N: usize>(
         let v = initialized[i + 1] as u32;
         (i, v, u)
     };
+
     debug_assert!(u <= s.rng);
     debug_assert!(u >= v);
     s.ctx_norm(s.dif - ((v as u64) << 48), u - v);

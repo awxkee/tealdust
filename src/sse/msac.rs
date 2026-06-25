@@ -470,6 +470,12 @@ fn load_min_prob<const N: usize>() -> __m128i {
     }
 }
 
+#[repr(C, align(16))]
+pub(crate) struct AlignedSse9(pub(crate) [u16; 9]);
+
+#[repr(C, align(16))]
+pub(crate) struct AlignedSse8(pub(crate) [u16; 8]);
+
 #[inline]
 #[target_feature(enable = "sse2")]
 fn update_cdf_sse2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m128i, rate: u8) {
@@ -492,9 +498,10 @@ fn update_cdf_sse2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m
         _mm_andnot_si128(ge_mask, add_path),
     );
 
-    let mut tmp = [0u16; 8];
-    unsafe { _mm_storeu_si128(tmp.as_mut_ptr().cast(), updated) };
-    cdf[..N].copy_from_slice(&tmp[..N]);
+    let mut tmp = core::mem::MaybeUninit::<AlignedSse8>::uninit();
+    unsafe { _mm_store_si128(tmp.as_mut_ptr().cast(), updated) };
+    let initialized = (unsafe { tmp.assume_init() }).0;
+    cdf[..N].copy_from_slice(&initialized[..N]);
 }
 
 #[target_feature(enable = "sse2")]
@@ -515,32 +522,27 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize>(
         _mm_setzero_si128(),
     );
 
-    let mut mask = (_mm_movemask_epi8(cmp) as u32) & 0x5555;
-    mask &= if N >= 8 {
-        u32::MAX
-    } else {
-        (1u32 << (N * 2)) - 1
-    };
+    let mask_lanes = if N == 4 { N } else { N + 1 };
+    let mask = ((_mm_movemask_epi8(cmp) as u32) & 0x5555) & ((1u32 << (mask_lanes * 2)) - 1);
 
-    let mut boundaries = [0u16; 8];
+    let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
+    let bounds_ptr = bounds.as_mut_ptr().cast::<u16>();
     unsafe {
-        _mm_storeu_si128(boundaries.as_mut_ptr().cast(), boundaries_v);
+        bounds_ptr.write(s.rng as u16);
+        _mm_store_si128(bounds_ptr.add(1).cast(), boundaries_v);
     }
 
-    let (val, v, u) = if mask != 0 {
-        let i = (mask.trailing_zeros() >> 1) as usize;
-        let v = boundaries[i] as u32;
-        let u = if i == 0 {
-            s.rng
-        } else {
-            boundaries[i - 1] as u32
-        };
-        (i, v, u)
+    let initialized = (unsafe { bounds.assume_init() }).0;
+
+    let (val, v, u) = if N == 4 && mask == 0 {
+        // cdf[4] was not loaded; its min_prob sentinel would have produced v=0.
+        let u = initialized[N] as u32;
+        (N, 0, u)
     } else {
-        let p_raw = (cdf[N] | 127) as i32 - MSAC_MIN_PROB[N - 1][N] as i32;
-        let p = p_raw.max(0) as u32;
-        let v = ((r * p) >> 10) << 3;
-        (N, v, boundaries[N - 1] as u32)
+        let i = (mask.trailing_zeros() >> 1) as usize;
+        let u = initialized[i] as u32;
+        let v = initialized[i + 1] as u32;
+        (i, v, u)
     };
 
     debug_assert!(u <= s.rng);

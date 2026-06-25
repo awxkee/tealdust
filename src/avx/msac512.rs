@@ -567,13 +567,17 @@ fn update_cdf_avx512<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: _
         _mm_andnot_si128(ge_mask, add_path),
     );
 
-    let mut tmp = [0u16; 8];
-    unsafe { _mm_storeu_si128(tmp.as_mut_ptr().cast(), updated) };
-    cdf[..N].copy_from_slice(&tmp[..N]);
+    let mut tmp = core::mem::MaybeUninit::<AlignedSse8>::uninit();
+    unsafe { _mm_store_si128(tmp.as_mut_ptr().cast(), updated) };
+    let initialized = (unsafe { tmp.assume_init() }).0;
+    cdf[..N].copy_from_slice(&initialized[..N]);
 }
 
 #[repr(C, align(16))]
 pub(crate) struct AlignedSse9(pub(crate) [u16; 9]);
+
+#[repr(C, align(16))]
+pub(crate) struct AlignedSse8(pub(crate) [u16; 8]);
 
 #[target_feature(enable = "avx512f,avx512dq")]
 fn msac_decode_symbol_adapt_avx512<const UPDATE_CDF: bool, const N: usize>(
