@@ -783,6 +783,232 @@ macro_rules! neon_dct32_i16x4_all_body {
     }};
 }
 
+macro_rules! neon_dct16_i16x4_all_body_active {
+    () => {{
+        let z = vdupq_n_s32(0);
+        let mut b = [z; 8];
+        let mut m = 0usize;
+        while m < 8 {
+            let base = m * 8;
+            let mut acc = z;
+            if ACTIVE > 1 {
+                acc = vmlal_n_s16(acc, load!(1), crate::itx_2d::DCT16_KBW[base]);
+            }
+            if ACTIVE > 3 {
+                acc = vmlal_n_s16(acc, load!(3), crate::itx_2d::DCT16_KBW[base + 1]);
+            }
+            if ACTIVE > 5 {
+                acc = vmlal_n_s16(acc, load!(5), crate::itx_2d::DCT16_KBW[base + 2]);
+            }
+            if ACTIVE > 7 {
+                acc = vmlal_n_s16(acc, load!(7), crate::itx_2d::DCT16_KBW[base + 3]);
+            }
+            if ACTIVE > 9 {
+                acc = vmlal_n_s16(acc, load!(9), crate::itx_2d::DCT16_KBW[base + 4]);
+            }
+            if ACTIVE > 11 {
+                acc = vmlal_n_s16(acc, load!(11), crate::itx_2d::DCT16_KBW[base + 5]);
+            }
+            if ACTIVE > 13 {
+                acc = vmlal_n_s16(acc, load!(13), crate::itx_2d::DCT16_KBW[base + 6]);
+            }
+            if ACTIVE > 15 {
+                acc = vmlal_n_s16(acc, load!(15), crate::itx_2d::DCT16_KBW[base + 7]);
+            }
+            b[m] = acc;
+            m += 1;
+        }
+        let mut d = [z; 4];
+        m = 0;
+        while m < 4 {
+            let base = m * 8;
+            let mut acc = z;
+            if ACTIVE > 2 {
+                acc = vmlal_n_s16(acc, load!(2), crate::itx_2d::DCT16_KDW[base]);
+            }
+            if ACTIVE > 6 {
+                acc = vmlal_n_s16(acc, load!(6), crate::itx_2d::DCT16_KDW[base + 1]);
+            }
+            if ACTIVE > 10 {
+                acc = vmlal_n_s16(acc, load!(10), crate::itx_2d::DCT16_KDW[base + 2]);
+            }
+            if ACTIVE > 14 {
+                acc = vmlal_n_s16(acc, load!(14), crate::itx_2d::DCT16_KDW[base + 3]);
+            }
+            d[m] = acc;
+            m += 1;
+        }
+        let f0 = if ACTIVE > 4 {
+            let mut t = vmull_n_s16(load!(4), crate::itx_2d::DCT16_KFW[0]);
+            if ACTIVE > 12 {
+                t = vmlal_n_s16(t, load!(12), crate::itx_2d::DCT16_KFW[1]);
+            }
+            t
+        } else {
+            z
+        };
+        let f1 = if ACTIVE > 4 {
+            let mut t = vmull_n_s16(load!(4), crate::itx_2d::DCT16_KFW[2]);
+            if ACTIVE > 12 {
+                t = vmlal_n_s16(t, load!(12), crate::itx_2d::DCT16_KFW[3]);
+            }
+            t
+        } else {
+            z
+        };
+        let mut g0 = vmull_n_s16(load!(0), crate::itx_2d::DCT16_KGW[0]);
+        if ACTIVE > 8 {
+            g0 = vmlal_n_s16(g0, load!(8), crate::itx_2d::DCT16_KGW[1]);
+        }
+        let mut g1 = vmull_n_s16(load!(0), crate::itx_2d::DCT16_KGW[2]);
+        if ACTIVE > 8 {
+            g1 = vmlal_n_s16(g1, load!(8), crate::itx_2d::DCT16_KGW[3]);
+        }
+        let cc = [
+            vaddq_s32(g0, f0),
+            vaddq_s32(g1, f1),
+            vsubq_s32(g1, f1),
+            vsubq_s32(g0, f0),
+        ];
+        let mut a = [z; 8];
+        let mut i = 0usize;
+        while i < 4 {
+            a[i] = vaddq_s32(cc[i], d[i]);
+            i += 1;
+        }
+        while i < 8 {
+            a[i] = vsubq_s32(cc[7 - i], d[7 - i]);
+            i += 1;
+        }
+        let mut out = [z; 16];
+        let mut k = 0usize;
+        while k < 8 {
+            out[k] = vaddq_s32(a[k], b[k]);
+            out[k + 8] = vsubq_s32(a[7 - k], b[7 - k]);
+            k += 1;
+        }
+        out
+    }};
+}
+
+macro_rules! neon_dct32_i16x4_all_body_active {
+    () => {{
+        let z = vdupq_n_s32(0);
+        let mut b = [z; 16];
+        let mut m = 0usize;
+        while m < 16 {
+            let base = m * 16;
+            let mut acc = z;
+            let mut k = 0usize;
+            while k < 16 {
+                let idx = 2 * k + 1;
+                if ACTIVE > idx {
+                    acc = vmlal_n_s16(acc, load!(idx), crate::itx_2d::DCT32_KBW[base + k]);
+                }
+                k += 1;
+            }
+            b[m] = acc;
+            m += 1;
+        }
+        let mut d = [z; 8];
+        m = 0;
+        while m < 8 {
+            let base = m * 8;
+            let mut acc = z;
+            let mut k = 0usize;
+            while k < 8 {
+                let idx = 4 * k + 2;
+                if ACTIVE > idx {
+                    acc = vmlal_n_s16(acc, load!(idx), crate::itx_2d::DCT32_KDW[base + k]);
+                }
+                k += 1;
+            }
+            d[m] = acc;
+            m += 1;
+        }
+        let mut f = [z; 4];
+        m = 0;
+        while m < 4 {
+            let base = m * 8;
+            let mut acc = z;
+            if ACTIVE > 4 {
+                acc = vmlal_n_s16(acc, load!(4), crate::itx_2d::DCT32_KFW[base]);
+            }
+            if ACTIVE > 12 {
+                acc = vmlal_n_s16(acc, load!(12), crate::itx_2d::DCT32_KFW[base + 1]);
+            }
+            if ACTIVE > 20 {
+                acc = vmlal_n_s16(acc, load!(20), crate::itx_2d::DCT32_KFW[base + 2]);
+            }
+            if ACTIVE > 28 {
+                acc = vmlal_n_s16(acc, load!(28), crate::itx_2d::DCT32_KFW[base + 3]);
+            }
+            f[m] = acc;
+            m += 1;
+        }
+        let h0 = if ACTIVE > 8 {
+            let mut t = vmull_n_s16(load!(8), crate::itx_2d::DCT32_KHW[0]);
+            if ACTIVE > 24 {
+                t = vmlal_n_s16(t, load!(24), crate::itx_2d::DCT32_KHW[1]);
+            }
+            t
+        } else {
+            z
+        };
+        let h1 = if ACTIVE > 8 {
+            let mut t = vmull_n_s16(load!(8), crate::itx_2d::DCT32_KHW[2]);
+            if ACTIVE > 24 {
+                t = vmlal_n_s16(t, load!(24), crate::itx_2d::DCT32_KHW[3]);
+            }
+            t
+        } else {
+            z
+        };
+        let mut g0 = vmull_n_s16(load!(0), crate::itx_2d::DCT32_KGW[0]);
+        if ACTIVE > 16 {
+            g0 = vmlal_n_s16(g0, load!(16), crate::itx_2d::DCT32_KGW[1]);
+        }
+        let mut g1 = vmull_n_s16(load!(0), crate::itx_2d::DCT32_KGW[2]);
+        if ACTIVE > 16 {
+            g1 = vmlal_n_s16(g1, load!(16), crate::itx_2d::DCT32_KGW[3]);
+        }
+        let e = [
+            vaddq_s32(g0, h0),
+            vaddq_s32(g1, h1),
+            vsubq_s32(g1, h1),
+            vsubq_s32(g0, h0),
+        ];
+        let mut cc = [z; 8];
+        let mut i = 0usize;
+        while i < 4 {
+            cc[i] = vaddq_s32(e[i], f[i]);
+            i += 1;
+        }
+        while i < 8 {
+            cc[i] = vsubq_s32(e[7 - i], f[7 - i]);
+            i += 1;
+        }
+        let mut a = [z; 16];
+        i = 0;
+        while i < 8 {
+            a[i] = vaddq_s32(cc[i], d[i]);
+            i += 1;
+        }
+        while i < 16 {
+            a[i] = vsubq_s32(cc[15 - i], d[15 - i]);
+            i += 1;
+        }
+        let mut out = [z; 32];
+        let mut k = 0usize;
+        while k < 16 {
+            out[k] = vaddq_s32(a[k], b[k]);
+            out[k + 16] = vsubq_s32(a[15 - k], b[15 - k]);
+            k += 1;
+        }
+        out
+    }};
+}
+
 #[target_feature(enable = "neon")]
 #[inline]
 fn neon_dct16_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
@@ -871,6 +1097,82 @@ fn neon_dct32_i16x4_all_from_scratch4_stride<const STRIDE: usize>(
         };
     }
     unsafe { neon_dct32_i16x4_all_body!() }
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+fn neon_dct16_i16x4_all_from_scratch4_stride_active<const STRIDE: usize, const ACTIVE: usize>(
+    scratch: &[i16],
+    base: usize,
+) -> [int32x4_t; 16] {
+    debug_assert!(ACTIVE == 4 || ACTIVE == 8 || ACTIVE == 16);
+    debug_assert!(base + (ACTIVE - 1) * STRIDE + 4 <= scratch.len());
+    let zz = vdup_n_s16(0);
+    macro_rules! load {
+        ($idx:expr) => {
+            if ($idx) < ACTIVE {
+                neon_load4_i16_scratch(scratch, base + ($idx) * STRIDE)
+            } else {
+                zz
+            }
+        };
+    }
+    unsafe { neon_dct16_i16x4_all_body_active!() }
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+fn neon_dct32_i16x4_all_from_scratch4_stride_active<const STRIDE: usize, const ACTIVE: usize>(
+    scratch: &[i16],
+    base: usize,
+) -> [int32x4_t; 32] {
+    debug_assert!(ACTIVE == 4 || ACTIVE == 8 || ACTIVE == 16 || ACTIVE == 32);
+    debug_assert!(base + (ACTIVE - 1) * STRIDE + 4 <= scratch.len());
+    let zz = vdup_n_s16(0);
+    macro_rules! load {
+        ($idx:expr) => {
+            if ($idx) < ACTIVE {
+                neon_load4_i16_scratch(scratch, base + ($idx) * STRIDE)
+            } else {
+                zz
+            }
+        };
+    }
+    unsafe { neon_dct32_i16x4_all_body_active!() }
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+fn neon_dct16_i16x4_all_from_scratch4_stride_eob<const STRIDE: usize>(
+    scratch: &[i16],
+    base: usize,
+    active: usize,
+) -> [int32x4_t; 16] {
+    if active <= 4 {
+        neon_dct16_i16x4_all_from_scratch4_stride_active::<STRIDE, 4>(scratch, base)
+    } else if active <= 8 {
+        neon_dct16_i16x4_all_from_scratch4_stride_active::<STRIDE, 8>(scratch, base)
+    } else {
+        neon_dct16_i16x4_all_from_scratch4_stride_active::<STRIDE, 16>(scratch, base)
+    }
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+fn neon_dct32_i16x4_all_from_scratch4_stride_eob<const STRIDE: usize>(
+    scratch: &[i16],
+    base: usize,
+    active: usize,
+) -> [int32x4_t; 32] {
+    if active <= 4 {
+        neon_dct32_i16x4_all_from_scratch4_stride_active::<STRIDE, 4>(scratch, base)
+    } else if active <= 8 {
+        neon_dct32_i16x4_all_from_scratch4_stride_active::<STRIDE, 8>(scratch, base)
+    } else if active <= 16 {
+        neon_dct32_i16x4_all_from_scratch4_stride_active::<STRIDE, 16>(scratch, base)
+    } else {
+        neon_dct32_i16x4_all_from_scratch4_stride_active::<STRIDE, 32>(scratch, base)
+    }
 }
 
 #[target_feature(enable = "neon")]
@@ -997,7 +1299,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
             }
             let mut x = 0usize;
             while x < 16 {
-                let out = neon_dct16_i16x4_all_from_scratch4_stride::<16>(&scratch, x);
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<16>(&scratch, x, ncols);
                 let mut m = 0usize;
                 while m < 16 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -1066,7 +1368,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
             }
             let mut x = 0usize;
             while x < 32 {
-                let out = neon_dct32_i16x4_all_from_scratch4_stride::<32>(&scratch, x);
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<32>(&scratch, x, ncols);
                 let mut m = 0usize;
                 while m < 32 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -1210,7 +1512,7 @@ fn idct_dequant_dct_i16_neon_rdm_impl_const<
         }
         let mut x = 0usize;
         while x < 32 {
-            let out = neon_dct32_i16x4_all_from_scratch4_stride::<32>(&scratch, x);
+            let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<32>(&scratch, x, ncols);
             let mut m = 0usize;
             while m < 32 {
                 vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -1469,6 +1771,98 @@ fn tx_dequant_dense_neon_i16_impl_kind<
 
 #[target_feature(enable = "neon")]
 #[inline]
+unsafe fn neon_add4_i32_to_u8(
+    dst: &mut [u8],
+    off: usize,
+    v: int32x4_t,
+    rnd: int32x4_t,
+    nsh: int32x4_t,
+) {
+    debug_assert!(off + 4 <= dst.len());
+    let r = vshlq_s32(vaddq_s32(v, rnd), nsh);
+    let r16 = vmovn_s32(r);
+    let d8 = vld1_u8(dst.as_ptr().add(off));
+    let d16 = vreinterpret_s16_u16(vget_low_u16(vmovl_u8(d8)));
+    let sum = vadd_s16(d16, r16);
+    let sum = vmax_s16(vdup_n_s16(0), vmin_s16(vdup_n_s16(255), sum));
+    let packed = vqmovun_s16(vcombine_s16(sum, vdup_n_s16(0)));
+    let lane = vget_lane_u32::<0>(vreinterpret_u32_u8(packed));
+    std::ptr::write_unaligned(dst.as_mut_ptr().add(off) as *mut u32, lane);
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn neon_add4_i32_to_u8_expand_x2(
+    dst: &mut [u8],
+    off: usize,
+    v: int32x4_t,
+    rnd: int32x4_t,
+    nsh: int32x4_t,
+) {
+    debug_assert!(off + 8 <= dst.len());
+    let r = vshlq_s32(vaddq_s32(v, rnd), nsh);
+    let v0 = vgetq_lane_s32::<0>(r);
+    let v1 = vgetq_lane_s32::<1>(r);
+    let v2 = vgetq_lane_s32::<2>(r);
+    let v3 = vgetq_lane_s32::<3>(r);
+    let p = dst.as_mut_ptr().add(off);
+    let d0 = *p.add(0) as i32 + v0;
+    let d1 = *p.add(1) as i32 + v0;
+    let d2 = *p.add(2) as i32 + v1;
+    let d3 = *p.add(3) as i32 + v1;
+    let d4 = *p.add(4) as i32 + v2;
+    let d5 = *p.add(5) as i32 + v2;
+    let d6 = *p.add(6) as i32 + v3;
+    let d7 = *p.add(7) as i32 + v3;
+    *p.add(0) = d0.clamp(0, 255) as u8;
+    *p.add(1) = d1.clamp(0, 255) as u8;
+    *p.add(2) = d2.clamp(0, 255) as u8;
+    *p.add(3) = d3.clamp(0, 255) as u8;
+    *p.add(4) = d4.clamp(0, 255) as u8;
+    *p.add(5) = d5.clamp(0, 255) as u8;
+    *p.add(6) = d6.clamp(0, 255) as u8;
+    *p.add(7) = d7.clamp(0, 255) as u8;
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn neon_writeback4_i32_u8<const W: usize, const H: usize>(
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    x: usize,
+    y: usize,
+    v: int32x4_t,
+    rnd: int32x4_t,
+    nsh: int32x4_t,
+) {
+    debug_assert!(x + 4 <= W);
+    debug_assert!(y < H);
+    if out_w > W {
+        let ox = x * 2;
+        let oy = if out_h > H { y * 2 } else { y };
+        let off0 = dst_off + oy * dst_stride + ox;
+        neon_add4_i32_to_u8_expand_x2(dst, off0, v, rnd, nsh);
+        if out_h > H {
+            let off1 = off0 + dst_stride;
+            neon_add4_i32_to_u8_expand_x2(dst, off1, v, rnd, nsh);
+        }
+    } else {
+        let ox = x;
+        let oy = if out_h > H { y * 2 } else { y };
+        let off0 = dst_off + oy * dst_stride + ox;
+        neon_add4_i32_to_u8(dst, off0, v, rnd, nsh);
+        if out_h > H {
+            let off1 = off0 + dst_stride;
+            neon_add4_i32_to_u8(dst, off1, v, rnd, nsh);
+        }
+    }
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
 fn tx_dequant_dense_neon_i16_impl_const<
     const N: usize,
     const W: usize,
@@ -1684,7 +2078,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
         let mut x = 0usize;
         while x < W {
             if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
-                let out = neon_dct16_i16x4_all_from_scratch4_stride::<W>(&scratch, x);
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 16 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -1694,7 +2088,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
                     m += 4;
                 }
             } else if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 32 {
-                let out = neon_dct32_i16x4_all_from_scratch4_stride::<W>(&scratch, x);
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 32 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -2097,7 +2491,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
         let mut x = 0usize;
         while x < W {
             if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
-                let out = neon_dct16_i16x4_all_from_scratch4_stride::<W>(&scratch, x);
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 16 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -2107,7 +2501,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
                     m += 4;
                 }
             } else if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 32 {
-                let out = neon_dct32_i16x4_all_from_scratch4_stride::<W>(&scratch, x);
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 32 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -3148,6 +3542,1557 @@ fn idct_dequant_32x32_neon_rdm_impl_const<const IS_RECT2: bool>(
 }
 
 // Low-bit-depth i16 coefficient entry points.
+
+#[target_feature(enable = "neon")]
+#[inline]
+fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
+    const N: usize,
+    const W: usize,
+    const H: usize,
+    const IS_RECT2: bool,
+    const FIRST_KIND: usize,
+    const SECOND_KIND: usize,
+>(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    eob: i32,
+    tx: usize,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+) {
+    unsafe {
+        debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
+        debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
+        debug_assert!(W * H <= N && N <= coeff.len());
+        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+        let mut ngrp = 0usize;
+        while ngrp < H / 4 {
+            ngrp += 1;
+            if eob <= last_eob[ngrp - 1] as i32 {
+                break;
+            }
+        }
+        let nrows = ngrp * 4;
+        let z = vdupq_n_s32(0);
+        let rnd = vdupq_n_s32((1 << shift0) >> 1);
+        let nsh = vdupq_n_s32(-shift0);
+        let minv = vdupq_n_s32(row_clip_min);
+        let maxv = vdupq_n_s32(row_clip_max);
+
+        let mut scratch = [0i16; N];
+        let mut y = 0usize;
+        while y + 8 <= nrows && FIRST_KIND == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
+            if W == 16 {
+                let lo = neon_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
+                let hi = neon_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
+                let mut m = 0usize;
+                while m < 16 {
+                    neon_store8x8_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        lo[m],
+                        hi[m],
+                        lo[m + 1],
+                        hi[m + 1],
+                        lo[m + 2],
+                        hi[m + 2],
+                        lo[m + 3],
+                        hi[m + 3],
+                        lo[m + 4],
+                        hi[m + 4],
+                        lo[m + 5],
+                        hi[m + 5],
+                        lo[m + 6],
+                        hi[m + 6],
+                        lo[m + 7],
+                        hi[m + 7],
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 8;
+                }
+            } else {
+                let lo = neon_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
+                let hi = neon_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
+                let mut m = 0usize;
+                while m < 32 {
+                    neon_store8x8_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        lo[m],
+                        hi[m],
+                        lo[m + 1],
+                        hi[m + 1],
+                        lo[m + 2],
+                        hi[m + 2],
+                        lo[m + 3],
+                        hi[m + 3],
+                        lo[m + 4],
+                        hi[m + 4],
+                        lo[m + 5],
+                        hi[m + 5],
+                        lo[m + 6],
+                        hi[m + 6],
+                        lo[m + 7],
+                        hi[m + 7],
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 8;
+                }
+            }
+            y += 8;
+        }
+        while y + 4 <= nrows {
+            if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 16 {
+                let out = neon_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
+                let mut m = 0usize;
+                while m < 16 {
+                    neon_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        out[m],
+                        out[m + 1],
+                        out[m + 2],
+                        out[m + 3],
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+            } else if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 32 {
+                let out = neon_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
+                let mut m = 0usize;
+                while m < 32 {
+                    neon_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        out[m],
+                        out[m + 1],
+                        out[m + 2],
+                        out[m + 3],
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+            } else {
+                let mut m = 0usize;
+                while m < W {
+                    let mut a0 = z;
+                    let mut a1 = z;
+                    let mut a2 = z;
+                    let mut a3 = z;
+                    let mut j = 0usize;
+                    while j < W {
+                        let x0 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
+                        let x1 =
+                            neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                        a0 = vmlal_n_s16(
+                            a0,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j),
+                        );
+                        a0 = vmlal_n_s16(
+                            a0,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j + 1),
+                        );
+                        a1 = vmlal_n_s16(
+                            a1,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j),
+                        );
+                        a1 = vmlal_n_s16(
+                            a1,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j + 1),
+                        );
+                        a2 = vmlal_n_s16(
+                            a2,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j),
+                        );
+                        a2 = vmlal_n_s16(
+                            a2,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j + 1),
+                        );
+                        a3 = vmlal_n_s16(
+                            a3,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j),
+                        );
+                        a3 = vmlal_n_s16(
+                            a3,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j + 1),
+                        );
+                        j += 2;
+                    }
+                    neon_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        a0,
+                        a1,
+                        a2,
+                        a3,
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+            }
+            y += 4;
+        }
+        let rnd1 = vdupq_n_s32((1 << shift1) >> 1);
+        let nsh1 = vdupq_n_s32(-shift1);
+
+        let mut x = 0usize;
+        while x < W {
+            if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let mut m = 0usize;
+                while m < 16 {
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst, dst_off, dst_stride, out_w, out_h, x, m, out[m], rnd1, nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 1,
+                        out[m + 1],
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 2,
+                        out[m + 2],
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 3,
+                        out[m + 3],
+                        rnd1,
+                        nsh1,
+                    );
+                    m += 4;
+                }
+            } else if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 32 {
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let mut m = 0usize;
+                while m < 32 {
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst, dst_off, dst_stride, out_w, out_h, x, m, out[m], rnd1, nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 1,
+                        out[m + 1],
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 2,
+                        out[m + 2],
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 3,
+                        out[m + 3],
+                        rnd1,
+                        nsh1,
+                    );
+                    m += 4;
+                }
+            } else {
+                let mut m = 0usize;
+                while m < H {
+                    let mut a0 = z;
+                    let mut a1 = z;
+                    let mut a2 = z;
+                    let mut a3 = z;
+                    let mut j = 0usize;
+                    while j < H {
+                        let x0 = neon_load4_i16_scratch(&scratch, x + j * W);
+                        let x1 = neon_load4_i16_scratch(&scratch, x + (j + 1) * W);
+                        a0 = vmlal_n_s16(
+                            a0,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m, j),
+                        );
+                        a0 = vmlal_n_s16(
+                            a0,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m, j + 1),
+                        );
+                        a1 = vmlal_n_s16(
+                            a1,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 1, j),
+                        );
+                        a1 = vmlal_n_s16(
+                            a1,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 1, j + 1),
+                        );
+                        a2 = vmlal_n_s16(
+                            a2,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 2, j),
+                        );
+                        a2 = vmlal_n_s16(
+                            a2,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 2, j + 1),
+                        );
+                        a3 = vmlal_n_s16(
+                            a3,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 3, j),
+                        );
+                        a3 = vmlal_n_s16(
+                            a3,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 3, j + 1),
+                        );
+                        j += 2;
+                    }
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst, dst_off, dst_stride, out_w, out_h, x, m, a0, rnd1, nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 1,
+                        a1,
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 2,
+                        a2,
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 3,
+                        a3,
+                        rnd1,
+                        nsh1,
+                    );
+                    m += 4;
+                }
+            }
+            x += 4;
+        }
+        coeff[..W * H].fill(0);
+    }
+}
+
+#[target_feature(enable = "rdm")]
+#[inline]
+fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
+    const N: usize,
+    const W: usize,
+    const H: usize,
+    const IS_RECT2: bool,
+    const FIRST_KIND: usize,
+    const SECOND_KIND: usize,
+>(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    eob: i32,
+    tx: usize,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+) {
+    unsafe {
+        debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
+        debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
+        debug_assert!(W * H <= N && N <= coeff.len());
+        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+        let mut ngrp = 0usize;
+        while ngrp < H / 4 {
+            ngrp += 1;
+            if eob <= last_eob[ngrp - 1] as i32 {
+                break;
+            }
+        }
+        let nrows = ngrp * 4;
+        let z = vdupq_n_s32(0);
+        let rnd = vdupq_n_s32((1 << shift0) >> 1);
+        let nsh = vdupq_n_s32(-shift0);
+        let minv = vdupq_n_s32(row_clip_min);
+        let maxv = vdupq_n_s32(row_clip_max);
+
+        let mut scratch = [0i16; N];
+        let mut y = 0usize;
+        while y + 8 <= nrows && FIRST_KIND == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
+            if W == 16 {
+                let lo = neon_dct16_i16x4_all_from_coeff4_rdm_stride_const::<IS_RECT2, H>(coeff, y);
+                let hi =
+                    neon_dct16_i16x4_all_from_coeff4_rdm_stride_const::<IS_RECT2, H>(coeff, y + 4);
+                let mut m = 0usize;
+                while m < 16 {
+                    neon_store8x8_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        lo[m],
+                        hi[m],
+                        lo[m + 1],
+                        hi[m + 1],
+                        lo[m + 2],
+                        hi[m + 2],
+                        lo[m + 3],
+                        hi[m + 3],
+                        lo[m + 4],
+                        hi[m + 4],
+                        lo[m + 5],
+                        hi[m + 5],
+                        lo[m + 6],
+                        hi[m + 6],
+                        lo[m + 7],
+                        hi[m + 7],
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 8;
+                }
+            } else {
+                let lo = neon_dct32_i16x4_all_from_coeff4_rdm_stride_const::<IS_RECT2, H>(coeff, y);
+                let hi =
+                    neon_dct32_i16x4_all_from_coeff4_rdm_stride_const::<IS_RECT2, H>(coeff, y + 4);
+                let mut m = 0usize;
+                while m < 32 {
+                    neon_store8x8_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        lo[m],
+                        hi[m],
+                        lo[m + 1],
+                        hi[m + 1],
+                        lo[m + 2],
+                        hi[m + 2],
+                        lo[m + 3],
+                        hi[m + 3],
+                        lo[m + 4],
+                        hi[m + 4],
+                        lo[m + 5],
+                        hi[m + 5],
+                        lo[m + 6],
+                        hi[m + 6],
+                        lo[m + 7],
+                        hi[m + 7],
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 8;
+                }
+            }
+            y += 8;
+        }
+        while y + 4 <= nrows {
+            if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 16 {
+                let out =
+                    neon_dct16_i16x4_all_from_coeff4_rdm_stride_const::<IS_RECT2, H>(coeff, y);
+                let mut m = 0usize;
+                while m < 16 {
+                    neon_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        out[m],
+                        out[m + 1],
+                        out[m + 2],
+                        out[m + 3],
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+            } else if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 32 {
+                let out =
+                    neon_dct32_i16x4_all_from_coeff4_rdm_stride_const::<IS_RECT2, H>(coeff, y);
+                let mut m = 0usize;
+                while m < 32 {
+                    neon_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        out[m],
+                        out[m + 1],
+                        out[m + 2],
+                        out[m + 3],
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+            } else {
+                let mut m = 0usize;
+                while m < W {
+                    let mut a0 = z;
+                    let mut a1 = z;
+                    let mut a2 = z;
+                    let mut a3 = z;
+                    let mut j = 0usize;
+                    while j < W {
+                        let x0 =
+                            neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(coeff, y + j * H);
+                        let x1 = neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(
+                            coeff,
+                            y + (j + 1) * H,
+                        );
+                        a0 = vmlal_n_s16(
+                            a0,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j),
+                        );
+                        a0 = vmlal_n_s16(
+                            a0,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j + 1),
+                        );
+                        a1 = vmlal_n_s16(
+                            a1,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j),
+                        );
+                        a1 = vmlal_n_s16(
+                            a1,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j + 1),
+                        );
+                        a2 = vmlal_n_s16(
+                            a2,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j),
+                        );
+                        a2 = vmlal_n_s16(
+                            a2,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j + 1),
+                        );
+                        a3 = vmlal_n_s16(
+                            a3,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j),
+                        );
+                        a3 = vmlal_n_s16(
+                            a3,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j + 1),
+                        );
+                        j += 2;
+                    }
+                    neon_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        a0,
+                        a1,
+                        a2,
+                        a3,
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+            }
+            y += 4;
+        }
+        let rnd1 = vdupq_n_s32((1 << shift1) >> 1);
+        let nsh1 = vdupq_n_s32(-shift1);
+
+        let mut x = 0usize;
+        while x < W {
+            if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let mut m = 0usize;
+                while m < 16 {
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst, dst_off, dst_stride, out_w, out_h, x, m, out[m], rnd1, nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 1,
+                        out[m + 1],
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 2,
+                        out[m + 2],
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 3,
+                        out[m + 3],
+                        rnd1,
+                        nsh1,
+                    );
+                    m += 4;
+                }
+            } else if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 32 {
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let mut m = 0usize;
+                while m < 32 {
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst, dst_off, dst_stride, out_w, out_h, x, m, out[m], rnd1, nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 1,
+                        out[m + 1],
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 2,
+                        out[m + 2],
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 3,
+                        out[m + 3],
+                        rnd1,
+                        nsh1,
+                    );
+                    m += 4;
+                }
+            } else {
+                let mut m = 0usize;
+                while m < H {
+                    let mut a0 = z;
+                    let mut a1 = z;
+                    let mut a2 = z;
+                    let mut a3 = z;
+                    let mut j = 0usize;
+                    while j < H {
+                        let x0 = neon_load4_i16_scratch(&scratch, x + j * W);
+                        let x1 = neon_load4_i16_scratch(&scratch, x + (j + 1) * W);
+                        a0 = vmlal_n_s16(
+                            a0,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m, j),
+                        );
+                        a0 = vmlal_n_s16(
+                            a0,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m, j + 1),
+                        );
+                        a1 = vmlal_n_s16(
+                            a1,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 1, j),
+                        );
+                        a1 = vmlal_n_s16(
+                            a1,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 1, j + 1),
+                        );
+                        a2 = vmlal_n_s16(
+                            a2,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 2, j),
+                        );
+                        a2 = vmlal_n_s16(
+                            a2,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 2, j + 1),
+                        );
+                        a3 = vmlal_n_s16(
+                            a3,
+                            x0,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 3, j),
+                        );
+                        a3 = vmlal_n_s16(
+                            a3,
+                            x1,
+                            neon_tx_dense_coeff_i16_const::<SECOND_KIND, H>(m + 3, j + 1),
+                        );
+                        j += 2;
+                    }
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst, dst_off, dst_stride, out_w, out_h, x, m, a0, rnd1, nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 1,
+                        a1,
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 2,
+                        a2,
+                        rnd1,
+                        nsh1,
+                    );
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst,
+                        dst_off,
+                        dst_stride,
+                        out_w,
+                        out_h,
+                        x,
+                        m + 3,
+                        a3,
+                        rnd1,
+                        nsh1,
+                    );
+                    m += 4;
+                }
+            }
+            x += 4;
+        }
+        coeff[..W * H].fill(0);
+    }
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+fn tx_dequant_dense_neon_i16_fused_8bpc_impl<const N: usize, const W: usize, const H: usize>(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    macro_rules! call_kind {
+        ($first:expr, $second:expr) => {
+            if is_rect2 {
+                tx_dequant_dense_neon_i16_fused_8bpc_impl_const::<
+                    N,
+                    W,
+                    H,
+                    true,
+                    { $first },
+                    { $second },
+                >(
+                    coeff,
+                    dst,
+                    dst_off,
+                    dst_stride,
+                    out_w,
+                    out_h,
+                    eob,
+                    tx,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    shift1,
+                )
+            } else {
+                tx_dequant_dense_neon_i16_fused_8bpc_impl_const::<
+                    N,
+                    W,
+                    H,
+                    false,
+                    { $first },
+                    { $second },
+                >(
+                    coeff,
+                    dst,
+                    dst_off,
+                    dst_stride,
+                    out_w,
+                    out_h,
+                    eob,
+                    tx,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    shift1,
+                )
+            }
+        };
+    }
+    match (first_kind, second_kind) {
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_FLIPADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_FLIPADST)
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_FLIPADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_FLIPADST)
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_FLIPADST) => call_kind!(
+            crate::itx_2d::TX_KIND_FLIPADST,
+            crate::itx_2d::TX_KIND_FLIPADST
+        ),
+        _ => unreachable!(),
+    }
+}
+
+#[target_feature(enable = "rdm")]
+#[inline]
+fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl<const N: usize, const W: usize, const H: usize>(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    macro_rules! call_kind {
+        ($first:expr, $second:expr) => {
+            if is_rect2 {
+                tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const::<
+                    N,
+                    W,
+                    H,
+                    true,
+                    { $first },
+                    { $second },
+                >(
+                    coeff,
+                    dst,
+                    dst_off,
+                    dst_stride,
+                    out_w,
+                    out_h,
+                    eob,
+                    tx,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    shift1,
+                )
+            } else {
+                tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const::<
+                    N,
+                    W,
+                    H,
+                    false,
+                    { $first },
+                    { $second },
+                >(
+                    coeff,
+                    dst,
+                    dst_off,
+                    dst_stride,
+                    out_w,
+                    out_h,
+                    eob,
+                    tx,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    shift1,
+                )
+            }
+        };
+    }
+    match (first_kind, second_kind) {
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_FLIPADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_FLIPADST)
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_FLIPADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_FLIPADST)
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_FLIPADST) => call_kind!(
+            crate::itx_2d::TX_KIND_FLIPADST,
+            crate::itx_2d::TX_KIND_FLIPADST
+        ),
+        _ => unreachable!(),
+    }
+}
+
+macro_rules! neon_fused_match_body {
+    ($call:ident, $coeff:ident, $dst:ident, $dst_off:ident, $dst_stride:ident, $out_w:ident, $out_h:ident, $eob:ident, $tx:ident, $is_rect2:ident, $shift0:ident, $row_clip_min:ident, $row_clip_max:ident, $shift1:ident, $first_kind:ident, $second_kind:ident) => {{
+        match $tx {
+            crate::levels::txsz::TX_4X4 => $call::<16, 4, 4>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::TX_8X8 => $call::<64, 8, 8>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::TX_16X16 => $call::<256, 16, 16>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::TX_32X32 => $call::<1024, 32, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::TX_64X64 => $call::<1024, 32, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_4X8 => $call::<32, 4, 8>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_8X4 => $call::<32, 8, 4>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_8X16 => $call::<128, 8, 16>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_16X8 => $call::<128, 16, 8>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_16X32 => $call::<512, 16, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_32X16 => $call::<512, 32, 16>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_32X64 => $call::<1024, 32, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_64X32 => $call::<1024, 32, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_4X16 => $call::<64, 4, 16>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_16X4 => $call::<64, 16, 4>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_8X32 => $call::<256, 8, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_32X8 => $call::<256, 32, 8>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_16X64 => $call::<512, 16, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_64X16 => $call::<512, 32, 16>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_4X32 => $call::<128, 4, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_32X4 => $call::<128, 32, 4>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_8X64 => $call::<256, 8, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_64X8 => $call::<256, 32, 8>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_4X64 => $call::<128, 4, 32>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            crate::levels::txsz::RTX_64X4 => $call::<128, 32, 4>(
+                $coeff,
+                $dst,
+                $dst_off,
+                $dst_stride,
+                $out_w,
+                $out_h,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+                $shift1,
+                $first_kind,
+                $second_kind,
+            ),
+            _ => return false,
+        }
+        true
+    }};
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+pub(crate) fn itx_dequant_i16_neon_fused_8bpc(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+    first_kind: usize,
+    second_kind: usize,
+) -> bool {
+    neon_fused_match_body!(
+        tx_dequant_dense_neon_i16_fused_8bpc_impl,
+        coeff,
+        dst,
+        dst_off,
+        dst_stride,
+        out_w,
+        out_h,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        shift1,
+        first_kind,
+        second_kind
+    )
+}
+
+#[target_feature(enable = "rdm")]
+#[inline]
+pub(crate) fn itx_dequant_i16_neon_rdm_fused_8bpc(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+    first_kind: usize,
+    second_kind: usize,
+) -> bool {
+    neon_fused_match_body!(
+        tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl,
+        coeff,
+        dst,
+        dst_off,
+        dst_stride,
+        out_w,
+        out_h,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        shift1,
+        first_kind,
+        second_kind
+    )
+}
 
 macro_rules! idct_i16_neon_fn {
     ($pub:ident, $n:expr, $s:expr) => {
