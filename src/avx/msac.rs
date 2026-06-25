@@ -131,6 +131,24 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
     }
 
     #[inline(always)]
+    fn ctx_norm_symbol(&mut self, inv_dif: u64, rng: u32) {
+        debug_assert!(rng <= 65535 && rng > 0);
+
+        let d = rng.leading_zeros() ^ 16;
+        let cnt = self.cnt;
+
+        //   inv_dif = !(dif - (v << 48))
+        //   dif     = !(inv_dif << d)
+        self.dif = !(inv_dif << d);
+        self.rng = rng << d;
+        self.cnt = cnt - d as i32;
+
+        if (cnt as u32) < d {
+            self.ctx_refill();
+        }
+    }
+
+    #[inline(always)]
     pub(crate) fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
         debug_assert!(n_bits > 0 && n_bits <= 32);
         if (self.cnt as u32) < n_bits {
@@ -630,7 +648,8 @@ fn msac_decode_symbol_adapt_avx2<const UPDATE_CDF: bool, const N: usize>(
 
     debug_assert!(u <= s.rng);
     debug_assert!(u >= v);
-    s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
+    let inv_dif = (!s.dif).wrapping_add((v as u64) << 48);
+    s.ctx_norm_symbol(inv_dif, u - v);
 
     if UPDATE_CDF {
         let pc = cdf[N];
