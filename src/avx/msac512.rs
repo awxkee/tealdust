@@ -373,15 +373,15 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx512<'a, UPDATE_CDF> {
             return 0;
         }
 
-        if N <= 2 || (N <= 4 && cdf.len() < 4) || (N > 4 && cdf.len() < 8) {
+        // if N <= 2 || (N <= 4 && cdf.len() < 4) || (N > 4 && cdf.len() < 8) {
             return self.decode_symbol_adapt_n_scalar::<N>(cdf);
-        }
-
-        if !UPDATE_CDF && N == 3 {
-            return msac_decode_symbol_adapt3_no_update_avx512::<UPDATE_CDF>(self, cdf);
-        }
-
-        msac_decode_symbol_adapt_avx512::<UPDATE_CDF, N>(self, cdf)
+        // }
+        //
+        // if !UPDATE_CDF && N == 3 {
+        //     return msac_decode_symbol_adapt3_no_update_avx512::<UPDATE_CDF>(self, cdf);
+        // }
+        //
+        // msac_decode_symbol_adapt_avx512::<UPDATE_CDF, N>(self, cdf)
     }
 }
 
