@@ -484,9 +484,9 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
 
     #[inline(always)]
     pub(crate) fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
-        // Keep the dynamic interface for non-hot call sites, but dispatch to
-        // the fixed-size implementation so the actual decoder body is shared
-        // and monomorphized where possible.
+        if !UPDATE_CDF && n_symbols == 3 {
+            return self.decode_symbol_adapt3_no_update_scalar(cdf);
+        }
         match n_symbols {
             1 => self.decode_symbol_adapt_n::<1>(cdf),
             2 => self.decode_symbol_adapt_n::<2>(cdf),
@@ -528,8 +528,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         let mut val_usize = N;
 
         for i in 0..N {
-            let p_raw = (cdf[i] | 127) as i32 - min_prob[i] as i32;
-            let p = p_raw.max(0) as u32;
+            let p = ((cdf[i] | 127) as u32) - min_prob[i] as u32;
             let boundary = ((r * p) >> 10) << 3;
 
             if c >= boundary {
@@ -542,9 +541,8 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
 
         if val_usize == N {
-            let p_raw = (cdf[N] | 127) as i32 - min_prob[N] as i32;
-            let p = p_raw.max(0) as u32;
-            v = ((r * p) >> 10) << 3;
+            debug_assert_eq!(min_prob[N], 65535);
+            v = 0;
         }
 
         debug_assert!(u <= self.rng);
@@ -590,6 +588,43 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
 
         bit
+    }
+
+    #[inline(always)]
+    pub(crate) fn decode_symbol_adapt3_no_update_scalar(&mut self, cdf: &[u16]) -> u32 {
+        debug_assert!(!UPDATE_CDF);
+
+        if cdf.len() <= 3 {
+            return 0;
+        }
+
+        let c = (self.dif >> 48) as u32;
+        let r = self.rng >> 8;
+
+        let p0 = ((cdf[0] | 127) as u32) - 31;
+        let b0 = ((r * p0) >> 10) << 3;
+        if c >= b0 {
+            self.ctx_norm(self.dif - ((b0 as u64) << 48), self.rng - b0);
+            return 0;
+        }
+
+        let p1 = ((cdf[1] | 127) as u32) - 63;
+        let b1 = ((r * p1) >> 10) << 3;
+        if c >= b1 {
+            self.ctx_norm(self.dif - ((b1 as u64) << 48), b0 - b1);
+            return 1;
+        }
+
+        let p2 = ((cdf[2] | 127) as u32) - 95;
+        let b2 = ((r * p2) >> 10) << 3;
+        if c >= b2 {
+            self.ctx_norm(self.dif - ((b2 as u64) << 48), b1 - b2);
+            return 2;
+        }
+
+        // Sentinel lane: v = 0, u = b2.
+        self.ctx_norm(self.dif, b2);
+        3
     }
 
     pub(crate) fn decode_uniform(&mut self, n: u32) -> u32 {

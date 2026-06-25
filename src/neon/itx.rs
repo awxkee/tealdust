@@ -1696,6 +1696,14 @@ fn tx_dequant_dense_neon_i32_impl_const<
 
         let mut x = 0usize;
         while x < W {
+            let mut vin = [z; H];
+            {
+                let mut j = 0usize;
+                while j < H {
+                    vin[j] = vld1q_s32(tmp.as_ptr().add(x + j * 32));
+                    j += 1;
+                }
+            }
             let mut m = 0usize;
             while m < H {
                 let mut a0 = z;
@@ -1704,7 +1712,7 @@ fn tx_dequant_dense_neon_i32_impl_const<
                 let mut a3 = z;
                 let mut j = 0usize;
                 while j < H {
-                    let v = vld1q_s32(tmp.as_ptr().add(x + j * 32));
+                    let v = vin[j];
                     a0 = vmlaq_n_s32(a0, v, neon_tx_dense_coeff(second_kind, H, m, j));
                     a1 = vmlaq_n_s32(a1, v, neon_tx_dense_coeff(second_kind, H, m + 1, j));
                     a2 = vmlaq_n_s32(a2, v, neon_tx_dense_coeff(second_kind, H, m + 2, j));
@@ -2905,14 +2913,16 @@ fn tx_dequant_8x8_neon_i32_impl_const<const IS_RECT2: bool>(
         coeff[..64].fill(0);
         let mut x = 0usize;
         while x < 8 {
-            let mut m = 0usize;
-            while m < 8 {
-                let g = neon_tx8_i32x4_from_tmp4(tmp, x, second_kind, m);
+            // Compute both output-row groups from the pristine row-pass result
+            // before storing either (in-place aliasing: storing m=0 would
+            // overwrite rows 0-3 that the m=4 group still needs to read).
+            let g_lo = neon_tx8_i32x4_from_tmp4(tmp, x, second_kind, 0);
+            let g_hi = neon_tx8_i32x4_from_tmp4(tmp, x, second_kind, 4);
+            for (m, g) in [(0usize, &g_lo), (4usize, &g_hi)] {
                 vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), g[0]);
                 vst1q_s32(tmp.as_mut_ptr().add(x + (m + 1) * 32), g[1]);
                 vst1q_s32(tmp.as_mut_ptr().add(x + (m + 2) * 32), g[2]);
                 vst1q_s32(tmp.as_mut_ptr().add(x + (m + 3) * 32), g[3]);
-                m += 4;
             }
             x += 4;
         }
@@ -3052,14 +3062,15 @@ fn idct_dequant_16x16_neon_i32_impl_const<const IS_RECT2: bool>(
 
         let mut x = 0usize;
         while x < 16 {
-            let mut m = 0usize;
-            while m < 16 {
-                let g = dct16x4_tmp!(x, m);
+            let g0 = dct16x4_tmp!(x, 0);
+            let g4 = dct16x4_tmp!(x, 4);
+            let g8 = dct16x4_tmp!(x, 8);
+            let g12 = dct16x4_tmp!(x, 12);
+            for (m, g) in [(0usize, &g0), (4, &g4), (8, &g8), (12, &g12)] {
                 vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), g[0]);
                 vst1q_s32(tmp.as_mut_ptr().add(x + (m + 1) * 32), g[1]);
                 vst1q_s32(tmp.as_mut_ptr().add(x + (m + 2) * 32), g[2]);
                 vst1q_s32(tmp.as_mut_ptr().add(x + (m + 3) * 32), g[3]);
-                m += 4;
             }
             x += 4;
         }
@@ -3156,9 +3167,19 @@ fn idct_dequant_32x32_neon_i32_impl_const<const IS_RECT2: bool>(
         coeff[..1024].fill(0);
         let mut x = 0usize;
         while x < 32 {
+            let groups = [
+                neon_dct32_i32x4_from_tmp4(tmp, x, 0),
+                neon_dct32_i32x4_from_tmp4(tmp, x, 4),
+                neon_dct32_i32x4_from_tmp4(tmp, x, 8),
+                neon_dct32_i32x4_from_tmp4(tmp, x, 12),
+                neon_dct32_i32x4_from_tmp4(tmp, x, 16),
+                neon_dct32_i32x4_from_tmp4(tmp, x, 20),
+                neon_dct32_i32x4_from_tmp4(tmp, x, 24),
+                neon_dct32_i32x4_from_tmp4(tmp, x, 28),
+            ];
             let mut m = 0usize;
             while m < 32 {
-                let g = neon_dct32_i32x4_from_tmp4(tmp, x, m);
+                let g = &groups[m / 4];
                 vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), g[0]);
                 vst1q_s32(tmp.as_mut_ptr().add(x + (m + 1) * 32), g[1]);
                 vst1q_s32(tmp.as_mut_ptr().add(x + (m + 2) * 32), g[2]);

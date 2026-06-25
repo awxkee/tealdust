@@ -736,7 +736,7 @@ fn sse41_tx_dense_coeff(kind: usize, n: usize, out: usize, input: usize) -> i32 
 fn sse41_tx_dense_coeff_pair(kind: usize, n: usize, out: usize, input: usize) -> __m128i {
     debug_assert_eq!(input & 1, 0);
     let (table, idx): (&[i32], usize) = match (kind, n) {
-        (crate::itx_2d::TX_KIND_DCT, 4) => (&crate::itx_2d::DCT4_KP_X4, out * 2 + (input >> 1)),
+        (crate::itx_2d::TX_KIND_DCT, 4) => (&crate::itx_2d::DCT4_KP_X4, out * 4 + (input >> 1)),
         (crate::itx_2d::TX_KIND_DCT, 8) => (&crate::itx_2d::DCT8_KP_X4, out * 4 + (input >> 1)),
         (crate::itx_2d::TX_KIND_DCT, 16) => {
             (&crate::itx_2d::DCT16_DENSE_PAIR_X4, out * 8 + (input >> 1))
@@ -752,11 +752,11 @@ fn sse41_tx_dense_coeff_pair(kind: usize, n: usize, out: usize, input: usize) ->
             let k1 = sse41_identity_coeff(n, out, input + 1) as i16;
             return sse41_coeff_pair_from_scalars_i16(k0, k1);
         }
-        (crate::itx_2d::TX_KIND_ADST, 4) => (&crate::itx_2d::ADST4_KP_X4, out * 2 + (input >> 1)),
+        (crate::itx_2d::TX_KIND_ADST, 4) => (&crate::itx_2d::ADST4_KP_X4, out * 4 + (input >> 1)),
         (crate::itx_2d::TX_KIND_ADST, 8) => (&crate::itx_2d::ADST8_KP_X4, out * 4 + (input >> 1)),
         (crate::itx_2d::TX_KIND_ADST, 16) => (&crate::itx_2d::ADST16_KP_X4, out * 8 + (input >> 1)),
         (crate::itx_2d::TX_KIND_FLIPADST, 4) => {
-            (&crate::itx_2d::FLIPADST4_KP_X4, out * 2 + (input >> 1))
+            (&crate::itx_2d::FLIPADST4_KP_X4, out * 4 + (input >> 1))
         }
         (crate::itx_2d::TX_KIND_FLIPADST, 8) => {
             (&crate::itx_2d::ADST8_KP_X4, (7 - out) * 4 + (input >> 1))
@@ -2589,6 +2589,14 @@ fn tx_dequant_dense_sse41_i32_impl_const<
 
         let mut x = 0usize;
         while x < W {
+            let mut vin = [z; H];
+            {
+                let mut j = 0usize;
+                while j < H {
+                    vin[j] = _mm_loadu_si128(tmp.as_ptr().add(x + j * 32) as *const __m128i);
+                    j += 1;
+                }
+            }
             let mut m = 0usize;
             while m < H {
                 let mut a0 = z;
@@ -2597,7 +2605,7 @@ fn tx_dequant_dense_sse41_i32_impl_const<
                 let mut a3 = z;
                 let mut j = 0usize;
                 while j < H {
-                    let v = _mm_loadu_si128(tmp.as_ptr().add(x + j * 32) as *const __m128i);
+                    let v = vin[j];
                     a0 = _mm_add_epi32(
                         a0,
                         _mm_mullo_epi32(
@@ -3075,14 +3083,13 @@ fn tx_dequant_8x8_sse41_i32_impl_const<const IS_RECT2: bool>(
         coeff[..64].fill(0);
         let mut x = 0usize;
         while x < 8 {
-            let mut m = 0usize;
-            while m < 8 {
-                let g = sse41_tx8_i32x4_from_tmp4(tmp, x, second_kind, m);
+            let g_lo = sse41_tx8_i32x4_from_tmp4(tmp, x, second_kind, 0);
+            let g_hi = sse41_tx8_i32x4_from_tmp4(tmp, x, second_kind, 4);
+            for (m, g) in [(0usize, &g_lo), (4, &g_hi)] {
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, g[0]);
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32) as *mut __m128i, g[1]);
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32) as *mut __m128i, g[2]);
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 3) * 32) as *mut __m128i, g[3]);
-                m += 4;
             }
             x += 4;
         }
@@ -3265,14 +3272,15 @@ fn idct_dequant_16x16_sse41_i32_impl_const<const IS_RECT2: bool>(
 
         let mut x = 0usize;
         while x < 16 {
-            let mut m = 0usize;
-            while m < 16 {
-                let g = dct16x4_tmp!(x, m);
+            let g0 = dct16x4_tmp!(x, 0);
+            let g4 = dct16x4_tmp!(x, 4);
+            let g8 = dct16x4_tmp!(x, 8);
+            let g12 = dct16x4_tmp!(x, 12);
+            for (m, g) in [(0usize, &g0), (4, &g4), (8, &g8), (12, &g12)] {
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, g[0]);
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32) as *mut __m128i, g[1]);
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32) as *mut __m128i, g[2]);
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 3) * 32) as *mut __m128i, g[3]);
-                m += 4;
             }
             x += 4;
         }
@@ -3358,9 +3366,19 @@ fn idct_dequant_32x32_sse41_i32_impl_const<const IS_RECT2: bool>(
         coeff[..1024].fill(0);
         let mut x = 0usize;
         while x < 32 {
+            let groups = [
+                sse41_dct32_i32x4_from_tmp4(tmp, x, 0),
+                sse41_dct32_i32x4_from_tmp4(tmp, x, 4),
+                sse41_dct32_i32x4_from_tmp4(tmp, x, 8),
+                sse41_dct32_i32x4_from_tmp4(tmp, x, 12),
+                sse41_dct32_i32x4_from_tmp4(tmp, x, 16),
+                sse41_dct32_i32x4_from_tmp4(tmp, x, 20),
+                sse41_dct32_i32x4_from_tmp4(tmp, x, 24),
+                sse41_dct32_i32x4_from_tmp4(tmp, x, 28),
+            ];
             let mut m = 0usize;
             while m < 32 {
-                let g = sse41_dct32_i32x4_from_tmp4(tmp, x, m);
+                let g = &groups[m / 4];
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, g[0]);
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32) as *mut __m128i, g[1]);
                 _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32) as *mut __m128i, g[2]);

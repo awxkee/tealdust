@@ -446,8 +446,10 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
         // net for those fallbacks.  This keeps the fused path at the top of
         // the 8-bit route instead of silently letting later tmp-based branches
         // win.
-        let can_fuse_neon_8bpc =
-            BD::BPC == 8 && tx_type_has_no_extension(txtp) && !force_generic_itx();
+        let can_fuse_neon_8bpc = BD::BPC == 8
+            && tx_type_has_no_extension(txtp)
+            && tx_type_class(txtp) == 0
+            && !force_generic_itx();
         if can_fuse_neon_8bpc {
             if let (Some(coeff16), Some(dst8)) = (
                 C::try_as_i16_slice_mut(coeff),
@@ -605,6 +607,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
         // 64-expanded optimized i16 transforms.
         let can_fuse_avx2_8bpc = BD::BPC == 8
             && tx_type_has_no_extension(txtp)
+            && tx_type_class(txtp) == 0
             && crate::itx_2d::is_itx_dense_kind(first_kind)
             && crate::itx_2d::is_itx_dense_kind(second_kind)
             && !force_generic_itx();

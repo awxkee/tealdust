@@ -27,7 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-use crate::avx::msac512::{AlignedSse8, AlignedSse9};
+use crate::avx::msac512::AlignedSse8;
 use crate::msac::{MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState};
 use core::arch::x86_64::*;
 
@@ -249,13 +249,17 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
         let c = (self.dif >> 48) as u32;
         let r = self.rng >> 8;
 
+        // Branchy interval search. The previous version computed every range
+        // boundary into a stack array, then scanned all boundaries with masks.
+        // In the coefficient hot path symbol 0/1 dominate, so most calls only
+        // need one or two boundaries. This mirrors the usual entropy decoder
+        // shape more closely and avoids a lot of multiply/shift work.
         let mut u = self.rng;
         let mut v = 0u32;
         let mut val_usize = N;
 
         for i in 0..N {
-            let p_raw = (cdf[i] | 127) as i32 - min_prob[i] as i32;
-            let p = p_raw.max(0) as u32;
+            let p = ((cdf[i] | 127) as u32) - min_prob[i] as u32;
             let boundary = ((r * p) >> 10) << 3;
 
             if c >= boundary {
@@ -268,9 +272,8 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
         }
 
         if val_usize == N {
-            let p_raw = (cdf[N] | 127) as i32 - min_prob[N] as i32;
-            let p = p_raw.max(0) as u32;
-            v = ((r * p) >> 10) << 3;
+            debug_assert_eq!(min_prob[N], 65535);
+            v = 0;
         }
 
         debug_assert!(u <= self.rng);
@@ -280,7 +283,9 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
         if UPDATE_CDF {
             let pc = cdf[N];
             let count = (pc & 0xFF) as u8;
+
             debug_assert!(count <= 32);
+
             let rate =
                 MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
 
@@ -354,6 +359,10 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
 
     #[target_feature(enable = "avx2")]
     pub(crate) fn decode_symbol_adapt_avx2(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
+        if !UPDATE_CDF && n_symbols == 3 {
+            return self.decode_symbol_adapt3_no_update_scalar(cdf);
+        }
+
         match n_symbols {
             1 => self.decode_symbol_adapt_n_avx2::<1>(cdf),
             2 => self.decode_symbol_adapt_n_avx2::<2>(cdf),
@@ -373,16 +382,44 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
         if cdf.len() <= N {
             return 0;
         }
+        self.decode_symbol_adapt_n_scalar::<N>(cdf)
+    }
 
-        if N <= 2 || (N <= 4 && cdf.len() < 4) || (N > 4 && cdf.len() < 8) {
-            return self.decode_symbol_adapt_n_scalar::<N>(cdf);
+    #[inline(always)]
+    pub(crate) fn decode_symbol_adapt3_no_update_scalar(&mut self, cdf: &[u16]) -> u32 {
+        debug_assert!(!UPDATE_CDF);
+
+        if cdf.len() <= 3 {
+            return 0;
         }
 
-        if !UPDATE_CDF && N == 3 {
-            return msac_decode_symbol_adapt3_no_update_avx2::<UPDATE_CDF>(self, cdf);
+        let c = (self.dif >> 48) as u32;
+        let r = self.rng >> 8;
+
+        let p0 = ((cdf[0] | 127) as u32) - 31;
+        let b0 = ((r * p0) >> 10) << 3;
+        if c >= b0 {
+            self.ctx_norm(self.dif - ((b0 as u64) << 48), self.rng - b0);
+            return 0;
         }
 
-        msac_decode_symbol_adapt_avx2::<UPDATE_CDF, N>(self, cdf)
+        let p1 = ((cdf[1] | 127) as u32) - 63;
+        let b1 = ((r * p1) >> 10) << 3;
+        if c >= b1 {
+            self.ctx_norm(self.dif - ((b1 as u64) << 48), b0 - b1);
+            return 1;
+        }
+
+        let p2 = ((cdf[2] | 127) as u32) - 95;
+        let b2 = ((r * p2) >> 10) << 3;
+        if c >= b2 {
+            self.ctx_norm(self.dif - ((b2 as u64) << 48), b1 - b2);
+            return 2;
+        }
+
+        // Sentinel lane: v = 0, u = b2.
+        self.ctx_norm(self.dif, b2);
+        3
     }
 }
 
@@ -589,108 +626,4 @@ fn update_cdf_avx2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m
     unsafe { _mm_store_si128(tmp.as_mut_ptr().cast(), updated) };
     let initialized = (unsafe { tmp.assume_init() }).0;
     cdf[..N].copy_from_slice(&initialized[..N]);
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn msac_decode_symbol_adapt3_no_update_avx2<const UPDATE_CDF: bool>(
-    s: &mut MsacContextAvx<'_, UPDATE_CDF>,
-    cdf: &mut [u16],
-) -> u32 {
-    debug_assert!(!UPDATE_CDF);
-    debug_assert!(cdf.len() >= 4);
-
-    let cdf_v = unsafe { _mm_loadl_epi64(cdf.as_ptr().cast::<__m128i>()) };
-    let min_prob = unsafe { _mm_loadl_epi64(MSAC_MIN_PROB[2].as_ptr().cast::<__m128i>()) };
-    let c = (s.dif >> 48) as u16;
-    let r = s.rng >> 8;
-
-    let p = _mm_subs_epu16(_mm_or_si128(cdf_v, _mm_set1_epi16(127)), min_prob);
-    let scale = _mm_set1_epi16(((r << 6) & 0xffff) as i16);
-    let boundaries_v = _mm_slli_epi16(_mm_mulhi_epu16(p, scale), 3);
-    let cmp = _mm_cmpeq_epi16(
-        _mm_subs_epu16(boundaries_v, _mm_set1_epi16(c as i16)),
-        _mm_setzero_si128(),
-    );
-
-    // For N=3, lane 3 is the min-prob sentinel and its boundary is always 0,
-    // so the first four lanes always contain a match.  Unlike the generic path
-    // we do not need to mask pmovmskb down to one bit per word before tzcnt;
-    // the first set bit of each 0xffff word is already at byte bit 2*i.
-    let raw_mask = _mm_movemask_epi8(cmp) as u32;
-    debug_assert_ne!(raw_mask & 0xff, 0);
-    let val = (raw_mask.trailing_zeros() >> 1) as u32;
-
-    // boundaries_v low qword is [v0, v1, v2, 0].  Build a second packed qword
-    // [rng, v0, v1, v2], then select u and v with the same variable shift.
-    // This avoids the generic stack store of [rng, v0..v7].
-    let boundaries = _mm_cvtsi128_si64(boundaries_v) as u64;
-    let shift = val << 4;
-    let u_pack = (boundaries << 16) | (s.rng as u64);
-    let v = ((boundaries >> shift) & 0xffff) as u32;
-    let u = ((u_pack >> shift) & 0xffff) as u32;
-
-    debug_assert!(u <= s.rng);
-    debug_assert!(u >= v);
-    s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
-
-    val
-}
-
-#[target_feature(enable = "avx2")]
-fn msac_decode_symbol_adapt_avx2<const UPDATE_CDF: bool, const N: usize>(
-    s: &mut MsacContextAvx<'_, UPDATE_CDF>,
-    cdf: &mut [u16],
-) -> u32 {
-    let cdf_v = load_cdf::<N>(cdf);
-    let min_prob = load_min_prob::<N>();
-    let c = (s.dif >> 48) as u16;
-    let r = s.rng >> 8;
-
-    let p = _mm_subs_epu16(_mm_or_si128(cdf_v, _mm_set1_epi16(127)), min_prob);
-    let scale = _mm_set1_epi16(((r << 6) & 0xffff) as i16);
-    let boundaries_v = _mm_slli_epi16(_mm_mulhi_epu16(p, scale), 3);
-    let cmp = _mm_cmpeq_epi16(
-        _mm_subs_epu16(boundaries_v, _mm_set1_epi16(c as i16)),
-        _mm_setzero_si128(),
-    );
-
-    let mask_lanes = if N == 4 { N } else { N + 1 };
-    let mask = ((_mm_movemask_epi8(cmp) as u32) & 0x5555) & ((1u32 << (mask_lanes * 2)) - 1);
-
-    let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
-    let bounds_ptr = bounds.as_mut_ptr().cast::<u16>();
-    unsafe {
-        bounds_ptr.write(s.rng as u16);
-        _mm_store_si128(bounds_ptr.add(1).cast(), boundaries_v);
-    }
-
-    let initialized = (unsafe { bounds.assume_init() }).0;
-
-    let (val, v, u) = if N == 4 && mask == 0 {
-        // cdf[4] was not loaded; its min_prob sentinel would have produced v=0.
-        let u = initialized[N] as u32;
-        (N, 0, u)
-    } else {
-        let i = (mask.trailing_zeros() >> 1) as usize;
-        let u = initialized[i] as u32;
-        let v = initialized[i + 1] as u32;
-        (i, v, u)
-    };
-
-    debug_assert!(u <= s.rng);
-    debug_assert!(u >= v);
-    s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
-
-    if UPDATE_CDF {
-        let pc = cdf[N];
-        let count = (pc & 0xff) as u8;
-        debug_assert!(count <= 32);
-        let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
-
-        update_cdf_avx2::<N>(cdf, cdf_v, cmp, rate);
-        cdf[N] = pc + u16::from(count < 32);
-    }
-
-    val as u32
 }
