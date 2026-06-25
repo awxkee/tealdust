@@ -238,10 +238,10 @@ fn sse41_store4x4_i32_clip(
                 )
             }};
         }
-        let c0 = clip!(v0);
-        let c1 = clip!(v1);
-        let c2 = clip!(v2);
-        let c3 = clip!(v3);
+        let c0 = clip!(v[0]);
+        let c1 = clip!(v[1]);
+        let c2 = clip!(v[2]);
+        let c3 = clip!(v[3]);
         let t0 = _mm_unpacklo_epi32(c0, c1);
         let t1 = _mm_unpackhi_epi32(c0, c1);
         let t2 = _mm_unpacklo_epi32(c2, c3);
@@ -282,10 +282,10 @@ fn sse41_store4x4_i16_clip<const STRIDE: usize>(
                 )
             }};
         }
-        let c0 = clip!(v[0]);
-        let c1 = clip!(v[1]);
-        let c2 = clip!(v[2]);
-        let c3 = clip!(v[3]);
+        let c0 = clip!(v0);
+        let c1 = clip!(v1);
+        let c2 = clip!(v2);
+        let c3 = clip!(v3);
         let t0 = _mm_unpacklo_epi32(c0, c1);
         let t1 = _mm_unpackhi_epi32(c0, c1);
         let t2 = _mm_unpacklo_epi32(c2, c3);
@@ -670,6 +670,39 @@ fn sse41_identity_coeff(n: usize, out: usize, input: usize) -> i32 {
             _ => unreachable!(),
         }
     }
+}
+
+#[inline]
+fn sse41_identity_scale(n: usize) -> i32 {
+    match n {
+        4 => 128,
+        8 => 181,
+        16 => 256,
+        32 => 362,
+        _ => unreachable!(),
+    }
+}
+
+#[target_feature(enable = "sse4.1")]
+#[inline]
+unsafe fn sse41_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
+    coeff: &[i16],
+    off: usize,
+    scale: __m128i,
+) -> __m128i {
+    let v = sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, off);
+    _mm_mullo_epi32(_mm_cvtepi16_epi32(v), scale)
+}
+
+#[target_feature(enable = "sse4.1")]
+#[inline]
+unsafe fn sse41_identity_i16x4_scratch_to_i32(
+    scratch: &[i16],
+    off: usize,
+    scale: __m128i,
+) -> __m128i {
+    let v = sse41_load4_i16_scratch(scratch, off);
+    _mm_mullo_epi32(_mm_cvtepi16_epi32(v), scale)
 }
 
 #[inline]
@@ -2687,6 +2720,50 @@ fn tx_dequant_dense_sse41_i16_impl_const<
 
         let mut scratch = [0i16; N];
         let mut y = 0usize;
+
+        if first_kind == crate::itx_2d::TX_KIND_IDENTITY {
+            let scale = _mm_set1_epi32(sse41_identity_scale(W));
+            while y + 4 <= nrows {
+                let mut m = 0usize;
+                while m < W {
+                    let a0 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
+                        coeff,
+                        y + (m + 0) * H,
+                        scale,
+                    );
+                    let a1 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
+                        coeff,
+                        y + (m + 1) * H,
+                        scale,
+                    );
+                    let a2 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
+                        coeff,
+                        y + (m + 2) * H,
+                        scale,
+                    );
+                    let a3 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
+                        coeff,
+                        y + (m + 3) * H,
+                        scale,
+                    );
+                    sse41_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        a0,
+                        a1,
+                        a2,
+                        a3,
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+                y += 4;
+            }
+        }
+
         while y + 8 <= nrows && first_kind == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
             if W == 16 {
                 let lo = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
@@ -2843,6 +2920,18 @@ fn tx_dequant_dense_sse41_i16_impl_const<
         coeff[..W * H].fill(0);
 
         let mut x = 0usize;
+        if second_kind == crate::itx_2d::TX_KIND_IDENTITY {
+            let scale = _mm_set1_epi32(sse41_identity_scale(H));
+            while x < W {
+                let mut m = 0usize;
+                while m < H {
+                    let a = sse41_identity_i16x4_scratch_to_i32(&scratch, x + m * W, scale);
+                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, a);
+                    m += 1;
+                }
+                x += 4;
+            }
+        }
         while x < W {
             if second_kind == crate::itx_2d::TX_KIND_DCT && H == 16 {
                 sse41_dct16_i16x4_scratch4_stride_eob_store::<W>(&scratch, x, nrows, tmp);

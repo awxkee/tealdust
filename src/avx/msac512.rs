@@ -590,19 +590,18 @@ fn msac_decode_symbol_adapt_avx512<const UPDATE_CDF: bool, const N: usize>(
         _mm_setzero_si128(),
     );
 
-    let mut mask = (_mm_movemask_epi8(cmp) as u32) & 0x5555;
-    mask &= if N >= 8 {
-        u32::MAX
-    } else {
-        (1u32 << (N * 2)) - 1
-    };
+    let mask_lanes = if N == 4 { N } else { N + 1 };
+    let mask = ((_mm_movemask_epi8(cmp) as u32) & 0x5555) & ((1u32 << (mask_lanes * 2)) - 1);
 
     let mut boundaries = [0u16; 8];
     unsafe {
         _mm_storeu_si128(boundaries.as_mut_ptr().cast(), boundaries_v);
     }
 
-    let (val, v, u) = if mask != 0 {
+    let (val, v, u) = if N == 4 && mask == 0 {
+        // cdf[4] was not loaded; its min_prob sentinel would have produced v=0.
+        (N, 0, boundaries[N - 1] as u32)
+    } else {
         let i = (mask.trailing_zeros() >> 1) as usize;
         let v = boundaries[i] as u32;
         let u = if i == 0 {
@@ -611,11 +610,6 @@ fn msac_decode_symbol_adapt_avx512<const UPDATE_CDF: bool, const N: usize>(
             boundaries[i - 1] as u32
         };
         (i, v, u)
-    } else {
-        let p_raw = (cdf[N] | 127) as i32 - MSAC_MIN_PROB[N - 1][N] as i32;
-        let p = p_raw.max(0) as u32;
-        let v = ((r * p) >> 10) << 3;
-        (N, v, boundaries[N - 1] as u32)
     };
 
     debug_assert!(u <= s.rng);

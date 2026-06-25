@@ -371,6 +371,35 @@ fn tx8_coeff(kind: usize, out: usize, input: usize) -> i32 {
 }
 
 #[inline]
+fn neon_identity_scale(n: usize) -> i16 {
+    match n {
+        4 => 128,
+        8 => 181,
+        16 => 256,
+        32 => 362,
+        _ => unreachable!(),
+    }
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn neon_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
+    coeff: &[i16],
+    off: usize,
+    scale: i16,
+) -> int32x4_t {
+    let v = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, off);
+    vmull_n_s16(v, scale)
+}
+
+#[target_feature(enable = "neon")]
+#[inline]
+unsafe fn neon_identity_i16x4_scratch_to_i32(scratch: &[i16], off: usize, scale: i16) -> int32x4_t {
+    let v = neon_load4_i16_scratch(scratch, off);
+    vmull_n_s16(v, scale)
+}
+
+#[inline]
 fn neon_tx_dense_coeff(kind: usize, n: usize, out: usize, input: usize) -> i32 {
     match (kind, n) {
         (crate::itx_2d::TX_KIND_DCT, 4) => crate::itx_2d::DCT4_KW[out * 8 + input] as i32,
@@ -1873,7 +1902,7 @@ fn neon_add4_i32_to_u8_expand_x2(
 
 #[target_feature(enable = "neon")]
 #[inline]
- fn neon_writeback4_i32_u8<const W: usize, const H: usize>(
+fn neon_writeback4_i32_u8<const W: usize, const H: usize>(
     dst: &mut [u8],
     dst_off: usize,
     dst_stride: usize,
@@ -2029,6 +2058,38 @@ fn tx_dequant_dense_neon_i16_impl_const<
 
         let mut scratch = [0i16; N];
         let mut y = 0usize;
+
+        if FIRST_KIND == crate::itx_2d::TX_KIND_IDENTITY {
+            let scale = neon_identity_scale(W);
+            while y + 4 <= nrows {
+                let mut m = 0usize;
+                while m < W {
+                    let a0 =
+                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 0) * H, scale);
+                    let a1 =
+                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 1) * H, scale);
+                    let a2 =
+                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 2) * H, scale);
+                    let a3 =
+                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 3) * H, scale);
+                    neon_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        a0,
+                        a1,
+                        a2,
+                        a3,
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+                y += 4;
+            }
+        }
+
         while y + 8 <= nrows && FIRST_KIND == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
             if W == 16 {
                 let lo = neon_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
@@ -2204,6 +2265,18 @@ fn tx_dequant_dense_neon_i16_impl_const<
             y += 4;
         }
         let mut x = 0usize;
+        if SECOND_KIND == crate::itx_2d::TX_KIND_IDENTITY {
+            let scale = neon_identity_scale(H);
+            while x < W {
+                let mut m = 0usize;
+                while m < H {
+                    let a = neon_identity_i16x4_scratch_to_i32(&scratch, x + m * W, scale);
+                    vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), a);
+                    m += 1;
+                }
+                x += 4;
+            }
+        }
         while x < W {
             if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
                 let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
@@ -3746,6 +3819,38 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
 
         let mut scratch = [0i16; N];
         let mut y = 0usize;
+
+        if FIRST_KIND == crate::itx_2d::TX_KIND_IDENTITY {
+            let scale = neon_identity_scale(W);
+            while y + 4 <= nrows {
+                let mut m = 0usize;
+                while m < W {
+                    let a0 =
+                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 0) * H, scale);
+                    let a1 =
+                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 1) * H, scale);
+                    let a2 =
+                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 2) * H, scale);
+                    let a3 =
+                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 3) * H, scale);
+                    neon_store4x4_i16_clip::<W>(
+                        &mut scratch,
+                        y * W + m,
+                        a0,
+                        a1,
+                        a2,
+                        a3,
+                        rnd,
+                        nsh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+                y += 4;
+            }
+        }
+
         while y + 8 <= nrows && FIRST_KIND == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
             if W == 16 {
                 let lo = neon_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
@@ -3924,6 +4029,20 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
         let nsh1 = vdupq_n_s32(-shift1);
 
         let mut x = 0usize;
+        if SECOND_KIND == crate::itx_2d::TX_KIND_IDENTITY {
+            let scale = neon_identity_scale(H);
+            while x < W {
+                let mut m = 0usize;
+                while m < H {
+                    let a = neon_identity_i16x4_scratch_to_i32(&scratch, x + m * W, scale);
+                    neon_writeback4_i32_u8::<W, H>(
+                        dst, dst_off, dst_stride, out_w, out_h, x, m, a, rnd1, nsh1,
+                    );
+                    m += 1;
+                }
+                x += 4;
+            }
+        }
         while x < W {
             if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
                 let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
