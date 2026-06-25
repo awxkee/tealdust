@@ -29,6 +29,7 @@
 
 use crate::msac::{MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState};
 use core::arch::x86_64::*;
+use crate::avx::msac512::AlignedSse9;
 
 pub(crate) struct MsacContextAvx<'a, const UPDATE_CDF: bool> {
     pub(crate) buf_pos: usize,
@@ -606,14 +607,14 @@ fn msac_decode_symbol_adapt_avx2<const UPDATE_CDF: bool, const N: usize>(
     let mask_lanes = if N == 4 { N } else { N + 1 };
     let mask = ((_mm_movemask_epi8(cmp) as u32) & 0x5555) & ((1u32 << (mask_lanes * 2)) - 1);
 
-    let mut bounds = core::mem::MaybeUninit::<[u16; 9]>::uninit();
+    let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
     let bounds_ptr = bounds.as_mut_ptr().cast::<u16>();
     unsafe {
         bounds_ptr.write(s.rng as u16);
-        _mm_storeu_si128(bounds_ptr.add(1).cast(), boundaries_v);
+        _mm_store_si128(bounds_ptr.add(1).cast(), boundaries_v);
     }
 
-    let initialized = unsafe { bounds.assume_init() };
+    let initialized = (unsafe { bounds.assume_init() }).0;
 
     let (val, v, u) = if N == 4 && mask == 0 {
         // cdf[4] was not loaded; its min_prob sentinel would have produced v=0.
@@ -625,7 +626,6 @@ fn msac_decode_symbol_adapt_avx2<const UPDATE_CDF: bool, const N: usize>(
         let v = initialized[i + 1] as u32;
         (i, v, u)
     };
-
     debug_assert!(u <= s.rng);
     debug_assert!(u >= v);
     s.ctx_norm(s.dif - ((v as u64) << 48), u - v);

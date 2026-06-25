@@ -572,6 +572,9 @@ fn update_cdf_avx512<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: _
     cdf[..N].copy_from_slice(&tmp[..N]);
 }
 
+#[repr(C, align(16))]
+pub(crate) struct AlignedSse9(pub(crate) [u16; 9]);
+
 #[target_feature(enable = "avx512f,avx512dq")]
 fn msac_decode_symbol_adapt_avx512<const UPDATE_CDF: bool, const N: usize>(
     s: &mut MsacContextAvx512<'_, UPDATE_CDF>,
@@ -593,14 +596,14 @@ fn msac_decode_symbol_adapt_avx512<const UPDATE_CDF: bool, const N: usize>(
     let mask_lanes = if N == 4 { N } else { N + 1 };
     let mask = ((_mm_movemask_epi8(cmp) as u32) & 0x5555) & ((1u32 << (mask_lanes * 2)) - 1);
 
-    let mut bounds = core::mem::MaybeUninit::<[u16; 9]>::uninit();
+    let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
     let bounds_ptr = bounds.as_mut_ptr().cast::<u16>();
     unsafe {
         bounds_ptr.write(s.rng as u16);
-        _mm_storeu_si128(bounds_ptr.add(1).cast(), boundaries_v);
+        _mm_store_si128(bounds_ptr.add(1).cast(), boundaries_v);
     }
 
-    let initialized = unsafe { bounds.assume_init() };
+    let initialized = (unsafe { bounds.assume_init() }).0;
 
     let (val, v, u) = if N == 4 && mask == 0 {
         // cdf[4] was not loaded; its min_prob sentinel would have produced v=0.
