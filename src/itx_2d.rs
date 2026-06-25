@@ -29,7 +29,7 @@
 
 use crate::itx_1d::{
     ADST4_KERNEL_ROWS, ADST8_KERNEL_ROWS, ADST16_KERNEL_ROWS, DCT8_ODD_KERNEL,
-    FLIPADST4_KERNEL_ROWS, FLIPADST16_KERNEL_ROWS, TX1D_FNS, TX1D_FNS_X8, inv_dct4_1d, inv_dct8_1d,
+    FLIPADST4_KERNEL_ROWS, FLIPADST16_KERNEL_ROWS, TX1D_FNS, inv_dct4_1d, inv_dct8_1d,
     inv_dct16_1d, inv_dct32_1d,
 };
 use crate::pixel::Coeff;
@@ -39,6 +39,531 @@ use std::sync::OnceLock;
 
 pub(crate) const ITX_TMP_STRIDE: usize = 32;
 pub(crate) const ITX_TMP_PIXELS: usize = ITX_TMP_STRIDE * ITX_TMP_STRIDE;
+
+// ITX entry bodies are expanded into the architecture modules so the large
+// row/column control flow stays inside the same feature-local function as the
+// AVX2/SSE4.1/NEON intrinsics. The helpers below are deliberately macro bodies,
+// not wrapper functions: this avoids the old `arch entry -> shared generic core`
+// call boundary that was repeatedly preventing reliable feature-local inlining.
+#[macro_export]
+macro_rules! itx_idct_dequant_simd4_body {
+    ($backend:ty, $n:expr, $s:expr, $coeff_ty:ty, $coeff:expr, $tmp:expr, $eob:expr, $tx:expr, $is_rect2:expr, $shift0:expr, $row_clip_min:expr, $row_clip_max:expr $(,)?) => {{
+        if $is_rect2 {
+            $crate::itx_2d::idct_dequant_rows_rect_dct_simd4::<$backend, $n, $s, $s, $coeff_ty>(
+                $coeff,
+                $tmp,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+            );
+        } else {
+            $crate::itx_2d::idct_dequant_rows_dct_simd4::<$backend, $n, $s, $coeff_ty>(
+                $coeff,
+                $tmp,
+                $eob,
+                $tx,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+            );
+        }
+
+        let mut x = 0usize;
+        if <$coeff_ty as $crate::itx_2d::ItxCoeff>::USE_WIDE_16BIT && ($s == 16 || $s == 32) {
+            while x + 8 <= $s {
+                $crate::itx_2d::dct_1d_wide_x8::<<$backend as $crate::itx_2d::DctSimd4>::Wide, $s>(
+                    $tmp, x,
+                );
+                x += 8;
+            }
+        }
+        while x + 4 <= $s {
+            if !(<$coeff_ty as $crate::itx_2d::ItxCoeff>::USE_WIDE_16BIT
+                && $crate::itx_2d::itx_1d_wide_x4::<$backend, $s, { $crate::itx_2d::TX_KIND_DCT }>(
+                    $tmp, x,
+                ))
+            {
+                $crate::itx_2d::dct_1d_x4::<$backend, $s>($tmp, x);
+            }
+            x += 4;
+        }
+        while x < $s {
+            $crate::itx_2d::dct_1d::<$s>(&mut $tmp[x..], $crate::itx_2d::ITX_TMP_STRIDE);
+            x += 1;
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! itx_kind_dequant_simd4_mono_body {
+    ($backend:ty, $n:expr, $s:expr, $coeff_ty:ty, $first_kind:expr, $second_kind:expr, $coeff:expr, $tmp:expr, $eob:expr, $tx:expr, $is_rect2:expr, $shift0:expr, $row_clip_min:expr, $row_clip_max:expr $(,)?) => {{
+        if $is_rect2 {
+            $crate::itx_2d::itx_dequant_scalar_core_mono::<
+                $n,
+                $s,
+                $coeff_ty,
+                $first_kind,
+                $second_kind,
+            >(
+                $coeff,
+                $tmp,
+                $eob,
+                $tx,
+                $is_rect2,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+            );
+        } else {
+            $crate::itx_2d::itx_dequant_rows_simd4::<$backend, $n, $s, $coeff_ty, $first_kind>(
+                $coeff,
+                $tmp,
+                $eob,
+                $tx,
+                $shift0,
+                $row_clip_min,
+                $row_clip_max,
+            );
+
+            let mut x = 0usize;
+            if <$coeff_ty as $crate::itx_2d::ItxCoeff>::USE_WIDE_16BIT && ($s == 8 || $s == 16) {
+                while x + 8 <= $s {
+                    if !$crate::itx_2d::itx_1d_wide_x8::<$backend, $s, $second_kind>($tmp, x) {
+                        break;
+                    }
+                    x += 8;
+                }
+            }
+            while x + 4 <= $s {
+                if !(<$coeff_ty as $crate::itx_2d::ItxCoeff>::USE_WIDE_16BIT
+                    && $crate::itx_2d::itx_1d_wide_x4::<$backend, $s, $second_kind>($tmp, x))
+                {
+                    $crate::itx_2d::itx_1d_x4::<$backend, $s, $second_kind>($tmp, x);
+                }
+                x += 4;
+            }
+            while x < $s {
+                $crate::itx_2d::tx_1d_scalar_mono::<$s, $second_kind>(
+                    &mut $tmp[x..],
+                    $crate::itx_2d::ITX_TMP_STRIDE,
+                );
+                x += 1;
+            }
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! itx_kind_dequant_simd4_body {
+    ($backend:ty, $n:expr, $s:expr, $coeff_ty:ty, $coeff:expr, $tmp:expr, $eob:expr, $tx:expr, $is_rect2:expr, $shift0:expr, $row_clip_min:expr, $row_clip_max:expr, $first_kind:expr, $second_kind:expr $(,)?) => {{
+        match ($first_kind, $second_kind) {
+            ($crate::itx_2d::TX_KIND_DCT, $crate::itx_2d::TX_KIND_DCT) => {
+                $crate::itx_kind_dequant_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $s,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_DCT, $crate::itx_2d::TX_KIND_ADST) => {
+                $crate::itx_kind_dequant_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $s,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_DCT, $crate::itx_2d::TX_KIND_FLIPADST) => {
+                $crate::itx_kind_dequant_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $s,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_ADST, $crate::itx_2d::TX_KIND_DCT) => {
+                $crate::itx_kind_dequant_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $s,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_ADST, $crate::itx_2d::TX_KIND_ADST) => {
+                $crate::itx_kind_dequant_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $s,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_ADST, $crate::itx_2d::TX_KIND_FLIPADST) => {
+                $crate::itx_kind_dequant_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $s,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_FLIPADST, $crate::itx_2d::TX_KIND_DCT) => {
+                $crate::itx_kind_dequant_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $s,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_FLIPADST, $crate::itx_2d::TX_KIND_ADST) => {
+                $crate::itx_kind_dequant_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $s,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_FLIPADST, $crate::itx_2d::TX_KIND_FLIPADST) => {
+                $crate::itx_kind_dequant_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $s,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            _ => unreachable!(),
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! itx_idct_dequant_rect_simd4_body {
+    ($backend:ty, $n:expr, $w:expr, $h:expr, $coeff_ty:ty, $coeff:expr, $tmp:expr, $eob:expr, $tx:expr, $is_rect2:expr, $shift0:expr, $row_clip_min:expr, $row_clip_max:expr $(,)?) => {{
+        $crate::itx_2d::idct_dequant_rows_rect_dct_simd4::<$backend, $n, $w, $h, $coeff_ty>(
+            $coeff,
+            $tmp,
+            $eob,
+            $tx,
+            $is_rect2,
+            $shift0,
+            $row_clip_min,
+            $row_clip_max,
+        );
+        $crate::itx_2d::rect_col_pass::<$backend, $w, $h, $coeff_ty>($tmp);
+    }};
+}
+
+#[macro_export]
+macro_rules! itx_kind_dequant_rect_simd4_mono_body {
+    ($backend:ty, $n:expr, $w:expr, $h:expr, $coeff_ty:ty, $first_kind:expr, $second_kind:expr, $coeff:expr, $tmp:expr, $eob:expr, $tx:expr, $is_rect2:expr, $shift0:expr, $row_clip_min:expr, $row_clip_max:expr $(,)?) => {{
+        $crate::itx_2d::itx_dequant_rows_rect_simd4::<$backend, $n, $w, $h, $coeff_ty, $first_kind>(
+            $coeff,
+            $tmp,
+            $eob,
+            $tx,
+            $is_rect2,
+            $shift0,
+            $row_clip_min,
+            $row_clip_max,
+        );
+
+        let mut x = 0usize;
+        if <$coeff_ty as $crate::itx_2d::ItxCoeff>::USE_WIDE_16BIT && ($h == 8 || $h == 16) {
+            while x + 8 <= $w {
+                if !$crate::itx_2d::itx_1d_wide_x8::<$backend, $h, $second_kind>($tmp, x) {
+                    break;
+                }
+                x += 8;
+            }
+        }
+        while x + 4 <= $w {
+            if !(<$coeff_ty as $crate::itx_2d::ItxCoeff>::USE_WIDE_16BIT
+                && $crate::itx_2d::itx_1d_wide_x4::<$backend, $h, $second_kind>($tmp, x))
+            {
+                $crate::itx_2d::itx_1d_x4::<$backend, $h, $second_kind>($tmp, x);
+            }
+            x += 4;
+        }
+        while x < $w {
+            $crate::itx_2d::tx_1d_scalar_mono::<$h, $second_kind>(
+                &mut $tmp[x..],
+                $crate::itx_2d::ITX_TMP_STRIDE,
+            );
+            x += 1;
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! itx_kind_dequant_rect_simd4_body {
+    ($backend:ty, $n:expr, $w:expr, $h:expr, $coeff_ty:ty, $coeff:expr, $tmp:expr, $eob:expr, $tx:expr, $is_rect2:expr, $shift0:expr, $row_clip_min:expr, $row_clip_max:expr, $first_kind:expr, $second_kind:expr $(,)?) => {{
+        match ($first_kind, $second_kind) {
+            ($crate::itx_2d::TX_KIND_DCT, $crate::itx_2d::TX_KIND_DCT) => {
+                $crate::itx_kind_dequant_rect_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $w,
+                    $h,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_DCT, $crate::itx_2d::TX_KIND_ADST) => {
+                $crate::itx_kind_dequant_rect_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $w,
+                    $h,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_DCT, $crate::itx_2d::TX_KIND_FLIPADST) => {
+                $crate::itx_kind_dequant_rect_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $w,
+                    $h,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_ADST, $crate::itx_2d::TX_KIND_DCT) => {
+                $crate::itx_kind_dequant_rect_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $w,
+                    $h,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_ADST, $crate::itx_2d::TX_KIND_ADST) => {
+                $crate::itx_kind_dequant_rect_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $w,
+                    $h,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_ADST, $crate::itx_2d::TX_KIND_FLIPADST) => {
+                $crate::itx_kind_dequant_rect_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $w,
+                    $h,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_FLIPADST, $crate::itx_2d::TX_KIND_DCT) => {
+                $crate::itx_kind_dequant_rect_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $w,
+                    $h,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    { $crate::itx_2d::TX_KIND_DCT },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_FLIPADST, $crate::itx_2d::TX_KIND_ADST) => {
+                $crate::itx_kind_dequant_rect_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $w,
+                    $h,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    { $crate::itx_2d::TX_KIND_ADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            ($crate::itx_2d::TX_KIND_FLIPADST, $crate::itx_2d::TX_KIND_FLIPADST) => {
+                $crate::itx_kind_dequant_rect_simd4_mono_body!(
+                    $backend,
+                    $n,
+                    $w,
+                    $h,
+                    $coeff_ty,
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    { $crate::itx_2d::TX_KIND_FLIPADST },
+                    $coeff,
+                    $tmp,
+                    $eob,
+                    $tx,
+                    $is_rect2,
+                    $shift0,
+                    $row_clip_min,
+                    $row_clip_max
+                )
+            }
+            _ => unreachable!(),
+        }
+    }};
+}
 
 pub(crate) type IdctDequantFn<const N: usize> = unsafe fn(
     coeff: &mut [i32],
@@ -453,14 +978,14 @@ impl Adst2dBackend for ScalarDct2d {
 }
 
 #[inline(always)]
-fn row_mut(tmp: &mut [i32; ITX_TMP_PIXELS], y: usize) -> &mut [i32; ITX_TMP_STRIDE] {
+pub(crate) fn row_mut(tmp: &mut [i32; ITX_TMP_PIXELS], y: usize) -> &mut [i32; ITX_TMP_STRIDE] {
     (&mut tmp[y * ITX_TMP_STRIDE..(y + 1) * ITX_TMP_STRIDE])
         .try_into()
         .unwrap()
 }
 
 #[inline(always)]
-fn dct_1d<const S: usize>(c: &mut [i32], stride: usize) {
+pub(crate) fn dct_1d<const S: usize>(c: &mut [i32], stride: usize) {
     match S {
         4 => inv_dct4_1d(c, stride),
         8 => inv_dct8_1d(c, stride),
@@ -565,13 +1090,13 @@ fn tx_size_idx<const S: usize>() -> usize {
 }
 
 #[inline(always)]
-fn tx_1d_scalar_mono<const S: usize, const KIND: usize>(c: &mut [i32], stride: usize) {
+pub(crate) fn tx_1d_scalar_mono<const S: usize, const KIND: usize>(c: &mut [i32], stride: usize) {
     debug_assert!(is_dct_adst_kind(KIND));
     let f = TX1D_FNS[tx_size_idx::<S>()][KIND].expect("unsupported 1D transform");
     f(c, stride);
 }
 
-fn itx_dequant_scalar_core_mono<
+pub(crate) fn itx_dequant_scalar_core_mono<
     const N: usize,
     const S: usize,
     C: Coeff,
@@ -1092,7 +1617,12 @@ fn process_row_group_wide_x8<B: DctSimd4, const S: usize, C: ItxCoeff>(
 }
 
 #[inline(always)]
-fn idct_dequant_rows_dct_simd4<B: DctSimd4, const N: usize, const S: usize, C: ItxCoeff>(
+pub(crate) fn idct_dequant_rows_dct_simd4<
+    B: DctSimd4,
+    const N: usize,
+    const S: usize,
+    C: ItxCoeff,
+>(
     coeff: &mut [C],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -1542,7 +2072,7 @@ fn process_row_group_itx_wide_x8<
 }
 
 #[inline(always)]
-fn itx_dequant_rows_simd4<
+pub(crate) fn itx_dequant_rows_simd4<
     B: DctSimd4,
     const N: usize,
     const S: usize,
@@ -1615,7 +2145,7 @@ fn itx_dequant_rows_simd4<
 }
 
 #[inline(always)]
-fn itx_1d_wide_x4<B: DctSimd4, const S: usize, const KIND: usize>(
+pub(crate) fn itx_1d_wide_x4<B: DctSimd4, const S: usize, const KIND: usize>(
     tmp: &mut [i32; ITX_TMP_PIXELS],
     x: usize,
 ) -> bool {
@@ -1658,7 +2188,7 @@ fn itx_1d_wide_x4<B: DctSimd4, const S: usize, const KIND: usize>(
 }
 
 #[inline(always)]
-fn itx_1d_x4<B: DctSimd4, const S: usize, const KIND: usize>(
+pub(crate) fn itx_1d_x4<B: DctSimd4, const S: usize, const KIND: usize>(
     tmp: &mut [i32; ITX_TMP_PIXELS],
     x: usize,
 ) {
@@ -1683,7 +2213,7 @@ fn itx_1d_x4<B: DctSimd4, const S: usize, const KIND: usize>(
 }
 
 #[inline(always)]
-fn itx_1d_wide_x8<B: DctSimd4, const S: usize, const KIND: usize>(
+pub(crate) fn itx_1d_wide_x8<B: DctSimd4, const S: usize, const KIND: usize>(
     tmp: &mut [i32; ITX_TMP_PIXELS],
     x: usize,
 ) -> bool {
@@ -1814,78 +2344,8 @@ pub(crate) fn itx_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usize
     });
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "sse4.1")]
-pub(crate) fn itx_dequant_simd4_core_sse41<
-    B: DctSimd4,
-    const N: usize,
-    const S: usize,
-    C: ItxCoeff,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    debug_assert!(is_dct_adst_kind(first_kind));
-    debug_assert!(is_dct_adst_kind(second_kind));
-    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
-        itx_dequant_simd4_core_mono::<B, N, S, C, FK, SK>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    });
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-pub(crate) fn itx_dequant_simd4_core_avx2<
-    B: DctSimd4,
-    const N: usize,
-    const S: usize,
-    C: ItxCoeff,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    debug_assert!(is_dct_adst_kind(first_kind));
-    debug_assert!(is_dct_adst_kind(second_kind));
-    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
-        itx_dequant_simd4_core_mono::<B, N, S, C, FK, SK>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    });
-}
-
 #[inline(always)]
-fn dct_1d_x4<B: DctSimd4, const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: usize) {
+pub(crate) fn dct_1d_x4<B: DctSimd4, const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: usize) {
     match S {
         4 => {
             let mut v = load_1d_x4::<B, 4>(tmp, x, ITX_TMP_STRIDE);
@@ -1919,7 +2379,7 @@ fn dct_1d_x4<B: DctSimd4, const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: us
 /// per row from the i32 scratch (narrowing to s16), runs the widening-MAC DCT,
 /// stores the s32 results back. Bit-exact to `dct_1d_x4`.
 #[inline(always)]
-fn dct_1d_wide_x8<W: crate::itx_1d::DctWide, const S: usize>(
+pub(crate) fn dct_1d_wide_x8<W: crate::itx_1d::DctWide, const S: usize>(
     tmp: &mut [i32; ITX_TMP_PIXELS],
     x: usize,
 ) {
@@ -1952,124 +2412,6 @@ pub(crate) fn idct_dequant_simd4_core<B: DctSimd4, const N: usize, const S: usiz
         // cases that reuse the square 32x32 core. Keep them on the same
         // SIMD row pipeline as true rectangular transforms instead of falling
         // back to scalar rows.
-        idct_dequant_rows_rect_dct_simd4::<B, N, S, S, C>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    } else {
-        idct_dequant_rows_dct_simd4::<B, N, S, C>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    let mut x = 0usize;
-    if C::USE_WIDE_16BIT && (S == 16 || S == 32) {
-        while x + 8 <= S {
-            dct_1d_wide_x8::<B::Wide, S>(tmp, x);
-            x += 8;
-        }
-    }
-    while x + 4 <= S {
-        if !(C::USE_WIDE_16BIT && itx_1d_wide_x4::<B, S, TX_KIND_DCT>(tmp, x)) {
-            dct_1d_x4::<B, S>(tmp, x);
-        }
-        x += 4;
-    }
-    while x < S {
-        dct_1d::<S>(&mut tmp[x..], ITX_TMP_STRIDE);
-        x += 1;
-    }
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "sse4.1")]
-pub(crate) fn idct_dequant_simd4_core_sse41<
-    B: DctSimd4,
-    const N: usize,
-    const S: usize,
-    C: ItxCoeff,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    if is_rect2 {
-        idct_dequant_rows_rect_dct_simd4::<B, N, S, S, C>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    } else {
-        idct_dequant_rows_dct_simd4::<B, N, S, C>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    let mut x = 0usize;
-    if C::USE_WIDE_16BIT && (S == 16 || S == 32) {
-        while x + 8 <= S {
-            dct_1d_wide_x8::<B::Wide, S>(tmp, x);
-            x += 8;
-        }
-    }
-    while x + 4 <= S {
-        if !(C::USE_WIDE_16BIT && itx_1d_wide_x4::<B, S, TX_KIND_DCT>(tmp, x)) {
-            dct_1d_x4::<B, S>(tmp, x);
-        }
-        x += 4;
-    }
-    while x < S {
-        dct_1d::<S>(&mut tmp[x..], ITX_TMP_STRIDE);
-        x += 1;
-    }
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-pub(crate) fn idct_dequant_simd4_core_avx2<
-    B: DctSimd4,
-    const N: usize,
-    const S: usize,
-    C: ItxCoeff,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    if is_rect2 {
         idct_dequant_rows_rect_dct_simd4::<B, N, S, S, C>(
             coeff,
             tmp,
@@ -2392,7 +2734,7 @@ fn process_row_group_rect_x4<B: DctSimd4, const W: usize, const H: usize, C: Itx
 /// SIMD row pass for the non-rect2 case (mirrors `idct_dequant_rows_dct_simd4`
 /// with separate `W`/`H`).
 #[inline(always)]
-fn idct_dequant_rows_rect_dct_simd4<
+pub(crate) fn idct_dequant_rows_rect_dct_simd4<
     B: DctSimd4,
     const N: usize,
     const W: usize,
@@ -2529,7 +2871,7 @@ fn idct_dequant_rows_rect_dct_scalar<const N: usize, const W: usize, const H: us
 /// Column pass: an `H`-point DCT down each of the `W` columns, 4 columns at a
 /// time, with a scalar tail.
 #[inline(always)]
-fn rect_col_pass<B: DctSimd4, const W: usize, const H: usize, C: ItxCoeff>(
+pub(crate) fn rect_col_pass<B: DctSimd4, const W: usize, const H: usize, C: ItxCoeff>(
     tmp: &mut [i32; ITX_TMP_PIXELS],
 ) {
     let mut x = 0usize;
@@ -2557,68 +2899,6 @@ fn rect_col_pass<B: DctSimd4, const W: usize, const H: usize, C: ItxCoeff>(
 /// SIMD-structured rectangular DCT_DCT core (used by the NEON/SSE backends).
 #[inline(always)]
 pub(crate) fn idct_dequant_rect_simd4_core<
-    B: DctSimd4,
-    const N: usize,
-    const W: usize,
-    const H: usize,
-    C: ItxCoeff,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    idct_dequant_rows_rect_dct_simd4::<B, N, W, H, C>(
-        coeff,
-        tmp,
-        eob,
-        tx,
-        is_rect2,
-        shift0,
-        row_clip_min,
-        row_clip_max,
-    );
-    rect_col_pass::<B, W, H, C>(tmp);
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "sse4.1")]
-pub(crate) fn idct_dequant_rect_simd4_core_sse41<
-    B: DctSimd4,
-    const N: usize,
-    const W: usize,
-    const H: usize,
-    C: ItxCoeff,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    idct_dequant_rows_rect_dct_simd4::<B, N, W, H, C>(
-        coeff,
-        tmp,
-        eob,
-        tx,
-        is_rect2,
-        shift0,
-        row_clip_min,
-        row_clip_max,
-    );
-    rect_col_pass::<B, W, H, C>(tmp);
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-pub(crate) fn idct_dequant_rect_simd4_core_avx2<
     B: DctSimd4,
     const N: usize,
     const W: usize,
@@ -2746,7 +3026,7 @@ fn process_row_group_itx_rect_x4<
 
 /// Kind-aware SIMD row pass (non-rect2), generalized to `W`/`H`.
 #[inline(always)]
-fn itx_dequant_rows_rect_simd4<
+pub(crate) fn itx_dequant_rows_rect_simd4<
     B: DctSimd4,
     const N: usize,
     const W: usize,
@@ -2838,7 +3118,7 @@ fn itx_dequant_rows_rect_simd4<
 
 /// Pure-scalar kind-aware rectangular core (rect2 sizes + universal fallback).
 /// Mirrors the generic path: scalar rows with rect2 scaling, scalar columns.
-fn itx_dequant_rect_scalar_core_mono<
+pub(crate) fn itx_dequant_rect_scalar_core_mono<
     const N: usize,
     const W: usize,
     const H: usize,
@@ -2934,7 +3214,7 @@ pub(crate) fn itx_dequant_rect_scalar_core<
 /// SIMD-structured kind-aware rectangular core (used by NEON/SSE). Rect2 goes
 /// fully scalar, exactly as the square `itx_dequant_simd4_core` does.
 #[inline(always)]
-fn itx_dequant_rect_simd4_core_mono<
+pub(crate) fn itx_dequant_rect_simd4_core_mono<
     B: DctSimd4,
     const N: usize,
     const W: usize,
@@ -2994,78 +3274,6 @@ fn itx_dequant_rect_simd4_core_mono<
 /// SIMD-structured kind-aware rectangular core (used by NEON/SSE).
 #[inline(always)]
 pub(crate) fn itx_dequant_rect_simd4_core<
-    B: DctSimd4,
-    const N: usize,
-    const W: usize,
-    const H: usize,
-    C: ItxCoeff,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    debug_assert!(is_dct_adst_kind(first_kind));
-    debug_assert!(is_dct_adst_kind(second_kind));
-    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
-        itx_dequant_rect_simd4_core_mono::<B, N, W, H, C, FK, SK>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    });
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "sse4.1")]
-pub(crate) fn itx_dequant_rect_simd4_core_sse41<
-    B: DctSimd4,
-    const N: usize,
-    const W: usize,
-    const H: usize,
-    C: ItxCoeff,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-    first_kind: usize,
-    second_kind: usize,
-) {
-    debug_assert!(is_dct_adst_kind(first_kind));
-    debug_assert!(is_dct_adst_kind(second_kind));
-    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
-        itx_dequant_rect_simd4_core_mono::<B, N, W, H, C, FK, SK>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    });
-}
-
-#[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx2")]
-pub(crate) fn itx_dequant_rect_simd4_core_avx2<
     B: DctSimd4,
     const N: usize,
     const W: usize,
