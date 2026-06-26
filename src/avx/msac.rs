@@ -178,41 +178,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
     }
 
     #[inline(always)]
-    pub(crate) fn decode_unary_bypass_scalar(&mut self, max_bits: u32) -> u32 {
-        debug_assert!(max_bits == 5 || max_bits == 6 || max_bits == 21);
-        if (self.cnt as u32) < max_bits {
-            self.ctx_refill();
-        }
-
-        let r = self.rng as u64;
-        let mut dif = self.dif;
-        debug_assert!(r & 1 == 0);
-        debug_assert!((dif >> 48) < r);
-        let mut vw = r << 47;
-        let mut ret: u32 = 0;
-        let mut bit: u32 = 0;
-        while bit < max_bits {
-            if dif >= vw {
-                dif -= vw;
-                vw >>= 1;
-                ret += 1;
-                bit += 1;
-            } else {
-                bit += 1;
-                break;
-            }
-        }
-        self.dif = ((dif + 1) << bit) - 1;
-        self.cnt -= bit as i32;
-        ret
-    }
-
-    #[inline(always)]
-    pub(crate) fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
-        self.decode_unary_bypass_scalar(max_bits)
-    }
-
-    #[inline(always)]
     fn decode_bool_raw(&mut self, f: u32) -> u32 {
         let r = self.rng;
         let dif = self.dif;

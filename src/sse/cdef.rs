@@ -42,7 +42,9 @@ fn load_i16x4_i32(a: &[i16; 4]) -> __m128i {
 fn store_i32x4_u8(a: &mut [u8; 4], v: __m128i) {
     let p16 = _mm_packs_epi32(v, v);
     let p8 = _mm_packus_epi16(p16, p16);
-    *a = (_mm_cvtsi128_si32(p8) as u32).to_le_bytes();
+    unsafe {
+        _mm_store_ss(a.as_mut_ptr().cast(), _mm_castsi128_ps(p8));
+    }
 }
 
 /// `constrain(diff, threshold, shift)` over i32 lanes:

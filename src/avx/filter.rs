@@ -59,27 +59,32 @@ fn load_i8x8_i32(a: &[i8; 8]) -> __m256i {
     unsafe { _mm256_cvtepi8_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn load_i16x8_i32(a: &[i16; 8]) -> __m256i {
     unsafe { _mm256_cvtepi16_epi32(_mm_loadu_si128(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn load_u8x16_i16(a: &[u8; 16]) -> __m256i {
     unsafe { _mm256_cvtepu8_epi16(_mm_loadu_si128(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn load_u8x32(a: &[u8; 32]) -> __m256i {
     unsafe { _mm256_loadu_si256(a.as_ptr() as *const __m256i) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn store_u8x32(a: &mut [u8; 32], v: __m256i) {
     unsafe { _mm256_storeu_si256(a.as_mut_ptr() as *mut __m256i, v) };
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn store_i32x8_u8(a: &mut [u8; 8], v: __m256i) {
     unsafe {
         let z = _mm256_setzero_si256();
@@ -92,7 +97,8 @@ fn store_i32x8_u8(a: &mut [u8; 8], v: __m256i) {
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn store_i32x16_u8(a: &mut [u8; 16], lo: __m256i, hi: __m256i) {
     unsafe {
         let p16 = _mm256_permute4x64_epi64::<0xd8>(_mm256_packs_epi32(lo, hi));
@@ -104,7 +110,8 @@ fn store_i32x16_u8(a: &mut [u8; 16], lo: __m256i, hi: __m256i) {
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn store_i16x16_u8(a: &mut [u8; 16], v: __m256i) {
     unsafe {
         let p8 = _mm256_packus_epi16(v, v);
@@ -115,9 +122,10 @@ fn store_i16x16_u8(a: &mut [u8; 16], v: __m256i) {
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn sra_i32(v: __m256i, shift: i32) -> __m256i {
-    unsafe { _mm256_sra_epi32(v, _mm_cvtsi32_si128(shift)) }
+    _mm256_sra_epi32(v, _mm_cvtsi32_si128(shift))
 }
 
 #[target_feature(enable = "avx2")]

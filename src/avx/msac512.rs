@@ -177,41 +177,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx512<'a, UPDATE_CDF> {
     }
 
     #[inline(always)]
-    pub(crate) fn decode_unary_bypass_scalar(&mut self, max_bits: u32) -> u32 {
-        debug_assert!(max_bits == 5 || max_bits == 6 || max_bits == 21);
-        if (self.cnt as u32) < max_bits {
-            self.ctx_refill();
-        }
-
-        let r = self.rng as u64;
-        let mut dif = self.dif;
-        debug_assert!(r & 1 == 0);
-        debug_assert!((dif >> 48) < r);
-        let mut vw = r << 47;
-        let mut ret: u32 = 0;
-        let mut bit: u32 = 0;
-        while bit < max_bits {
-            if dif >= vw {
-                dif -= vw;
-                vw >>= 1;
-                ret += 1;
-                bit += 1;
-            } else {
-                bit += 1;
-                break;
-            }
-        }
-        self.dif = ((dif + 1) << bit) - 1;
-        self.cnt -= bit as i32;
-        ret
-    }
-
-    #[inline(always)]
-    pub(crate) fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
-        self.decode_unary_bypass_scalar(max_bits)
-    }
-
-    #[inline(always)]
     fn decode_bool_raw(&mut self, f: u32) -> u32 {
         let r = self.rng;
         let dif = self.dif;
@@ -619,52 +584,6 @@ pub(crate) struct AlignedSse9(pub(crate) [u16; 9]);
 
 #[repr(C, align(16))]
 pub(crate) struct AlignedSse8(pub(crate) [u16; 8]);
-
-#[inline]
-#[target_feature(enable = "avx512f,avx512dq")]
-fn msac_decode_symbol_adapt3_no_update_avx512<const UPDATE_CDF: bool>(
-    s: &mut MsacContextAvx512<'_, UPDATE_CDF>,
-    cdf: &mut [u16],
-) -> u32 {
-    debug_assert!(!UPDATE_CDF);
-    debug_assert!(cdf.len() >= 4);
-
-    let cdf_v = unsafe { _mm_loadl_epi64(cdf.as_ptr().cast::<__m128i>()) };
-    let min_prob = unsafe { _mm_loadl_epi64(MSAC_MIN_PROB[2].as_ptr().cast::<__m128i>()) };
-    let c = (s.dif >> 48) as u16;
-    let r = s.rng >> 8;
-
-    let p = _mm_subs_epu16(_mm_or_si128(cdf_v, _mm_set1_epi16(127)), min_prob);
-    let scale = _mm_set1_epi16(((r << 6) & 0xffff) as i16);
-    let boundaries_v = _mm_slli_epi16(_mm_mulhi_epu16(p, scale), 3);
-    let cmp = _mm_cmpeq_epi16(
-        _mm_subs_epu16(boundaries_v, _mm_set1_epi16(c as i16)),
-        _mm_setzero_si128(),
-    );
-
-    // For N=3, lane 3 is the min-prob sentinel and its boundary is always 0,
-    // so the first four lanes always contain a match.  Unlike the generic path
-    // we do not need to mask pmovmskb down to one bit per word before tzcnt;
-    // the first set bit of each 0xffff word is already at byte bit 2*i.
-    let raw_mask = _mm_movemask_epi8(cmp) as u32;
-    debug_assert_ne!(raw_mask & 0xff, 0);
-    let val = (raw_mask.trailing_zeros() >> 1) as u32;
-
-    // boundaries_v low qword is [v0, v1, v2, 0].  Build a second packed qword
-    // [rng, v0, v1, v2], then select u and v with the same variable shift.
-    // This avoids the generic stack store of [rng, v0..v7].
-    let boundaries = _mm_cvtsi128_si64(boundaries_v) as u64;
-    let shift = val << 4;
-    let u_pack = (boundaries << 16) | (s.rng as u64);
-    let v = ((boundaries >> shift) & 0xffff) as u32;
-    let u = ((u_pack >> shift) & 0xffff) as u32;
-
-    debug_assert!(u <= s.rng);
-    debug_assert!(u >= v);
-    s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
-
-    val
-}
 
 #[target_feature(enable = "avx512f,avx512dq")]
 fn msac_decode_symbol_adapt_avx512<const UPDATE_CDF: bool, const N: usize>(

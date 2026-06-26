@@ -47,46 +47,47 @@ fn load_u16x4_i32(a: &[u16; 4]) -> __m128i {
     unsafe { _mm_cvtepu16_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load_u8x4_i32(a: &[u8; 4]) -> __m128i {
-    unsafe { _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(*a))) }
+    _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(*a)))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load_i16x8_i32x2(a: &[i16; 8]) -> (__m128i, __m128i) {
     let v = unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) };
-    unsafe {
-        (
-            _mm_cvtepi16_epi32(v),
-            _mm_cvtepi16_epi32(_mm_srli_si128(v, 8)),
-        )
-    }
+    (
+        _mm_cvtepi16_epi32(v),
+        _mm_cvtepi16_epi32(_mm_srli_si128(v, 8)),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load_u16x8_i32x2(a: &[u16; 8]) -> (__m128i, __m128i) {
     let v = unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) };
-    unsafe {
-        (
-            _mm_cvtepu16_epi32(v),
-            _mm_cvtepu16_epi32(_mm_srli_si128(v, 8)),
-        )
-    }
+    (
+        _mm_cvtepu16_epi32(v),
+        _mm_cvtepu16_epi32(_mm_srli_si128(v, 8)),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn store_i32x4_u16_clip(a: &mut [u16; 4], v: __m128i, max_v: __m128i) {
-    let v = unsafe { _mm_min_epi32(_mm_max_epi32(v, _mm_setzero_si128()), max_v) };
-    let p = unsafe { _mm_packus_epi32(v, v) };
+    let v = _mm_min_epi32(_mm_max_epi32(v, _mm_setzero_si128()), max_v);
+    let p = _mm_packus_epi32(v, v);
     unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, p) };
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn store_i32x8_u16_clip(a: &mut [u16; 8], lo: __m128i, hi: __m128i, max_v: __m128i) {
-    let zero = unsafe { _mm_setzero_si128() };
-    let lo = unsafe { _mm_min_epi32(_mm_max_epi32(lo, zero), max_v) };
-    let hi = unsafe { _mm_min_epi32(_mm_max_epi32(hi, zero), max_v) };
-    let p = unsafe { _mm_packus_epi32(lo, hi) };
+    let zero = _mm_setzero_si128();
+    let lo = _mm_min_epi32(_mm_max_epi32(lo, zero), max_v);
+    let hi = _mm_min_epi32(_mm_max_epi32(hi, zero), max_v);
+    let p = _mm_packus_epi32(lo, hi);
     unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, p) };
 }
 

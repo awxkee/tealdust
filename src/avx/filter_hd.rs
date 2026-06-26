@@ -49,17 +49,18 @@ fn load_u8x8_i32(a: &[u8; 8]) -> __m256i {
     unsafe { _mm256_cvtepu8_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn store_i32x8_u16_clip(a: &mut [u16; 8], v: __m256i, max_v: __m256i) {
-    let v = unsafe { _mm256_min_epi32(_mm256_max_epi32(v, _mm256_setzero_si256()), max_v) };
-    let lo = unsafe { _mm256_castsi256_si128(v) };
-    let hi = unsafe { _mm256_extracti128_si256::<1>(v) };
-    let p = unsafe { _mm_packus_epi32(lo, hi) };
+    let v = _mm256_min_epi32(_mm256_max_epi32(v, _mm256_setzero_si256()), max_v);
+    let lo = _mm256_castsi256_si128(v);
+    let hi = _mm256_extracti128_si256::<1>(v);
+    let p = _mm_packus_epi32(lo, hi);
     unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, p) };
 }
 
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn residual_add_row_hbd_avx2(
+pub(crate) fn residual_add_row_hbd_avx2(
     dst: &mut [u16],
     c: &[i32],
     n: usize,
@@ -83,7 +84,7 @@ pub(crate) unsafe fn residual_add_row_hbd_avx2(
 }
 
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn dc_add_row_hbd_avx2(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
+pub(crate) fn dc_add_row_hbd_avx2(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
     if dc == 0 {
         return;
     }
@@ -99,7 +100,7 @@ pub(crate) unsafe fn dc_add_row_hbd_avx2(dst: &mut [u16], dc: i32, n: usize, bit
 }
 
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn avg_row_hbd_avx2(
+pub(crate) fn avg_row_hbd_avx2(
     dst: &mut [u16],
     t1: &[i16],
     t2: &[i16],
@@ -131,7 +132,7 @@ pub(crate) unsafe fn avg_row_hbd_avx2(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn w_avg_row_hbd_avx2(
+pub(crate) fn w_avg_row_hbd_avx2(
     dst: &mut [u16],
     t1: &[i16],
     t2: &[i16],
@@ -170,7 +171,7 @@ pub(crate) unsafe fn w_avg_row_hbd_avx2(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn mask_row_hbd_avx2(
+pub(crate) fn mask_row_hbd_avx2(
     dst: &mut [u16],
     t1: &[i16],
     t2: &[i16],
@@ -234,7 +235,7 @@ pub(crate) unsafe fn blend_row_hbd_avx2(dst: &mut [u16], tmp: &[u16], mask: &[u8
 }
 
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn morph_row_hbd_avx2(
+pub(crate) fn morph_row_hbd_avx2(
     dst: &mut [u16],
     alpha: i32,
     beta: i32,

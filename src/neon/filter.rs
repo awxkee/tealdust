@@ -34,39 +34,43 @@ fn load_i16x4_i32(a: &[i16; 4]) -> int32x4_t {
     unsafe { vmovl_s16(vld1_s16(a.as_ptr())) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_u8x4_i32(a: &[u8; 4]) -> int32x4_t {
     // Pull the 4 bytes through a scalar u32 (no NEON over-read of a [u8; 4]).
-    let dup = unsafe { vreinterpret_u8_u32(vdup_n_u32(u32::from_le_bytes(*a))) };
-    unsafe { vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(dup)))) }
+    let dup = vreinterpret_u8_u32(vdup_n_u32(u32::from_le_bytes(*a)));
+    vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(dup))))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_i8x4_i32(a: &[i8; 4]) -> int32x4_t {
     let bytes = [a[0] as u8, a[1] as u8, a[2] as u8, a[3] as u8];
-    let dup = unsafe { vreinterpret_s8_u32(vdup_n_u32(u32::from_le_bytes(bytes))) };
-    unsafe { vmovl_s16(vget_low_s16(vmovl_s8(dup))) }
+    let dup = vreinterpret_s8_u32(vdup_n_u32(u32::from_le_bytes(bytes)));
+    vmovl_s16(vget_low_s16(vmovl_s8(dup)))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_u8x8_i32x2(a: &[u8; 8]) -> (int32x4_t, int32x4_t) {
     let w = unsafe { vmovl_u8(vld1_u8(a.as_ptr())) };
-    unsafe {
-        (
-            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
-            vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
-        )
-    }
+    (
+        vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
+        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
+    )
 }
-#[inline(always)]
+
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_i8x8_i32x2(a: &[i8; 8]) -> (int32x4_t, int32x4_t) {
     let w = unsafe { vmovl_s8(vld1_s8(a.as_ptr())) };
-    unsafe { (vmovl_s16(vget_low_s16(w)), vmovl_s16(vget_high_s16(w))) }
+    (vmovl_s16(vget_low_s16(w)), vmovl_s16(vget_high_s16(w)))
 }
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_i16x8_i32x2(a: &[i16; 8]) -> (int32x4_t, int32x4_t) {
     let w = unsafe { vld1q_s16(a.as_ptr()) };
-    unsafe { (vmovl_s16(vget_low_s16(w)), vmovl_s16(vget_high_s16(w))) }
+    (vmovl_s16(vget_low_s16(w)), vmovl_s16(vget_high_s16(w)))
 }
 
 #[inline(always)]
@@ -79,19 +83,20 @@ fn store_i32x4(a: &mut [i32; 4], v: int32x4_t) {
     unsafe { vst1q_s32(a.as_mut_ptr(), v) };
 }
 
-/// Pack one i32x4 to u8 (unsigned-sat == `clamp(.,0,255)`) and write 4 bytes.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn store_i32x4_u8(a: &mut [u8; 4], v: int32x4_t) {
-    let u16x4 = unsafe { vqmovun_s32(v) };
-    let u8x8 = unsafe { vqmovn_u16(vcombine_u16(u16x4, u16x4)) };
-    let lane = unsafe { vget_lane_u32::<0>(vreinterpret_u32_u8(u8x8)) };
-    *a = lane.to_le_bytes();
+    let u16x4 = vqmovun_s32(v);
+    let u8x8 = vqmovn_u16(vcombine_u16(u16x4, u16x4));
+    unsafe {
+        vst1_lane_u32::<0>(a.as_mut_ptr().cast(), vreinterpret_u32_u8(u8x8));
+    }
 }
 
-/// Pack two i32x4 lanes (lo, hi) to 8 clamped u8 and store.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn store_i32x8_u8(a: &mut [u8; 8], lo: int32x4_t, hi: int32x4_t) {
-    let u16x8 = unsafe { vcombine_u16(vqmovun_s32(lo), vqmovun_s32(hi)) };
+    let u16x8 = vcombine_u16(vqmovun_s32(lo), vqmovun_s32(hi));
     unsafe { vst1_u8(a.as_mut_ptr(), vqmovn_u16(u16x8)) };
 }
 
@@ -120,17 +125,14 @@ fn load_u8x8_i16(a: &[u8; 8]) -> int16x8_t {
     unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(a.as_ptr()))) }
 }
 
-/// One 16-byte load split into two i16x8 lanes (low 8, high 8), replacing two
-/// adjacent 8-byte loads of a contiguous `[u8; 16]` chunk.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_u8x16_i16x2(a: &[u8; 16]) -> (int16x8_t, int16x8_t) {
     let v = unsafe { vld1q_u8(a.as_ptr()) };
-    unsafe {
-        (
-            vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v))),
-            vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(v))),
-        )
-    }
+    (
+        vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v))),
+        vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(v))),
+    )
 }
 
 #[inline(always)]

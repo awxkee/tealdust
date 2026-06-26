@@ -32,7 +32,8 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
     let arr: [u8; 4] = if stride_line == 1 {
         dst[base as usize..base as usize + 4].try_into().unwrap()
@@ -44,15 +45,15 @@ fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
             dst[(base + 3 * stride_line) as usize],
         ]
     };
-    unsafe { _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(arr))) }
+    _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(arr)))
 }
 
-/// Scatter a pre-clipped (`0..=255`) i32x4 back to the 4 line positions.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: __m128i) {
     if stride_line == 1 {
-        let p8 = unsafe { _mm_packus_epi16(_mm_packs_epi32(v, v), _mm_packs_epi32(v, v)) };
-        let bytes = (unsafe { _mm_cvtsi128_si32(p8) } as u32).to_le_bytes();
+        let p8 = _mm_packus_epi16(_mm_packs_epi32(v, v), _mm_packs_epi32(v, v));
+        let bytes = (_mm_cvtsi128_si32(p8) as u32).to_le_bytes();
         dst[base as usize..base as usize + 4].copy_from_slice(&bytes);
     } else {
         let mut arr = [0i32; 4];

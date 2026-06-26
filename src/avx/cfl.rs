@@ -76,19 +76,12 @@ fn combine_m128(lo: __m128i, hi: __m128i) -> __m256i {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn pack_i32x8_pair_to_i16x16(lo: __m256i, hi: __m256i) -> __m256i {
-    // AVX2 packs inside 128-bit lanes:
-    //   [0..3, 8..11 | 4..7, 12..15]
-    // Rotate qwords back to linear order:
-    //   [0..3, 4..7 | 8..11, 12..15]
     _mm256_permute4x64_epi64::<0xd8>(_mm256_packs_epi32(lo, hi))
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
 fn pack_i16x16_to_u8x16(v: __m256i, zero: __m256i) -> __m128i {
-    // packus is also lane-local. After packing with zeros the qwords are:
-    //   [0..7, zero | 8..15, zero].
-    // Move the two data qwords together and keep the low 128 bits.
     _mm256_castsi256_si128(_mm256_permute4x64_epi64::<0xd8>(_mm256_packus_epi16(
         v, zero,
     )))

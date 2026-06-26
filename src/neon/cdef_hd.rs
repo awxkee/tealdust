@@ -39,24 +39,20 @@ fn store_i32x4_u16(a: &mut [u16; 4], v: int32x4_t) {
     unsafe { vst1_u16(a.as_mut_ptr(), vqmovun_s32(v)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn constrain_v(diff: int32x4_t, threshold: int32x4_t, nsh: int32x4_t) -> int32x4_t {
-    unsafe {
-        let adiff = vabsq_s32(diff);
-        let t = vmaxq_s32(vdupq_n_s32(0), vsubq_s32(threshold, vshlq_s32(adiff, nsh)));
-        let m = vminq_s32(adiff, t);
-        let neg = vsubq_s32(vdupq_n_s32(0), m);
-        vbslq_s32(vcltq_s32(diff, vdupq_n_s32(0)), neg, m)
-    }
+    let adiff = vabsq_s32(diff);
+    let t = vmaxq_s32(vdupq_n_s32(0), vsubq_s32(threshold, vshlq_s32(adiff, nsh)));
+    let m = vminq_s32(adiff, t);
+    let neg = vsubq_s32(vdupq_n_s32(0), m);
+    vbslq_s32(vcltq_s32(diff, vdupq_n_s32(0)), neg, m)
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn mul_i32x4_i16_n(v: int32x4_t, k: i32) -> int32x4_t {
-    unsafe {
-        // CDEF constrain() is strength-bounded, so it fits i16. Widen-multiply
-        // from i16 instead of using four full i32 multiplies.
-        vmull_n_s16(vqmovn_s32(v), k as i16)
-    }
+    vmull_n_s16(vqmovn_s32(v), k as i16)
 }
 
 #[allow(clippy::too_many_arguments)]

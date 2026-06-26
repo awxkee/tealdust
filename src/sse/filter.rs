@@ -37,47 +37,46 @@ fn load_i16x4_i32(a: &[i16; 4]) -> __m128i {
     unsafe { _mm_cvtepi16_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load_u8x4_i32(a: &[u8; 4]) -> __m128i {
-    unsafe { _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(*a))) }
+    _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(*a)))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load_i8x4_i32(a: &[i8; 4]) -> __m128i {
     let bytes = [a[0] as u8, a[1] as u8, a[2] as u8, a[3] as u8];
-    unsafe { _mm_cvtepi8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(bytes))) }
+    _mm_cvtepi8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(bytes)))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load_u8x8_i32x2(a: &[u8; 8]) -> (__m128i, __m128i) {
     let v = unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) };
-    unsafe {
-        (
-            _mm_cvtepu8_epi32(v),
-            _mm_cvtepu8_epi32(_mm_srli_si128(v, 4)),
-        )
-    }
+    (
+        _mm_cvtepu8_epi32(v),
+        _mm_cvtepu8_epi32(_mm_srli_si128(v, 4)),
+    )
 }
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load_i8x8_i32x2(a: &[i8; 8]) -> (__m128i, __m128i) {
     let v = unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) };
-    unsafe {
-        (
-            _mm_cvtepi8_epi32(v),
-            _mm_cvtepi8_epi32(_mm_srli_si128(v, 4)),
-        )
-    }
+    (
+        _mm_cvtepi8_epi32(v),
+        _mm_cvtepi8_epi32(_mm_srli_si128(v, 4)),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load_i16x8_i32x2(a: &[i16; 8]) -> (__m128i, __m128i) {
     let v = unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) };
-    unsafe {
-        (
-            _mm_cvtepi16_epi32(v),
-            _mm_cvtepi16_epi32(_mm_srli_si128(v, 8)),
-        )
-    }
+    (
+        _mm_cvtepi16_epi32(v),
+        _mm_cvtepi16_epi32(_mm_srli_si128(v, 8)),
+    )
 }
 
 #[inline(always)]
@@ -90,13 +89,12 @@ fn store_i32x4(a: &mut [i32; 4], v: __m128i) {
     unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, v) };
 }
 
-/// Pack one i32x4 to u8 (signed-sat to i16, then unsigned-sat to u8 ==
-/// `clamp(.,0,255)`) and write the low 4 bytes.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn store_i32x4_u8(a: &mut [u8; 4], v: __m128i) {
-    let p16 = unsafe { _mm_packs_epi32(v, v) };
-    let p8 = unsafe { _mm_packus_epi16(p16, p16) };
-    *a = (unsafe { _mm_cvtsi128_si32(p8) } as u32).to_le_bytes();
+    let p16 = _mm_packs_epi32(v, v);
+    let p8 = _mm_packus_epi16(p16, p16);
+    *a = (_mm_cvtsi128_si32(p8) as u32).to_le_bytes();
 }
 
 /// Pack two i32x4 lanes (lo, hi) to 8 clamped u8 and store.

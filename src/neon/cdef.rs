@@ -34,32 +34,30 @@ fn load_i16x4_i32(a: &[i16; 4]) -> int32x4_t {
     unsafe { vmovl_s16(vld1_s16(a.as_ptr())) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn store_i32x4_u8(a: &mut [u8; 4], v: int32x4_t) {
-    let u16x4 = unsafe { vqmovun_s32(v) };
-    let u8x8 = unsafe { vqmovn_u16(vcombine_u16(u16x4, u16x4)) };
-    let lane = unsafe { vget_lane_u32::<0>(vreinterpret_u32_u8(u8x8)) };
-    *a = lane.to_le_bytes();
+    let u16x4 = vqmovun_s32(v);
+    let u8x8 = vqmovn_u16(vcombine_u16(u16x4, u16x4));
+    unsafe {
+        vst1_lane_u32::<0>(a.as_mut_ptr().cast(), vreinterpret_u32_u8(u8x8));
+    }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn constrain_v(diff: int32x4_t, threshold: int32x4_t, nsh: int32x4_t) -> int32x4_t {
-    unsafe {
-        let adiff = vabsq_s32(diff);
-        let t = vmaxq_s32(vdupq_n_s32(0), vsubq_s32(threshold, vshlq_s32(adiff, nsh)));
-        let m = vminq_s32(adiff, t);
-        let neg = vsubq_s32(vdupq_n_s32(0), m);
-        vbslq_s32(vcltq_s32(diff, vdupq_n_s32(0)), neg, m)
-    }
+    let adiff = vabsq_s32(diff);
+    let t = vmaxq_s32(vdupq_n_s32(0), vsubq_s32(threshold, vshlq_s32(adiff, nsh)));
+    let m = vminq_s32(adiff, t);
+    let neg = vsubq_s32(vdupq_n_s32(0), m);
+    vbslq_s32(vcltq_s32(diff, vdupq_n_s32(0)), neg, m)
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn mul_i32x4_i16_n(v: int32x4_t, k: i32) -> int32x4_t {
-    unsafe {
-        // CDEF constrain() is strength-bounded, so it fits i16. Widen-multiply
-        // from i16 instead of using four full i32 multiplies.
-        vmull_n_s16(vqmovn_s32(v), k as i16)
-    }
+    vmull_n_s16(vqmovn_s32(v), k as i16)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -44,40 +44,43 @@ fn load_u16x4_i32(a: &[u16; 4]) -> int32x4_t {
     unsafe { vreinterpretq_s32_u32(vmovl_u16(vld1_u16(a.as_ptr()))) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_u8x4_i32(a: &[u8; 4]) -> int32x4_t {
-    let dup = unsafe { vreinterpret_u8_u32(vdup_n_u32(u32::from_le_bytes(*a))) };
-    unsafe { vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(dup)))) }
+    let dup = vreinterpret_u8_u32(vdup_n_u32(u32::from_le_bytes(*a)));
+    vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(dup))))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_i16x8_i32x2(a: &[i16; 8]) -> (int32x4_t, int32x4_t) {
     let v = unsafe { vld1q_s16(a.as_ptr()) };
-    unsafe { (vmovl_s16(vget_low_s16(v)), vmovl_s16(vget_high_s16(v))) }
+    (vmovl_s16(vget_low_s16(v)), vmovl_s16(vget_high_s16(v)))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_u16x8_i32x2(a: &[u16; 8]) -> (int32x4_t, int32x4_t) {
     let v = unsafe { vld1q_u16(a.as_ptr()) };
-    unsafe {
-        (
-            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(v))),
-            vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(v))),
-        )
-    }
+    (
+        vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(v))),
+        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(v))),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn store_i32x4_u16_clip(a: &mut [u16; 4], v: int32x4_t, max_v: int32x4_t) {
-    let v = unsafe { vminq_s32(vmaxq_s32(v, vdupq_n_s32(0)), max_v) };
+    let v = vminq_s32(vmaxq_s32(v, vdupq_n_s32(0)), max_v);
     unsafe { vst1_u16(a.as_mut_ptr(), vqmovun_s32(v)) };
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn store_i32x8_u16_clip(a: &mut [u16; 8], lo: int32x4_t, hi: int32x4_t, max_v: int32x4_t) {
-    let zero = unsafe { vdupq_n_s32(0) };
-    let lo = unsafe { vminq_s32(vmaxq_s32(lo, zero), max_v) };
-    let hi = unsafe { vminq_s32(vmaxq_s32(hi, zero), max_v) };
+    let zero = vdupq_n_s32(0);
+    let lo = vminq_s32(vmaxq_s32(lo, zero), max_v);
+    let hi = vminq_s32(vmaxq_s32(hi, zero), max_v);
     unsafe {
         vst1q_u16(
             a.as_mut_ptr(),
@@ -86,9 +89,10 @@ fn store_i32x8_u16_clip(a: &mut [u16; 8], lo: int32x4_t, hi: int32x4_t, max_v: i
     };
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn shr(v: int32x4_t, sh: i32) -> int32x4_t {
-    unsafe { vshlq_s32(v, vdupq_n_s32(-sh)) }
+    vshlq_s32(v, vdupq_n_s32(-sh))
 }
 
 #[target_feature(enable = "neon")]

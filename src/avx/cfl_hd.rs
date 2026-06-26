@@ -101,8 +101,6 @@ fn ac8_444_i32(src: __m256i, dc0v: __m256i) -> __m256i {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn mul_i32x8_i16_n(ac: __m256i, alpha: i32) -> __m256i {
-    // HBD CFL AC is bounded to i16 even for 12-bit. Pack to 8xi16 and
-    // use PMADDWD as eight independent i16*alpha -> i32 multiplies.
     let lo = _mm256_castsi256_si128(ac);
     let hi = _mm256_extracti128_si256::<1>(ac);
     let ac16 = _mm_packs_epi32(lo, hi);

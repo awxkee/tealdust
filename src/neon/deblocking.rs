@@ -45,12 +45,13 @@ fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> int32x4_t {
     unsafe { vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(dup)))) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: int32x4_t) {
     if stride_line == 1 {
-        let u16x4 = unsafe { vqmovun_s32(v) };
-        let u8x8 = unsafe { vqmovn_u16(vcombine_u16(u16x4, u16x4)) };
-        let lane = unsafe { vget_lane_u32::<0>(vreinterpret_u32_u8(u8x8)) };
+        let u16x4 = vqmovun_s32(v);
+        let u8x8 = vqmovn_u16(vcombine_u16(u16x4, u16x4));
+        let lane = vget_lane_u32::<0>(vreinterpret_u32_u8(u8x8));
         dst[base as usize..base as usize + 4].copy_from_slice(&lane.to_le_bytes());
     } else {
         let mut arr = [0i32; 4];
@@ -138,9 +139,10 @@ fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> int32x4_t {
     unsafe { vreinterpretq_s32_u32(vmovl_u16(v)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: int32x4_t) {
-    let u16x4 = unsafe { vqmovun_s32(v) };
+    let u16x4 = vqmovun_s32(v);
     if stride_line == 1 {
         unsafe { vst1_u16(dst.as_mut_ptr().add(base as usize), u16x4) };
     } else {

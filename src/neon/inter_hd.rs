@@ -40,11 +40,12 @@ fn round_s32(v: int32x4_t, rnd: i32, shift: i32) -> int32x4_t {
     vshlq_s32(vaddq_s32(v, vdupq_n_s32(rnd)), vdupq_n_s32(-shift))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn store_clip_u16x4(dst: &mut [u16], v: int32x4_t, rnd: i32, shift: i32, max: uint16x4_t) {
+    let v = round_s32(v, rnd, shift);
+    let p = vmin_u16(vqmovun_s32(v), max);
     unsafe {
-        let v = round_s32(v, rnd, shift);
-        let p = vmin_u16(vqmovun_s32(v), max);
         vst1_u16(dst.as_mut_ptr(), p);
     }
 }

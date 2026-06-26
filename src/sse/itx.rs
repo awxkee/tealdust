@@ -423,7 +423,7 @@ fn sse41_store8x8_i16_clip<const STRIDE: usize>(
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-unsafe fn sse41_load4_i16_scratch(src: &[i16], off: usize) -> __m128i {
+fn sse41_load4_i16_scratch(src: &[i16], off: usize) -> __m128i {
     debug_assert!(off + 4 <= src.len());
     unsafe { _mm_loadl_epi64(src.as_ptr().add(off) as *const __m128i) }
 }
@@ -661,11 +661,7 @@ unsafe fn sse41_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-unsafe fn sse41_identity_i16x4_scratch_to_i32(
-    scratch: &[i16],
-    off: usize,
-    scale: __m128i,
-) -> __m128i {
+fn sse41_identity_i16x4_scratch_to_i32(scratch: &[i16], off: usize, scale: __m128i) -> __m128i {
     let v = sse41_load4_i16_scratch(scratch, off);
     _mm_mullo_epi32(_mm_cvtepi16_epi32(v), scale)
 }
@@ -736,10 +732,7 @@ fn sse41_tx_dense_coeff_pair(kind: usize, n: usize, out: usize, input: usize) ->
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-unsafe fn sse41_load4_i16_coeff_packed_const<const IS_RECT2: bool>(
-    src: &[i16],
-    off: usize,
-) -> __m128i {
+fn sse41_load4_i16_coeff_packed_const<const IS_RECT2: bool>(src: &[i16], off: usize) -> __m128i {
     debug_assert!(off + 4 <= src.len());
     let mut v = unsafe { _mm_loadl_epi64(src.as_ptr().add(off) as *const __m128i) };
     if IS_RECT2 {
@@ -753,7 +746,7 @@ unsafe fn sse41_load4_i16_coeff_packed_const<const IS_RECT2: bool>(
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn sse41_coeff_pair_from_scalars_i16(k0: i16, k1: i16) -> __m128i {
-    unsafe { _mm_set1_epi32(((k1 as u16 as i32) << 16) | (k0 as u16 as i32)) }
+    _mm_set1_epi32(((k1 as u16 as i32) << 16) | (k0 as u16 as i32))
 }
 
 #[inline]
@@ -955,244 +948,6 @@ macro_rules! sse41_dct32_i16x4_all_body {
             _mm_unpacklo_epi16(load!(0), load!(16)),
             sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KGP_X4, 1),
         );
-        let e = [
-            _mm_add_epi32(g0, h0),
-            _mm_add_epi32(g1, h1),
-            _mm_sub_epi32(g1, h1),
-            _mm_sub_epi32(g0, h0),
-        ];
-        let mut cc = [z; 8];
-        let mut i = 0usize;
-        while i < 4 {
-            cc[i] = _mm_add_epi32(e[i], f[i]);
-            i += 1;
-        }
-        while i < 8 {
-            cc[i] = _mm_sub_epi32(e[7 - i], f[7 - i]);
-            i += 1;
-        }
-        let mut a = [z; 16];
-        i = 0;
-        while i < 8 {
-            a[i] = _mm_add_epi32(cc[i], d[i]);
-            i += 1;
-        }
-        while i < 16 {
-            a[i] = _mm_sub_epi32(cc[15 - i], d[15 - i]);
-            i += 1;
-        }
-        let mut out = [z; 32];
-        let mut k = 0usize;
-        while k < 16 {
-            out[k] = _mm_add_epi32(a[k], b[k]);
-            out[k + 16] = _mm_sub_epi32(a[15 - k], b[15 - k]);
-            k += 1;
-        }
-        out
-    }};
-}
-
-macro_rules! sse41_dct16_i16x4_all_body_active {
-    () => {{
-        let z = _mm_setzero_si128();
-        let mut b = [z; 8];
-        let mut m = 0usize;
-        while m < 8 {
-            let base = m * 8;
-            let mut acc = z;
-            if ACTIVE > 1 {
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(1), load!(3)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KBP_X4, base >> 1),
-                    ),
-                );
-            }
-            if ACTIVE > 5 {
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(5), load!(7)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 1),
-                    ),
-                );
-            }
-            if ACTIVE > 9 {
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(9), load!(11)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 2),
-                    ),
-                );
-            }
-            if ACTIVE > 13 {
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(13), load!(15)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 3),
-                    ),
-                );
-            }
-            b[m] = acc;
-            m += 1;
-        }
-        let mut d = [z; 4];
-        m = 0;
-        while m < 4 {
-            let base = m * 8;
-            let mut acc = z;
-            if ACTIVE > 2 {
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(2), load!(6)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KDP_X4, base >> 1),
-                    ),
-                );
-            }
-            if ACTIVE > 10 {
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(10), load!(14)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KDP_X4, (base >> 1) + 1),
-                    ),
-                );
-            }
-            d[m] = acc;
-            m += 1;
-        }
-        let x412 = _mm_unpacklo_epi16(load!(4), load!(12));
-        let f0 = if ACTIVE > 4 {
-            _mm_madd_epi16(x412, sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KFP_X4, 0))
-        } else {
-            z
-        };
-        let f1 = if ACTIVE > 4 {
-            _mm_madd_epi16(x412, sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KFP_X4, 1))
-        } else {
-            z
-        };
-        let x08 = _mm_unpacklo_epi16(load!(0), load!(8));
-        let g0 = _mm_madd_epi16(x08, sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KGP_X4, 0));
-        let g1 = _mm_madd_epi16(x08, sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KGP_X4, 1));
-        let cc = [
-            _mm_add_epi32(g0, f0),
-            _mm_add_epi32(g1, f1),
-            _mm_sub_epi32(g1, f1),
-            _mm_sub_epi32(g0, f0),
-        ];
-        let mut a = [z; 8];
-        let mut i = 0usize;
-        while i < 4 {
-            a[i] = _mm_add_epi32(cc[i], d[i]);
-            i += 1;
-        }
-        while i < 8 {
-            a[i] = _mm_sub_epi32(cc[7 - i], d[7 - i]);
-            i += 1;
-        }
-        let mut out = [z; 16];
-        let mut k = 0usize;
-        while k < 8 {
-            out[k] = _mm_add_epi32(a[k], b[k]);
-            out[k + 8] = _mm_sub_epi32(a[7 - k], b[7 - k]);
-            k += 1;
-        }
-        out
-    }};
-}
-
-macro_rules! sse41_dct32_i16x4_all_body_active {
-    () => {{
-        let z = _mm_setzero_si128();
-        let mut b = [z; 16];
-        let mut m = 0usize;
-        while m < 16 {
-            let base = m * 16;
-            let mut acc = z;
-            let mut pair = 0usize;
-            while pair < 8 {
-                let i0 = 4 * pair + 1;
-                if ACTIVE > i0 {
-                    acc = _mm_add_epi32(
-                        acc,
-                        _mm_madd_epi16(
-                            _mm_unpacklo_epi16(load!(i0), load!(i0 + 2)),
-                            sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KBP_X4, (base >> 1) + pair),
-                        ),
-                    );
-                }
-                pair += 1;
-            }
-            b[m] = acc;
-            m += 1;
-        }
-        let mut d = [z; 8];
-        m = 0;
-        while m < 8 {
-            let base = m * 8;
-            let mut acc = z;
-            let mut pair = 0usize;
-            while pair < 4 {
-                let i0 = 8 * pair + 2;
-                if ACTIVE > i0 {
-                    acc = _mm_add_epi32(
-                        acc,
-                        _mm_madd_epi16(
-                            _mm_unpacklo_epi16(load!(i0), load!(i0 + 4)),
-                            sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KDP_X4, (base >> 1) + pair),
-                        ),
-                    );
-                }
-                pair += 1;
-            }
-            d[m] = acc;
-            m += 1;
-        }
-        let mut f = [z; 4];
-        m = 0;
-        while m < 4 {
-            let base = m * 8;
-            let mut acc = z;
-            if ACTIVE > 4 {
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(4), load!(12)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KFP_X4, base >> 1),
-                    ),
-                );
-            }
-            if ACTIVE > 20 {
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(20), load!(28)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KFP_X4, (base >> 1) + 1),
-                    ),
-                );
-            }
-            f[m] = acc;
-            m += 1;
-        }
-        let x824 = _mm_unpacklo_epi16(load!(8), load!(24));
-        let h0 = if ACTIVE > 8 {
-            _mm_madd_epi16(x824, sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KHP_X4, 0))
-        } else {
-            z
-        };
-        let h1 = if ACTIVE > 8 {
-            _mm_madd_epi16(x824, sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KHP_X4, 1))
-        } else {
-            z
-        };
-        let x016 = _mm_unpacklo_epi16(load!(0), load!(16));
-        let g0 = _mm_madd_epi16(x016, sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KGP_X4, 0));
-        let g1 = _mm_madd_epi16(x016, sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KGP_X4, 1));
         let e = [
             _mm_add_epi32(g0, h0),
             _mm_add_epi32(g1, h1),
@@ -1920,15 +1675,13 @@ fn sse41_dct16_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const ST
     coeff: &[i16],
     base: usize,
 ) -> [__m128i; 16] {
-    unsafe {
-        debug_assert!(base + 15 * STRIDE + 4 <= coeff.len());
-        macro_rules! load {
-            ($idx:expr) => {
-                sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
-            };
-        }
-        sse41_dct16_i16x4_all_body!()
+    debug_assert!(base + 15 * STRIDE + 4 <= coeff.len());
+    macro_rules! load {
+        ($idx:expr) => {
+            sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
+        };
     }
+    sse41_dct16_i16x4_all_body!()
 }
 
 #[inline]
@@ -1937,15 +1690,13 @@ fn sse41_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const ST
     coeff: &[i16],
     base: usize,
 ) -> [__m128i; 32] {
-    unsafe {
-        debug_assert!(base + 31 * STRIDE + 4 <= coeff.len());
-        macro_rules! load {
-            ($idx:expr) => {
-                sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
-            };
-        }
-        sse41_dct32_i16x4_all_body!()
+    debug_assert!(base + 31 * STRIDE + 4 <= coeff.len());
+    macro_rules! load {
+        ($idx:expr) => {
+            sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
+        };
     }
+    sse41_dct32_i16x4_all_body!()
 }
 
 #[inline]
@@ -1994,156 +1745,146 @@ fn idct_dequant_dct_i16_sse41_impl_const<const N: usize, const IS_RECT2: bool>(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    unsafe {
-        debug_assert!(N == 16 || N == 32);
-        debug_assert!(coeff.len() >= N * N);
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < N / 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(N == 16 || N == 32);
+    debug_assert!(coeff.len() >= N * N);
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < N / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let ncols = ngrp * 4;
-        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
-        let sh = _mm_cvtsi32_si128(shift0);
-        let minv = _mm_set1_epi32(row_clip_min);
-        let maxv = _mm_set1_epi32(row_clip_max);
-
-        with_sse41_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| unsafe {
-            scratch.fill(0);
-            let mut y = 0usize;
-            while y + 8 <= ncols {
-                if N == 16 {
-                    let lo =
-                        sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                    let hi = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(
-                        coeff,
-                        y + 4,
-                    );
-                    let mut x = 0usize;
-                    while x < 16 {
-                        sse41_store8x8_i16_clip::<16>(
-                            scratch,
-                            y * 16 + x,
-                            lo[x],
-                            hi[x],
-                            lo[x + 1],
-                            hi[x + 1],
-                            lo[x + 2],
-                            hi[x + 2],
-                            lo[x + 3],
-                            hi[x + 3],
-                            lo[x + 4],
-                            hi[x + 4],
-                            lo[x + 5],
-                            hi[x + 5],
-                            lo[x + 6],
-                            hi[x + 6],
-                            lo[x + 7],
-                            hi[x + 7],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        x += 8;
-                    }
-                } else {
-                    let lo =
-                        sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                    let hi = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(
-                        coeff,
-                        y + 4,
-                    );
-                    let mut x = 0usize;
-                    while x < 32 {
-                        sse41_store8x8_i16_clip::<32>(
-                            scratch,
-                            y * 32 + x,
-                            lo[x],
-                            hi[x],
-                            lo[x + 1],
-                            hi[x + 1],
-                            lo[x + 2],
-                            hi[x + 2],
-                            lo[x + 3],
-                            hi[x + 3],
-                            lo[x + 4],
-                            hi[x + 4],
-                            lo[x + 5],
-                            hi[x + 5],
-                            lo[x + 6],
-                            hi[x + 6],
-                            lo[x + 7],
-                            hi[x + 7],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        x += 8;
-                    }
-                }
-                y += 8;
-            }
-            while y + 4 <= ncols {
-                if N == 16 {
-                    let out =
-                        sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                    let mut x = 0usize;
-                    while x < 16 {
-                        sse41_store4x4_i16_clip::<16>(
-                            scratch,
-                            y * 16 + x,
-                            out[x],
-                            out[x + 1],
-                            out[x + 2],
-                            out[x + 3],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        x += 4;
-                    }
-                } else {
-                    let out =
-                        sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                    let mut x = 0usize;
-                    while x < 32 {
-                        sse41_store4x4_i16_clip::<32>(
-                            scratch,
-                            y * 32 + x,
-                            out[x],
-                            out[x + 1],
-                            out[x + 2],
-                            out[x + 3],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        x += 4;
-                    }
-                }
-                y += 4;
-            }
-            coeff[..N * N].fill(0);
-
-            let mut x = 0usize;
-            while x < N {
-                if N == 16 {
-                    sse41_dct16_i16x4_scratch4_stride_eob_store::<16>(scratch, x, ncols, tmp);
-                } else {
-                    sse41_dct32_i16x4_scratch4_stride_eob_store::<32>(scratch, x, ncols, tmp);
-                }
-                x += 4;
-            }
-        });
     }
+    let ncols = ngrp * 4;
+    let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+    let sh = _mm_cvtsi32_si128(shift0);
+    let minv = _mm_set1_epi32(row_clip_min);
+    let maxv = _mm_set1_epi32(row_clip_max);
+
+    with_sse41_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
+        scratch.fill(0);
+        let mut y = 0usize;
+        while y + 8 <= ncols {
+            if N == 16 {
+                let lo = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
+                let hi =
+                    sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 4);
+                let mut x = 0usize;
+                while x < 16 {
+                    sse41_store8x8_i16_clip::<16>(
+                        scratch,
+                        y * 16 + x,
+                        lo[x],
+                        hi[x],
+                        lo[x + 1],
+                        hi[x + 1],
+                        lo[x + 2],
+                        hi[x + 2],
+                        lo[x + 3],
+                        hi[x + 3],
+                        lo[x + 4],
+                        hi[x + 4],
+                        lo[x + 5],
+                        hi[x + 5],
+                        lo[x + 6],
+                        hi[x + 6],
+                        lo[x + 7],
+                        hi[x + 7],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    x += 8;
+                }
+            } else {
+                let lo = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
+                let hi =
+                    sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 4);
+                let mut x = 0usize;
+                while x < 32 {
+                    sse41_store8x8_i16_clip::<32>(
+                        scratch,
+                        y * 32 + x,
+                        lo[x],
+                        hi[x],
+                        lo[x + 1],
+                        hi[x + 1],
+                        lo[x + 2],
+                        hi[x + 2],
+                        lo[x + 3],
+                        hi[x + 3],
+                        lo[x + 4],
+                        hi[x + 4],
+                        lo[x + 5],
+                        hi[x + 5],
+                        lo[x + 6],
+                        hi[x + 6],
+                        lo[x + 7],
+                        hi[x + 7],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    x += 8;
+                }
+            }
+            y += 8;
+        }
+        while y + 4 <= ncols {
+            if N == 16 {
+                let out = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
+                let mut x = 0usize;
+                while x < 16 {
+                    sse41_store4x4_i16_clip::<16>(
+                        scratch,
+                        y * 16 + x,
+                        out[x],
+                        out[x + 1],
+                        out[x + 2],
+                        out[x + 3],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    x += 4;
+                }
+            } else {
+                let out = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
+                let mut x = 0usize;
+                while x < 32 {
+                    sse41_store4x4_i16_clip::<32>(
+                        scratch,
+                        y * 32 + x,
+                        out[x],
+                        out[x + 1],
+                        out[x + 2],
+                        out[x + 3],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    x += 4;
+                }
+            }
+            y += 4;
+        }
+        coeff[..N * N].fill(0);
+
+        let mut x = 0usize;
+        while x < N {
+            if N == 16 {
+                sse41_dct16_i16x4_scratch4_stride_eob_store::<16>(scratch, x, ncols, tmp);
+            } else {
+                sse41_dct32_i16x4_scratch4_stride_eob_store::<32>(scratch, x, ncols, tmp);
+            }
+            x += 4;
+        }
+    });
 }
 
 #[inline]
@@ -2160,162 +1901,152 @@ fn idct_dequant_dct_i16_sse41_fused_8bpc_impl_const<const N: usize, const IS_REC
     row_clip_max: i32,
     shift1: i32,
 ) {
-    unsafe {
-        debug_assert!(N == 16 || N == 32);
-        debug_assert!(coeff.len() >= N * N);
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < N / 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(N == 16 || N == 32);
+    debug_assert!(coeff.len() >= N * N);
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < N / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let ncols = ngrp * 4;
-        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
-        let sh = _mm_cvtsi32_si128(shift0);
-        let minv = _mm_set1_epi32(row_clip_min);
-        let maxv = _mm_set1_epi32(row_clip_max);
-
-        with_sse41_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| unsafe {
-            scratch.fill(0);
-            let mut y = 0usize;
-            while y + 8 <= ncols {
-                if N == 16 {
-                    let lo =
-                        sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                    let hi = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(
-                        coeff,
-                        y + 4,
-                    );
-                    let mut x = 0usize;
-                    while x < 16 {
-                        sse41_store8x8_i16_clip::<16>(
-                            scratch,
-                            y * 16 + x,
-                            lo[x],
-                            hi[x],
-                            lo[x + 1],
-                            hi[x + 1],
-                            lo[x + 2],
-                            hi[x + 2],
-                            lo[x + 3],
-                            hi[x + 3],
-                            lo[x + 4],
-                            hi[x + 4],
-                            lo[x + 5],
-                            hi[x + 5],
-                            lo[x + 6],
-                            hi[x + 6],
-                            lo[x + 7],
-                            hi[x + 7],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        x += 8;
-                    }
-                } else {
-                    let lo =
-                        sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                    let hi = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(
-                        coeff,
-                        y + 4,
-                    );
-                    let mut x = 0usize;
-                    while x < 32 {
-                        sse41_store8x8_i16_clip::<32>(
-                            scratch,
-                            y * 32 + x,
-                            lo[x],
-                            hi[x],
-                            lo[x + 1],
-                            hi[x + 1],
-                            lo[x + 2],
-                            hi[x + 2],
-                            lo[x + 3],
-                            hi[x + 3],
-                            lo[x + 4],
-                            hi[x + 4],
-                            lo[x + 5],
-                            hi[x + 5],
-                            lo[x + 6],
-                            hi[x + 6],
-                            lo[x + 7],
-                            hi[x + 7],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        x += 8;
-                    }
-                }
-                y += 8;
-            }
-            while y + 4 <= ncols {
-                if N == 16 {
-                    let out =
-                        sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                    let mut x = 0usize;
-                    while x < 16 {
-                        sse41_store4x4_i16_clip::<16>(
-                            scratch,
-                            y * 16 + x,
-                            out[x],
-                            out[x + 1],
-                            out[x + 2],
-                            out[x + 3],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        x += 4;
-                    }
-                } else {
-                    let out =
-                        sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                    let mut x = 0usize;
-                    while x < 32 {
-                        sse41_store4x4_i16_clip::<32>(
-                            scratch,
-                            y * 32 + x,
-                            out[x],
-                            out[x + 1],
-                            out[x + 2],
-                            out[x + 3],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        x += 4;
-                    }
-                }
-                y += 4;
-            }
-            coeff[..N * N].fill(0);
-
-            let rnd1 = _mm_set1_epi32((1 << shift1) >> 1);
-            let sh1 = _mm_cvtsi32_si128(shift1);
-            let mut x = 0usize;
-            while x < N {
-                if N == 16 {
-                    sse41_dct16_i16x4_scratch4_stride_eob_add_u8::<16>(
-                        scratch, x, ncols, dst, dst_off, dst_stride, rnd1, sh1,
-                    );
-                } else {
-                    sse41_dct32_i16x4_scratch4_stride_eob_add_u8::<32>(
-                        scratch, x, ncols, dst, dst_off, dst_stride, rnd1, sh1,
-                    );
-                }
-                x += 4;
-            }
-        });
     }
+    let ncols = ngrp * 4;
+    let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+    let sh = _mm_cvtsi32_si128(shift0);
+    let minv = _mm_set1_epi32(row_clip_min);
+    let maxv = _mm_set1_epi32(row_clip_max);
+
+    with_sse41_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
+        scratch.fill(0);
+        let mut y = 0usize;
+        while y + 8 <= ncols {
+            if N == 16 {
+                let lo = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
+                let hi =
+                    sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 4);
+                let mut x = 0usize;
+                while x < 16 {
+                    sse41_store8x8_i16_clip::<16>(
+                        scratch,
+                        y * 16 + x,
+                        lo[x],
+                        hi[x],
+                        lo[x + 1],
+                        hi[x + 1],
+                        lo[x + 2],
+                        hi[x + 2],
+                        lo[x + 3],
+                        hi[x + 3],
+                        lo[x + 4],
+                        hi[x + 4],
+                        lo[x + 5],
+                        hi[x + 5],
+                        lo[x + 6],
+                        hi[x + 6],
+                        lo[x + 7],
+                        hi[x + 7],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    x += 8;
+                }
+            } else {
+                let lo = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
+                let hi =
+                    sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 4);
+                let mut x = 0usize;
+                while x < 32 {
+                    sse41_store8x8_i16_clip::<32>(
+                        scratch,
+                        y * 32 + x,
+                        lo[x],
+                        hi[x],
+                        lo[x + 1],
+                        hi[x + 1],
+                        lo[x + 2],
+                        hi[x + 2],
+                        lo[x + 3],
+                        hi[x + 3],
+                        lo[x + 4],
+                        hi[x + 4],
+                        lo[x + 5],
+                        hi[x + 5],
+                        lo[x + 6],
+                        hi[x + 6],
+                        lo[x + 7],
+                        hi[x + 7],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    x += 8;
+                }
+            }
+            y += 8;
+        }
+        while y + 4 <= ncols {
+            if N == 16 {
+                let out = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
+                let mut x = 0usize;
+                while x < 16 {
+                    sse41_store4x4_i16_clip::<16>(
+                        scratch,
+                        y * 16 + x,
+                        out[x],
+                        out[x + 1],
+                        out[x + 2],
+                        out[x + 3],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    x += 4;
+                }
+            } else {
+                let out = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
+                let mut x = 0usize;
+                while x < 32 {
+                    sse41_store4x4_i16_clip::<32>(
+                        scratch,
+                        y * 32 + x,
+                        out[x],
+                        out[x + 1],
+                        out[x + 2],
+                        out[x + 3],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    x += 4;
+                }
+            }
+            y += 4;
+        }
+        coeff[..N * N].fill(0);
+
+        let rnd1 = _mm_set1_epi32((1 << shift1) >> 1);
+        let sh1 = _mm_cvtsi32_si128(shift1);
+        let mut x = 0usize;
+        while x < N {
+            if N == 16 {
+                sse41_dct16_i16x4_scratch4_stride_eob_add_u8::<16>(
+                    scratch, x, ncols, dst, dst_off, dst_stride, rnd1, sh1,
+                );
+            } else {
+                sse41_dct32_i16x4_scratch4_stride_eob_add_u8::<32>(
+                    scratch, x, ncols, dst, dst_off, dst_stride, rnd1, sh1,
+                );
+            }
+            x += 4;
+        }
+    });
 }
 
 #[inline]
@@ -2577,325 +2308,294 @@ fn tx_dequant_dense_sse41_i16_impl_const<
     first_kind: usize,
     second_kind: usize,
 ) {
-    unsafe {
-        debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
-        debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-        debug_assert!(W * H <= N && N <= coeff.len());
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < H / 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
+    debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
+    debug_assert!(W * H <= N && N <= coeff.len());
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < H / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let nrows = ngrp * 4;
-        let z = _mm_setzero_si128();
-        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
-        let sh = _mm_cvtsi32_si128(shift0);
-        let minv = _mm_set1_epi32(row_clip_min);
-        let maxv = _mm_set1_epi32(row_clip_max);
+    }
+    let nrows = ngrp * 4;
+    let z = _mm_setzero_si128();
+    let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+    let sh = _mm_cvtsi32_si128(shift0);
+    let minv = _mm_set1_epi32(row_clip_min);
+    let maxv = _mm_set1_epi32(row_clip_max);
 
-        with_sse41_itx_i16_scratch(N, |scratch| unsafe {
-            scratch.fill(0);
-            let mut y = 0usize;
+    with_sse41_itx_i16_scratch(N, |scratch| unsafe {
+        scratch.fill(0);
+        let mut y = 0usize;
 
-            if first_kind == crate::itx_2d::TX_KIND_IDENTITY {
-                let scale = _mm_set1_epi32(sse41_identity_scale(W));
-                while y + 4 <= nrows {
-                    let mut m = 0usize;
-                    while m < W {
-                        let a0 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
-                            coeff,
-                            y + (m + 0) * H,
-                            scale,
-                        );
-                        let a1 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
-                            coeff,
-                            y + (m + 1) * H,
-                            scale,
-                        );
-                        let a2 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
-                            coeff,
-                            y + (m + 2) * H,
-                            scale,
-                        );
-                        let a3 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
-                            coeff,
-                            y + (m + 3) * H,
-                            scale,
-                        );
-                        sse41_store4x4_i16_clip::<W>(
-                            scratch,
-                            y * W + m,
-                            a0,
-                            a1,
-                            a2,
-                            a3,
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        m += 4;
-                    }
-                    y += 4;
-                }
-            }
-
-            while y + 8 <= nrows && first_kind == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32)
-            {
-                if W == 16 {
-                    let lo =
-                        sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                    let hi =
-                        sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                    let mut m = 0usize;
-                    while m < 16 {
-                        sse41_store8x8_i16_clip::<W>(
-                            scratch,
-                            y * W + m,
-                            lo[m],
-                            hi[m],
-                            lo[m + 1],
-                            hi[m + 1],
-                            lo[m + 2],
-                            hi[m + 2],
-                            lo[m + 3],
-                            hi[m + 3],
-                            lo[m + 4],
-                            hi[m + 4],
-                            lo[m + 5],
-                            hi[m + 5],
-                            lo[m + 6],
-                            hi[m + 6],
-                            lo[m + 7],
-                            hi[m + 7],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        m += 8;
-                    }
-                } else {
-                    let lo =
-                        sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                    let hi =
-                        sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                    let mut m = 0usize;
-                    while m < 32 {
-                        sse41_store8x8_i16_clip::<W>(
-                            scratch,
-                            y * W + m,
-                            lo[m],
-                            hi[m],
-                            lo[m + 1],
-                            hi[m + 1],
-                            lo[m + 2],
-                            hi[m + 2],
-                            lo[m + 3],
-                            hi[m + 3],
-                            lo[m + 4],
-                            hi[m + 4],
-                            lo[m + 5],
-                            hi[m + 5],
-                            lo[m + 6],
-                            hi[m + 6],
-                            lo[m + 7],
-                            hi[m + 7],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        m += 8;
-                    }
-                }
-                y += 8;
-            }
+        if first_kind == crate::itx_2d::TX_KIND_IDENTITY {
+            let scale = _mm_set1_epi32(sse41_identity_scale(W));
             while y + 4 <= nrows {
-                if first_kind == crate::itx_2d::TX_KIND_DCT && W == 16 {
-                    let out =
-                        sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                    let mut m = 0usize;
-                    while m < 16 {
-                        sse41_store4x4_i16_clip::<W>(
-                            scratch,
-                            y * W + m,
-                            out[m],
-                            out[m + 1],
-                            out[m + 2],
-                            out[m + 3],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        m += 4;
-                    }
-                } else if first_kind == crate::itx_2d::TX_KIND_DCT && W == 32 {
-                    let out =
-                        sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                    let mut m = 0usize;
-                    while m < 32 {
-                        sse41_store4x4_i16_clip::<W>(
-                            scratch,
-                            y * W + m,
-                            out[m],
-                            out[m + 1],
-                            out[m + 2],
-                            out[m + 3],
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        m += 4;
-                    }
-                } else {
-                    let mut m = 0usize;
-                    while m < W {
-                        let mut a0 = z;
-                        let mut a1 = z;
-                        let mut a2 = z;
-                        let mut a3 = z;
-                        let mut j = 0usize;
-                        while j < W {
-                            let x0 =
-                                sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
-                            let x1 = sse41_load4_i16_coeff_packed_const::<IS_RECT2>(
-                                coeff,
-                                y + (j + 1) * H,
-                            );
-                            let x01 = _mm_unpacklo_epi16(x0, x1);
-                            a0 = _mm_add_epi32(
-                                a0,
-                                _mm_madd_epi16(x01, sse41_tx_dense_coeff_pair(first_kind, W, m, j)),
-                            );
-                            a1 = _mm_add_epi32(
-                                a1,
-                                _mm_madd_epi16(
-                                    x01,
-                                    sse41_tx_dense_coeff_pair(first_kind, W, m + 1, j),
-                                ),
-                            );
-                            a2 = _mm_add_epi32(
-                                a2,
-                                _mm_madd_epi16(
-                                    x01,
-                                    sse41_tx_dense_coeff_pair(first_kind, W, m + 2, j),
-                                ),
-                            );
-                            a3 = _mm_add_epi32(
-                                a3,
-                                _mm_madd_epi16(
-                                    x01,
-                                    sse41_tx_dense_coeff_pair(first_kind, W, m + 3, j),
-                                ),
-                            );
-                            j += 2;
-                        }
-                        sse41_store4x4_i16_clip::<W>(
-                            scratch,
-                            y * W + m,
-                            a0,
-                            a1,
-                            a2,
-                            a3,
-                            rnd,
-                            sh,
-                            minv,
-                            maxv,
-                        );
-                        m += 4;
-                    }
+                let mut m = 0usize;
+                while m < W {
+                    let a0 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
+                        coeff,
+                        y + (m + 0) * H,
+                        scale,
+                    );
+                    let a1 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
+                        coeff,
+                        y + (m + 1) * H,
+                        scale,
+                    );
+                    let a2 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
+                        coeff,
+                        y + (m + 2) * H,
+                        scale,
+                    );
+                    let a3 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
+                        coeff,
+                        y + (m + 3) * H,
+                        scale,
+                    );
+                    sse41_store4x4_i16_clip::<W>(
+                        scratch,
+                        y * W + m,
+                        a0,
+                        a1,
+                        a2,
+                        a3,
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
                 }
                 y += 4;
             }
-            coeff[..W * H].fill(0);
+        }
 
-            let mut x = 0usize;
-            if second_kind == crate::itx_2d::TX_KIND_IDENTITY {
-                let scale = _mm_set1_epi32(sse41_identity_scale(H));
-                while x < W {
-                    let mut m = 0usize;
-                    while m < H {
-                        let a = sse41_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
-                        _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, a);
-                        m += 1;
-                    }
-                    x += 4;
+        while y + 8 <= nrows && first_kind == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
+            if W == 16 {
+                let lo = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
+                let hi =
+                    sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
+                let mut m = 0usize;
+                while m < 16 {
+                    sse41_store8x8_i16_clip::<W>(
+                        scratch,
+                        y * W + m,
+                        lo[m],
+                        hi[m],
+                        lo[m + 1],
+                        hi[m + 1],
+                        lo[m + 2],
+                        hi[m + 2],
+                        lo[m + 3],
+                        hi[m + 3],
+                        lo[m + 4],
+                        hi[m + 4],
+                        lo[m + 5],
+                        hi[m + 5],
+                        lo[m + 6],
+                        hi[m + 6],
+                        lo[m + 7],
+                        hi[m + 7],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    m += 8;
+                }
+            } else {
+                let lo = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
+                let hi =
+                    sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
+                let mut m = 0usize;
+                while m < 32 {
+                    sse41_store8x8_i16_clip::<W>(
+                        scratch,
+                        y * W + m,
+                        lo[m],
+                        hi[m],
+                        lo[m + 1],
+                        hi[m + 1],
+                        lo[m + 2],
+                        hi[m + 2],
+                        lo[m + 3],
+                        hi[m + 3],
+                        lo[m + 4],
+                        hi[m + 4],
+                        lo[m + 5],
+                        hi[m + 5],
+                        lo[m + 6],
+                        hi[m + 6],
+                        lo[m + 7],
+                        hi[m + 7],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    m += 8;
                 }
             }
-            while x < W {
-                if second_kind == crate::itx_2d::TX_KIND_DCT && H == 16 {
-                    sse41_dct16_i16x4_scratch4_stride_eob_store::<W>(scratch, x, nrows, tmp);
-                } else if second_kind == crate::itx_2d::TX_KIND_DCT && H == 32 {
-                    sse41_dct32_i16x4_scratch4_stride_eob_store::<W>(scratch, x, nrows, tmp);
-                } else {
-                    let mut m = 0usize;
-                    while m < H {
-                        let mut a0 = z;
-                        let mut a1 = z;
-                        let mut a2 = z;
-                        let mut a3 = z;
-                        let mut j = 0usize;
-                        while j < H {
-                            let x0 = sse41_load4_i16_scratch(scratch, x + j * W);
-                            let x1 = sse41_load4_i16_scratch(scratch, x + (j + 1) * W);
-                            let x01 = _mm_unpacklo_epi16(x0, x1);
-                            a0 = _mm_add_epi32(
-                                a0,
-                                _mm_madd_epi16(
-                                    x01,
-                                    sse41_tx_dense_coeff_pair(second_kind, H, m, j),
-                                ),
-                            );
-                            a1 = _mm_add_epi32(
-                                a1,
-                                _mm_madd_epi16(
-                                    x01,
-                                    sse41_tx_dense_coeff_pair(second_kind, H, m + 1, j),
-                                ),
-                            );
-                            a2 = _mm_add_epi32(
-                                a2,
-                                _mm_madd_epi16(
-                                    x01,
-                                    sse41_tx_dense_coeff_pair(second_kind, H, m + 2, j),
-                                ),
-                            );
-                            a3 = _mm_add_epi32(
-                                a3,
-                                _mm_madd_epi16(
-                                    x01,
-                                    sse41_tx_dense_coeff_pair(second_kind, H, m + 3, j),
-                                ),
-                            );
-                            j += 2;
-                        }
-                        _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, a0);
-                        _mm_storeu_si128(
-                            tmp.as_mut_ptr().add(x + (m + 1) * 32) as *mut __m128i,
+            y += 8;
+        }
+        while y + 4 <= nrows {
+            if first_kind == crate::itx_2d::TX_KIND_DCT && W == 16 {
+                let out = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
+                let mut m = 0usize;
+                while m < 16 {
+                    sse41_store4x4_i16_clip::<W>(
+                        scratch,
+                        y * W + m,
+                        out[m],
+                        out[m + 1],
+                        out[m + 2],
+                        out[m + 3],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+            } else if first_kind == crate::itx_2d::TX_KIND_DCT && W == 32 {
+                let out = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
+                let mut m = 0usize;
+                while m < 32 {
+                    sse41_store4x4_i16_clip::<W>(
+                        scratch,
+                        y * W + m,
+                        out[m],
+                        out[m + 1],
+                        out[m + 2],
+                        out[m + 3],
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+            } else {
+                let mut m = 0usize;
+                while m < W {
+                    let mut a0 = z;
+                    let mut a1 = z;
+                    let mut a2 = z;
+                    let mut a3 = z;
+                    let mut j = 0usize;
+                    while j < W {
+                        let x0 = sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
+                        let x1 =
+                            sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                        let x01 = _mm_unpacklo_epi16(x0, x1);
+                        a0 = _mm_add_epi32(
+                            a0,
+                            _mm_madd_epi16(x01, sse41_tx_dense_coeff_pair(first_kind, W, m, j)),
+                        );
+                        a1 = _mm_add_epi32(
                             a1,
+                            _mm_madd_epi16(x01, sse41_tx_dense_coeff_pair(first_kind, W, m + 1, j)),
                         );
-                        _mm_storeu_si128(
-                            tmp.as_mut_ptr().add(x + (m + 2) * 32) as *mut __m128i,
+                        a2 = _mm_add_epi32(
                             a2,
+                            _mm_madd_epi16(x01, sse41_tx_dense_coeff_pair(first_kind, W, m + 2, j)),
                         );
-                        _mm_storeu_si128(
-                            tmp.as_mut_ptr().add(x + (m + 3) * 32) as *mut __m128i,
+                        a3 = _mm_add_epi32(
                             a3,
+                            _mm_madd_epi16(x01, sse41_tx_dense_coeff_pair(first_kind, W, m + 3, j)),
                         );
-                        m += 4;
+                        j += 2;
                     }
+                    sse41_store4x4_i16_clip::<W>(
+                        scratch,
+                        y * W + m,
+                        a0,
+                        a1,
+                        a2,
+                        a3,
+                        rnd,
+                        sh,
+                        minv,
+                        maxv,
+                    );
+                    m += 4;
+                }
+            }
+            y += 4;
+        }
+        coeff[..W * H].fill(0);
+
+        let mut x = 0usize;
+        if second_kind == crate::itx_2d::TX_KIND_IDENTITY {
+            let scale = _mm_set1_epi32(sse41_identity_scale(H));
+            while x < W {
+                let mut m = 0usize;
+                while m < H {
+                    let a = sse41_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
+                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, a);
+                    m += 1;
                 }
                 x += 4;
             }
-        });
-    }
+        }
+        while x < W {
+            if second_kind == crate::itx_2d::TX_KIND_DCT && H == 16 {
+                sse41_dct16_i16x4_scratch4_stride_eob_store::<W>(scratch, x, nrows, tmp);
+            } else if second_kind == crate::itx_2d::TX_KIND_DCT && H == 32 {
+                sse41_dct32_i16x4_scratch4_stride_eob_store::<W>(scratch, x, nrows, tmp);
+            } else {
+                let mut m = 0usize;
+                while m < H {
+                    let mut a0 = z;
+                    let mut a1 = z;
+                    let mut a2 = z;
+                    let mut a3 = z;
+                    let mut j = 0usize;
+                    while j < H {
+                        let x0 = sse41_load4_i16_scratch(scratch, x + j * W);
+                        let x1 = sse41_load4_i16_scratch(scratch, x + (j + 1) * W);
+                        let x01 = _mm_unpacklo_epi16(x0, x1);
+                        a0 = _mm_add_epi32(
+                            a0,
+                            _mm_madd_epi16(x01, sse41_tx_dense_coeff_pair(second_kind, H, m, j)),
+                        );
+                        a1 = _mm_add_epi32(
+                            a1,
+                            _mm_madd_epi16(
+                                x01,
+                                sse41_tx_dense_coeff_pair(second_kind, H, m + 1, j),
+                            ),
+                        );
+                        a2 = _mm_add_epi32(
+                            a2,
+                            _mm_madd_epi16(
+                                x01,
+                                sse41_tx_dense_coeff_pair(second_kind, H, m + 2, j),
+                            ),
+                        );
+                        a3 = _mm_add_epi32(
+                            a3,
+                            _mm_madd_epi16(
+                                x01,
+                                sse41_tx_dense_coeff_pair(second_kind, H, m + 3, j),
+                            ),
+                        );
+                        j += 2;
+                    }
+                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, a0);
+                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32) as *mut __m128i, a1);
+                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32) as *mut __m128i, a2);
+                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 3) * 32) as *mut __m128i, a3);
+                    m += 4;
+                }
+            }
+            x += 4;
+        }
+    });
 }
 
 #[inline]
@@ -3304,20 +3004,18 @@ pub(crate) fn idct_dequant_4x4_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    unsafe {
-        tx_dequant_dense_sse41_i32_impl::<16, 4, 4>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            crate::itx_2d::TX_KIND_DCT,
-            crate::itx_2d::TX_KIND_DCT,
-        )
-    }
+    tx_dequant_dense_sse41_i32_impl::<16, 4, 4>(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        crate::itx_2d::TX_KIND_DCT,
+        crate::itx_2d::TX_KIND_DCT,
+    )
 }
 #[inline]
 #[target_feature(enable = "sse4.1")]
@@ -4007,20 +3705,18 @@ macro_rules! iadst_i16_fn {
             first_kind: usize,
             second_kind: usize,
         ) {
-            unsafe {
-                tx_dequant_dense_sse41_i16_impl::<{ $n }, { $s }, { $s }>(
-                    coeff,
-                    tmp,
-                    eob,
-                    tx,
-                    is_rect2,
-                    shift0,
-                    row_clip_min,
-                    row_clip_max,
-                    first_kind,
-                    second_kind,
-                )
-            };
+            tx_dequant_dense_sse41_i16_impl::<{ $n }, { $s }, { $s }>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+                first_kind,
+                second_kind,
+            )
         }
     };
 }
@@ -4038,20 +3734,18 @@ macro_rules! idct_rect_i16_fn {
             row_clip_min: i32,
             row_clip_max: i32,
         ) {
-            unsafe {
-                tx_dequant_dense_sse41_i16_impl::<{ $n }, { $w }, { $h }>(
-                    coeff,
-                    tmp,
-                    eob,
-                    tx,
-                    is_rect2,
-                    shift0,
-                    row_clip_min,
-                    row_clip_max,
-                    crate::itx_2d::TX_KIND_DCT,
-                    crate::itx_2d::TX_KIND_DCT,
-                )
-            };
+            tx_dequant_dense_sse41_i16_impl::<{ $n }, { $w }, { $h }>(
+                coeff,
+                tmp,
+                eob,
+                tx,
+                is_rect2,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+                crate::itx_2d::TX_KIND_DCT,
+                crate::itx_2d::TX_KIND_DCT,
+            )
         }
     };
 }

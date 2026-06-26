@@ -37,12 +37,14 @@ fn load_i16x4_i32(a: &[i16; 4]) -> __m128i {
     unsafe { _mm_cvtepi16_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
-/// Store a pre-masked (`0..=255`) i32x4 as 4 u8.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn store_i32x4_u8(a: &mut [u8; 4], v: __m128i) {
-    let p16 = unsafe { _mm_packs_epi32(v, v) };
-    let p8 = unsafe { _mm_packus_epi16(p16, p16) };
-    *a = (unsafe { _mm_cvtsi128_si32(p8) } as u32).to_le_bytes();
+    let p16 = _mm_packs_epi32(v, v);
+    let p8 = _mm_packus_epi16(p16, p16);
+    unsafe {
+        _mm_store_ss(a.as_mut_ptr().cast(), _mm_castsi128_ps(p8));
+    }
 }
 
 /// `constrain(diff, threshold, shift)` over i32 lanes:

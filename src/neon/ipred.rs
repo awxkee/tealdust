@@ -38,15 +38,14 @@ fn load_u8x8_i16_fixed(ptr: &[u8; 8]) -> int16x8_t {
     unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(ptr.as_ptr()))) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_u8x16_i16x2_neon(a: &[u8; 16]) -> (int16x8_t, int16x8_t) {
     let v = unsafe { vld1q_u8(a.as_ptr()) };
-    unsafe {
-        (
-            vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v))),
-            vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(v))),
-        )
-    }
+    (
+        vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v))),
+        vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(v))),
+    )
 }
 
 #[inline(always)]
@@ -65,16 +64,18 @@ fn store_i16x8x2_u8_fixed(ptr: &mut [u8; 16], lo: int16x8_t, hi: int16x8_t) {
     };
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn sra_i16(v: int16x8_t, shift: i32) -> int16x8_t {
-    unsafe { vshlq_s16(v, vdupq_n_s16(-(shift as i16))) }
+    vshlq_s16(v, vdupq_n_s16(-(shift as i16)))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn dist8(base: i16) -> int16x8_t {
     static OFFSETS: [i16; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
     let offsets = unsafe { vld1q_s16(OFFSETS.as_ptr()) };
-    unsafe { vsubq_s16(vdupq_n_s16(base), offsets) }
+    vsubq_s16(vdupq_n_s16(base), offsets)
 }
 
 pub(crate) fn ipred_v_8bpc_neon(

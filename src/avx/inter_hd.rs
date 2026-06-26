@@ -700,7 +700,6 @@ pub(crate) unsafe fn prep_8tap_hbd_avx2(
 #[cfg(test)]
 mod inter_hd_avx_tests {
     use super::*;
-    use std::arch::x86_64::*;
 
     struct R(u64);
     impl R {
@@ -756,7 +755,7 @@ mod inter_hd_avx_tests {
             let src: Vec<u16> = (0..40).map(|_| r.range(0, (1 << 12) - 1) as u16).collect();
             let f: [i8; 8] = std::array::from_fn(|_| r.range(-128, 127) as i8);
             let base = 8usize;
-            let sv = unsafe { filter_u16x8(&src, base, 1, &f) };
+            let sv = filter_u16x8(&src, base, 1, &f);
             let mut out = [0i32; 8];
             unsafe {
                 _mm256_storeu_si256(out.as_mut_ptr() as *mut __m256i, sv);

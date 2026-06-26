@@ -36,9 +36,10 @@ use crate::intops::ulog2;
 use crate::levels::{ANGLE_IBP_FLAG, ANGLE_MULTI_MRL_FLAG};
 use crate::tables::SM_WEIGHTS;
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn sra_i32(v: __m128i, shift: i32) -> __m128i {
-    unsafe { _mm_sra_epi32(v, _mm_cvtsi32_si128(shift)) }
+    _mm_sra_epi32(v, _mm_cvtsi32_si128(shift))
 }
 
 #[inline(always)]
@@ -56,15 +57,17 @@ fn load_u16x4_i32(a: &[u16; 4]) -> __m128i {
     unsafe { _mm_cvtepu16_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn store_i32x4_u16(a: &mut [u16; 4], v: __m128i) {
-    let packed = unsafe { _mm_packus_epi32(v, _mm_setzero_si128()) };
+    let packed = _mm_packus_epi32(v, _mm_setzero_si128());
     unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, packed) };
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn dist4(base: i32) -> __m128i {
-    unsafe { _mm_sub_epi32(_mm_set1_epi32(base), _mm_setr_epi32(0, 1, 2, 3)) }
+    _mm_sub_epi32(_mm_set1_epi32(base), _mm_setr_epi32(0, 1, 2, 3))
 }
 
 #[inline]
