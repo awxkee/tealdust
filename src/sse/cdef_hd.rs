@@ -37,7 +37,8 @@ fn load_i16x4_i32(a: &[i16; 4]) -> __m128i {
     unsafe { _mm_cvtepi16_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn store_i32x4_u16(a: &mut [u16; 4], v: __m128i) {
     unsafe {
         let p16 = _mm_packus_epi32(v, v);
@@ -45,33 +46,29 @@ fn store_i32x4_u16(a: &mut [u16; 4], v: __m128i) {
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn constrain_v(diff: __m128i, threshold: __m128i, shc: __m128i) -> __m128i {
-    unsafe {
-        let adiff = _mm_abs_epi32(diff);
-        let t = _mm_max_epi32(
-            _mm_setzero_si128(),
-            _mm_sub_epi32(threshold, _mm_srl_epi32(adiff, shc)),
-        );
-        let m = _mm_min_epi32(adiff, t);
-        _mm_blendv_epi8(
-            m,
-            _mm_sub_epi32(_mm_setzero_si128(), m),
-            _mm_cmpgt_epi32(_mm_setzero_si128(), diff),
-        )
-    }
+    let adiff = _mm_abs_epi32(diff);
+    let t = _mm_max_epi32(
+        _mm_setzero_si128(),
+        _mm_sub_epi32(threshold, _mm_srl_epi32(adiff, shc)),
+    );
+    let m = _mm_min_epi32(adiff, t);
+    _mm_blendv_epi8(
+        m,
+        _mm_sub_epi32(_mm_setzero_si128(), m),
+        _mm_cmpgt_epi32(_mm_setzero_si128(), diff),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn mul_i32x4_i16_n(v: __m128i, k: i32) -> __m128i {
-    unsafe {
-        // CDEF constrain() is strength-bounded, so it fits i16. Use PMADDWD
-        // as four independent i16*tap -> i32 multiplies.
-        let v16 = _mm_packs_epi32(v, _mm_setzero_si128());
-        let vz = _mm_unpacklo_epi16(v16, _mm_setzero_si128());
-        let kz = _mm_set1_epi32((k as i16 as u16) as i32);
-        _mm_madd_epi16(vz, kz)
-    }
+    let v16 = _mm_packs_epi32(v, _mm_setzero_si128());
+    let vz = _mm_unpacklo_epi16(v16, _mm_setzero_si128());
+    let kz = _mm_set1_epi32((k as i16 as u16) as i32);
+    _mm_madd_epi16(vz, kz)
 }
 
 #[allow(clippy::too_many_arguments)]

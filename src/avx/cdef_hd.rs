@@ -42,38 +42,34 @@ fn store_i32x8_u16(a: &mut [u16; 8], v: __m256i) {
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn constrain_v(diff: __m256i, threshold: __m256i, shc: __m128i) -> __m256i {
-    unsafe {
-        let adiff = _mm256_abs_epi32(diff);
-        let t = _mm256_max_epi32(
-            _mm256_setzero_si256(),
-            _mm256_sub_epi32(threshold, _mm256_srl_epi32(adiff, shc)),
-        );
-        let m = _mm256_min_epi32(adiff, t);
-        _mm256_blendv_epi8(
-            m,
-            _mm256_sub_epi32(_mm256_setzero_si256(), m),
-            _mm256_cmpgt_epi32(_mm256_setzero_si256(), diff),
-        )
-    }
+    let adiff = _mm256_abs_epi32(diff);
+    let t = _mm256_max_epi32(
+        _mm256_setzero_si256(),
+        _mm256_sub_epi32(threshold, _mm256_srl_epi32(adiff, shc)),
+    );
+    let m = _mm256_min_epi32(adiff, t);
+    _mm256_blendv_epi8(
+        m,
+        _mm256_sub_epi32(_mm256_setzero_si256(), m),
+        _mm256_cmpgt_epi32(_mm256_setzero_si256(), diff),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn mul_i32x8_i16_n(v: __m256i, k: i32) -> __m256i {
-    unsafe {
-        // CDEF constrain() is strength-bounded, so it fits i16. Use PMADDWD
-        // as eight independent i16*tap -> i32 multiplies.
-        let lo = _mm256_castsi256_si128(v);
-        let hi = _mm256_extracti128_si256::<1>(v);
-        let v16 = _mm_packs_epi32(lo, hi);
-        let zero = _mm_setzero_si128();
-        let loz = _mm_unpacklo_epi16(v16, zero);
-        let hiz = _mm_unpackhi_epi16(v16, zero);
-        let vz = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(loz), hiz);
-        let kz = _mm256_set1_epi32((k as i16 as u16) as i32);
-        _mm256_madd_epi16(vz, kz)
-    }
+    let lo = _mm256_castsi256_si128(v);
+    let hi = _mm256_extracti128_si256::<1>(v);
+    let v16 = _mm_packs_epi32(lo, hi);
+    let zero = _mm_setzero_si128();
+    let loz = _mm_unpacklo_epi16(v16, zero);
+    let hiz = _mm_unpackhi_epi16(v16, zero);
+    let vz = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(loz), hiz);
+    let kz = _mm256_set1_epi32((k as i16 as u16) as i32);
+    _mm256_madd_epi16(vz, kz)
 }
 
 #[allow(clippy::too_many_arguments)]

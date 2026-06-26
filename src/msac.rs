@@ -510,6 +510,10 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
     pub(crate) fn decode_symbol_adapt_n<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
         debug_assert!((1..=7).contains(&N));
 
+        if !UPDATE_CDF && N == 3 {
+            return self.decode_symbol_adapt3_no_update_scalar(cdf);
+        }
+
         if cdf.len() <= N {
             return 0;
         }

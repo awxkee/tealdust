@@ -47,34 +47,30 @@ fn store_i32x4_u8(a: &mut [u8; 4], v: __m128i) {
 
 /// `constrain(diff, threshold, shift)` over i32 lanes:
 /// `apply_sign(min(|d|, max(0, threshold - (|d| >> shift))), d)`.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn constrain_v(diff: __m128i, threshold: __m128i, shc: __m128i) -> __m128i {
-    unsafe {
-        let adiff = _mm_abs_epi32(diff);
-        let t = _mm_max_epi32(
-            _mm_setzero_si128(),
-            _mm_sub_epi32(threshold, _mm_srl_epi32(adiff, shc)),
-        );
-        let m = _mm_min_epi32(adiff, t);
-        // apply_sign: negate where diff < 0 (m is 0 when diff == 0, so exact)
-        _mm_blendv_epi8(
-            m,
-            _mm_sub_epi32(_mm_setzero_si128(), m),
-            _mm_cmpgt_epi32(_mm_setzero_si128(), diff),
-        )
-    }
+    let adiff = _mm_abs_epi32(diff);
+    let t = _mm_max_epi32(
+        _mm_setzero_si128(),
+        _mm_sub_epi32(threshold, _mm_srl_epi32(adiff, shc)),
+    );
+    let m = _mm_min_epi32(adiff, t);
+    // apply_sign: negate where diff < 0 (m is 0 when diff == 0, so exact)
+    _mm_blendv_epi8(
+        m,
+        _mm_sub_epi32(_mm_setzero_si128(), m),
+        _mm_cmpgt_epi32(_mm_setzero_si128(), diff),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn mul_i32x4_i16_n(v: __m128i, k: i32) -> __m128i {
-    unsafe {
-        // CDEF constrain() is strength-bounded, so it fits i16. Use PMADDWD
-        // as four independent i16*tap -> i32 multiplies.
-        let v16 = _mm_packs_epi32(v, _mm_setzero_si128());
-        let vz = _mm_unpacklo_epi16(v16, _mm_setzero_si128());
-        let kz = _mm_set1_epi32((k as i16 as u16) as i32);
-        _mm_madd_epi16(vz, kz)
-    }
+    let v16 = _mm_packs_epi32(v, _mm_setzero_si128());
+    let vz = _mm_unpacklo_epi16(v16, _mm_setzero_si128());
+    let kz = _mm_set1_epi32((k as i16 as u16) as i32);
+    _mm_madd_epi16(vz, kz)
 }
 
 #[allow(clippy::too_many_arguments)]

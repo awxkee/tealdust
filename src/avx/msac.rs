@@ -353,7 +353,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
     }
 
     #[target_feature(enable = "avx2")]
-    pub(crate) fn decode_symbol_adapt_avx2(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
+    fn decode_symbol_adapt_avx2(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
         match n_symbols {
             1 => self.decode_symbol_adapt_n_avx2::<1>(cdf),
             2 => self.decode_symbol_adapt_n_avx2::<2>(cdf),
@@ -374,15 +374,52 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
             return 0;
         }
 
+        if !UPDATE_CDF && N == 3 {
+            return self.decode_symbol_adapt3_no_update_scalar(cdf);
+        }
+
         if N <= 2 || (N <= 4 && cdf.len() < 4) || (N > 4 && cdf.len() < 8) {
             return self.decode_symbol_adapt_n_scalar::<N>(cdf);
         }
 
-        if !UPDATE_CDF && N == 3 {
-            return msac_decode_symbol_adapt3_no_update_avx2::<UPDATE_CDF>(self, cdf);
+        msac_decode_symbol_adapt_avx2::<UPDATE_CDF, N>(self, cdf)
+    }
+
+    #[inline(always)]
+    fn decode_symbol_adapt3_no_update_scalar(&mut self, cdf: &[u16]) -> u32 {
+        debug_assert!(!UPDATE_CDF);
+
+        if cdf.len() <= 3 {
+            return 0;
         }
 
-        msac_decode_symbol_adapt_avx2::<UPDATE_CDF, N>(self, cdf)
+        let c = (self.dif >> 48) as u32;
+        let r = self.rng >> 8;
+
+        let p0 = ((cdf[0] | 127) as u32) - 31;
+        let b0 = ((r * p0) >> 10) << 3;
+        if c >= b0 {
+            self.ctx_norm(self.dif - ((b0 as u64) << 48), self.rng - b0);
+            return 0;
+        }
+
+        let p1 = ((cdf[1] | 127) as u32) - 63;
+        let b1 = ((r * p1) >> 10) << 3;
+        if c >= b1 {
+            self.ctx_norm(self.dif - ((b1 as u64) << 48), b0 - b1);
+            return 1;
+        }
+
+        let p2 = ((cdf[2] | 127) as u32) - 95;
+        let b2 = ((r * p2) >> 10) << 3;
+        if c >= b2 {
+            self.ctx_norm(self.dif - ((b2 as u64) << 48), b1 - b2);
+            return 2;
+        }
+
+        // Sentinel lane: v = 0, u = b2.
+        self.ctx_norm(self.dif, b2);
+        3
     }
 }
 
@@ -589,52 +626,6 @@ fn update_cdf_avx2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m
     unsafe { _mm_store_si128(tmp.as_mut_ptr().cast(), updated) };
     let initialized = (unsafe { tmp.assume_init() }).0;
     cdf[..N].copy_from_slice(&initialized[..N]);
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn msac_decode_symbol_adapt3_no_update_avx2<const UPDATE_CDF: bool>(
-    s: &mut MsacContextAvx<'_, UPDATE_CDF>,
-    cdf: &mut [u16],
-) -> u32 {
-    debug_assert!(!UPDATE_CDF);
-    debug_assert!(cdf.len() >= 4);
-
-    let cdf_v = unsafe { _mm_loadl_epi64(cdf.as_ptr().cast::<__m128i>()) };
-    let min_prob = unsafe { _mm_loadl_epi64(MSAC_MIN_PROB[2].as_ptr().cast::<__m128i>()) };
-    let c = (s.dif >> 48) as u16;
-    let r = s.rng >> 8;
-
-    let p = _mm_subs_epu16(_mm_or_si128(cdf_v, _mm_set1_epi16(127)), min_prob);
-    let scale = _mm_set1_epi16(((r << 6) & 0xffff) as i16);
-    let boundaries_v = _mm_slli_epi16(_mm_mulhi_epu16(p, scale), 3);
-    let cmp = _mm_cmpeq_epi16(
-        _mm_subs_epu16(boundaries_v, _mm_set1_epi16(c as i16)),
-        _mm_setzero_si128(),
-    );
-
-    // For N=3, lane 3 is the min-prob sentinel and its boundary is always 0,
-    // so the first four lanes always contain a match.  Unlike the generic path
-    // we do not need to mask pmovmskb down to one bit per word before tzcnt;
-    // the first set bit of each 0xffff word is already at byte bit 2*i.
-    let raw_mask = _mm_movemask_epi8(cmp) as u32;
-    debug_assert_ne!(raw_mask & 0xff, 0);
-    let val = (raw_mask.trailing_zeros() >> 1) as u32;
-
-    // boundaries_v low qword is [v0, v1, v2, 0].  Build a second packed qword
-    // [rng, v0, v1, v2], then select u and v with the same variable shift.
-    // This avoids the generic stack store of [rng, v0..v7].
-    let boundaries = _mm_cvtsi128_si64(boundaries_v) as u64;
-    let shift = val << 4;
-    let u_pack = (boundaries << 16) | (s.rng as u64);
-    let v = ((boundaries >> shift) & 0xffff) as u32;
-    let u = ((u_pack >> shift) & 0xffff) as u32;
-
-    debug_assert!(u <= s.rng);
-    debug_assert!(u >= v);
-    s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
-
-    val
 }
 
 #[target_feature(enable = "avx2")]

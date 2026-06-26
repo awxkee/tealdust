@@ -373,15 +373,52 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx512<'a, UPDATE_CDF> {
             return 0;
         }
 
+        if !UPDATE_CDF && N == 3 {
+            return self.decode_symbol_adapt3_no_update_scalar(cdf);
+        }
+
         if N <= 2 || (N <= 4 && cdf.len() < 4) || (N > 4 && cdf.len() < 8) {
             return self.decode_symbol_adapt_n_scalar::<N>(cdf);
         }
 
-        if !UPDATE_CDF && N == 3 {
-            return msac_decode_symbol_adapt3_no_update_avx512::<UPDATE_CDF>(self, cdf);
+        msac_decode_symbol_adapt_avx512::<UPDATE_CDF, N>(self, cdf)
+    }
+
+    #[inline(always)]
+    fn decode_symbol_adapt3_no_update_scalar(&mut self, cdf: &[u16]) -> u32 {
+        debug_assert!(!UPDATE_CDF);
+
+        if cdf.len() <= 3 {
+            return 0;
         }
 
-        msac_decode_symbol_adapt_avx512::<UPDATE_CDF, N>(self, cdf)
+        let c = (self.dif >> 48) as u32;
+        let r = self.rng >> 8;
+
+        let p0 = ((cdf[0] | 127) as u32) - 31;
+        let b0 = ((r * p0) >> 10) << 3;
+        if c >= b0 {
+            self.ctx_norm(self.dif - ((b0 as u64) << 48), self.rng - b0);
+            return 0;
+        }
+
+        let p1 = ((cdf[1] | 127) as u32) - 63;
+        let b1 = ((r * p1) >> 10) << 3;
+        if c >= b1 {
+            self.ctx_norm(self.dif - ((b1 as u64) << 48), b0 - b1);
+            return 1;
+        }
+
+        let p2 = ((cdf[2] | 127) as u32) - 95;
+        let b2 = ((r * p2) >> 10) << 3;
+        if c >= b2 {
+            self.ctx_norm(self.dif - ((b2 as u64) << 48), b1 - b2);
+            return 2;
+        }
+
+        // Sentinel lane: v = 0, u = b2.
+        self.ctx_norm(self.dif, b2);
+        3
     }
 }
 

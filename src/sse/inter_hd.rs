@@ -89,8 +89,6 @@ fn load_i16x4(p: &[i16]) -> __m128i {
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn mul_i16x4_n_s32(x: __m128i, k: i32) -> __m128i {
-    // PMADDWD gives an element-wise i16*i16 -> i32 multiply when each
-    // source lane is interleaved with a zero lane: [x0,0,x1,0,...].
     let xz = _mm_unpacklo_epi16(x, _mm_setzero_si128());
     let kz = _mm_set1_epi32((k as i16 as u16) as i32);
     _mm_madd_epi16(xz, kz)

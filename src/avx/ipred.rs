@@ -36,14 +36,16 @@ use crate::intops::ulog2;
 use crate::levels::ANGLE_MULTI_MRL_FLAG;
 use crate::tables::SM_WEIGHTS;
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn sra_i16(v: __m128i, shift: i32) -> __m128i {
-    unsafe { _mm_sra_epi16(v, _mm_cvtsi32_si128(shift)) }
+    _mm_sra_epi16(v, _mm_cvtsi32_si128(shift))
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn sra_i16x16(v: __m256i, shift: i32) -> __m256i {
-    unsafe { _mm256_sra_epi16(v, _mm_cvtsi32_si128(shift)) }
+    _mm256_sra_epi16(v, _mm_cvtsi32_si128(shift))
 }
 
 #[inline(always)]
@@ -61,7 +63,8 @@ fn load_u8x16_i16_avx2(a: &[u8; 16]) -> __m256i {
     unsafe { _mm256_cvtepu8_epi16(_mm_loadu_si128(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn store_i16x16_u8_fixed(a: &mut [u8; 16], v: __m256i) {
     unsafe {
         let lo = _mm256_castsi256_si128(v);
@@ -71,15 +74,16 @@ fn store_i16x16_u8_fixed(a: &mut [u8; 16], v: __m256i) {
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn splat_row_u8_avx2(row: &mut [u8], v: u8) {
-    let vv = unsafe { _mm256_set1_epi8(v as i8) };
+    let vv = _mm256_set1_epi8(v as i8);
     let (c32, r32) = row.as_chunks_mut::<32>();
     for c in c32.iter_mut() {
         store_u8x32_fixed(c, vv);
     }
     let (c16, rem) = r32.as_chunks_mut::<16>();
-    let vv16 = unsafe { _mm_set1_epi8(v as i8) };
+    let vv16 = _mm_set1_epi8(v as i8);
     for c in c16.iter_mut() {
         store_u8x16_fixed(c, vv16);
     }

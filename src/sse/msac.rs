@@ -337,7 +337,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
     }
 
     #[target_feature(enable = "sse2")]
-    pub(crate) fn decode_symbol_adapt_sse2(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
+    fn decode_symbol_adapt_sse2(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
         match n_symbols {
             1 => self.decode_symbol_adapt_n_sse2::<1>(cdf),
             2 => self.decode_symbol_adapt_n_sse2::<2>(cdf),

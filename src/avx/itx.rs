@@ -48,8 +48,8 @@ fn with_avx2_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -> 
 // Concrete 32x32 DCT kernels.  These are intentionally backend-local and do not
 // pass through DctSimd4/DctWide or any generic 1-D transform wrapper.
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i32x4_impl(s: &[__m128i; 16]) -> [__m128i; 16] {
     let z = _mm_setzero_si128();
     let mut out = [z; 16];
@@ -68,8 +68,8 @@ fn avx2_dct16_i32x4_impl(s: &[__m128i; 16]) -> [__m128i; 16] {
     out
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_adst16_i32x4_impl(s: &[__m128i; 16], flip: bool) -> [__m128i; 16] {
     let rows = if flip {
         &crate::itx_1d::FLIPADST16_KERNEL_ROWS
@@ -94,8 +94,8 @@ fn avx2_adst16_i32x4_impl(s: &[__m128i; 16], flip: bool) -> [__m128i; 16] {
     out
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_tx16_i32x4_impl(s: &[__m128i; 16], kind: usize) -> [__m128i; 16] {
     match kind {
         crate::itx_2d::TX_KIND_DCT => avx2_dct16_i32x4_impl(s),
@@ -105,8 +105,8 @@ fn avx2_tx16_i32x4_impl(s: &[__m128i; 16], kind: usize) -> [__m128i; 16] {
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn iadst_dequant_16x16_avx2_i32_impl(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -146,8 +146,8 @@ fn iadst_dequant_16x16_avx2_i32_impl(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn iadst_dequant_16x16_avx2_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -223,8 +223,8 @@ fn iadst_dequant_16x16_avx2_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_store4x4_i32_clip(
     dst: &mut [i32; ITX_TMP_PIXELS],
     off: usize,
@@ -262,8 +262,8 @@ fn avx2_store4x4_i32_clip(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_store4x4_i16_clip<const STRIDE: usize>(
     scratch: &mut [i16],
     off: usize,
@@ -318,8 +318,8 @@ fn avx2_store4x4_i16_clip<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_store8x8_i16_clip<const STRIDE: usize>(
     scratch: &mut [i16],
     off: usize,
@@ -421,8 +421,8 @@ fn avx2_store8x8_i16_clip<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_store16x16_i16_clip<const STRIDE: usize>(
     scratch: &mut [i16],
     off: usize,
@@ -539,22 +539,22 @@ fn avx2_store16x16_i16_clip<const STRIDE: usize>(
     );
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 unsafe fn avx2_load4_i16_scratch(src: &[i16], off: usize) -> __m128i {
     debug_assert!(off + 4 <= src.len());
     unsafe { _mm_loadl_epi64(src.as_ptr().add(off) as *const __m128i) }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 unsafe fn avx2_load8_i16_scratch(src: &[i16], off: usize) -> __m128i {
     debug_assert!(off + 8 <= src.len());
     unsafe { _mm_loadu_si128(src.as_ptr().add(off) as *const __m128i) }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_pair8_i16(a: __m128i, b: __m128i) -> __m256i {
     let lo = _mm_unpacklo_epi16(a, b);
     let hi = _mm_unpackhi_epi16(a, b);
@@ -566,8 +566,8 @@ fn tmp_ptr(dst: &mut [i32; ITX_TMP_PIXELS], off: usize) -> *mut __m128i {
     unsafe { dst.as_mut_ptr().add(off) as *mut __m128i }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i32x4_from_coeff4_const<const IS_RECT2: bool>(
     coeff: &[i32],
     base: usize,
@@ -621,8 +621,8 @@ fn avx2_dct32_i32x4_from_coeff4_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i32x4_from_tmp4(tmp: &[i32; ITX_TMP_PIXELS], base: usize, m: usize) -> [__m128i; 4] {
     unsafe {
         let z = _mm_setzero_si128();
@@ -667,8 +667,8 @@ fn avx2_dct32_i32x4_from_tmp4(tmp: &[i32; ITX_TMP_PIXELS], base: usize, m: usize
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_tx8_i32x4_from_coeff4_const<const IS_RECT2: bool>(
     coeff: &[i32],
     base: usize,
@@ -711,8 +711,8 @@ fn avx2_tx8_i32x4_from_coeff4_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_tx8_i32x4_from_tmp4(
     tmp: &[i32; ITX_TMP_PIXELS],
     base: usize,
@@ -786,8 +786,8 @@ fn avx2_identity_scale(n: usize) -> i32 {
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 unsafe fn avx2_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
     coeff: &[i16],
     off: usize,
@@ -797,8 +797,8 @@ unsafe fn avx2_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
     _mm_mullo_epi32(_mm_cvtepi16_epi32(v), scale)
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 unsafe fn avx2_identity_i16x4_scratch_to_i32(
     scratch: &[i16],
     off: usize,
@@ -834,8 +834,8 @@ fn avx2_tx_dense_coeff(kind: usize, n: usize, out: usize, input: usize) -> i32 {
         _ => unreachable!(),
     }
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_tx_dense_coeff_pair(kind: usize, n: usize, out: usize, input: usize) -> __m128i {
     debug_assert_eq!(input & 1, 0);
     let (table, idx): (&[i32], usize) = match (kind, n) {
@@ -872,8 +872,8 @@ fn avx2_tx_dense_coeff_pair(kind: usize, n: usize, out: usize, input: usize) -> 
     avx2_coeff_pair_i16(table, idx)
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 unsafe fn avx2_load4_i16_coeff_packed_const<const IS_RECT2: bool>(
     src: &[i16],
     off: usize,
@@ -888,21 +888,21 @@ unsafe fn avx2_load4_i16_coeff_packed_const<const IS_RECT2: bool>(
     v
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_coeff_pair_from_scalars_i16(k0: i16, k1: i16) -> __m128i {
     unsafe { _mm_set1_epi32(((k1 as u16 as i32) << 16) | (k0 as u16 as i32)) }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_coeff_pair_i16(table: &[i32], idx: usize) -> __m128i {
     debug_assert!(idx * 4 + 4 <= table.len());
     unsafe { _mm_loadu_si128(table.as_ptr().add(idx * 4) as *const __m128i) }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_coeff_pair_i16x8(table: &[i32], idx: usize) -> __m256i {
     unsafe { _mm256_broadcastsi128_si256(avx2_coeff_pair_i16(table, idx)) }
 }
@@ -1374,8 +1374,8 @@ macro_rules! avx2_dct32_i16x4_all_body_active {
     }};
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_residual_add_u8x8(dst: *mut u8, v: __m256i, rnd: __m256i, sh: __m128i) {
     unsafe {
         let r = _mm256_sra_epi32(_mm256_add_epi32(v, rnd), sh);
@@ -1388,8 +1388,8 @@ fn avx2_residual_add_u8x8(dst: *mut u8, v: __m256i, rnd: __m256i, sh: __m128i) {
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_residual_add_u8x8_expand_x2(dst: *mut u8, v: __m256i, rnd: __m256i, sh: __m128i) {
     unsafe {
         let r = _mm256_sra_epi32(_mm256_add_epi32(v, rnd), sh);
@@ -1406,8 +1406,8 @@ fn avx2_residual_add_u8x8_expand_x2(dst: *mut u8, v: __m256i, rnd: __m256i, sh: 
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_residual_add_u8x4(dst: &mut [u8], off: usize, v: __m128i, rnd: __m128i, sh: __m128i) {
     unsafe {
         debug_assert!(off + 4 <= dst.len());
@@ -1423,8 +1423,8 @@ fn avx2_residual_add_u8x4(dst: &mut [u8], off: usize, v: __m128i, rnd: __m128i, 
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_residual_add_u8x4_expand_x2(
     dst: &mut [u8],
     off: usize,
@@ -1449,8 +1449,8 @@ fn avx2_residual_add_u8x4_expand_x2(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_writeback8_i32_u8<const W: usize, const H: usize>(
     dst: &mut [u8],
     dst_off: usize,
@@ -1491,8 +1491,8 @@ fn avx2_writeback8_i32_u8<const W: usize, const H: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_writeback4_i32_u8<const W: usize, const H: usize>(
     dst: &mut [u8],
     dst_off: usize,
@@ -1528,8 +1528,8 @@ fn avx2_writeback4_i32_u8<const W: usize, const H: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x8_scratch8_stride_active_store<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -1650,8 +1650,8 @@ fn avx2_dct16_i16x8_scratch8_stride_active_store<const STRIDE: usize, const ACTI
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x8_scratch8_stride_active_add_u8<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -1788,8 +1788,8 @@ fn avx2_dct16_i16x8_scratch8_stride_active_add_u8<const STRIDE: usize, const ACT
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x8_scratch8_stride_active_store<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -1945,8 +1945,8 @@ fn avx2_dct32_i16x8_scratch8_stride_active_store<const STRIDE: usize, const ACTI
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x8_scratch8_stride_active_add_u8<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2131,8 +2131,8 @@ fn avx2_dct32_i16x8_scratch8_stride_active_add_u8<const STRIDE: usize, const ACT
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x8_scratch8_stride_eob_store<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2148,8 +2148,8 @@ fn avx2_dct16_i16x8_scratch8_stride_eob_store<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x8_scratch8_stride_eob_store<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2167,8 +2167,8 @@ fn avx2_dct32_i16x8_scratch8_stride_eob_store<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x8_scratch8_stride_eob_add_u8<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2196,8 +2196,8 @@ fn avx2_dct16_i16x8_scratch8_stride_eob_add_u8<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x8_scratch8_stride_eob_add_u8<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2229,8 +2229,8 @@ fn avx2_dct32_i16x8_scratch8_stride_eob_add_u8<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x4_scratch4_stride_active_store<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2364,8 +2364,8 @@ fn avx2_dct16_i16x4_scratch4_stride_active_store<const STRIDE: usize, const ACTI
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x4_scratch4_stride_active_store<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2509,8 +2509,8 @@ fn avx2_dct32_i16x4_scratch4_stride_active_store<const STRIDE: usize, const ACTI
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x4_scratch4_stride_eob_store<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2526,8 +2526,8 @@ fn avx2_dct16_i16x4_scratch4_stride_eob_store<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x4_scratch4_stride_eob_store<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2545,8 +2545,8 @@ fn avx2_dct32_i16x4_scratch4_stride_eob_store<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x4_scratch4_stride_active_add_u8<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2693,8 +2693,8 @@ fn avx2_dct16_i16x4_scratch4_stride_active_add_u8<const STRIDE: usize, const ACT
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x4_scratch4_stride_active_add_u8<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2873,8 +2873,8 @@ fn avx2_dct32_i16x4_scratch4_stride_active_add_u8<const STRIDE: usize, const ACT
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x4_scratch4_stride_eob_add_u8<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2902,8 +2902,8 @@ fn avx2_dct16_i16x4_scratch4_stride_eob_add_u8<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x4_scratch4_stride_eob_add_u8<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -2935,8 +2935,8 @@ fn avx2_dct32_i16x4_scratch4_stride_eob_add_u8<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
     base: usize,
@@ -2952,8 +2952,8 @@ fn avx2_dct16_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STR
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
     base: usize,
@@ -2969,8 +2969,8 @@ fn avx2_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STR
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn idct_dequant_dct_i16_avx2_impl<const N: usize>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3004,8 +3004,8 @@ fn idct_dequant_dct_i16_avx2_impl<const N: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn idct_dequant_dct_i16_avx2_impl_const<const N: usize, const IS_RECT2: bool>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3227,8 +3227,8 @@ fn idct_dequant_dct_i16_avx2_impl_const<const N: usize, const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn idct_dequant_dct_i16_avx2_fused_8bpc_impl_const<const N: usize, const IS_RECT2: bool>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -3452,8 +3452,8 @@ fn idct_dequant_dct_i16_avx2_fused_8bpc_impl_const<const N: usize, const IS_RECT
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i32_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3493,8 +3493,8 @@ fn tx_dequant_dense_avx2_i32_impl<const N: usize, const W: usize, const H: usize
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i32_impl_const<
     const N: usize,
     const W: usize,
@@ -3655,8 +3655,8 @@ fn tx_dequant_dense_avx2_i32_impl_const<
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3696,8 +3696,8 @@ fn tx_dequant_dense_avx2_i16_impl<const N: usize, const W: usize, const H: usize
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_impl_const<
     const N: usize,
     const W: usize,
@@ -4035,8 +4035,8 @@ fn tx_dequant_dense_avx2_i16_impl_const<
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
     const N: usize,
     const W: usize,
@@ -4497,8 +4497,8 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -5064,8 +5064,8 @@ macro_rules! avx2_fused_match_body {
     }};
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn itx_dequant_i16_avx2_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -5103,8 +5103,8 @@ pub(crate) fn itx_dequant_i16_avx2_fused_8bpc(
     )
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_8x8_avx2_i32_impl(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5144,8 +5144,8 @@ fn tx_dequant_8x8_avx2_i32_impl(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_8x8_avx2_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5206,8 +5206,8 @@ fn tx_dequant_8x8_avx2_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn idct_dequant_16x16_avx2_i32_impl(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5241,8 +5241,8 @@ fn idct_dequant_16x16_avx2_i32_impl(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn idct_dequant_16x16_avx2_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5402,8 +5402,8 @@ fn idct_dequant_16x16_avx2_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn idct_dequant_32x32_avx2_i32_impl(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5437,8 +5437,8 @@ fn idct_dequant_32x32_avx2_i32_impl(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn idct_dequant_32x32_avx2_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5507,8 +5507,8 @@ fn idct_dequant_32x32_avx2_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_4x4_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5532,8 +5532,8 @@ pub(crate) fn idct_dequant_4x4_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x8_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5557,8 +5557,8 @@ pub(crate) fn idct_dequant_8x8_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x16_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5580,8 +5580,8 @@ pub(crate) fn idct_dequant_16x16_avx2(
         row_clip_max,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x32_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5603,8 +5603,8 @@ pub(crate) fn idct_dequant_32x32_avx2(
         row_clip_max,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_64x64_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5628,8 +5628,8 @@ pub(crate) fn idct_dequant_64x64_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_4x4_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5655,8 +5655,8 @@ pub(crate) fn iadst_dequant_4x4_avx2(
         second_kind,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_8x8_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5682,8 +5682,8 @@ pub(crate) fn iadst_dequant_8x8_avx2(
         second_kind,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_16x16_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5709,8 +5709,8 @@ pub(crate) fn iadst_dequant_16x16_avx2(
         second_kind,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_4x8_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5734,8 +5734,8 @@ pub(crate) fn idct_dequant_4x8_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x4_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5759,8 +5759,8 @@ pub(crate) fn idct_dequant_8x4_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x16_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5784,8 +5784,8 @@ pub(crate) fn idct_dequant_8x16_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x8_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5809,8 +5809,8 @@ pub(crate) fn idct_dequant_16x8_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x32_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5834,8 +5834,8 @@ pub(crate) fn idct_dequant_16x32_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x16_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5859,8 +5859,8 @@ pub(crate) fn idct_dequant_32x16_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_4x16_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5884,8 +5884,8 @@ pub(crate) fn idct_dequant_4x16_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x4_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5909,8 +5909,8 @@ pub(crate) fn idct_dequant_16x4_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x32_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5934,8 +5934,8 @@ pub(crate) fn idct_dequant_8x32_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x8_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5959,8 +5959,8 @@ pub(crate) fn idct_dequant_32x8_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_4x32_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5984,8 +5984,8 @@ pub(crate) fn idct_dequant_4x32_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x4_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6009,8 +6009,8 @@ pub(crate) fn idct_dequant_32x4_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_4x8_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6036,8 +6036,8 @@ pub(crate) fn iadst_dequant_4x8_avx2(
         second_kind,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_8x4_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6063,8 +6063,8 @@ pub(crate) fn iadst_dequant_8x4_avx2(
         second_kind,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_8x16_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6090,8 +6090,8 @@ pub(crate) fn iadst_dequant_8x16_avx2(
         second_kind,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_16x8_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6117,8 +6117,8 @@ pub(crate) fn iadst_dequant_16x8_avx2(
         second_kind,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_4x16_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6144,8 +6144,8 @@ pub(crate) fn iadst_dequant_4x16_avx2(
         second_kind,
     )
 }
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_16x4_avx2(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6304,8 +6304,8 @@ idct_i16_fn!(
     16,
     4
 );
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x8_i16_avx2(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6330,8 +6330,8 @@ pub(crate) fn idct_dequant_8x8_i16_avx2(
     )
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 fn idct_dequant_dct_i16_avx2_fused_8bpc_impl<const N: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -6374,8 +6374,8 @@ fn idct_dequant_dct_i16_avx2_fused_8bpc_impl<const N: usize>(
     }
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x16_i16_avx2_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -6404,8 +6404,8 @@ pub(crate) fn idct_dequant_16x16_i16_avx2_fused_8bpc(
     )
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x32_i16_avx2_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -6434,8 +6434,8 @@ pub(crate) fn idct_dequant_32x32_i16_avx2_fused_8bpc(
     )
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x16_i16_avx2(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6458,8 +6458,8 @@ pub(crate) fn idct_dequant_16x16_i16_avx2(
     )
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x32_i16_avx2(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6494,8 +6494,8 @@ iadst_i16_fn!(
     16,
     4
 );
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_8x8_i16_avx2(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6522,8 +6522,8 @@ pub(crate) fn iadst_dequant_8x8_i16_avx2(
     )
 }
 
-#[target_feature(enable = "avx2")]
 #[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_16x16_i16_avx2(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],

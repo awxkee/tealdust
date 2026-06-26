@@ -37,44 +37,40 @@ fn load_i16x4_i32(a: &[i16; 4]) -> __m128i {
     unsafe { _mm_cvtepi16_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
-/// Store a pre-masked (`0..=255`) i32x4 as 4 u8.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn store_i32x4_u8(a: &mut [u8; 4], v: __m128i) {
-    let p16 = unsafe { _mm_packs_epi32(v, v) };
-    let p8 = unsafe { _mm_packus_epi16(p16, p16) };
-    *a = (unsafe { _mm_cvtsi128_si32(p8) } as u32).to_le_bytes();
+    let p16 = _mm_packs_epi32(v, v);
+    let p8 = _mm_packus_epi16(p16, p16);
+    *a = (_mm_cvtsi128_si32(p8) as u32).to_le_bytes();
 }
 
 /// `constrain(diff, threshold, shift)` over i32 lanes:
 /// `apply_sign(min(|d|, max(0, threshold - (|d| >> shift))), d)`.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn constrain_v(diff: __m128i, threshold: __m128i, shc: __m128i) -> __m128i {
-    unsafe {
-        let adiff = _mm_abs_epi32(diff);
-        let t = _mm_max_epi32(
-            _mm_setzero_si128(),
-            _mm_sub_epi32(threshold, _mm_srl_epi32(adiff, shc)),
-        );
-        let m = _mm_min_epi32(adiff, t);
-        // apply_sign: negate where diff < 0 (m is 0 when diff == 0, so exact)
-        _mm_blendv_epi8(
-            m,
-            _mm_sub_epi32(_mm_setzero_si128(), m),
-            _mm_cmpgt_epi32(_mm_setzero_si128(), diff),
-        )
-    }
+    let adiff = _mm_abs_epi32(diff);
+    let t = _mm_max_epi32(
+        _mm_setzero_si128(),
+        _mm_sub_epi32(threshold, _mm_srl_epi32(adiff, shc)),
+    );
+    let m = _mm_min_epi32(adiff, t);
+    // apply_sign: negate where diff < 0 (m is 0 when diff == 0, so exact)
+    _mm_blendv_epi8(
+        m,
+        _mm_sub_epi32(_mm_setzero_si128(), m),
+        _mm_cmpgt_epi32(_mm_setzero_si128(), diff),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn mul_i32x4_i16_n(v: __m128i, k: i32) -> __m128i {
-    unsafe {
-        // CDEF constrain() is strength-bounded, so it fits i16. Use PMADDWD
-        // as four independent i16*tap -> i32 multiplies.
-        let v16 = _mm_packs_epi32(v, _mm_setzero_si128());
-        let vz = _mm_unpacklo_epi16(v16, _mm_setzero_si128());
-        let kz = _mm_set1_epi32((k as i16 as u16) as i32);
-        _mm_madd_epi16(vz, kz)
-    }
+    let v16 = _mm_packs_epi32(v, _mm_setzero_si128());
+    let vz = _mm_unpacklo_epi16(v16, _mm_setzero_si128());
+    let kz = _mm_set1_epi32((k as i16 as u16) as i32);
+    _mm_madd_epi16(vz, kz)
 }
 
 #[allow(clippy::too_many_arguments)]

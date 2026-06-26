@@ -36,9 +36,10 @@ use crate::intops::ulog2;
 use crate::levels::ANGLE_MULTI_MRL_FLAG;
 use crate::tables::SM_WEIGHTS;
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn sra_i16(v: __m128i, shift: i32) -> __m128i {
-    unsafe { _mm_sra_epi16(v, _mm_cvtsi32_si128(shift)) }
+    _mm_sra_epi16(v, _mm_cvtsi32_si128(shift))
 }
 
 #[target_feature(enable = "sse4.1")]

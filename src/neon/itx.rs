@@ -47,8 +47,8 @@ use std::arch::aarch64::*;
 
 // Concrete 32x32 DCT kernels. These do not route through DctSimd4/DctWide.
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_dct16_i32x4_impl(s: &[int32x4_t; 16]) -> [int32x4_t; 16] {
     let z = vdupq_n_s32(0);
     let mut out = [z; 16];
@@ -66,8 +66,8 @@ fn neon_dct16_i32x4_impl(s: &[int32x4_t; 16]) -> [int32x4_t; 16] {
     out
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_adst16_i32x4_impl(s: &[int32x4_t; 16], flip: bool) -> [int32x4_t; 16] {
     let rows = if flip {
         &crate::itx_1d::FLIPADST16_KERNEL_ROWS
@@ -91,8 +91,8 @@ fn neon_adst16_i32x4_impl(s: &[int32x4_t; 16], flip: bool) -> [int32x4_t; 16] {
     out
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_tx16_i32x4_impl(s: &[int32x4_t; 16], kind: usize) -> [int32x4_t; 16] {
     match kind {
         crate::itx_2d::TX_KIND_DCT => neon_dct16_i32x4_impl(s),
@@ -102,8 +102,8 @@ fn neon_tx16_i32x4_impl(s: &[int32x4_t; 16], kind: usize) -> [int32x4_t; 16] {
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn iadst_dequant_16x16_neon_i32_impl(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -143,8 +143,8 @@ fn iadst_dequant_16x16_neon_i32_impl(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn iadst_dequant_16x16_neon_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -228,8 +228,8 @@ fn iadst_dequant_16x16_neon_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_store4x4_i32_clip(
     tmp: &mut [i32; ITX_TMP_PIXELS],
     off: usize,
@@ -263,8 +263,8 @@ fn neon_store4x4_i32_clip(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_dct32_i32x4_from_coeff4_const<const IS_RECT2: bool>(
     coeff: &[i32],
     base: usize,
@@ -292,8 +292,8 @@ fn neon_dct32_i32x4_from_coeff4_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_dct32_i32x4_from_tmp4(
     tmp: &[i32; ITX_TMP_PIXELS],
     base: usize,
@@ -318,8 +318,8 @@ fn neon_dct32_i32x4_from_tmp4(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_tx8_i32x4_from_coeff4_const<const IS_RECT2: bool>(
     coeff: &[i32],
     base: usize,
@@ -348,8 +348,8 @@ fn neon_tx8_i32x4_from_coeff4_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_tx8_i32x4_from_tmp4(
     tmp: &[i32; ITX_TMP_PIXELS],
     base: usize,
@@ -396,8 +396,8 @@ fn neon_identity_scale(n: usize) -> i16 {
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
     coeff: &[i16],
     off: usize,
@@ -407,8 +407,8 @@ fn neon_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
     vmull_n_s16(v, scale)
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 unsafe fn neon_identity_i16x4_scratch_to_i32(scratch: &[i16], off: usize, scale: i16) -> int32x4_t {
     let v = neon_load4_i16_scratch(scratch, off);
     vmull_n_s16(v, scale)
@@ -494,8 +494,8 @@ fn neon_tx_dense_coeff_i16_const<const KIND: usize, const N: usize>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_load4_i16_coeff_packed_const<const IS_RECT2: bool>(src: &[i16], off: usize) -> int16x4_t {
     debug_assert!(off + 4 <= src.len());
     let v = unsafe { vld1_s16(src.as_ptr().add(off)) };
@@ -507,8 +507,8 @@ fn neon_load4_i16_coeff_packed_const<const IS_RECT2: bool>(src: &[i16], off: usi
     }
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn neon_load4_i16_coeff_packed_rdm_const<const IS_RECT2: bool>(
     src: &[i16],
     off: usize,
@@ -522,15 +522,15 @@ fn neon_load4_i16_coeff_packed_rdm_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_load4_i16_scratch(src: &[i16], off: usize) -> int16x4_t {
     debug_assert!(off + 4 <= src.len());
     unsafe { vld1_s16(src.as_ptr().add(off)) }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_store4x4_i16_clip<const STRIDE: usize>(
     scratch: &mut [i16],
     off: usize,
@@ -566,8 +566,8 @@ fn neon_store4x4_i16_clip<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_store8x8_i16_clip<const STRIDE: usize>(
     scratch: &mut [i16],
     off: usize,
@@ -1081,8 +1081,8 @@ macro_rules! neon_dct32_i16x4_all_body_active {
     }};
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_dct16_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
     base: usize,
@@ -1096,8 +1096,8 @@ fn neon_dct16_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STR
     neon_dct16_i16x4_all_body!()
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn neon_dct16_i16x4_all_from_coeff4_rdm_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
     base: usize,
@@ -1111,8 +1111,8 @@ fn neon_dct16_i16x4_all_from_coeff4_rdm_stride_const<const IS_RECT2: bool, const
     neon_dct16_i16x4_all_body!()
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
     base: usize,
@@ -1126,8 +1126,8 @@ fn neon_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STR
     neon_dct32_i16x4_all_body!()
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn neon_dct32_i16x4_all_from_coeff4_rdm_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
     base: usize,
@@ -1141,8 +1141,8 @@ fn neon_dct32_i16x4_all_from_coeff4_rdm_stride_const<const IS_RECT2: bool, const
     neon_dct32_i16x4_all_body!()
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_dct16_i16x4_all_from_scratch4_stride_active<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -1162,8 +1162,8 @@ fn neon_dct16_i16x4_all_from_scratch4_stride_active<const STRIDE: usize, const A
     neon_dct16_i16x4_all_body_active!()
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_dct32_i16x4_all_from_scratch4_stride_active<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -1183,8 +1183,8 @@ fn neon_dct32_i16x4_all_from_scratch4_stride_active<const STRIDE: usize, const A
     neon_dct32_i16x4_all_body_active!()
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_dct16_i16x4_all_from_scratch4_stride_eob<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -1199,8 +1199,8 @@ fn neon_dct16_i16x4_all_from_scratch4_stride_eob<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_dct32_i16x4_all_from_scratch4_stride_eob<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -1217,8 +1217,8 @@ fn neon_dct32_i16x4_all_from_scratch4_stride_eob<const STRIDE: usize>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn idct_dequant_dct_i16_neon_impl<const N: usize, const LEN: usize>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1252,8 +1252,8 @@ fn idct_dequant_dct_i16_neon_impl<const N: usize, const LEN: usize>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const IS_RECT2: bool>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1426,8 +1426,8 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
     });
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn idct_dequant_dct_i16_neon_rdm_impl<const N: usize, const LEN: usize>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1461,8 +1461,8 @@ fn idct_dequant_dct_i16_neon_rdm_impl<const N: usize, const LEN: usize>(
     }
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn idct_dequant_dct_i16_neon_rdm_impl_const<
     const N: usize,
     const LEN: usize,
@@ -1569,8 +1569,8 @@ fn idct_dequant_dct_i16_neon_rdm_impl_const<
     });
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i32_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1610,8 +1610,8 @@ fn tx_dequant_dense_neon_i32_impl<const N: usize, const W: usize, const H: usize
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i32_impl_const<
     const N: usize,
     const W: usize,
@@ -1715,8 +1715,8 @@ fn tx_dequant_dense_neon_i32_impl_const<
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i16_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1808,8 +1808,8 @@ fn tx_dequant_dense_neon_i16_impl<const N: usize, const W: usize, const H: usize
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i16_impl_kind<
     const N: usize,
     const W: usize,
@@ -1849,8 +1849,8 @@ fn tx_dequant_dense_neon_i16_impl_kind<
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_add4_i32_to_u8(dst: &mut [u8], off: usize, v: int32x4_t, rnd: int32x4_t, nsh: int32x4_t) {
     debug_assert!(off + 4 <= dst.len());
     let r = vshlq_s32(vaddq_s32(v, rnd), nsh);
@@ -1867,8 +1867,8 @@ fn neon_add4_i32_to_u8(dst: &mut [u8], off: usize, v: int32x4_t, rnd: int32x4_t,
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_add4_i32_to_u8_expand_x2(
     dst: &mut [u8],
     off: usize,
@@ -1891,8 +1891,8 @@ fn neon_add4_i32_to_u8_expand_x2(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn neon_writeback4_i32_u8<const W: usize, const H: usize>(
     dst: &mut [u8],
     dst_off: usize,
@@ -1928,8 +1928,8 @@ fn neon_writeback4_i32_u8<const W: usize, const H: usize>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn add_tmp_to_dst_8bpc_neon(
     dst: &mut [u8],
     dst_off: usize,
@@ -1945,7 +1945,7 @@ pub(crate) fn add_tmp_to_dst_8bpc_neon(
 ) -> bool {
     debug_assert!(w == sw || w == sw * 2);
     debug_assert!(h == sh || h == sh * 2);
-    debug_assert!(sw % 4 == 0);
+    debug_assert!(sw.is_multiple_of(4));
     let rndv = vdupq_n_s32(rnd);
     let nsh = vdupq_n_s32(-shift);
 
@@ -2009,8 +2009,8 @@ pub(crate) fn add_tmp_to_dst_8bpc_neon(
     true
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i16_impl_const<
     const N: usize,
     const W: usize,
@@ -2355,8 +2355,8 @@ fn tx_dequant_dense_neon_i16_impl_const<
     });
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn tx_dequant_dense_neon_i16_rdm_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -2448,8 +2448,8 @@ fn tx_dequant_dense_neon_i16_rdm_impl<const N: usize, const W: usize, const H: u
     }
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn tx_dequant_dense_neon_i16_rdm_impl_kind<
     const N: usize,
     const W: usize,
@@ -2489,8 +2489,8 @@ fn tx_dequant_dense_neon_i16_rdm_impl_kind<
     }
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn tx_dequant_dense_neon_i16_rdm_impl_const<
     const N: usize,
     const W: usize,
@@ -2798,8 +2798,8 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
     });
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_8x8_neon_i32_impl(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -2839,8 +2839,8 @@ fn tx_dequant_8x8_neon_i32_impl(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_8x8_neon_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -2912,8 +2912,8 @@ fn tx_dequant_8x8_neon_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn idct_dequant_16x16_neon_i32_impl(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -2947,8 +2947,8 @@ fn idct_dequant_16x16_neon_i32_impl(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn idct_dequant_16x16_neon_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3060,8 +3060,8 @@ fn idct_dequant_16x16_neon_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn idct_dequant_32x32_neon_i32_impl(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3095,8 +3095,8 @@ fn idct_dequant_32x32_neon_i32_impl(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn idct_dequant_32x32_neon_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3303,8 +3303,8 @@ macro_rules! iadst_rect_neon_fn {
 }
 
 idct_neon_fn!(idct_dequant_4x4_neon, 16, 4);
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_8x8_neon(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3378,8 +3378,8 @@ pub(crate) fn idct_dequant_32x32_neon(
 }
 idct_neon_fn!(idct_dequant_64x64_neon, 1024, 32);
 iadst_neon_fn!(iadst_dequant_4x4_neon, 16, 4);
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn iadst_dequant_8x8_neon(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3718,8 +3718,8 @@ pub(crate) fn idct_dequant_32x32_neon_rdm(
         )
     }
 }
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn idct_dequant_32x32_neon_rdm_impl(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3753,8 +3753,8 @@ fn idct_dequant_32x32_neon_rdm_impl(
     }
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn idct_dequant_32x32_neon_rdm_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3776,8 +3776,8 @@ fn idct_dequant_32x32_neon_rdm_impl_const<const IS_RECT2: bool>(
     )
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
     const N: usize,
     const W: usize,
@@ -4343,8 +4343,8 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
     });
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
     const N: usize,
     const W: usize,
@@ -4872,8 +4872,8 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
     });
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i16_fused_8bpc_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -5005,8 +5005,8 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl<const N: usize, const W: usize, con
     }
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -5572,8 +5572,8 @@ macro_rules! neon_fused_match_body {
     }};
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_16x16_i16_neon_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -5634,8 +5634,8 @@ pub(crate) fn idct_dequant_16x16_i16_neon_fused_8bpc(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_32x32_i16_neon_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -5696,8 +5696,8 @@ pub(crate) fn idct_dequant_32x32_i16_neon_fused_8bpc(
     }
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 pub(crate) fn idct_dequant_16x16_i16_neon_rdm_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -5758,8 +5758,8 @@ pub(crate) fn idct_dequant_16x16_i16_neon_rdm_fused_8bpc(
     }
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 pub(crate) fn idct_dequant_32x32_i16_neon_rdm_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -5820,8 +5820,8 @@ pub(crate) fn idct_dequant_32x32_i16_neon_rdm_fused_8bpc(
     }
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn itx_dequant_i16_neon_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -5864,8 +5864,8 @@ pub(crate) fn itx_dequant_i16_neon_fused_8bpc(
     )
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 pub(crate) fn itx_dequant_i16_neon_rdm_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -6151,8 +6151,8 @@ macro_rules! iadst_rect_i16_neon_rdm_fn {
 }
 
 idct_i16_neon_fn!(idct_dequant_4x4_i16_neon, 16, 4);
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_8x8_i16_neon(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6177,8 +6177,8 @@ pub(crate) fn idct_dequant_8x8_i16_neon(
     )
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_16x16_i16_neon(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6201,8 +6201,8 @@ pub(crate) fn idct_dequant_16x16_i16_neon(
     )
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_32x32_i16_neon(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6225,8 +6225,8 @@ pub(crate) fn idct_dequant_32x32_i16_neon(
     )
 }
 
-#[target_feature(enable = "rdm")]
 #[inline]
+#[target_feature(enable = "rdm")]
 pub(crate) fn idct_dequant_32x32_i16_neon_rdm(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6249,8 +6249,8 @@ pub(crate) fn idct_dequant_32x32_i16_neon_rdm(
     )
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_64x64_i16_neon(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6273,8 +6273,8 @@ pub(crate) fn idct_dequant_64x64_i16_neon(
     )
 }
 iadst_i16_neon_fn!(iadst_dequant_4x4_i16_neon, 16, 4);
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn iadst_dequant_8x8_i16_neon(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6301,8 +6301,8 @@ pub(crate) fn iadst_dequant_8x8_i16_neon(
     )
 }
 
-#[target_feature(enable = "neon")]
 #[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn iadst_dequant_16x16_i16_neon(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],

@@ -67,22 +67,23 @@ fn dist4(base: i32) -> __m128i {
     unsafe { _mm_sub_epi32(_mm_set1_epi32(base), _mm_setr_epi32(0, 1, 2, 3)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn weights4(w: &[u8]) -> __m128i {
-    unsafe { _mm_setr_epi32(w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32) }
+    _mm_setr_epi32(w[0] as i32, w[1] as i32, w[2] as i32, w[3] as i32)
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn abs_i32(v: __m128i) -> __m128i {
-    unsafe {
-        let m = _mm_srai_epi32::<31>(v);
-        _mm_sub_epi32(_mm_xor_si128(v, m), m)
-    }
+    let m = _mm_srai_epi32::<31>(v);
+    _mm_sub_epi32(_mm_xor_si128(v, m), m)
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn le_i32(a: __m128i, b: __m128i) -> __m128i {
-    unsafe { _mm_andnot_si128(_mm_cmpgt_epi32(a, b), _mm_cmpeq_epi32(a, a)) }
+    _mm_andnot_si128(_mm_cmpgt_epi32(a, b), _mm_cmpeq_epi32(a, a))
 }
 
 #[inline]
