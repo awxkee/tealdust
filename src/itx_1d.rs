@@ -372,596 +372,181 @@ fn inv_dct8_array(v: &mut [i32; 8]) {
 }
 
 pub(crate) trait DctLane: Copy {
-    unsafe fn zero() -> Self;
-    unsafe fn add(self, o: Self) -> Self;
-    unsafe fn sub(self, o: Self) -> Self;
-    unsafe fn mul(self, k: Self) -> Self;
-    unsafe fn dup_load(table: &[i32], idx: usize) -> Self;
+    fn zero() -> Self;
+    fn add(self, o: Self) -> Self;
+    fn sub(self, o: Self) -> Self;
+    fn mul(self, k: Self) -> Self;
+    fn dup_load(table: &[i32], idx: usize) -> Self;
     #[inline(always)]
-    unsafe fn mul_add(self, x: Self, k: Self) -> Self {
-        unsafe { self.add(x.mul(k)) }
+    fn mul_add(self, x: Self, k: Self) -> Self {
+        self.add(x.mul(k))
     }
 
     type Coeffs: Copy;
-    unsafe fn load_coeffs(table: &[i32], idx: usize) -> Self::Coeffs;
-    unsafe fn mul_add_lane<const LANE: i32>(self, x: Self, c: Self::Coeffs) -> Self;
 }
 impl DctLane for i32 {
     #[inline(always)]
-    unsafe fn zero() -> Self {
+    fn zero() -> Self {
         0
     }
     #[inline(always)]
-    unsafe fn add(self, o: Self) -> Self {
+    fn add(self, o: Self) -> Self {
         self.wrapping_add(o)
     }
     #[inline(always)]
-    unsafe fn sub(self, o: Self) -> Self {
+    fn sub(self, o: Self) -> Self {
         self.wrapping_sub(o)
     }
     #[inline(always)]
-    unsafe fn mul(self, k: Self) -> Self {
+    fn mul(self, k: Self) -> Self {
         self.wrapping_mul(k)
     }
     #[inline(always)]
-    unsafe fn dup_load(table: &[i32], idx: usize) -> Self {
+    fn dup_load(table: &[i32], idx: usize) -> Self {
         // SAFETY: callers index within the kernel tables.
         unsafe { *table.get_unchecked(idx) }
     }
     type Coeffs = [i32; 4];
-    #[inline(always)]
-    unsafe fn load_coeffs(table: &[i32], idx: usize) -> [i32; 4] {
-        // SAFETY: callers index a 4-wide group within the kernel tables.
-        unsafe {
-            [
-                *table.get_unchecked(idx),
-                *table.get_unchecked(idx + 1),
-                *table.get_unchecked(idx + 2),
-                *table.get_unchecked(idx + 3),
-            ]
-        }
-    }
-    #[inline(always)]
-    unsafe fn mul_add_lane<const LANE: i32>(self, x: Self, c: [i32; 4]) -> Self {
-        self.wrapping_add(x.wrapping_mul(c[LANE as usize]))
-    }
 }
 impl DctLane for I32x8 {
     #[inline(always)]
-    unsafe fn zero() -> Self {
+    fn zero() -> Self {
         I32x8::splat(0)
     }
     #[inline(always)]
-    unsafe fn add(self, o: Self) -> Self {
+    fn add(self, o: Self) -> Self {
         self + o
     }
     #[inline(always)]
-    unsafe fn sub(self, o: Self) -> Self {
+    fn sub(self, o: Self) -> Self {
         self - o
     }
     #[inline(always)]
-    unsafe fn mul(self, k: Self) -> Self {
+    fn mul(self, k: Self) -> Self {
         self * k
     }
     #[inline(always)]
-    unsafe fn dup_load(table: &[i32], idx: usize) -> Self {
+    fn dup_load(table: &[i32], idx: usize) -> Self {
         // SAFETY: callers index within the kernel tables.
         I32x8::splat(unsafe { *table.get_unchecked(idx) })
     }
     type Coeffs = [i32; 4];
-    #[inline(always)]
-    unsafe fn load_coeffs(table: &[i32], idx: usize) -> [i32; 4] {
-        // SAFETY: callers index a 4-wide group within the kernel tables.
-        unsafe {
-            [
-                *table.get_unchecked(idx),
-                *table.get_unchecked(idx + 1),
-                *table.get_unchecked(idx + 2),
-                *table.get_unchecked(idx + 3),
-            ]
-        }
-    }
-    #[inline(always)]
-    unsafe fn mul_add_lane<const LANE: i32>(self, x: Self, c: [i32; 4]) -> Self {
-        unsafe { self.add(x.mul(I32x8::splat(c[LANE as usize]))) }
-    }
-}
-
-#[inline(always)]
-pub(crate) fn dct16_flat_bylane<L: DctLane>(
-    load: impl Fn(usize) -> L,
-    mut store: impl FnMut(usize, L),
-) {
-    use crate::itx_2d::{DCT16_KB, DCT16_KD, DCT16_KF, DCT16_KG};
-    unsafe {
-        let z = L::zero();
-        // b[m]: 8 odd taps j=2k+1, 2 groups of 4. KB[m*8+k]=K[(2k+1)*16+m].
-        let b: [L; 8] = core::array::from_fn(|m| {
-            let mut acc = z;
-            let base = m * 8;
-            let mut grp = 0;
-            while grp < 2 {
-                let c = L::load_coeffs(&DCT16_KB, base + grp * 4);
-                let k0 = grp * 4;
-                acc = acc.mul_add_lane::<0>(load(2 * k0 + 1), c);
-                acc = acc.mul_add_lane::<1>(load(2 * (k0 + 1) + 1), c);
-                acc = acc.mul_add_lane::<2>(load(2 * (k0 + 2) + 1), c);
-                acc = acc.mul_add_lane::<3>(load(2 * (k0 + 3) + 1), c);
-                grp += 1;
-            }
-            acc
-        });
-        // d[m]: 4 taps j=4k+2, one group. KD[m*4+k]=K[(4k+2)*16+m].
-        let d: [L; 4] = core::array::from_fn(|m| {
-            let c = L::load_coeffs(&DCT16_KD, m * 4);
-            z.mul_add_lane::<0>(load(2), c)
-                .mul_add_lane::<1>(load(6), c)
-                .mul_add_lane::<2>(load(10), c)
-                .mul_add_lane::<3>(load(14), c)
-        });
-        // f: taps 4,12 (m=0,1). KF=[K[64],K[192],K[65],K[193]].
-        let cf = L::load_coeffs(&DCT16_KF, 0);
-        let f = [
-            z.mul_add_lane::<0>(load(4), cf)
-                .mul_add_lane::<1>(load(12), cf),
-            z.mul_add_lane::<2>(load(4), cf)
-                .mul_add_lane::<3>(load(12), cf),
-        ];
-        // g: taps 0,8 (m=0,1). KG=[K[0],K[128],K[1],K[129]].
-        let cg = L::load_coeffs(&DCT16_KG, 0);
-        let g = [
-            z.mul_add_lane::<0>(load(0), cg)
-                .mul_add_lane::<1>(load(8), cg),
-            z.mul_add_lane::<2>(load(0), cg)
-                .mul_add_lane::<3>(load(8), cg),
-        ];
-        // --- identical butterfly tail to dct16_flat ---
-        let cc: [L; 4] = core::array::from_fn(|i| {
-            if i < 2 {
-                g[i].add(f[i])
-            } else {
-                g[3 - i].sub(f[3 - i])
-            }
-        });
-        let a: [L; 8] = core::array::from_fn(|i| {
-            if i < 4 {
-                cc[i].add(d[i])
-            } else {
-                cc[7 - i].sub(d[7 - i])
-            }
-        });
-        for kk in 0..8 {
-            store(kk, a[kk].add(b[kk]));
-            store(kk + 8, a[7 - kk].sub(b[7 - kk]));
-        }
-    }
 }
 
 #[inline(always)]
 pub(crate) fn dct16_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl FnMut(usize, L)) {
-    unsafe {
-        let kv = |idx: usize| L::dup_load(&crate::itx_2d::DCT16_DENSE_KERNEL, idx);
-        let z = L::zero();
-        let b: [L; 8] = core::array::from_fn(|m| {
-            let mut acc = z;
-            let mut j = 1;
-            while j < 16 {
-                acc = acc.mul_add(load(j), kv(j * 16 + m));
-                j += 2;
-            }
-            acc
-        });
-        let d: [L; 4] = core::array::from_fn(|m| {
-            let mut acc = z;
-            let mut j = 2;
-            while j < 16 {
-                acc = acc.mul_add(load(j), kv(j * 16 + m));
-                j += 4;
-            }
-            acc
-        });
-        let f = [
-            load(4).mul(kv(4 * 16)).mul_add(load(12), kv(12 * 16)),
-            load(4)
-                .mul(kv(4 * 16 + 1))
-                .mul_add(load(12), kv(12 * 16 + 1)),
-        ];
-        let g = [
-            load(0).mul(kv(0)).mul_add(load(8), kv(8 * 16)),
-            load(0).mul(kv(1)).mul_add(load(8), kv(8 * 16 + 1)),
-        ];
-        let cc: [L; 4] = core::array::from_fn(|i| {
-            if i < 2 {
-                g[i].add(f[i])
-            } else {
-                g[3 - i].sub(f[3 - i])
-            }
-        });
-        let a: [L; 8] = core::array::from_fn(|i| {
-            if i < 4 {
-                cc[i].add(d[i])
-            } else {
-                cc[7 - i].sub(d[7 - i])
-            }
-        });
-        for kk in 0..8 {
-            store(kk, a[kk].add(b[kk]));
-            store(kk + 8, a[7 - kk].sub(b[7 - kk]));
+    let kv = |idx: usize| L::dup_load(&crate::itx_2d::DCT16_DENSE_KERNEL, idx);
+    let z = L::zero();
+    let b: [L; 8] = core::array::from_fn(|m| {
+        let mut acc = z;
+        let mut j = 1;
+        while j < 16 {
+            acc = acc.mul_add(load(j), kv(j * 16 + m));
+            j += 2;
         }
-    }
-}
-
-pub(crate) trait DctWide {
-    type In: Copy;
-    type Acc: Copy;
-    type Coeffs: Copy;
-    type Clip: Copy;
-    unsafe fn zero() -> Self::Acc;
-    unsafe fn add(a: Self::Acc, b: Self::Acc) -> Self::Acc;
-    unsafe fn sub(a: Self::Acc, b: Self::Acc) -> Self::Acc;
-    unsafe fn load_coeffs(table: &[i16], idx: usize) -> Self::Coeffs;
-    unsafe fn mul_add_lane<const LANE: i32>(
-        acc: Self::Acc,
-        x: Self::In,
-        c: Self::Coeffs,
-    ) -> Self::Acc;
-    #[inline(always)]
-    unsafe fn mul_add_pair<const LANE0: i32, const LANE1: i32>(
-        acc: Self::Acc,
-        x0: Self::In,
-        x1: Self::In,
-        c: Self::Coeffs,
-    ) -> Self::Acc {
-        unsafe { Self::mul_add_lane::<LANE1>(Self::mul_add_lane::<LANE0>(acc, x0, c), x1, c) }
-    }
-    unsafe fn load8_narrow(src: &[i32], off: usize) -> Self::In;
-    unsafe fn load8_rect2_narrow(src: &[i32], off: usize) -> Self::In;
-    unsafe fn load4_narrow(src: &[i32], off: usize) -> Self::In;
-    unsafe fn load4_rect2_narrow(src: &[i32], off: usize) -> Self::In;
-    unsafe fn load8_i16(src: &[i16], off: usize) -> Self::In;
-    unsafe fn load8_rect2_i16(src: &[i16], off: usize) -> Self::In;
-    unsafe fn load4_i16(src: &[i16], off: usize) -> Self::In;
-    unsafe fn load4_rect2_i16(src: &[i16], off: usize) -> Self::In;
-    unsafe fn make_clip(rnd: i32, shift: i32, min: i32, max: i32) -> Self::Clip;
-    unsafe fn store8_strided_clip(
-        dst: &mut [i32],
-        off: usize,
-        stride: usize,
-        acc: Self::Acc,
-        clip: Self::Clip,
-    );
-    unsafe fn store4_strided_clip(
-        dst: &mut [i32],
-        off: usize,
-        stride: usize,
-        acc: Self::Acc,
-        clip: Self::Clip,
-    );
-
-    /// Store four output columns as four contiguous rows after clipping.
-    ///
-    /// Row-pass wide kernels produce one accumulator per output column, with
-    /// lanes representing four/eight source rows. This method fuses the
-    /// clip+transpose boundary that would otherwise be scalar lane stores.
-    unsafe fn store4x4_strided_clip<const HIGH: bool>(
-        dst: &mut [i32],
-        off: usize,
-        stride: usize,
-        acc: [Self::Acc; 4],
-        clip: Self::Clip,
-    );
-
-    /// Store eight output columns as eight contiguous rows after clipping.
-    ///
-    /// The default keeps the exact previous behaviour: split the 8x8 tile into
-    /// four SIMD 4x4 stores. AVX2 overrides this with a single true 8x8
-    /// register transpose so the low-bit-depth wide row pass does not bounce
-    /// through two half-tile transpose paths.
-    #[inline(always)]
-    unsafe fn store8x8_strided_clip(
-        dst: &mut [i32],
-        off: usize,
-        stride: usize,
-        acc: [Self::Acc; 8],
-        clip: Self::Clip,
-    ) {
-        unsafe {
-            Self::store4x4_strided_clip::<false>(
-                dst,
-                off,
-                stride,
-                [acc[0], acc[1], acc[2], acc[3]],
-                clip,
-            );
-            Self::store4x4_strided_clip::<true>(
-                dst,
-                off + 4 * stride,
-                stride,
-                [acc[0], acc[1], acc[2], acc[3]],
-                clip,
-            );
-            Self::store4x4_strided_clip::<false>(
-                dst,
-                off + 4,
-                stride,
-                [acc[4], acc[5], acc[6], acc[7]],
-                clip,
-            );
-            Self::store4x4_strided_clip::<true>(
-                dst,
-                off + 4 * stride + 4,
-                stride,
-                [acc[4], acc[5], acc[6], acc[7]],
-                clip,
-            );
+        acc
+    });
+    let d: [L; 4] = core::array::from_fn(|m| {
+        let mut acc = z;
+        let mut j = 2;
+        while j < 16 {
+            acc = acc.mul_add(load(j), kv(j * 16 + m));
+            j += 4;
         }
-    }
-
-    unsafe fn store8(dst: &mut [i32], off: usize, acc: Self::Acc);
-    unsafe fn store4(dst: &mut [i32], off: usize, acc: Self::Acc);
-}
-#[inline(always)]
-pub(crate) fn dct32_wide<W: DctWide>(
-    load: impl Fn(usize) -> W::In,
-    mut store: impl FnMut(usize, W::Acc),
-) {
-    use crate::itx_2d::{DCT32_KBW, DCT32_KDW, DCT32_KFW, DCT32_KGW, DCT32_KHW};
-    unsafe {
-        let z = W::zero();
-        let b: [W::Acc; 16] = core::array::from_fn(|m| {
-            let mut acc = z;
-            let base = m * 16;
-            let mut grp = 0;
-            while grp < 2 {
-                let c = W::load_coeffs(&DCT32_KBW, base + grp * 8);
-                let k0 = grp * 8;
-                acc = W::mul_add_pair::<0, 1>(acc, load(2 * k0 + 1), load(2 * (k0 + 1) + 1), c);
-                acc =
-                    W::mul_add_pair::<2, 3>(acc, load(2 * (k0 + 2) + 1), load(2 * (k0 + 3) + 1), c);
-                acc =
-                    W::mul_add_pair::<4, 5>(acc, load(2 * (k0 + 4) + 1), load(2 * (k0 + 5) + 1), c);
-                acc =
-                    W::mul_add_pair::<6, 7>(acc, load(2 * (k0 + 6) + 1), load(2 * (k0 + 7) + 1), c);
-                grp += 1;
-            }
-            acc
-        });
-        let d: [W::Acc; 8] = core::array::from_fn(|m| {
-            let c = W::load_coeffs(&DCT32_KDW, m * 8);
-            let mut acc = z;
-            acc = W::mul_add_pair::<0, 1>(acc, load(2), load(6), c);
-            acc = W::mul_add_pair::<2, 3>(acc, load(10), load(14), c);
-            acc = W::mul_add_pair::<4, 5>(acc, load(18), load(22), c);
-            acc = W::mul_add_pair::<6, 7>(acc, load(26), load(30), c);
-            acc
-        });
-        let f: [W::Acc; 4] = core::array::from_fn(|m| {
-            let c = W::load_coeffs(&DCT32_KFW, m * 8);
-            let mut acc = z;
-            acc = W::mul_add_pair::<0, 1>(acc, load(4), load(12), c);
-            acc = W::mul_add_pair::<2, 3>(acc, load(20), load(28), c);
-            acc
-        });
-        let ch = W::load_coeffs(&DCT32_KHW, 0);
-        let h = [
-            W::mul_add_pair::<0, 1>(z, load(8), load(24), ch),
-            W::mul_add_pair::<2, 3>(z, load(8), load(24), ch),
-        ];
-        let cg = W::load_coeffs(&DCT32_KGW, 0);
-        let g = [
-            W::mul_add_pair::<0, 1>(z, load(0), load(16), cg),
-            W::mul_add_pair::<2, 3>(z, load(0), load(16), cg),
-        ];
-        let e = [
-            W::add(g[0], h[0]),
-            W::add(g[1], h[1]),
-            W::sub(g[1], h[1]),
-            W::sub(g[0], h[0]),
-        ];
-        let cc: [W::Acc; 8] = core::array::from_fn(|i| {
-            if i < 4 {
-                W::add(e[i], f[i])
-            } else {
-                W::sub(e[7 - i], f[7 - i])
-            }
-        });
-        let a: [W::Acc; 16] = core::array::from_fn(|i| {
-            if i < 8 {
-                W::add(cc[i], d[i])
-            } else {
-                W::sub(cc[15 - i], d[15 - i])
-            }
-        });
-        for kk in 0..16 {
-            store(kk, W::add(a[kk], b[kk]));
-            store(kk + 16, W::sub(a[15 - kk], b[15 - kk]));
+        acc
+    });
+    let f = [
+        load(4).mul(kv(4 * 16)).mul_add(load(12), kv(12 * 16)),
+        load(4)
+            .mul(kv(4 * 16 + 1))
+            .mul_add(load(12), kv(12 * 16 + 1)),
+    ];
+    let g = [
+        load(0).mul(kv(0)).mul_add(load(8), kv(8 * 16)),
+        load(0).mul(kv(1)).mul_add(load(8), kv(8 * 16 + 1)),
+    ];
+    let cc: [L; 4] = core::array::from_fn(|i| {
+        if i < 2 {
+            g[i].add(f[i])
+        } else {
+            g[3 - i].sub(f[3 - i])
         }
-    }
-}
-
-#[inline(always)]
-pub(crate) fn mat4_wide<W: DctWide>(
-    load: impl Fn(usize) -> W::In,
-    mut store: impl FnMut(usize, W::Acc),
-    kernel: &[i16],
-) {
-    for i in 0..4 {
-        unsafe {
-            let c = W::load_coeffs(kernel, i * 8);
-            let mut acc = W::mul_add_pair::<0, 1>(W::zero(), load(0), load(1), c);
-            acc = W::mul_add_pair::<2, 3>(acc, load(2), load(3), c);
-            store(i, acc);
+    });
+    let a: [L; 8] = core::array::from_fn(|i| {
+        if i < 4 {
+            cc[i].add(d[i])
+        } else {
+            cc[7 - i].sub(d[7 - i])
         }
-    }
-}
-
-/// s16 8-wide DCT-16 (bit-exact to `dct16_flat`).
-#[inline(always)]
-pub(crate) fn dct16_wide<W: DctWide>(
-    load: impl Fn(usize) -> W::In,
-    mut store: impl FnMut(usize, W::Acc),
-) {
-    use crate::itx_2d::{DCT16_KBW, DCT16_KDW, DCT16_KFW, DCT16_KGW};
-    unsafe {
-        let z = W::zero();
-        let b: [W::Acc; 8] = core::array::from_fn(|m| {
-            let c = W::load_coeffs(&DCT16_KBW, m * 8);
-            let mut acc = z;
-            acc = W::mul_add_pair::<0, 1>(acc, load(1), load(3), c);
-            acc = W::mul_add_pair::<2, 3>(acc, load(5), load(7), c);
-            acc = W::mul_add_pair::<4, 5>(acc, load(9), load(11), c);
-            acc = W::mul_add_pair::<6, 7>(acc, load(13), load(15), c);
-            acc
-        });
-        let d: [W::Acc; 4] = core::array::from_fn(|m| {
-            let c = W::load_coeffs(&DCT16_KDW, m * 8);
-            let mut acc = z;
-            acc = W::mul_add_pair::<0, 1>(acc, load(2), load(6), c);
-            acc = W::mul_add_pair::<2, 3>(acc, load(10), load(14), c);
-            acc
-        });
-        let cf = W::load_coeffs(&DCT16_KFW, 0);
-        let f = [
-            W::mul_add_pair::<0, 1>(z, load(4), load(12), cf),
-            W::mul_add_pair::<2, 3>(z, load(4), load(12), cf),
-        ];
-        let cg = W::load_coeffs(&DCT16_KGW, 0);
-        let g = [
-            W::mul_add_pair::<0, 1>(z, load(0), load(8), cg),
-            W::mul_add_pair::<2, 3>(z, load(0), load(8), cg),
-        ];
-        let cc: [W::Acc; 4] = core::array::from_fn(|i| {
-            if i < 2 {
-                W::add(g[i], f[i])
-            } else {
-                W::sub(g[3 - i], f[3 - i])
-            }
-        });
-        let a: [W::Acc; 8] = core::array::from_fn(|i| {
-            if i < 4 {
-                W::add(cc[i], d[i])
-            } else {
-                W::sub(cc[7 - i], d[7 - i])
-            }
-        });
-        for kk in 0..8 {
-            store(kk, W::add(a[kk], b[kk]));
-            store(kk + 8, W::sub(a[7 - kk], b[7 - kk]));
-        }
-    }
-}
-
-/// s16 8-wide widening-MAC dense matmul for ADST/FLIPADST (mirrors the scalar
-/// `inv_dst_1d`). `kernel` is output-major i16 (n=4 rows zero-padded to 8);
-/// `flip` reverses the output order (FLIPADST-via-ADST-kernel). Bit-exact to
-/// the scalar dense reference: s16 in × i8(→i16) coeff, ≤16-term s32 sum.
-#[inline(always)]
-pub(crate) fn adst8_wide<W: DctWide>(
-    load: impl Fn(usize) -> W::In,
-    mut store: impl FnMut(usize, W::Acc),
-    kernel: &[i16],
-    flip: bool,
-) {
-    for i in 0..8 {
-        unsafe {
-            let c = W::load_coeffs(kernel, i * 8);
-            let mut acc = W::mul_add_pair::<0, 1>(W::zero(), load(0), load(1), c);
-            acc = W::mul_add_pair::<2, 3>(acc, load(2), load(3), c);
-            acc = W::mul_add_pair::<4, 5>(acc, load(4), load(5), c);
-            acc = W::mul_add_pair::<6, 7>(acc, load(6), load(7), c);
-            store(if flip { 7 - i } else { i }, acc);
-        }
-    }
-}
-
-#[inline(always)]
-pub(crate) fn adst16_wide<W: DctWide>(
-    load: impl Fn(usize) -> W::In,
-    mut store: impl FnMut(usize, W::Acc),
-    kernel: &[i16],
-    flip: bool,
-) {
-    for i in 0..16 {
-        unsafe {
-            let c0 = W::load_coeffs(kernel, i * 16);
-            let mut acc = W::mul_add_pair::<0, 1>(W::zero(), load(0), load(1), c0);
-            acc = W::mul_add_pair::<2, 3>(acc, load(2), load(3), c0);
-            acc = W::mul_add_pair::<4, 5>(acc, load(4), load(5), c0);
-            acc = W::mul_add_pair::<6, 7>(acc, load(6), load(7), c0);
-            let c1 = W::load_coeffs(kernel, i * 16 + 8);
-            acc = W::mul_add_pair::<0, 1>(acc, load(8), load(9), c1);
-            acc = W::mul_add_pair::<2, 3>(acc, load(10), load(11), c1);
-            acc = W::mul_add_pair::<4, 5>(acc, load(12), load(13), c1);
-            acc = W::mul_add_pair::<6, 7>(acc, load(14), load(15), c1);
-            store(if flip { 15 - i } else { i }, acc);
-        }
+    });
+    for kk in 0..8 {
+        store(kk, a[kk].add(b[kk]));
+        store(kk + 8, a[7 - kk].sub(b[7 - kk]));
     }
 }
 
 #[inline(always)]
 pub(crate) fn dct32_flat<L: DctLane>(load: impl Fn(usize) -> L, mut store: impl FnMut(usize, L)) {
-    unsafe {
-        let kv = |idx: usize| L::dup_load(&crate::itx_2d::DCT32_DENSE_KERNEL, idx);
-        let z = L::zero();
-        let b: [L; 16] = core::array::from_fn(|m| {
-            let mut acc = z;
-            let mut j = 1;
-            while j < 32 {
-                acc = acc.mul_add(load(j), kv(j * 32 + m));
-                j += 2;
-            }
-            acc
-        });
-        let d: [L; 8] = core::array::from_fn(|m| {
-            let mut acc = z;
-            let mut j = 2;
-            while j < 32 {
-                acc = acc.mul_add(load(j), kv(j * 32 + m));
-                j += 4;
-            }
-            acc
-        });
-        let f: [L; 4] = core::array::from_fn(|m| {
-            let mut acc = load(4).mul(kv(4 * 32 + m));
-            acc = acc.mul_add(load(12), kv(12 * 32 + m));
-            acc = acc.mul_add(load(20), kv(20 * 32 + m));
-            acc = acc.mul_add(load(28), kv(28 * 32 + m));
-            acc
-        });
-        let h = [
-            load(8).mul(kv(8 * 32)).mul_add(load(24), kv(24 * 32)),
-            load(8)
-                .mul(kv(8 * 32 + 1))
-                .mul_add(load(24), kv(24 * 32 + 1)),
-        ];
-        let g = [
-            load(0).mul(kv(0)).mul_add(load(16), kv(16 * 32)),
-            load(0).mul(kv(1)).mul_add(load(16), kv(16 * 32 + 1)),
-        ];
-        let e = [
-            g[0].add(h[0]),
-            g[1].add(h[1]),
-            g[1].sub(h[1]),
-            g[0].sub(h[0]),
-        ];
-        let cc: [L; 8] = core::array::from_fn(|i| {
-            if i < 4 {
-                e[i].add(f[i])
-            } else {
-                e[7 - i].sub(f[7 - i])
-            }
-        });
-        let a: [L; 16] = core::array::from_fn(|i| {
-            if i < 8 {
-                cc[i].add(d[i])
-            } else {
-                cc[15 - i].sub(d[15 - i])
-            }
-        });
-        for kk in 0..16 {
-            store(kk, a[kk].add(b[kk]));
-            store(kk + 16, a[15 - kk].sub(b[15 - kk]));
+    let kv = |idx: usize| L::dup_load(&crate::itx_2d::DCT32_DENSE_KERNEL, idx);
+    let z = L::zero();
+    let b: [L; 16] = core::array::from_fn(|m| {
+        let mut acc = z;
+        let mut j = 1;
+        while j < 32 {
+            acc = acc.mul_add(load(j), kv(j * 32 + m));
+            j += 2;
         }
+        acc
+    });
+    let d: [L; 8] = core::array::from_fn(|m| {
+        let mut acc = z;
+        let mut j = 2;
+        while j < 32 {
+            acc = acc.mul_add(load(j), kv(j * 32 + m));
+            j += 4;
+        }
+        acc
+    });
+    let f: [L; 4] = core::array::from_fn(|m| {
+        let mut acc = load(4).mul(kv(4 * 32 + m));
+        acc = acc.mul_add(load(12), kv(12 * 32 + m));
+        acc = acc.mul_add(load(20), kv(20 * 32 + m));
+        acc = acc.mul_add(load(28), kv(28 * 32 + m));
+        acc
+    });
+    let h = [
+        load(8).mul(kv(8 * 32)).mul_add(load(24), kv(24 * 32)),
+        load(8)
+            .mul(kv(8 * 32 + 1))
+            .mul_add(load(24), kv(24 * 32 + 1)),
+    ];
+    let g = [
+        load(0).mul(kv(0)).mul_add(load(16), kv(16 * 32)),
+        load(0).mul(kv(1)).mul_add(load(16), kv(16 * 32 + 1)),
+    ];
+    let e = [
+        g[0].add(h[0]),
+        g[1].add(h[1]),
+        g[1].sub(h[1]),
+        g[0].sub(h[0]),
+    ];
+    let cc: [L; 8] = core::array::from_fn(|i| {
+        if i < 4 {
+            e[i].add(f[i])
+        } else {
+            e[7 - i].sub(f[7 - i])
+        }
+    });
+    let a: [L; 16] = core::array::from_fn(|i| {
+        if i < 8 {
+            cc[i].add(d[i])
+        } else {
+            cc[15 - i].sub(d[15 - i])
+        }
+    });
+    for kk in 0..16 {
+        store(kk, a[kk].add(b[kk]));
+        store(kk + 16, a[15 - kk].sub(b[15 - kk]));
     }
 }
 

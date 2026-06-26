@@ -28,6 +28,21 @@
  */
 
 use crate::itx_2d::ITX_TMP_PIXELS;
+
+use core::cell::RefCell;
+
+thread_local! {
+    static NEON_ITX_I16_SCRATCH: RefCell<[i16; ITX_TMP_PIXELS]> = const { RefCell::new([0i16; ITX_TMP_PIXELS]) };
+}
+
+#[inline(always)]
+fn with_neon_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -> R {
+    assert!(len <= ITX_TMP_PIXELS);
+    NEON_ITX_I16_SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        f(&mut scratch[..len])
+    })
+}
 use std::arch::aarch64::*;
 
 // Concrete 32x32 DCT kernels. These do not route through DctSimd4/DctWide.
@@ -383,7 +398,7 @@ fn neon_identity_scale(n: usize) -> i16 {
 
 #[target_feature(enable = "neon")]
 #[inline]
-unsafe fn neon_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
+fn neon_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
     coeff: &[i16],
     off: usize,
     scale: i16,
@@ -486,7 +501,7 @@ fn neon_load4_i16_coeff_packed_const<const IS_RECT2: bool>(src: &[i16], off: usi
     let v = unsafe { vld1_s16(src.as_ptr().add(off)) };
     if IS_RECT2 {
         let w = vshrq_n_s32::<8>(vmlal_n_s16(vdupq_n_s32(128), v, 181));
-        vmovn_s32(w)
+        vqmovn_s32(w)
     } else {
         v
     }
@@ -509,7 +524,7 @@ fn neon_load4_i16_coeff_packed_rdm_const<const IS_RECT2: bool>(
 
 #[target_feature(enable = "neon")]
 #[inline]
-unsafe fn neon_load4_i16_scratch(src: &[i16], off: usize) -> int16x4_t {
+fn neon_load4_i16_scratch(src: &[i16], off: usize) -> int16x4_t {
     debug_assert!(off + 4 <= src.len());
     unsafe { vld1_s16(src.as_ptr().add(off)) }
 }
@@ -544,10 +559,10 @@ fn neon_store4x4_i16_clip<const STRIDE: usize>(
         let r1 = vcombine_s32(vget_low_s32(t01.1), vget_low_s32(t23.1));
         let r2 = vcombine_s32(vget_high_s32(t01.0), vget_high_s32(t23.0));
         let r3 = vcombine_s32(vget_high_s32(t01.1), vget_high_s32(t23.1));
-        vst1_s16(scratch.as_mut_ptr().add(off), vmovn_s32(r0));
-        vst1_s16(scratch.as_mut_ptr().add(off + STRIDE), vmovn_s32(r1));
-        vst1_s16(scratch.as_mut_ptr().add(off + 2 * STRIDE), vmovn_s32(r2));
-        vst1_s16(scratch.as_mut_ptr().add(off + 3 * STRIDE), vmovn_s32(r3));
+        vst1_s16(scratch.as_mut_ptr().add(off), vqmovn_s32(r0));
+        vst1_s16(scratch.as_mut_ptr().add(off + STRIDE), vqmovn_s32(r1));
+        vst1_s16(scratch.as_mut_ptr().add(off + 2 * STRIDE), vqmovn_s32(r2));
+        vst1_s16(scratch.as_mut_ptr().add(off + 3 * STRIDE), vqmovn_s32(r3));
     }
 }
 
@@ -584,14 +599,14 @@ fn neon_store8x8_i16_clip<const STRIDE: usize>(
             ($x:expr) => {{ vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32($x, rnd), nsh), minv), maxv) }};
         }
 
-        let r0 = vcombine_s16(vmovn_s32(clip!(v0lo)), vmovn_s32(clip!(v0hi)));
-        let r1 = vcombine_s16(vmovn_s32(clip!(v1lo)), vmovn_s32(clip!(v1hi)));
-        let r2 = vcombine_s16(vmovn_s32(clip!(v2lo)), vmovn_s32(clip!(v2hi)));
-        let r3 = vcombine_s16(vmovn_s32(clip!(v3lo)), vmovn_s32(clip!(v3hi)));
-        let r4 = vcombine_s16(vmovn_s32(clip!(v4lo)), vmovn_s32(clip!(v4hi)));
-        let r5 = vcombine_s16(vmovn_s32(clip!(v5lo)), vmovn_s32(clip!(v5hi)));
-        let r6 = vcombine_s16(vmovn_s32(clip!(v6lo)), vmovn_s32(clip!(v6hi)));
-        let r7 = vcombine_s16(vmovn_s32(clip!(v7lo)), vmovn_s32(clip!(v7hi)));
+        let r0 = vcombine_s16(vqmovn_s32(clip!(v0lo)), vqmovn_s32(clip!(v0hi)));
+        let r1 = vcombine_s16(vqmovn_s32(clip!(v1lo)), vqmovn_s32(clip!(v1hi)));
+        let r2 = vcombine_s16(vqmovn_s32(clip!(v2lo)), vqmovn_s32(clip!(v2hi)));
+        let r3 = vcombine_s16(vqmovn_s32(clip!(v3lo)), vqmovn_s32(clip!(v3hi)));
+        let r4 = vcombine_s16(vqmovn_s32(clip!(v4lo)), vqmovn_s32(clip!(v4hi)));
+        let r5 = vcombine_s16(vqmovn_s32(clip!(v5lo)), vqmovn_s32(clip!(v5hi)));
+        let r6 = vcombine_s16(vqmovn_s32(clip!(v6lo)), vqmovn_s32(clip!(v6hi)));
+        let r7 = vcombine_s16(vqmovn_s32(clip!(v7lo)), vqmovn_s32(clip!(v7hi)));
 
         let t01 = vtrnq_s16(r0, r1);
         let t23 = vtrnq_s16(r2, r3);
@@ -613,12 +628,12 @@ fn neon_store8x8_i16_clip<const STRIDE: usize>(
         }
 
         let o0 = join64!(u02_0.0, u46_0.0, vget_low_s64);
-        let o1 = join64!(u02_0.1, u46_0.1, vget_low_s64);
-        let o2 = join64!(u02_1.0, u46_1.0, vget_low_s64);
+        let o1 = join64!(u02_1.0, u46_1.0, vget_low_s64);
+        let o2 = join64!(u02_0.1, u46_0.1, vget_low_s64);
         let o3 = join64!(u02_1.1, u46_1.1, vget_low_s64);
         let o4 = join64!(u02_0.0, u46_0.0, vget_high_s64);
-        let o5 = join64!(u02_0.1, u46_0.1, vget_high_s64);
-        let o6 = join64!(u02_1.0, u46_1.0, vget_high_s64);
+        let o5 = join64!(u02_1.0, u46_1.0, vget_high_s64);
+        let o6 = join64!(u02_0.1, u46_0.1, vget_high_s64);
         let o7 = join64!(u02_1.1, u46_1.1, vget_high_s64);
 
         vst1q_s16(scratch.as_mut_ptr().add(off), o0);
@@ -1128,36 +1143,6 @@ fn neon_dct32_i16x4_all_from_coeff4_rdm_stride_const<const IS_RECT2: bool, const
 
 #[target_feature(enable = "neon")]
 #[inline]
-fn neon_dct16_i16x4_all_from_scratch4_stride<const STRIDE: usize>(
-    scratch: &[i16],
-    base: usize,
-) -> [int32x4_t; 16] {
-    debug_assert!(base + 15 * STRIDE + 4 <= scratch.len());
-    macro_rules! load {
-        ($idx:expr) => {
-            neon_load4_i16_scratch(scratch, base + ($idx) * STRIDE)
-        };
-    }
-    unsafe { neon_dct16_i16x4_all_body!() }
-}
-
-#[target_feature(enable = "neon")]
-#[inline]
-fn neon_dct32_i16x4_all_from_scratch4_stride<const STRIDE: usize>(
-    scratch: &[i16],
-    base: usize,
-) -> [int32x4_t; 32] {
-    debug_assert!(base + 31 * STRIDE + 4 <= scratch.len());
-    macro_rules! load {
-        ($idx:expr) => {
-            neon_load4_i16_scratch(scratch, base + ($idx) * STRIDE)
-        };
-    }
-    unsafe { neon_dct32_i16x4_all_body!() }
-}
-
-#[target_feature(enable = "neon")]
-#[inline]
 fn neon_dct16_i16x4_all_from_scratch4_stride_active<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
     base: usize,
@@ -1174,7 +1159,7 @@ fn neon_dct16_i16x4_all_from_scratch4_stride_active<const STRIDE: usize, const A
             }
         };
     }
-    unsafe { neon_dct16_i16x4_all_body_active!() }
+    neon_dct16_i16x4_all_body_active!()
 }
 
 #[target_feature(enable = "neon")]
@@ -1195,7 +1180,7 @@ fn neon_dct32_i16x4_all_from_scratch4_stride_active<const STRIDE: usize, const A
             }
         };
     }
-    unsafe { neon_dct32_i16x4_all_body_active!() }
+    neon_dct32_i16x4_all_body_active!()
 }
 
 #[target_feature(enable = "neon")]
@@ -1278,26 +1263,26 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    unsafe {
-        debug_assert!(N == 16 || N == 32);
-        debug_assert!(LEN >= N * N);
-        debug_assert!(coeff.len() >= N * N);
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < N / 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(N == 16 || N == 32);
+    debug_assert!(LEN >= N * N);
+    debug_assert!(coeff.len() >= N * N);
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < N / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let ncols = ngrp * 4;
-        let rnd = vdupq_n_s32((1 << shift0) >> 1);
-        let nsh = vdupq_n_s32(-shift0);
-        let minv = vdupq_n_s32(row_clip_min);
-        let maxv = vdupq_n_s32(row_clip_max);
+    }
+    let ncols = ngrp * 4;
+    let rnd = vdupq_n_s32((1 << shift0) >> 1);
+    let nsh = vdupq_n_s32(-shift0);
+    let minv = vdupq_n_s32(row_clip_min);
+    let maxv = vdupq_n_s32(row_clip_max);
 
-        let mut scratch = [0i16; LEN];
+    with_neon_itx_i16_scratch(LEN, |scratch| unsafe {
+        scratch.fill(0);
         if N == 16 {
             let mut y = 0usize;
             while y + 8 <= ncols {
@@ -1307,7 +1292,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
                 let mut x = 0usize;
                 while x < 16 {
                     neon_store8x8_i16_clip::<16>(
-                        &mut scratch,
+                        scratch,
                         y * 16 + x,
                         lo[x],
                         hi[x],
@@ -1339,7 +1324,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
                 let mut x = 0usize;
                 while x < 16 {
                     neon_store4x4_i16_clip::<16>(
-                        &mut scratch,
+                        scratch,
                         y * 16 + x,
                         out[x],
                         out[x + 1],
@@ -1356,7 +1341,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
             }
             let mut x = 0usize;
             while x < 16 {
-                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<16>(&scratch, x, ncols);
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<16>(scratch, x, ncols);
                 let mut m = 0usize;
                 while m < 16 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -1376,7 +1361,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
                 let mut x = 0usize;
                 while x < 32 {
                     neon_store8x8_i16_clip::<32>(
-                        &mut scratch,
+                        scratch,
                         y * 32 + x,
                         lo[x],
                         hi[x],
@@ -1408,7 +1393,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
                 let mut x = 0usize;
                 while x < 32 {
                     neon_store4x4_i16_clip::<32>(
-                        &mut scratch,
+                        scratch,
                         y * 32 + x,
                         out[x],
                         out[x + 1],
@@ -1425,7 +1410,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
             }
             let mut x = 0usize;
             while x < 32 {
-                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<32>(&scratch, x, ncols);
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<32>(scratch, x, ncols);
                 let mut m = 0usize;
                 while m < 32 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -1438,7 +1423,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
             }
         }
         coeff[..N * N].fill(0);
-    }
+    });
 }
 
 #[target_feature(enable = "rdm")]
@@ -1491,26 +1476,26 @@ fn idct_dequant_dct_i16_neon_rdm_impl_const<
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    unsafe {
-        debug_assert!(N == 16 || N == 32);
-        debug_assert!(LEN >= N * N);
-        debug_assert!(coeff.len() >= N * N);
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < N / 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(N == 16 || N == 32);
+    debug_assert!(LEN >= N * N);
+    debug_assert!(coeff.len() >= N * N);
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < N / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let ncols = ngrp * 4;
-        let rnd = vdupq_n_s32((1 << shift0) >> 1);
-        let nsh = vdupq_n_s32(-shift0);
-        let minv = vdupq_n_s32(row_clip_min);
-        let maxv = vdupq_n_s32(row_clip_max);
+    }
+    let ncols = ngrp * 4;
+    let rnd = vdupq_n_s32((1 << shift0) >> 1);
+    let nsh = vdupq_n_s32(-shift0);
+    let minv = vdupq_n_s32(row_clip_min);
+    let maxv = vdupq_n_s32(row_clip_max);
 
-        let mut scratch = [0i16; LEN];
+    with_neon_itx_i16_scratch(LEN, |scratch| unsafe {
+        scratch.fill(0);
         debug_assert!(N == 32);
         let mut y = 0usize;
         while y + 8 <= ncols {
@@ -1520,7 +1505,7 @@ fn idct_dequant_dct_i16_neon_rdm_impl_const<
             let mut x = 0usize;
             while x < 32 {
                 neon_store8x8_i16_clip::<32>(
-                    &mut scratch,
+                    scratch,
                     y * 32 + x,
                     lo[x],
                     hi[x],
@@ -1552,7 +1537,7 @@ fn idct_dequant_dct_i16_neon_rdm_impl_const<
             let mut x = 0usize;
             while x < 32 {
                 neon_store4x4_i16_clip::<32>(
-                    &mut scratch,
+                    scratch,
                     y * 32 + x,
                     out[x],
                     out[x + 1],
@@ -1569,7 +1554,7 @@ fn idct_dequant_dct_i16_neon_rdm_impl_const<
         }
         let mut x = 0usize;
         while x < 32 {
-            let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<32>(&scratch, x, ncols);
+            let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<32>(scratch, x, ncols);
             let mut m = 0usize;
             while m < 32 {
                 vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -1581,7 +1566,7 @@ fn idct_dequant_dct_i16_neon_rdm_impl_const<
             x += 4;
         }
         coeff[..N * N].fill(0);
-    }
+    });
 }
 
 #[target_feature(enable = "neon")]
@@ -1869,11 +1854,10 @@ fn tx_dequant_dense_neon_i16_impl_kind<
 fn neon_add4_i32_to_u8(dst: &mut [u8], off: usize, v: int32x4_t, rnd: int32x4_t, nsh: int32x4_t) {
     debug_assert!(off + 4 <= dst.len());
     let r = vshlq_s32(vaddq_s32(v, rnd), nsh);
-    let r16 = vmovn_s32(r);
+    let r16 = vqmovn_s32(r);
     let d8 = unsafe { vld1_u8(dst.as_ptr().add(off)) };
     let d16 = vreinterpret_s16_u16(vget_low_u16(vmovl_u8(d8)));
-    let sum = vadd_s16(d16, r16);
-    let sum = vmax_s16(vdup_n_s16(0), vmin_s16(vdup_n_s16(255), sum));
+    let sum = vqadd_s16(d16, r16);
     let packed = vqmovun_s16(vcombine_s16(sum, vdup_n_s16(0)));
     unsafe {
         vst1_lane_u32::<0>(
@@ -1894,14 +1878,13 @@ fn neon_add4_i32_to_u8_expand_x2(
 ) {
     debug_assert!(off + 8 <= dst.len());
     let r = vshlq_s32(vaddq_s32(v, rnd), nsh);
-    let r16 = vmovn_s32(r);
+    let r16 = vqmovn_s32(r);
     let rr = vcombine_s16(r16, r16);
     let rdup = vzip1q_s16(rr, rr);
     let p = unsafe { dst.as_mut_ptr().add(off) };
     let d8 = unsafe { vld1_u8(p) };
     let d16 = vreinterpretq_s16_u16(vmovl_u8(d8));
-    let sum = vaddq_s16(d16, rdup);
-    let sum = vmaxq_s16(vdupq_n_s16(0), vminq_s16(vdupq_n_s16(255), sum));
+    let sum = vqaddq_s16(d16, rdup);
     let packed = vqmovun_s16(sum);
     unsafe {
         vst1_u8(p, packed);
@@ -2044,27 +2027,27 @@ fn tx_dequant_dense_neon_i16_impl_const<
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    unsafe {
-        debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
-        debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-        debug_assert!(W * H <= N && N <= coeff.len());
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < H / 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
+    debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
+    debug_assert!(W * H <= N && N <= coeff.len());
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < H / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let nrows = ngrp * 4;
-        let z = vdupq_n_s32(0);
-        let rnd = vdupq_n_s32((1 << shift0) >> 1);
-        let nsh = vdupq_n_s32(-shift0);
-        let minv = vdupq_n_s32(row_clip_min);
-        let maxv = vdupq_n_s32(row_clip_max);
+    }
+    let nrows = ngrp * 4;
+    let z = vdupq_n_s32(0);
+    let rnd = vdupq_n_s32((1 << shift0) >> 1);
+    let nsh = vdupq_n_s32(-shift0);
+    let minv = vdupq_n_s32(row_clip_min);
+    let maxv = vdupq_n_s32(row_clip_max);
 
-        let mut scratch = [0i16; N];
+    with_neon_itx_i16_scratch(N, |scratch| unsafe {
+        scratch.fill(0);
         let mut y = 0usize;
 
         if FIRST_KIND == crate::itx_2d::TX_KIND_IDENTITY {
@@ -2081,7 +2064,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
                     let a3 =
                         neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 3) * H, scale);
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         a0,
                         a1,
@@ -2105,7 +2088,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
                 let mut m = 0usize;
                 while m < 16 {
                     neon_store8x8_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         lo[m],
                         hi[m],
@@ -2136,7 +2119,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
                 let mut m = 0usize;
                 while m < 32 {
                     neon_store8x8_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         lo[m],
                         hi[m],
@@ -2170,7 +2153,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
                 let mut m = 0usize;
                 while m < 16 {
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         out[m],
                         out[m + 1],
@@ -2188,7 +2171,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
                 let mut m = 0usize;
                 while m < 32 {
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         out[m],
                         out[m + 1],
@@ -2256,7 +2239,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
                         j += 2;
                     }
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         a0,
                         a1,
@@ -2278,7 +2261,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
             while x < W {
                 let mut m = 0usize;
                 while m < H {
-                    let a = neon_identity_i16x4_scratch_to_i32(&scratch, x + m * W, scale);
+                    let a = neon_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), a);
                     m += 1;
                 }
@@ -2287,7 +2270,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
         }
         while x < W {
             if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
-                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 16 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -2297,7 +2280,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
                     m += 4;
                 }
             } else if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 32 {
-                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 32 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -2315,8 +2298,8 @@ fn tx_dequant_dense_neon_i16_impl_const<
                     let mut a3 = z;
                     let mut j = 0usize;
                     while j < H {
-                        let x0 = neon_load4_i16_scratch(&scratch, x + j * W);
-                        let x1 = neon_load4_i16_scratch(&scratch, x + (j + 1) * W);
+                        let x0 = neon_load4_i16_scratch(scratch, x + j * W);
+                        let x1 = neon_load4_i16_scratch(scratch, x + (j + 1) * W);
                         a0 = vmlal_n_s16(
                             a0,
                             x0,
@@ -2369,7 +2352,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
             x += 4;
         }
         coeff[..W * H].fill(0);
-    }
+    });
 }
 
 #[target_feature(enable = "rdm")]
@@ -2524,27 +2507,27 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    unsafe {
-        debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
-        debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-        debug_assert!(W * H <= N && N <= coeff.len());
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < H / 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
+    debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
+    debug_assert!(W * H <= N && N <= coeff.len());
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < H / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let nrows = ngrp * 4;
-        let z = vdupq_n_s32(0);
-        let rnd = vdupq_n_s32((1 << shift0) >> 1);
-        let nsh = vdupq_n_s32(-shift0);
-        let minv = vdupq_n_s32(row_clip_min);
-        let maxv = vdupq_n_s32(row_clip_max);
+    }
+    let nrows = ngrp * 4;
+    let z = vdupq_n_s32(0);
+    let rnd = vdupq_n_s32((1 << shift0) >> 1);
+    let nsh = vdupq_n_s32(-shift0);
+    let minv = vdupq_n_s32(row_clip_min);
+    let maxv = vdupq_n_s32(row_clip_max);
 
-        let mut scratch = [0i16; N];
+    with_neon_itx_i16_scratch(N, |scratch| unsafe {
+        scratch.fill(0);
         let mut y = 0usize;
         while y + 8 <= nrows && FIRST_KIND == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
             if W == 16 {
@@ -2554,7 +2537,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
                 let mut m = 0usize;
                 while m < 16 {
                     neon_store8x8_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         lo[m],
                         hi[m],
@@ -2586,7 +2569,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
                 let mut m = 0usize;
                 while m < 32 {
                     neon_store8x8_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         lo[m],
                         hi[m],
@@ -2621,7 +2604,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
                 let mut m = 0usize;
                 while m < 16 {
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         out[m],
                         out[m + 1],
@@ -2640,7 +2623,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
                 let mut m = 0usize;
                 while m < 32 {
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         out[m],
                         out[m + 1],
@@ -2711,7 +2694,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
                         j += 2;
                     }
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         a0,
                         a1,
@@ -2730,7 +2713,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
         let mut x = 0usize;
         while x < W {
             if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
-                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 16 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -2740,7 +2723,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
                     m += 4;
                 }
             } else if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 32 {
-                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 32 {
                     vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), out[m]);
@@ -2758,8 +2741,8 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
                     let mut a3 = z;
                     let mut j = 0usize;
                     while j < H {
-                        let x0 = neon_load4_i16_scratch(&scratch, x + j * W);
-                        let x1 = neon_load4_i16_scratch(&scratch, x + (j + 1) * W);
+                        let x0 = neon_load4_i16_scratch(scratch, x + j * W);
+                        let x1 = neon_load4_i16_scratch(scratch, x + (j + 1) * W);
                         a0 = vmlal_n_s16(
                             a0,
                             x0,
@@ -2812,7 +2795,7 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
             x += 4;
         }
         coeff[..W * H].fill(0);
-    }
+    });
 }
 
 #[target_feature(enable = "neon")]
@@ -3793,8 +3776,6 @@ fn idct_dequant_32x32_neon_rdm_impl_const<const IS_RECT2: bool>(
     )
 }
 
-// Low-bit-depth i16 coefficient entry points.
-
 #[target_feature(enable = "neon")]
 #[inline]
 fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
@@ -3818,27 +3799,133 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
     row_clip_max: i32,
     shift1: i32,
 ) {
-    unsafe {
-        debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
-        debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-        debug_assert!(W * H <= N && N <= coeff.len());
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < H / 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
+    debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
+    debug_assert!(W * H <= N && N <= coeff.len());
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < H / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let nrows = ngrp * 4;
-        let z = vdupq_n_s32(0);
-        let rnd = vdupq_n_s32((1 << shift0) >> 1);
-        let nsh = vdupq_n_s32(-shift0);
-        let minv = vdupq_n_s32(row_clip_min);
-        let maxv = vdupq_n_s32(row_clip_max);
+    }
+    let nrows = ngrp * 4;
+    let z = vdupq_n_s32(0);
+    let rnd = vdupq_n_s32((1 << shift0) >> 1);
+    let nsh = vdupq_n_s32(-shift0);
+    let minv = vdupq_n_s32(row_clip_min);
+    let maxv = vdupq_n_s32(row_clip_max);
 
-        let mut scratch = [0i16; N];
+    if W == 4 && H == 4 {
+        let rnd1 = vdupq_n_s32((1 << shift1) >> 1);
+        let nsh1 = vdupq_n_s32(-shift1);
+        let c0 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 0);
+        let c1 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 4);
+        let c2 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 8);
+        let c3 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 12);
+        macro_rules! rrow {
+            ($m:expr) => {{
+                let mut a =
+                    vmlal_n_s16(z, c0, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 0));
+                a = vmlal_n_s16(a, c1, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 1));
+                a = vmlal_n_s16(a, c2, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 2));
+                a = vmlal_n_s16(a, c3, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 3));
+                vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32(a, rnd), nsh), minv), maxv)
+            }};
+        }
+        let cc0 = rrow!(0);
+        let cc1 = rrow!(1);
+        let cc2 = rrow!(2);
+        let cc3 = rrow!(3);
+        let t01 = vtrnq_s32(cc0, cc1);
+        let t23 = vtrnq_s32(cc2, cc3);
+        let r0 = vqmovn_s32(vcombine_s32(vget_low_s32(t01.0), vget_low_s32(t23.0)));
+        let r1 = vqmovn_s32(vcombine_s32(vget_low_s32(t01.1), vget_low_s32(t23.1)));
+        let r2 = vqmovn_s32(vcombine_s32(vget_high_s32(t01.0), vget_high_s32(t23.0)));
+        let r3 = vqmovn_s32(vcombine_s32(vget_high_s32(t01.1), vget_high_s32(t23.1)));
+        macro_rules! rcol {
+            ($m:expr) => {{
+                let mut b = vmlal_n_s16(
+                    z,
+                    r0,
+                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 0),
+                );
+                b = vmlal_n_s16(
+                    b,
+                    r1,
+                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 1),
+                );
+                b = vmlal_n_s16(
+                    b,
+                    r2,
+                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 2),
+                );
+                b = vmlal_n_s16(
+                    b,
+                    r3,
+                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 3),
+                );
+                b
+            }};
+        }
+        neon_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            0,
+            rcol!(0),
+            rnd1,
+            nsh1,
+        );
+        neon_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            1,
+            rcol!(1),
+            rnd1,
+            nsh1,
+        );
+        neon_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            2,
+            rcol!(2),
+            rnd1,
+            nsh1,
+        );
+        neon_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            3,
+            rcol!(3),
+            rnd1,
+            nsh1,
+        );
+        coeff[..W * H].fill(0);
+        return;
+    }
+
+    with_neon_itx_i16_scratch(N, |scratch| unsafe {
+        // Row pass fully writes rows 0..nrows; column pass reads rows 0..H, so
+        // clear only the reused tail (nrows..H) rather than the whole buffer.
+        scratch[nrows * W..H * W].fill(0);
         let mut y = 0usize;
 
         if FIRST_KIND == crate::itx_2d::TX_KIND_IDENTITY {
@@ -3855,7 +3942,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
                     let a3 =
                         neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 3) * H, scale);
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         a0,
                         a1,
@@ -3879,7 +3966,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
                 let mut m = 0usize;
                 while m < 16 {
                     neon_store8x8_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         lo[m],
                         hi[m],
@@ -3910,7 +3997,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
                 let mut m = 0usize;
                 while m < 32 {
                     neon_store8x8_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         lo[m],
                         hi[m],
@@ -3944,7 +4031,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
                 let mut m = 0usize;
                 while m < 16 {
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         out[m],
                         out[m + 1],
@@ -3962,7 +4049,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
                 let mut m = 0usize;
                 while m < 32 {
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         out[m],
                         out[m + 1],
@@ -4030,7 +4117,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
                         j += 2;
                     }
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         a0,
                         a1,
@@ -4055,7 +4142,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
             while x < W {
                 let mut m = 0usize;
                 while m < H {
-                    let a = neon_identity_i16x4_scratch_to_i32(&scratch, x + m * W, scale);
+                    let a = neon_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
                     neon_writeback4_i32_u8::<W, H>(
                         dst, dst_off, dst_stride, out_w, out_h, x, m, a, rnd1, nsh1,
                     );
@@ -4066,7 +4153,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
         }
         while x < W {
             if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
-                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 16 {
                     neon_writeback4_i32_u8::<W, H>(
@@ -4111,7 +4198,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
                     m += 4;
                 }
             } else if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 32 {
-                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 32 {
                     neon_writeback4_i32_u8::<W, H>(
@@ -4164,8 +4251,8 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
                     let mut a3 = z;
                     let mut j = 0usize;
                     while j < H {
-                        let x0 = neon_load4_i16_scratch(&scratch, x + j * W);
-                        let x1 = neon_load4_i16_scratch(&scratch, x + (j + 1) * W);
+                        let x0 = neon_load4_i16_scratch(scratch, x + j * W);
+                        let x1 = neon_load4_i16_scratch(scratch, x + (j + 1) * W);
                         a0 = vmlal_n_s16(
                             a0,
                             x0,
@@ -4253,7 +4340,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
             x += 4;
         }
         coeff[..W * H].fill(0);
-    }
+    });
 }
 
 #[target_feature(enable = "rdm")]
@@ -4279,27 +4366,134 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
     row_clip_max: i32,
     shift1: i32,
 ) {
-    unsafe {
-        debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
-        debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-        debug_assert!(W * H <= N && N <= coeff.len());
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < H / 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
+    debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
+    debug_assert!(W * H <= N && N <= coeff.len());
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < H / 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let nrows = ngrp * 4;
-        let z = vdupq_n_s32(0);
-        let rnd = vdupq_n_s32((1 << shift0) >> 1);
-        let nsh = vdupq_n_s32(-shift0);
-        let minv = vdupq_n_s32(row_clip_min);
-        let maxv = vdupq_n_s32(row_clip_max);
+    }
+    let nrows = ngrp * 4;
+    let z = vdupq_n_s32(0);
+    let rnd = vdupq_n_s32((1 << shift0) >> 1);
+    let nsh = vdupq_n_s32(-shift0);
+    let minv = vdupq_n_s32(row_clip_min);
+    let maxv = vdupq_n_s32(row_clip_max);
 
-        let mut scratch = [0i16; N];
+    if W == 4 && H == 4 {
+        let rnd1 = vdupq_n_s32((1 << shift1) >> 1);
+        let nsh1 = vdupq_n_s32(-shift1);
+        let c0 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 0);
+        let c1 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 4);
+        let c2 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 8);
+        let c3 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 12);
+        macro_rules! rrow {
+            ($m:expr) => {{
+                let mut a =
+                    vmlal_n_s16(z, c0, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 0));
+                a = vmlal_n_s16(a, c1, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 1));
+                a = vmlal_n_s16(a, c2, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 2));
+                a = vmlal_n_s16(a, c3, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 3));
+                vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32(a, rnd), nsh), minv), maxv)
+            }};
+        }
+        let cc0 = rrow!(0);
+        let cc1 = rrow!(1);
+        let cc2 = rrow!(2);
+        let cc3 = rrow!(3);
+        // Transpose (output-cols -> rows), identical to neon_store4x4_i16_clip.
+        let t01 = vtrnq_s32(cc0, cc1);
+        let t23 = vtrnq_s32(cc2, cc3);
+        let r0 = vqmovn_s32(vcombine_s32(vget_low_s32(t01.0), vget_low_s32(t23.0)));
+        let r1 = vqmovn_s32(vcombine_s32(vget_low_s32(t01.1), vget_low_s32(t23.1)));
+        let r2 = vqmovn_s32(vcombine_s32(vget_high_s32(t01.0), vget_high_s32(t23.0)));
+        let r3 = vqmovn_s32(vcombine_s32(vget_high_s32(t01.1), vget_high_s32(t23.1)));
+        macro_rules! rcol {
+            ($m:expr) => {{
+                let mut b = vmlal_n_s16(
+                    z,
+                    r0,
+                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 0),
+                );
+                b = vmlal_n_s16(
+                    b,
+                    r1,
+                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 1),
+                );
+                b = vmlal_n_s16(
+                    b,
+                    r2,
+                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 2),
+                );
+                b = vmlal_n_s16(
+                    b,
+                    r3,
+                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 3),
+                );
+                b
+            }};
+        }
+        neon_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            0,
+            rcol!(0),
+            rnd1,
+            nsh1,
+        );
+        neon_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            1,
+            rcol!(1),
+            rnd1,
+            nsh1,
+        );
+        neon_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            2,
+            rcol!(2),
+            rnd1,
+            nsh1,
+        );
+        neon_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            3,
+            rcol!(3),
+            rnd1,
+            nsh1,
+        );
+        coeff[..W * H].fill(0);
+        return;
+    }
+
+    with_neon_itx_i16_scratch(N, |scratch| {
+        // Row pass fully writes rows 0..nrows; column pass reads rows 0..H, so
+        // clear only the reused tail (nrows..H) rather than the whole buffer.
+        scratch[nrows * W..H * W].fill(0);
         let mut y = 0usize;
         while y + 8 <= nrows && FIRST_KIND == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
             if W == 16 {
@@ -4309,7 +4503,7 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
                 let mut m = 0usize;
                 while m < 16 {
                     neon_store8x8_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         lo[m],
                         hi[m],
@@ -4341,7 +4535,7 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
                 let mut m = 0usize;
                 while m < 32 {
                     neon_store8x8_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         lo[m],
                         hi[m],
@@ -4376,7 +4570,7 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
                 let mut m = 0usize;
                 while m < 16 {
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         out[m],
                         out[m + 1],
@@ -4395,7 +4589,7 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
                 let mut m = 0usize;
                 while m < 32 {
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         out[m],
                         out[m + 1],
@@ -4466,7 +4660,7 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
                         j += 2;
                     }
                     neon_store4x4_i16_clip::<W>(
-                        &mut scratch,
+                        scratch,
                         y * W + m,
                         a0,
                         a1,
@@ -4488,7 +4682,7 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
         let mut x = 0usize;
         while x < W {
             if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
-                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let out = neon_dct16_i16x4_all_from_scratch4_stride_eob::<W>(scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 16 {
                     neon_writeback4_i32_u8::<W, H>(
@@ -4533,7 +4727,7 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
                     m += 4;
                 }
             } else if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 32 {
-                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(&scratch, x, nrows);
+                let out = neon_dct32_i16x4_all_from_scratch4_stride_eob::<W>(scratch, x, nrows);
                 let mut m = 0usize;
                 while m < 32 {
                     neon_writeback4_i32_u8::<W, H>(
@@ -4586,8 +4780,8 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
                     let mut a3 = z;
                     let mut j = 0usize;
                     while j < H {
-                        let x0 = neon_load4_i16_scratch(&scratch, x + j * W);
-                        let x1 = neon_load4_i16_scratch(&scratch, x + (j + 1) * W);
+                        let x0 = neon_load4_i16_scratch(scratch, x + j * W);
+                        let x1 = neon_load4_i16_scratch(scratch, x + (j + 1) * W);
                         a0 = vmlal_n_s16(
                             a0,
                             x0,
@@ -4675,7 +4869,7 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
             x += 4;
         }
         coeff[..W * H].fill(0);
-    }
+    });
 }
 
 #[target_feature(enable = "neon")]

@@ -514,7 +514,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
         && (tx == txsz::TX_16X16 || tx == txsz::TX_32X32)
         && !force_generic_itx()
     {
-        if let (Some(coeff16), Some(dst8)) = (
+        if let (Some(_coeff16), Some(_dst8)) = (
             C::try_as_i16_slice_mut(coeff),
             <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst),
         ) {
@@ -524,8 +524,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if tx == txsz::TX_16X16 {
                         unsafe {
                             crate::avx::idct_dequant_16x16_i16_avx2_fused_8bpc(
-                                coeff16,
-                                dst8,
+                                _coeff16,
+                                _dst8,
                                 dst_off,
                                 stride,
                                 eob,
@@ -540,8 +540,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     } else {
                         unsafe {
                             crate::avx::idct_dequant_32x32_i16_avx2_fused_8bpc(
-                                coeff16,
-                                dst8,
+                                _coeff16,
+                                _dst8,
                                 dst_off,
                                 stride,
                                 eob,
@@ -563,8 +563,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if tx == txsz::TX_16X16 {
                         unsafe {
                             crate::sse::idct_dequant_16x16_i16_sse41_fused_8bpc(
-                                coeff16,
-                                dst8,
+                                _coeff16,
+                                _dst8,
                                 dst_off,
                                 stride,
                                 eob,
@@ -579,8 +579,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     } else {
                         unsafe {
                             crate::sse::idct_dequant_32x32_i16_sse41_fused_8bpc(
-                                coeff16,
-                                dst8,
+                                _coeff16,
+                                _dst8,
                                 dst_off,
                                 stride,
                                 eob,
