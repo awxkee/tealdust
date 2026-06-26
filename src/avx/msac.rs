@@ -605,7 +605,7 @@ fn msac_decode_symbol_adapt_avx2<const UPDATE_CDF: bool, const N: usize>(
     let bounds_ptr = bounds.as_mut_ptr().cast::<u16>();
     unsafe {
         bounds_ptr.write(s.rng as u16);
-        _mm_store_si128(bounds_ptr.add(1).cast(), boundaries_v);
+        _mm_storeu_si128(bounds_ptr.add(1).cast(), boundaries_v);
     }
 
     let initialized = (unsafe { bounds.assume_init() }).0;

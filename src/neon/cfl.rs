@@ -42,13 +42,38 @@ fn predict_one(dc: i32, alpha: i32, ac: i32) -> u8 {
 }
 
 #[inline(always)]
+fn load_u8x8(a: &[u8; 8]) -> uint8x8_t {
+    unsafe { vld1_u8(a.as_ptr()) }
+}
+
+#[inline(always)]
 fn load_u8x16(a: &[u8; 16]) -> uint8x16_t {
     unsafe { vld1q_u8(a.as_ptr()) }
 }
 
 #[inline(always)]
+fn load_u8x16_tail8(src: &[u8]) -> uint8x16_t {
+    debug_assert!(src.len() >= 8);
+    unsafe { vcombine_u8(vld1_u8(src.as_ptr().cast()), vdup_n_u8(0)) }
+}
+
+#[inline(always)]
+fn load_u8x8_tail4(src: &[u8]) -> uint8x8_t {
+    debug_assert!(src.len() >= 4);
+    unsafe { vreinterpret_u8_u32(vld1_lane_u32::<0>(src.as_ptr().cast(), vdup_n_u32(0))) }
+}
+
+#[inline(always)]
 fn store_u8x8(a: &mut [u8; 8], v: uint8x8_t) {
     unsafe { vst1_u8(a.as_mut_ptr(), v) };
+}
+
+#[inline(always)]
+fn store_u8x4(a: &mut [u8], v: uint8x8_t) {
+    debug_assert!(a.len() >= 4);
+    let mut tmp = [0u8; 8];
+    unsafe { vst1_u8(tmp.as_mut_ptr(), v) };
+    a[..4].copy_from_slice(&tmp[..4]);
 }
 
 #[inline(always)]
@@ -68,6 +93,25 @@ fn pad_bottom(plane: &mut [u8], row0: usize, stride: usize, w: usize, h: usize, 
 
 #[inline]
 #[target_feature(enable = "neon")]
+fn even_u8x8(src: uint8x16_t) -> uint8x8_t {
+    vget_low_u8(vuzp1q_u8(src, src))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn odd_u8x8(src: uint8x16_t) -> uint8x8_t {
+    vget_low_u8(vuzp2q_u8(src, src))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn left_u8x8(src: uint8x16_t, prev: u8) -> uint8x8_t {
+    let shifted = vextq_u8::<15>(vdupq_n_u8(prev), src);
+    even_u8x8(shifted)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
 fn ac8_420_i16(top: uint8x16_t, bot: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
     let top_pairs = vpaddlq_u8(top);
     let bot_pairs = vpaddlq_u8(bot);
@@ -76,6 +120,45 @@ fn ac8_420_i16(top: uint8x16_t, bot: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
     let sum2x2_x2 = vshlq_n_u16::<1>(sum2x2); // <= 2040
 
     vsubq_s16(vreinterpretq_s16_u16(sum2x2_x2), dc0v)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn ac8_420_filter_i16<const FILTER: u32>(
+    cur: uint8x16_t,
+    top: uint8x16_t,
+    bot: uint8x16_t,
+    prev_cur: u8,
+    prev_bot: u8,
+    dc0v: int16x8_t,
+) -> int16x8_t {
+    if FILTER == CFL_FLT_TYPE_VSTRIP {
+        let left_cur = vmovl_u8(left_u8x8(cur, prev_cur));
+        let center_cur = vmovl_u8(even_u8x8(cur));
+        let right_cur = vmovl_u8(odd_u8x8(cur));
+        let left_bot = vmovl_u8(left_u8x8(bot, prev_bot));
+        let center_bot = vmovl_u8(even_u8x8(bot));
+        let right_bot = vmovl_u8(odd_u8x8(bot));
+
+        let cur_sum = vaddq_u16(vaddq_u16(left_cur, vshlq_n_u16::<1>(center_cur)), right_cur);
+        let bot_sum = vaddq_u16(vaddq_u16(left_bot, vshlq_n_u16::<1>(center_bot)), right_bot);
+        vsubq_s16(vreinterpretq_s16_u16(vaddq_u16(cur_sum, bot_sum)), dc0v)
+    } else if FILTER == CFL_FLT_TYPE_GAUSS {
+        let left = vmovl_u8(left_u8x8(cur, prev_cur));
+        let center = vmovl_u8(even_u8x8(cur));
+        let right = vmovl_u8(odd_u8x8(cur));
+        let top = vmovl_u8(even_u8x8(top));
+        let bot = vmovl_u8(even_u8x8(bot));
+
+        let center4 = vshlq_n_u16::<2>(center);
+        let sum = vaddq_u16(
+            vaddq_u16(vaddq_u16(left, center4), right),
+            vaddq_u16(top, bot),
+        );
+        vsubq_s16(vreinterpretq_s16_u16(sum), dc0v)
+    } else {
+        ac8_420_i16(cur, bot, dc0v)
+    }
 }
 
 #[inline]
@@ -94,7 +177,7 @@ fn ac8_422_uniform_i16(src: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
 #[inline]
 #[target_feature(enable = "neon")]
 fn ac8_422_gauss_i16(src: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
-    ac8_444_i16(vget_low_u8(vuzp1q_u8(src, src)), dc0v)
+    ac8_444_i16(even_u8x8(src), dc0v)
 }
 
 /// Apply alpha to 8 i16 AC lanes.
@@ -103,9 +186,11 @@ fn ac8_422_gauss_i16(src: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
 /// Everything before this stays i16.
 #[inline]
 #[target_feature(enable = "neon")]
-fn apply8_i16_ac(
+fn apply8_i16_ac_wide(
     ac: int16x8_t,
+    _alpha: i16,
     alpha_v: int16x4_t,
+    _dc: i32,
     dc_v: int32x4_t,
     round_v: int32x4_t,
     zero_v: int32x4_t,
@@ -129,35 +214,83 @@ fn apply8_i16_ac(
     vqmovn_u16(vcombine_u16(vqmovun_s32(val_lo), vqmovun_s32(val_hi)))
 }
 
-#[inline]
-#[target_feature(enable = "neon")]
-fn apply16_444_i16_ac(
-    src: uint8x16_t,
-    dc0v: int16x8_t,
-    alpha_v: int16x4_t,
-    dc_v: int32x4_t,
-    round_v: int32x4_t,
-    zero_v: int32x4_t,
-) -> uint8x16_t {
-    let lo = apply8_i16_ac(
-        ac8_444_i16(vget_low_u8(src), dc0v),
-        alpha_v,
-        dc_v,
-        round_v,
-        zero_v,
-    );
-    let hi = apply8_i16_ac(
-        ac8_444_i16(vget_high_u8(src), dc0v),
-        alpha_v,
-        dc_v,
-        round_v,
-        zero_v,
-    );
-    vcombine_u8(lo, hi)
+macro_rules! cfl8_apply_wide {
+    ($ac:expr, $alpha:expr, $alpha_v:expr, $dc:expr, $dc_v:expr, $round_v:expr, $zero_v:expr) => {
+        apply8_i16_ac_wide($ac, $alpha, $alpha_v, $dc, $dc_v, $round_v, $zero_v)
+    };
 }
 
-#[target_feature(enable = "neon")]
-fn cfl_apply_420_8bpc_neon_impl(args: CflApply8<'_>) {
+macro_rules! cfl8_apply_rdm {
+    ($ac:expr, $alpha:expr, $_alpha_v:expr, $dc:expr, $_dc_v:expr, $_round_v:expr, $_zero_v:expr) => {{
+        // Equivalent to dav2d's abs(ac) << 4 + pmulhrsw(abs(alpha)) path:
+        //   sign(alpha * ac) * ((abs(alpha * ac) + 1024) >> 11)
+        // Keep this inside the rdm-specialized module so the RDM intrinsic
+        // never crosses a mixed target-feature helper boundary.
+        let zero = vdupq_n_s16(0);
+        let alpha8 = vdupq_n_s16($alpha);
+        let ac_abs = vabsq_s16($ac);
+        let alpha_abs = vabsq_s16(alpha8);
+        let mag = vqrdmulhq_s16(vshlq_n_s16::<4>(ac_abs), alpha_abs);
+        let neg_mask = veorq_u16(vcltq_s16($ac, zero), vcltq_s16(alpha8, zero));
+        let signed = vbslq_s16(neg_mask, vnegq_s16(mag), mag);
+        vqmovun_s16(vaddq_s16(vdupq_n_s16($dc as i16), signed))
+    }};
+}
+
+macro_rules! define_cfl8_neon_impl {
+    ($mod_name:ident, $apply8_i16_ac_macro:ident, $(#[$target_attr:meta])*) => {
+        mod $mod_name {
+            use super::*;
+
+            #[inline]
+            $(#[$target_attr])*
+            fn apply8_i16_ac_fn(
+                ac: int16x8_t,
+                alpha: i16,
+                _alpha_v: int16x4_t,
+                dc: i32,
+                _dc_v: int32x4_t,
+                _round_v: int32x4_t,
+                _zero_v: int32x4_t,
+            ) -> uint8x8_t {
+                $apply8_i16_ac_macro!(ac, alpha, _alpha_v, dc, _dc_v, _round_v, _zero_v)
+            }
+
+            #[inline]
+            $(#[$target_attr])*
+            fn apply16_444_i16_ac_fn(
+                src: uint8x16_t,
+                dc0v: int16x8_t,
+                alpha: i16,
+                alpha_v: int16x4_t,
+                dc: i32,
+                dc_v: int32x4_t,
+                round_v: int32x4_t,
+                zero_v: int32x4_t,
+            ) -> uint8x16_t {
+                let lo = apply8_i16_ac_fn(
+                    ac8_444_i16(vget_low_u8(src), dc0v),
+                    alpha,
+                    alpha_v,
+                    dc,
+                    dc_v,
+                    round_v,
+                    zero_v,
+                );
+                let hi = apply8_i16_ac_fn(
+                    ac8_444_i16(vget_high_u8(src), dc0v),
+                    alpha,
+                    alpha_v,
+                    dc,
+                    dc_v,
+                    round_v,
+                    zero_v,
+                );
+                vcombine_u8(lo, hi)
+            }
+
+$(#[$target_attr])*
+fn cfl_apply_420_8bpc_impl<const FILTER: u32>(args: CflApply8<'_>) {
     let CflApply8 {
         y,
         u,
@@ -216,8 +349,14 @@ fn cfl_apply_420_8bpc_neon_impl(args: CflApply8<'_>) {
     let mut urow = urow0;
     let mut vrow = vrow0;
 
-    for _y in 0..ylim {
-        let top = y[yrow..yrow + lfull].as_chunks::<16>().0;
+    for cy in 0..ylim {
+        let cur = y[yrow..yrow + lfull].as_chunks::<16>().0;
+        let top_row = if FILTER == CFL_FLT_TYPE_GAUSS && (cy & 31) != 0 {
+            yrow - ystride
+        } else {
+            yrow
+        };
+        let top = y[top_row..top_row + lfull].as_chunks::<16>().0;
         let bot = y[yrow + ystride..yrow + ystride + lfull]
             .as_chunks::<16>()
             .0;
@@ -227,52 +366,211 @@ fn cfl_apply_420_8bpc_neon_impl(args: CflApply8<'_>) {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
 
-                for (((du, dv), t), b) in u_chunks
+                for (i, (((du, dv), c), (t, b))) in u_chunks
                     .iter_mut()
                     .zip(v_chunks.iter_mut())
-                    .zip(top.iter())
-                    .zip(bot.iter())
+                    .zip(cur.iter())
+                    .zip(top.iter().zip(bot.iter()))
+                    .enumerate()
                 {
-                    let ac = ac8_420_i16(load_u8x16(t), load_u8x16(b), dc0v);
+                    let luma_x = i * 16;
+                    let prev_cur = if (luma_x & 63) == 0 {
+                        y[yrow + luma_x]
+                    } else {
+                        y[yrow + luma_x - 1]
+                    };
+                    let prev_bot = if (luma_x & 63) == 0 {
+                        y[yrow + ystride + luma_x]
+                    } else {
+                        y[yrow + ystride + luma_x - 1]
+                    };
+                    let ac = ac8_420_filter_i16::<FILTER>(
+                        load_u8x16(c),
+                        load_u8x16(t),
+                        load_u8x16(b),
+                        prev_cur,
+                        prev_bot,
+                        dc0v,
+                    );
 
-                    store_u8x8(du, apply8_i16_ac(ac, alpha0v, dc1v, round_v, zero_v));
-                    store_u8x8(dv, apply8_i16_ac(ac, alpha1v, dc2v, round_v, zero_v));
+                    store_u8x8(
+                        du,
+                        apply8_i16_ac_fn(
+                            ac,
+                            alpha0 as i16,
+                            alpha0v,
+                            dc1,
+                            dc1v,
+                            round_v,
+                            zero_v,
+                        ),
+                    );
+                    store_u8x8(
+                        dv,
+                        apply8_i16_ac_fn(
+                            ac,
+                            alpha1 as i16,
+                            alpha1v,
+                            dc2,
+                            dc2v,
+                            round_v,
+                            zero_v,
+                        ),
+                    );
                 }
             }
 
             (true, false) => {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
 
-                for ((du, t), b) in u_chunks.iter_mut().zip(top.iter()).zip(bot.iter()) {
-                    let ac = ac8_420_i16(load_u8x16(t), load_u8x16(b), dc0v);
+                for (i, ((du, c), (t, b))) in u_chunks
+                    .iter_mut()
+                    .zip(cur.iter())
+                    .zip(top.iter().zip(bot.iter()))
+                    .enumerate()
+                {
+                    let luma_x = i * 16;
+                    let prev_cur = if (luma_x & 63) == 0 {
+                        y[yrow + luma_x]
+                    } else {
+                        y[yrow + luma_x - 1]
+                    };
+                    let prev_bot = if (luma_x & 63) == 0 {
+                        y[yrow + ystride + luma_x]
+                    } else {
+                        y[yrow + ystride + luma_x - 1]
+                    };
+                    let ac = ac8_420_filter_i16::<FILTER>(
+                        load_u8x16(c),
+                        load_u8x16(t),
+                        load_u8x16(b),
+                        prev_cur,
+                        prev_bot,
+                        dc0v,
+                    );
 
-                    store_u8x8(du, apply8_i16_ac(ac, alpha0v, dc1v, round_v, zero_v));
+                    store_u8x8(
+                        du,
+                        apply8_i16_ac_fn(
+                            ac,
+                            alpha0 as i16,
+                            alpha0v,
+                            dc1,
+                            dc1v,
+                            round_v,
+                            zero_v,
+                        ),
+                    );
                 }
             }
 
             (false, true) => {
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
 
-                for ((dv, t), b) in v_chunks.iter_mut().zip(top.iter()).zip(bot.iter()) {
-                    let ac = ac8_420_i16(load_u8x16(t), load_u8x16(b), dc0v);
+                for (i, ((dv, c), (t, b))) in v_chunks
+                    .iter_mut()
+                    .zip(cur.iter())
+                    .zip(top.iter().zip(bot.iter()))
+                    .enumerate()
+                {
+                    let luma_x = i * 16;
+                    let prev_cur = if (luma_x & 63) == 0 {
+                        y[yrow + luma_x]
+                    } else {
+                        y[yrow + luma_x - 1]
+                    };
+                    let prev_bot = if (luma_x & 63) == 0 {
+                        y[yrow + ystride + luma_x]
+                    } else {
+                        y[yrow + ystride + luma_x - 1]
+                    };
+                    let ac = ac8_420_filter_i16::<FILTER>(
+                        load_u8x16(c),
+                        load_u8x16(t),
+                        load_u8x16(b),
+                        prev_cur,
+                        prev_bot,
+                        dc0v,
+                    );
 
-                    store_u8x8(dv, apply8_i16_ac(ac, alpha1v, dc2v, round_v, zero_v));
+                    store_u8x8(
+                        dv,
+                        apply8_i16_ac_fn(
+                            ac,
+                            alpha1 as i16,
+                            alpha1v,
+                            dc2,
+                            dc2v,
+                            round_v,
+                            zero_v,
+                        ),
+                    );
                 }
             }
 
             (false, false) => unreachable!(),
         }
 
-        for x in xfull..xlim {
-            let xl = x << 1;
+        let x4full = xfull + ((xlim - xfull) / 4) * 4;
+        let mut x = xfull;
+        while x < x4full {
+            let luma_x = x << 1;
+            let top_row = if FILTER == CFL_FLT_TYPE_GAUSS && (cy & 31) != 0 {
+                yrow - ystride
+            } else {
+                yrow
+            };
+            let prev_cur = if (luma_x & 63) == 0 {
+                y[yrow + luma_x]
+            } else {
+                y[yrow + luma_x - 1]
+            };
+            let prev_bot = if (luma_x & 63) == 0 {
+                y[yrow + ystride + luma_x]
+            } else {
+                y[yrow + ystride + luma_x - 1]
+            };
+            let ac = ac8_420_filter_i16::<FILTER>(
+                load_u8x16_tail8(&y[yrow + luma_x..]),
+                load_u8x16_tail8(&y[top_row + luma_x..]),
+                load_u8x16_tail8(&y[yrow + ystride + luma_x..]),
+                prev_cur,
+                prev_bot,
+                dc0v,
+            );
+            if do_u {
+                store_u8x4(
+                    &mut u[urow + x..urow + x + 4],
+                    apply8_i16_ac_fn(
+                        ac,
+                        alpha0 as i16,
+                        alpha0v,
+                        dc1,
+                        dc1v,
+                        round_v,
+                        zero_v,
+                    ),
+                );
+            }
+            if do_v {
+                store_u8x4(
+                    &mut v[vrow + x..vrow + x + 4],
+                    apply8_i16_ac_fn(
+                        ac,
+                        alpha1 as i16,
+                        alpha1v,
+                        dc2,
+                        dc2v,
+                        round_v,
+                        zero_v,
+                    ),
+                );
+            }
+            x += 4;
+        }
 
-            let ac = ((y[yrow + xl] as i32
-                + y[yrow + xl + 1] as i32
-                + y[yrow + xl + ystride] as i32
-                + y[yrow + xl + ystride + 1] as i32)
-                << 1)
-                - dc0;
-
+        for x in x4full..xlim {
+            let ac = cfl_ac_420_scalar_filter::<FILTER>(y, yrow, ystride, cy, x, dc0);
             if do_u {
                 u[urow + x] = predict_one(dc1, alpha0, ac);
             }
@@ -280,7 +578,6 @@ fn cfl_apply_420_8bpc_neon_impl(args: CflApply8<'_>) {
                 v[vrow + x] = predict_one(dc2, alpha1, ac);
             }
         }
-
         if do_u {
             let last = u[urow + xlim - 1];
             u[urow + xlim..urow + w].fill(last);
@@ -307,26 +604,76 @@ fn cfl_apply_420_8bpc_neon_impl(args: CflApply8<'_>) {
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn ac8_422_i16<const GAUSS: bool>(src: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
-    if GAUSS {
+fn ac8_422_i16<const FILTER: u32>(src: uint8x16_t, prev: u8, dc0v: int16x8_t) -> int16x8_t {
+    if FILTER == CFL_FLT_TYPE_GAUSS {
         ac8_422_gauss_i16(src, dc0v)
+    } else if FILTER == CFL_FLT_TYPE_VSTRIP {
+        let left = vmovl_u8(left_u8x8(src, prev));
+        let center = vmovl_u8(even_u8x8(src));
+        let right = vmovl_u8(odd_u8x8(src));
+        let sum = vshlq_n_u16::<1>(vaddq_u16(vaddq_u16(left, vshlq_n_u16::<1>(center)), right));
+        vsubq_s16(vreinterpretq_s16_u16(sum), dc0v)
     } else {
         ac8_422_uniform_i16(src, dc0v)
     }
 }
 
 #[inline(always)]
-fn cfl_ac_422_scalar_filter<const GAUSS: bool>(y: &[u8], yrow: usize, x: usize, dc0: i32) -> i32 {
+fn cfl_ac_420_scalar_filter<const FILTER: u32>(
+    y: &[u8],
+    yrow: usize,
+    ystride: usize,
+    cy: usize,
+    x: usize,
+    dc0: i32,
+) -> i32 {
     let xl = x << 1;
-    if GAUSS {
+    let left = ((xl as i32) & -64).max(xl as i32 - 1) as usize;
+    if FILTER == CFL_FLT_TYPE_GAUSS {
+        let top = if (cy & 31) == 0 {
+            yrow + xl
+        } else {
+            yrow + xl - ystride
+        };
+        y[yrow + left] as i32
+            + 4 * y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[top] as i32
+            + y[yrow + xl + ystride] as i32
+            - dc0
+    } else if FILTER == CFL_FLT_TYPE_VSTRIP {
+        y[yrow + left] as i32
+            + 2 * y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[yrow + left + ystride] as i32
+            + 2 * y[yrow + xl + ystride] as i32
+            + y[yrow + xl + ystride + 1] as i32
+            - dc0
+    } else {
+        ((y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[yrow + xl + ystride] as i32
+            + y[yrow + xl + ystride + 1] as i32)
+            << 1)
+            - dc0
+    }
+}
+
+#[inline(always)]
+fn cfl_ac_422_scalar_filter<const FILTER: u32>(y: &[u8], yrow: usize, x: usize, dc0: i32) -> i32 {
+    let xl = x << 1;
+    if FILTER == CFL_FLT_TYPE_GAUSS {
         ((y[yrow + xl] as i32) << 3) - dc0
+    } else if FILTER == CFL_FLT_TYPE_VSTRIP {
+        let left = ((xl as i32) & -64).max(xl as i32 - 1) as usize;
+        (y[yrow + left] as i32 + 2 * y[yrow + xl] as i32 + y[yrow + xl + 1] as i32) * 2 - dc0
     } else {
         ((y[yrow + xl] as i32 + y[yrow + xl + 1] as i32) << 2) - dc0
     }
 }
 
-#[target_feature(enable = "neon")]
-fn cfl_apply_422_8bpc_neon_impl<const GAUSS: bool>(args: CflApply8<'_>) {
+$(#[$target_attr])*
+fn cfl_apply_422_8bpc_impl<const FILTER: u32>(args: CflApply8<'_>) {
     let CflApply8 {
         y,
         u,
@@ -393,39 +740,147 @@ fn cfl_apply_422_8bpc_neon_impl<const GAUSS: bool>(args: CflApply8<'_>) {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
 
-                for ((du, dv), yy) in u_chunks.iter_mut().zip(v_chunks.iter_mut()).zip(row.iter()) {
-                    let ac = ac8_422_i16::<GAUSS>(load_u8x16(yy), dc0v);
+                for (i, ((du, dv), yy)) in u_chunks
+                    .iter_mut()
+                    .zip(v_chunks.iter_mut())
+                    .zip(row.iter())
+                    .enumerate()
+                {
+                    let luma_x = i * 16;
+                    let prev = if (luma_x & 63) == 0 {
+                        y[yrow + luma_x]
+                    } else {
+                        y[yrow + luma_x - 1]
+                    };
+                    let ac = ac8_422_i16::<FILTER>(load_u8x16(yy), prev, dc0v);
 
-                    store_u8x8(du, apply8_i16_ac(ac, alpha0v, dc1v, round_v, zero_v));
-                    store_u8x8(dv, apply8_i16_ac(ac, alpha1v, dc2v, round_v, zero_v));
+                    store_u8x8(
+                        du,
+                        apply8_i16_ac_fn(
+                            ac,
+                            alpha0 as i16,
+                            alpha0v,
+                            dc1,
+                            dc1v,
+                            round_v,
+                            zero_v,
+                        ),
+                    );
+                    store_u8x8(
+                        dv,
+                        apply8_i16_ac_fn(
+                            ac,
+                            alpha1 as i16,
+                            alpha1v,
+                            dc2,
+                            dc2v,
+                            round_v,
+                            zero_v,
+                        ),
+                    );
                 }
             }
 
             (true, false) => {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
 
-                for (du, yy) in u_chunks.iter_mut().zip(row.iter()) {
-                    let ac = ac8_422_i16::<GAUSS>(load_u8x16(yy), dc0v);
+                for (i, (du, yy)) in u_chunks.iter_mut().zip(row.iter()).enumerate() {
+                    let luma_x = i * 16;
+                    let prev = if (luma_x & 63) == 0 {
+                        y[yrow + luma_x]
+                    } else {
+                        y[yrow + luma_x - 1]
+                    };
+                    let ac = ac8_422_i16::<FILTER>(load_u8x16(yy), prev, dc0v);
 
-                    store_u8x8(du, apply8_i16_ac(ac, alpha0v, dc1v, round_v, zero_v));
+                    store_u8x8(
+                        du,
+                        apply8_i16_ac_fn(
+                            ac,
+                            alpha0 as i16,
+                            alpha0v,
+                            dc1,
+                            dc1v,
+                            round_v,
+                            zero_v,
+                        ),
+                    );
                 }
             }
 
             (false, true) => {
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
 
-                for (dv, yy) in v_chunks.iter_mut().zip(row.iter()) {
-                    let ac = ac8_422_i16::<GAUSS>(load_u8x16(yy), dc0v);
+                for (i, (dv, yy)) in v_chunks.iter_mut().zip(row.iter()).enumerate() {
+                    let luma_x = i * 16;
+                    let prev = if (luma_x & 63) == 0 {
+                        y[yrow + luma_x]
+                    } else {
+                        y[yrow + luma_x - 1]
+                    };
+                    let ac = ac8_422_i16::<FILTER>(load_u8x16(yy), prev, dc0v);
 
-                    store_u8x8(dv, apply8_i16_ac(ac, alpha1v, dc2v, round_v, zero_v));
+                    store_u8x8(
+                        dv,
+                        apply8_i16_ac_fn(
+                            ac,
+                            alpha1 as i16,
+                            alpha1v,
+                            dc2,
+                            dc2v,
+                            round_v,
+                            zero_v,
+                        ),
+                    );
                 }
             }
 
             (false, false) => unreachable!(),
         }
 
-        for x in xfull..xlim {
-            let ac = cfl_ac_422_scalar_filter::<GAUSS>(y, yrow, x, dc0);
+        let x4full = xfull + ((xlim - xfull) / 4) * 4;
+        let mut x = xfull;
+        while x < x4full {
+            let luma_x = x << 1;
+            let prev = if (luma_x & 63) == 0 {
+                y[yrow + luma_x]
+            } else {
+                y[yrow + luma_x - 1]
+            };
+            let ac = ac8_422_i16::<FILTER>(load_u8x16_tail8(&y[yrow + luma_x..]), prev, dc0v);
+            if do_u {
+                store_u8x4(
+                    &mut u[urow + x..urow + x + 4],
+                    apply8_i16_ac_fn(
+                        ac,
+                        alpha0 as i16,
+                        alpha0v,
+                        dc1,
+                        dc1v,
+                        round_v,
+                        zero_v,
+                    ),
+                );
+            }
+            if do_v {
+                store_u8x4(
+                    &mut v[vrow + x..vrow + x + 4],
+                    apply8_i16_ac_fn(
+                        ac,
+                        alpha1 as i16,
+                        alpha1v,
+                        dc2,
+                        dc2v,
+                        round_v,
+                        zero_v,
+                    ),
+                );
+            }
+            x += 4;
+        }
+
+        for x in x4full..xlim {
+            let ac = cfl_ac_422_scalar_filter::<FILTER>(y, yrow, x, dc0);
 
             if do_u {
                 u[urow + x] = predict_one(dc1, alpha0, ac);
@@ -459,8 +914,8 @@ fn cfl_apply_422_8bpc_neon_impl<const GAUSS: bool>(args: CflApply8<'_>) {
     }
 }
 
-#[target_feature(enable = "neon")]
-fn cfl_apply_444_8bpc_neon_impl(args: CflApply8<'_>) {
+$(#[$target_attr])*
+fn cfl_apply_444_8bpc_impl(args: CflApply8<'_>) {
     let CflApply8 {
         y,
         u,
@@ -530,11 +985,29 @@ fn cfl_apply_444_8bpc_neon_impl(args: CflApply8<'_>) {
                     let yy = load_u8x16(yy);
                     store_u8x16(
                         du,
-                        apply16_444_i16_ac(yy, dc0v, alpha0v, dc1v, round_v, zero_v),
+                        apply16_444_i16_ac_fn(
+                            yy,
+                            dc0v,
+                            alpha0 as i16,
+                            alpha0v,
+                            dc1,
+                            dc1v,
+                            round_v,
+                            zero_v,
+                        ),
                     );
                     store_u8x16(
                         dv,
-                        apply16_444_i16_ac(yy, dc0v, alpha1v, dc2v, round_v, zero_v),
+                        apply16_444_i16_ac_fn(
+                            yy,
+                            dc0v,
+                            alpha1 as i16,
+                            alpha1v,
+                            dc2,
+                            dc2v,
+                            round_v,
+                            zero_v,
+                        ),
                     );
                 }
             }
@@ -545,7 +1018,16 @@ fn cfl_apply_444_8bpc_neon_impl(args: CflApply8<'_>) {
                 for (du, yy) in u_chunks.iter_mut().zip(row.iter()) {
                     store_u8x16(
                         du,
-                        apply16_444_i16_ac(load_u8x16(yy), dc0v, alpha0v, dc1v, round_v, zero_v),
+                        apply16_444_i16_ac_fn(
+                            load_u8x16(yy),
+                            dc0v,
+                            alpha0 as i16,
+                            alpha0v,
+                            dc1,
+                            dc1v,
+                            round_v,
+                            zero_v,
+                        ),
                     );
                 }
             }
@@ -556,7 +1038,16 @@ fn cfl_apply_444_8bpc_neon_impl(args: CflApply8<'_>) {
                 for (dv, yy) in v_chunks.iter_mut().zip(row.iter()) {
                     store_u8x16(
                         dv,
-                        apply16_444_i16_ac(load_u8x16(yy), dc0v, alpha1v, dc2v, round_v, zero_v),
+                        apply16_444_i16_ac_fn(
+                            load_u8x16(yy),
+                            dc0v,
+                            alpha1 as i16,
+                            alpha1v,
+                            dc2,
+                            dc2v,
+                            round_v,
+                            zero_v,
+                        ),
                     );
                 }
             }
@@ -564,7 +1055,79 @@ fn cfl_apply_444_8bpc_neon_impl(args: CflApply8<'_>) {
             (false, false) => unreachable!(),
         }
 
-        for x in xfull..xlim {
+        let x8full = xfull + ((xlim - xfull) / 8) * 8;
+        let mut x = xfull;
+        while x < x8full {
+            let yy_chunks = y[yrow + x..yrow + x + 8].as_chunks::<8>().0;
+            let ac = ac8_444_i16(load_u8x8(&yy_chunks[0]), dc0v);
+            if do_u {
+                let u_chunks = u[urow + x..urow + x + 8].as_chunks_mut::<8>().0;
+                store_u8x8(
+                    &mut u_chunks[0],
+                    apply8_i16_ac_fn(
+                        ac,
+                        alpha0 as i16,
+                        alpha0v,
+                        dc1,
+                        dc1v,
+                        round_v,
+                        zero_v,
+                    ),
+                );
+            }
+            if do_v {
+                let v_chunks = v[vrow + x..vrow + x + 8].as_chunks_mut::<8>().0;
+                store_u8x8(
+                    &mut v_chunks[0],
+                    apply8_i16_ac_fn(
+                        ac,
+                        alpha1 as i16,
+                        alpha1v,
+                        dc2,
+                        dc2v,
+                        round_v,
+                        zero_v,
+                    ),
+                );
+            }
+            x += 8;
+        }
+
+        let x4full = x8full + ((xlim - x8full) / 4) * 4;
+        while x < x4full {
+            let ac = ac8_444_i16(load_u8x8_tail4(&y[yrow + x..]), dc0v);
+            if do_u {
+                store_u8x4(
+                    &mut u[urow + x..urow + x + 4],
+                    apply8_i16_ac_fn(
+                        ac,
+                        alpha0 as i16,
+                        alpha0v,
+                        dc1,
+                        dc1v,
+                        round_v,
+                        zero_v,
+                    ),
+                );
+            }
+            if do_v {
+                store_u8x4(
+                    &mut v[vrow + x..vrow + x + 4],
+                    apply8_i16_ac_fn(
+                        ac,
+                        alpha1 as i16,
+                        alpha1v,
+                        dc2,
+                        dc2v,
+                        round_v,
+                        zero_v,
+                    ),
+                );
+            }
+            x += 4;
+        }
+
+        for x in x4full..xlim {
             let ac = ((y[yrow + x] as i32) << 3) - dc0;
 
             if do_u {
@@ -599,18 +1162,66 @@ fn cfl_apply_444_8bpc_neon_impl(args: CflApply8<'_>) {
     }
 }
 
+            pub(super) fn cfl_apply_420_8bpc(args: CflApply8<'_>) {
+                match args.params.filter_type {
+                    CFL_FLT_TYPE_VSTRIP => unsafe {
+                        cfl_apply_420_8bpc_impl::<CFL_FLT_TYPE_VSTRIP>(args)
+                    },
+                    CFL_FLT_TYPE_GAUSS => unsafe {
+                        cfl_apply_420_8bpc_impl::<CFL_FLT_TYPE_GAUSS>(args)
+                    },
+                    _ => unsafe { cfl_apply_420_8bpc_impl::<0>(args) },
+                }
+            }
+
+            pub(super) fn cfl_apply_422_8bpc(args: CflApply8<'_>) {
+                match args.params.filter_type {
+                    CFL_FLT_TYPE_VSTRIP => unsafe {
+                        cfl_apply_422_8bpc_impl::<CFL_FLT_TYPE_VSTRIP>(args)
+                    },
+                    CFL_FLT_TYPE_GAUSS => unsafe {
+                        cfl_apply_422_8bpc_impl::<CFL_FLT_TYPE_GAUSS>(args)
+                    },
+                    _ => unsafe { cfl_apply_422_8bpc_impl::<0>(args) },
+                }
+            }
+
+            pub(super) fn cfl_apply_444_8bpc(args: CflApply8<'_>) {
+                unsafe { cfl_apply_444_8bpc_impl(args) }
+            }
+        }
+    };
+}
+
+define_cfl8_neon_impl!(cfl8_neon_base, cfl8_apply_wide, #[target_feature(enable = "neon")]);
+define_cfl8_neon_impl!(cfl8_neon_rdm, cfl8_apply_rdm,#[target_feature(enable = "rdm")]);
+
+#[target_feature(enable = "neon")]
 pub(crate) fn cfl_apply_420_8bpc_neon(args: CflApply8<'_>) {
-    unsafe { cfl_apply_420_8bpc_neon_impl(args) }
+    cfl8_neon_base::cfl_apply_420_8bpc(args)
 }
 
+#[target_feature(enable = "rdm")]
+pub(crate) fn cfl_apply_420_8bpc_neon_rdm(args: CflApply8<'_>) {
+    cfl8_neon_rdm::cfl_apply_420_8bpc(args)
+}
+
+#[target_feature(enable = "neon")]
 pub(crate) fn cfl_apply_422_8bpc_neon(args: CflApply8<'_>) {
-    match args.params.filter_type {
-        CFL_FLT_TYPE_VSTRIP => crate::cfl_dispatch::cfl_apply_422_8bpc_scalar(args),
-        CFL_FLT_TYPE_GAUSS => unsafe { cfl_apply_422_8bpc_neon_impl::<true>(args) },
-        _ => unsafe { cfl_apply_422_8bpc_neon_impl::<false>(args) },
-    }
+    cfl8_neon_base::cfl_apply_422_8bpc(args)
 }
 
+#[target_feature(enable = "rdm")]
+pub(crate) fn cfl_apply_422_8bpc_neon_rdm(args: CflApply8<'_>) {
+    cfl8_neon_rdm::cfl_apply_422_8bpc(args)
+}
+
+#[target_feature(enable = "neon")]
 pub(crate) fn cfl_apply_444_8bpc_neon(args: CflApply8<'_>) {
-    unsafe { cfl_apply_444_8bpc_neon_impl(args) }
+    cfl8_neon_base::cfl_apply_444_8bpc(args)
+}
+
+#[target_feature(enable = "rdm")]
+pub(crate) fn cfl_apply_444_8bpc_neon_rdm(args: CflApply8<'_>) {
+    cfl8_neon_rdm::cfl_apply_444_8bpc(args)
 }

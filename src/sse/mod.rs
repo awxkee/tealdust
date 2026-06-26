@@ -48,8 +48,8 @@ pub(crate) use itx::*;
 
 pub(crate) use ccso::{ccso_add_8bpc_sse41, ccso_prep_lut_8bpc_sse41};
 pub(crate) use ccso_hd::{ccso_add_hbd_sse41, ccso_prep_lut_hbd_sse41};
-pub(crate) use cdef::cdef_filter_block_8bpc_sse41;
-pub(crate) use cdef_hd::cdef_filter_block_hbd_sse41;
+pub(crate) use cdef::{cdef_filter_block_8bpc_sse41, cdef_find_dir_8bpc_sse41};
+pub(crate) use cdef_hd::{cdef_filter_block_hbd_sse41, cdef_find_dir_hbd_sse41};
 pub(crate) use cfl::{
     cfl_apply_420_8bpc_sse41, cfl_apply_422_8bpc_sse41, cfl_apply_444_8bpc_sse41,
 };

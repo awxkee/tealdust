@@ -181,6 +181,114 @@ fn deblock_diff_i16(delta: __m128i, width: i32, tap: i32) -> __m128i {
     _mm_mulhrs_epi16(delta, _mm_set1_epi16(coeff))
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn deblock_extract_i16<const LANE: i32>(v: __m128i) -> i16 {
+    _mm_extract_epi16::<LANE>(v) as u16 as i16
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn deblock_apply_8bpc_avx2_h_sym4_rows(
+    dst: &mut [u8],
+    off: isize,
+    stride_line: isize,
+    delta: __m128i,
+    apply_neg: bool,
+    apply_pos: bool,
+) {
+    let wm = (crate::deblock::W_MULT[3] as i16) * 16;
+    let neg = if apply_neg { wm } else { 0 };
+    let pos = if apply_pos { -wm } else { 0 };
+    let coeff = _mm_setr_epi16(
+        neg,
+        neg * 2,
+        neg * 3,
+        neg * 4,
+        pos * 4,
+        pos * 3,
+        pos * 2,
+        pos,
+    );
+
+    let p = dst.as_mut_ptr();
+    let mut r = 0;
+    while r < 4 {
+        let row = off + r * stride_line - 4;
+        unsafe {
+            let bytes = _mm_loadl_epi64(p.add(row as usize).cast());
+            let pix = _mm_cvtepu8_epi16(bytes);
+            let d = match r {
+                0 => deblock_extract_i16::<0>(delta),
+                1 => deblock_extract_i16::<1>(delta),
+                2 => deblock_extract_i16::<2>(delta),
+                _ => deblock_extract_i16::<3>(delta),
+            };
+            let diff = _mm_mulhrs_epi16(_mm_set1_epi16(d), coeff);
+            let res = _mm_add_epi16(pix, diff);
+            let packed = _mm_packus_epi16(res, res);
+            _mm_storel_epi64(p.add(row as usize).cast(), packed);
+        }
+        r += 1;
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn deblock_apply_8bpc_avx2_h_sym8_rows(
+    dst: &mut [u8],
+    off: isize,
+    stride_line: isize,
+    delta: __m128i,
+    apply_neg: bool,
+    apply_pos: bool,
+) {
+    let wm = (crate::deblock::W_MULT[7] as i16) * 16;
+    let neg = if apply_neg { wm } else { 0 };
+    let pos = if apply_pos { -wm } else { 0 };
+    let coeff = _mm256_setr_epi16(
+        neg,
+        neg * 2,
+        neg * 3,
+        neg * 4,
+        neg * 5,
+        neg * 6,
+        neg * 7,
+        neg * 8,
+        pos * 8,
+        pos * 7,
+        pos * 6,
+        pos * 5,
+        pos * 4,
+        pos * 3,
+        pos * 2,
+        pos,
+    );
+
+    let p = dst.as_mut_ptr();
+    let mut r = 0;
+    while r < 4 {
+        let row = off + r * stride_line - 8;
+        unsafe {
+            let bytes = _mm_loadu_si128(p.add(row as usize).cast());
+            let pix = _mm256_cvtepu8_epi16(bytes);
+            let d = match r {
+                0 => deblock_extract_i16::<0>(delta),
+                1 => deblock_extract_i16::<1>(delta),
+                2 => deblock_extract_i16::<2>(delta),
+                _ => deblock_extract_i16::<3>(delta),
+            };
+            let diff = _mm256_mulhrs_epi16(_mm256_set1_epi16(d), coeff);
+            let res = _mm256_add_epi16(pix, diff);
+            let lo = _mm256_castsi256_si128(res);
+            let hi = _mm256_extracti128_si256::<1>(res);
+            let packed = _mm_packus_epi16(lo, hi);
+            _mm_storeu_si128(p.add(row as usize).cast(), packed);
+        }
+        r += 1;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -190,11 +298,13 @@ fn deblock_apply_8bpc_avx2_const_oriented<const WN: i32, const WP: i32, const CO
     stride_line: isize,
     stride_tap: isize,
     q_thr_clamp: i32,
-    apply_neg: bool,
-    apply_pos: bool,
+    neg_lossless: bool,
+    pos_lossless: bool,
 ) {
     debug_assert!((1..=8).contains(&WN));
     debug_assert!((1..=8).contains(&WP));
+    let apply_neg = !neg_lossless;
+    let apply_pos = !pos_lossless;
     debug_assert!(apply_neg || apply_pos);
     debug_assert!(q_thr_clamp <= i16::MAX as i32);
 
@@ -205,6 +315,17 @@ fn deblock_apply_8bpc_avx2_const_oriented<const WN: i32, const WP: i32, const CO
     let dp1 = load4_u8_i16_oriented::<CONTIG>(dst, off + stride_tap, stride_line);
     let dm2 = load4_u8_i16_oriented::<CONTIG>(dst, off - 2 * stride_tap, stride_line);
     let delta = deblock_delta_i16(d0, dm1, dp1, dm2, nqc, qc);
+
+    if !CONTIG && stride_tap == 1 && WN == WP {
+        if WN == 8 {
+            deblock_apply_8bpc_avx2_h_sym8_rows(dst, off, stride_line, delta, apply_neg, apply_pos);
+            return;
+        }
+        if WN == 4 {
+            deblock_apply_8bpc_avx2_h_sym4_rows(dst, off, stride_line, delta, apply_neg, apply_pos);
+            return;
+        }
+    }
 
     if apply_neg {
         let mut j = 0;
@@ -226,6 +347,199 @@ fn deblock_apply_8bpc_avx2_const_oriented<const WN: i32, const WP: i32, const CO
             store4_clip_u8_i16_oriented::<CONTIG>(dst, base, stride_line, _mm_sub_epi16(cur, diff));
             j += 1;
         }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn transpose16x16_u8_avx2(r: &mut [__m128i; 16]) {
+    let z = _mm_setzero_si128();
+    let mut t = [z; 16];
+    let mut u = [z; 16];
+    let mut v = [z; 16];
+
+    let mut i = 0;
+    while i < 8 {
+        let a = r[i * 2];
+        let b = r[i * 2 + 1];
+        t[i * 2] = _mm_unpacklo_epi8(a, b);
+        t[i * 2 + 1] = _mm_unpackhi_epi8(a, b);
+        i += 1;
+    }
+
+    i = 0;
+    while i < 4 {
+        let b = i * 4;
+        u[b] = _mm_unpacklo_epi16(t[b], t[b + 2]);
+        u[b + 1] = _mm_unpackhi_epi16(t[b], t[b + 2]);
+        u[b + 2] = _mm_unpacklo_epi16(t[b + 1], t[b + 3]);
+        u[b + 3] = _mm_unpackhi_epi16(t[b + 1], t[b + 3]);
+        i += 1;
+    }
+
+    i = 0;
+    while i < 2 {
+        let b = i * 8;
+        v[b] = _mm_unpacklo_epi32(u[b], u[b + 4]);
+        v[b + 1] = _mm_unpackhi_epi32(u[b], u[b + 4]);
+        v[b + 2] = _mm_unpacklo_epi32(u[b + 1], u[b + 5]);
+        v[b + 3] = _mm_unpackhi_epi32(u[b + 1], u[b + 5]);
+        v[b + 4] = _mm_unpacklo_epi32(u[b + 2], u[b + 6]);
+        v[b + 5] = _mm_unpackhi_epi32(u[b + 2], u[b + 6]);
+        v[b + 6] = _mm_unpacklo_epi32(u[b + 3], u[b + 7]);
+        v[b + 7] = _mm_unpackhi_epi32(u[b + 3], u[b + 7]);
+        i += 1;
+    }
+
+    r[0] = _mm_unpacklo_epi64(v[0], v[8]);
+    r[1] = _mm_unpackhi_epi64(v[0], v[8]);
+    r[2] = _mm_unpacklo_epi64(v[1], v[9]);
+    r[3] = _mm_unpackhi_epi64(v[1], v[9]);
+    r[4] = _mm_unpacklo_epi64(v[2], v[10]);
+    r[5] = _mm_unpackhi_epi64(v[2], v[10]);
+    r[6] = _mm_unpacklo_epi64(v[3], v[11]);
+    r[7] = _mm_unpackhi_epi64(v[3], v[11]);
+    r[8] = _mm_unpacklo_epi64(v[4], v[12]);
+    r[9] = _mm_unpackhi_epi64(v[4], v[12]);
+    r[10] = _mm_unpacklo_epi64(v[5], v[13]);
+    r[11] = _mm_unpackhi_epi64(v[5], v[13]);
+    r[12] = _mm_unpacklo_epi64(v[6], v[14]);
+    r[13] = _mm_unpackhi_epi64(v[6], v[14]);
+    r[14] = _mm_unpacklo_epi64(v[7], v[15]);
+    r[15] = _mm_unpackhi_epi64(v[7], v[15]);
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn cvtepu8_hi_epi16(v: __m128i) -> __m128i {
+    _mm_unpackhi_epi8(v, _mm_setzero_si128())
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn pack_u8_from_i16x2(lo: __m128i, hi: __m128i) -> __m128i {
+    _mm_packus_epi16(lo, hi)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn repeated_qclamp4_w8(q_thr: &[u8], qi: usize) -> (__m128i, __m128i) {
+    let m = crate::deblock::Q_THRESH_MULTS[7] as i16;
+    let q0 = (q_thr[qi] as i16) * m;
+    let q1 = (q_thr[qi + 1] as i16) * m;
+    let q2 = (q_thr[qi + 2] as i16) * m;
+    let q3 = (q_thr[qi + 3] as i16) * m;
+    (
+        _mm_setr_epi16(q0, q0, q0, q0, q1, q1, q1, q1),
+        _mm_setr_epi16(q2, q2, q2, q2, q3, q3, q3, q3),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn repeated_apply_mask4(ll: u16, qi: usize) -> (__m128i, __m128i) {
+    let m0 = if (ll & (1u16 << qi)) == 0 { -1i16 } else { 0 };
+    let m1 = if (ll & (1u16 << (qi + 1))) == 0 {
+        -1i16
+    } else {
+        0
+    };
+    let m2 = if (ll & (1u16 << (qi + 2))) == 0 {
+        -1i16
+    } else {
+        0
+    };
+    let m3 = if (ll & (1u16 << (qi + 3))) == 0 {
+        -1i16
+    } else {
+        0
+    };
+    (
+        _mm_setr_epi16(m0, m0, m0, m0, m1, m1, m1, m1),
+        _mm_setr_epi16(m2, m2, m2, m2, m3, m3, m3, m3),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn deblock_apply_8bpc_avx2_h_w8x4_transpose(
+    dst: &mut [u8],
+    off: isize,
+    stride: isize,
+    qlo: __m128i,
+    qhi: __m128i,
+    neg_mask_lo: __m128i,
+    neg_mask_hi: __m128i,
+    pos_mask_lo: __m128i,
+    pos_mask_hi: __m128i,
+) {
+    let p = dst.as_mut_ptr();
+    let z = _mm_setzero_si128();
+    let mut cols = [z; 16];
+
+    let mut r = 0;
+    while r < 16 {
+        let row = off + r as isize * stride - 8;
+        unsafe {
+            cols[r] = _mm_loadu_si128(p.add(row as usize).cast());
+        }
+        r += 1;
+    }
+
+    transpose16x16_u8_avx2(&mut cols);
+
+    let d0_lo = _mm_cvtepu8_epi16(cols[8]);
+    let d0_hi = cvtepu8_hi_epi16(cols[8]);
+    let dm1_lo = _mm_cvtepu8_epi16(cols[7]);
+    let dm1_hi = cvtepu8_hi_epi16(cols[7]);
+    let dp1_lo = _mm_cvtepu8_epi16(cols[9]);
+    let dp1_hi = cvtepu8_hi_epi16(cols[9]);
+    let dm2_lo = _mm_cvtepu8_epi16(cols[6]);
+    let dm2_hi = cvtepu8_hi_epi16(cols[6]);
+
+    let delta_lo = deblock_delta_i16(d0_lo, dm1_lo, dp1_lo, dm2_lo, _mm_sub_epi16(z, qlo), qlo);
+    let delta_hi = deblock_delta_i16(d0_hi, dm1_hi, dp1_hi, dm2_hi, _mm_sub_epi16(z, qhi), qhi);
+    let wm = (crate::deblock::W_MULT[7] as i16) * 16;
+
+    let mut c = 0;
+    while c < 8 {
+        let tap = (c + 1) as i16;
+        let coeff = _mm_set1_epi16(wm * tap);
+        let diff_lo = _mm_and_si128(_mm_mulhrs_epi16(delta_lo, coeff), neg_mask_lo);
+        let diff_hi = _mm_and_si128(_mm_mulhrs_epi16(delta_hi, coeff), neg_mask_hi);
+        let pix_lo = _mm_cvtepu8_epi16(cols[c]);
+        let pix_hi = cvtepu8_hi_epi16(cols[c]);
+        cols[c] = pack_u8_from_i16x2(
+            _mm_add_epi16(pix_lo, diff_lo),
+            _mm_add_epi16(pix_hi, diff_hi),
+        );
+        c += 1;
+    }
+
+    c = 8;
+    while c < 16 {
+        let tap = (16 - c) as i16;
+        let coeff = _mm_set1_epi16(wm * tap);
+        let diff_lo = _mm_and_si128(_mm_mulhrs_epi16(delta_lo, coeff), pos_mask_lo);
+        let diff_hi = _mm_and_si128(_mm_mulhrs_epi16(delta_hi, coeff), pos_mask_hi);
+        let pix_lo = _mm_cvtepu8_epi16(cols[c]);
+        let pix_hi = cvtepu8_hi_epi16(cols[c]);
+        cols[c] = pack_u8_from_i16x2(
+            _mm_sub_epi16(pix_lo, diff_lo),
+            _mm_sub_epi16(pix_hi, diff_hi),
+        );
+        c += 1;
+    }
+
+    transpose16x16_u8_avx2(&mut cols);
+
+    r = 0;
+    while r < 16 {
+        let row = off + r as isize * stride - 8;
+        unsafe {
+            _mm_storeu_si128(p.add(row as usize).cast(), cols[r]);
+        }
+        r += 1;
     }
 }
 
@@ -283,9 +597,6 @@ fn deblock_apply_8bpc_avx2_specialized(
     neg_lossless: bool,
     pos_lossless: bool,
 ) -> bool {
-    // The dav2d-style i16/pmulhrsw apply path needs the clipping threshold in
-    // signed 16-bit lanes.  8bpc thresholds are expected to fit, but keep the
-    // old i32 fallback available for malformed/extreme inputs.
     if q_thr_clamp > i16::MAX as i32 {
         return false;
     }
@@ -1715,6 +2026,69 @@ fn deblock_8bpc_avx2_const_max<
     );
 }
 
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+fn try_deblock_h_sb64_w8_run4_transpose(
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+    qi: usize,
+    vm: u32,
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+) -> bool {
+    debug_assert!(qi + 3 < 16);
+    let run = 0x0fu32 << qi;
+    if (vm & run) != run {
+        return false;
+    }
+
+    // Keep this first transpose port deliberately conservative: only full
+    // FILTER_8 luma runs with four consecutive x4 edges.  Dav2d can still
+    // handle mixed widths in one vector body with mask LUTs; here we bail out
+    // unless the scalar-equivalent width resolver chooses 8 for every group.
+    let mut i = 0;
+    while i < 4 {
+        let bit = 1u16 << (qi + i);
+        let q = q_thr[qi + i] as u32;
+        if q == 0 || ((ll_mask[0] & bit) != 0 && (ll_mask[1] & bit) != 0) {
+            return false;
+        }
+        let off = (dst_off + (qi + i) * 4 * stride) as isize;
+        let width = filter_choice_8bpc_avx2_const::<8, 8>(
+            dst,
+            off,
+            off + 3 * stride as isize,
+            1,
+            q,
+            side_thr[qi + i] as u32,
+        );
+        if width != 8 {
+            return false;
+        }
+        i += 1;
+    }
+
+    let (qlo, qhi) = repeated_qclamp4_w8(q_thr, qi);
+    let (neg_mask_lo, neg_mask_hi) = repeated_apply_mask4(ll_mask[0], qi);
+    let (pos_mask_lo, pos_mask_hi) = repeated_apply_mask4(ll_mask[1], qi);
+    let off = (dst_off + qi * 4 * stride) as isize;
+    deblock_apply_8bpc_avx2_h_w8x4_transpose(
+        dst,
+        off,
+        stride as isize,
+        qlo,
+        qhi,
+        neg_mask_lo,
+        neg_mask_hi,
+        pos_mask_lo,
+        pos_mask_hi,
+    );
+    true
+}
+
 #[inline]
 #[target_feature(enable = "avx2")]
 fn deblock_mask_class_bits(mask: u16, higher: u16, both_lossless: u16) -> u32 {
@@ -1740,11 +2114,21 @@ fn deblock_sb64_8bpc_avx2_mask<
 ) {
     debug_assert!(MAX_WIDTH_NEG <= MAX_WIDTH_POS);
 
-    // This is closer to dav2d's SB filter macros: the caller has already split
-    // the edge mask into one max-width class, so the loop body no longer has to
-    // rediscover idx from vmask[3]/[2]/[1] for every filtered edge.  Lossless
-    // both-side edges and q==0 edges are also skipped before filter-choice,
-    // avoiding the expensive derivative probes when apply would be a no-op.
+    if HORIZONTAL && !CONTIG && MAX_WIDTH_NEG == 8 && MAX_WIDTH_POS == 8 {
+        let mut qi = 0usize;
+        while qi <= 12 {
+            let run = 0x0fu32 << qi;
+            if (vm & run) == run
+                && try_deblock_h_sb64_w8_run4_transpose(
+                    dst, dst_off, stride, qi, vm, ll_mask, q_thr, side_thr,
+                )
+            {
+                vm &= !run;
+            }
+            qi += 4;
+        }
+    }
+
     while vm != 0 {
         let qi = vm.trailing_zeros() as usize;
         let bit = 1u32 << qi;

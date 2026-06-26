@@ -32,6 +32,12 @@ use std::sync::OnceLock;
 const CFL_FLT_TYPE_VSTRIP: u32 = 1;
 const CFL_FLT_TYPE_GAUSS: u32 = 2;
 
+// Keep RDM selection centralized in the OnceLock resolvers.  The RDM entry
+// points are still separately target-feature-gated, so this only enables them
+// after both NEON and RDM have been detected.
+#[cfg(target_arch = "aarch64")]
+const ENABLE_NEON_CFL_RDM_8BPC: bool = true;
+
 #[derive(Clone, Copy)]
 pub(crate) struct CflLayout {
     pub(crate) yrow0: usize,
@@ -107,6 +113,90 @@ fn pad_bottom(plane: &mut [u8], row0: usize, stride: usize, w: usize, h: usize, 
     }
 }
 
+#[inline(always)]
+fn cfl_ac_420_scalar(
+    y: &[u8],
+    yrow: usize,
+    ystride: usize,
+    cy: usize,
+    x: usize,
+    dc0: i32,
+    filter_type: u32,
+) -> i32 {
+    let xl = x << 1;
+    let left = ((xl as i32) & -64).max(xl as i32 - 1) as usize;
+    if filter_type == CFL_FLT_TYPE_GAUSS {
+        let top = if (cy & 31) == 0 {
+            yrow + xl
+        } else {
+            yrow + xl - ystride
+        };
+        y[yrow + left] as i32
+            + 4 * y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[top] as i32
+            + y[yrow + xl + ystride] as i32
+            - dc0
+    } else if filter_type == CFL_FLT_TYPE_VSTRIP {
+        y[yrow + left] as i32
+            + 2 * y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[yrow + left + ystride] as i32
+            + 2 * y[yrow + xl + ystride] as i32
+            + y[yrow + xl + ystride + 1] as i32
+            - dc0
+    } else {
+        ((y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[yrow + xl + ystride] as i32
+            + y[yrow + xl + ystride + 1] as i32)
+            << 1)
+            - dc0
+    }
+}
+
+#[inline(always)]
+fn cfl_ac_420_hbd_scalar(
+    y: &[u16],
+    yrow: usize,
+    ystride: usize,
+    cy: usize,
+    x: usize,
+    dc0: i32,
+    filter_type: u32,
+) -> i32 {
+    let xl = x << 1;
+    let left = ((xl as i32) & -64).max(xl as i32 - 1) as usize;
+    if filter_type == CFL_FLT_TYPE_GAUSS {
+        let top = if (cy & 31) == 0 {
+            yrow + xl
+        } else {
+            yrow + xl - ystride
+        };
+        y[yrow + left] as i32
+            + 4 * y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[top] as i32
+            + y[yrow + xl + ystride] as i32
+            - dc0
+    } else if filter_type == CFL_FLT_TYPE_VSTRIP {
+        y[yrow + left] as i32
+            + 2 * y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[yrow + left + ystride] as i32
+            + 2 * y[yrow + xl + ystride] as i32
+            + y[yrow + xl + ystride + 1] as i32
+            - dc0
+    } else {
+        ((y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[yrow + xl + ystride] as i32
+            + y[yrow + xl + ystride + 1] as i32)
+            << 1)
+            - dc0
+    }
+}
+
 pub(crate) fn cfl_apply_420_8bpc_scalar(args: CflApply8<'_>) {
     let CflApply8 {
         y,
@@ -130,7 +220,7 @@ pub(crate) fn cfl_apply_420_8bpc_scalar(args: CflApply8<'_>) {
         dc2,
         alpha0,
         alpha1,
-        filter_type: _,
+        filter_type,
     } = params;
 
     let do_u = alpha0 != 0;
@@ -142,15 +232,9 @@ pub(crate) fn cfl_apply_420_8bpc_scalar(args: CflApply8<'_>) {
     let mut yrow = yrow0;
     let mut urow = urow0;
     let mut vrow = vrow0;
-    for _y in 0..ylim {
+    for cy in 0..ylim {
         for x in 0..xlim {
-            let xl = x << 1;
-            let ac = ((y[yrow + xl] as i32
-                + y[yrow + xl + 1] as i32
-                + y[yrow + xl + ystride] as i32
-                + y[yrow + xl + ystride + 1] as i32)
-                << 1)
-                - dc0;
+            let ac = cfl_ac_420_scalar(y, yrow, ystride, cy, x, dc0, filter_type);
             if do_u {
                 u[urow + x] = predict_one(dc1, alpha0, ac);
             }
@@ -439,7 +523,7 @@ pub(crate) fn cfl_apply_420_hbd_scalar(args: CflApplyHbd<'_>) {
         dc2,
         alpha0,
         alpha1,
-        filter_type: _,
+        filter_type,
     } = params;
 
     let do_u = alpha0 != 0;
@@ -451,15 +535,9 @@ pub(crate) fn cfl_apply_420_hbd_scalar(args: CflApplyHbd<'_>) {
     let mut yrow = yrow0;
     let mut urow = urow0;
     let mut vrow = vrow0;
-    for _y in 0..ylim {
+    for cy in 0..ylim {
         for x in 0..xlim {
-            let xl = x << 1;
-            let ac = ((y[yrow + xl] as i32
-                + y[yrow + xl + 1] as i32
-                + y[yrow + xl + ystride] as i32
-                + y[yrow + xl + ystride + 1] as i32)
-                << 1)
-                - dc0;
+            let ac = cfl_ac_420_hbd_scalar(y, yrow, ystride, cy, x, dc0, filter_type);
             if do_u {
                 u[urow + x] = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
             }
@@ -651,9 +729,11 @@ pub(crate) fn cfl_apply_422_hbd_scalar(args: CflApplyHbd<'_>) {
 }
 
 static CFL_APPLY_420_8BPC: OnceLock<CflApplyFn> = OnceLock::new();
+static CFL_APPLY_420_8BPC_FILTERED: OnceLock<CflApplyFn> = OnceLock::new();
 static CFL_APPLY_422_8BPC: OnceLock<CflApplyFn> = OnceLock::new();
 static CFL_APPLY_444_8BPC: OnceLock<CflApplyFn> = OnceLock::new();
 static CFL_APPLY_420_HBD: OnceLock<CflApplyHbdFn> = OnceLock::new();
+static CFL_APPLY_420_HBD_FILTERED: OnceLock<CflApplyHbdFn> = OnceLock::new();
 static CFL_APPLY_422_HBD: OnceLock<CflApplyHbdFn> = OnceLock::new();
 static CFL_APPLY_444_HBD: OnceLock<CflApplyHbdFn> = OnceLock::new();
 
@@ -665,6 +745,9 @@ fn resolve_cfl_apply_420() -> CflApplyFn {
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
                 f = crate::neon::cfl_apply_420_8bpc_neon;
+                if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::cfl_apply_420_8bpc_neon_rdm;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -685,6 +768,32 @@ fn resolve_cfl_apply_420() -> CflApplyFn {
 }
 
 #[inline]
+fn resolve_cfl_apply_420_filtered() -> CflApplyFn {
+    *CFL_APPLY_420_8BPC_FILTERED.get_or_init(|| {
+        let mut f: CflApplyFn = cfl_apply_420_8bpc_scalar;
+        // Filtered 4:2:0 variants (VSTRIP/GAUSS) have NEON and AVX2 entries.
+        // Keep SSE on the scalar fallback until its 4:2:0 entry grows the same
+        // filter coverage.
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::cfl_apply_420_8bpc_neon;
+                if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::cfl_apply_420_8bpc_neon_rdm;
+                }
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::cfl_apply_420_8bpc_avx2;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
 fn resolve_cfl_apply_422() -> CflApplyFn {
     *CFL_APPLY_422_8BPC.get_or_init(|| {
         let mut f: CflApplyFn = cfl_apply_422_8bpc_scalar;
@@ -692,6 +801,9 @@ fn resolve_cfl_apply_422() -> CflApplyFn {
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
                 f = crate::neon::cfl_apply_422_8bpc_neon;
+                if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::cfl_apply_422_8bpc_neon_rdm;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -719,6 +831,9 @@ fn resolve_cfl_apply_444() -> CflApplyFn {
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
                 f = crate::neon::cfl_apply_444_8bpc_neon;
+                if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
+                    f = crate::neon::cfl_apply_444_8bpc_neon_rdm;
+                }
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -740,9 +855,17 @@ fn resolve_cfl_apply_444() -> CflApplyFn {
 
 #[inline]
 pub(crate) fn cfl_apply_420_8bpc(args: CflApply8<'_>) {
-    // SAFETY: the resolver only installs a target-feature entry after the
+    let f = if args.params.filter_type == CFL_FLT_TYPE_VSTRIP
+        || args.params.filter_type == CFL_FLT_TYPE_GAUSS
+    {
+        resolve_cfl_apply_420_filtered()
+    } else {
+        resolve_cfl_apply_420()
+    };
+
+    // SAFETY: the resolvers only install target-feature entries after the
     // matching runtime CPU feature check succeeds; scalar fallback is always valid.
-    unsafe { resolve_cfl_apply_420()(args) };
+    unsafe { f(args) };
 }
 
 #[inline]
@@ -773,6 +896,28 @@ fn resolve_cfl_apply_420_hbd() -> CflApplyHbdFn {
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 f = crate::sse::cfl_apply_420_hbd_sse41;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::cfl_apply_420_hbd_avx2;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_cfl_apply_420_hbd_filtered() -> CflApplyHbdFn {
+    *CFL_APPLY_420_HBD_FILTERED.get_or_init(|| {
+        let mut f: CflApplyHbdFn = cfl_apply_420_hbd_scalar;
+        // Filtered HBD 4:2:0 has NEON and AVX2 implementations; keep SSE on
+        // the scalar fallback until its 4:2:0 entry grows the same filter coverage.
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::cfl_apply_420_hbd_neon;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
@@ -839,9 +984,17 @@ fn resolve_cfl_apply_444_hbd() -> CflApplyHbdFn {
 
 #[inline]
 pub(crate) fn cfl_apply_420_hbd(args: CflApplyHbd<'_>) {
-    // SAFETY: the resolver only installs a target-feature entry after the
+    let f = if args.params.filter_type == CFL_FLT_TYPE_VSTRIP
+        || args.params.filter_type == CFL_FLT_TYPE_GAUSS
+    {
+        resolve_cfl_apply_420_hbd_filtered()
+    } else {
+        resolve_cfl_apply_420_hbd()
+    };
+
+    // SAFETY: the resolvers only install target-feature entries after the
     // matching runtime CPU feature check succeeds; scalar fallback is always valid.
-    unsafe { resolve_cfl_apply_420_hbd()(args) };
+    unsafe { f(args) };
 }
 
 #[inline]

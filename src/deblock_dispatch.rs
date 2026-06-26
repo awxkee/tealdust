@@ -33,6 +33,8 @@ pub(crate) type DeblockApply8bpcFn =
     unsafe fn(&mut [u8], isize, isize, isize, i32, i32, i32, bool, bool);
 pub(crate) type DeblockApplyHbdFn =
     unsafe fn(&mut [u16], isize, isize, isize, i32, i32, i32, bool, bool, i32);
+pub(crate) type DeblockSb64Fn =
+    unsafe fn(&mut [u8], usize, usize, &[u16], &[u16], &[u8], &[u8], bool);
 
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
@@ -648,6 +650,10 @@ pub(crate) fn deblock_apply_hbd_scalar(
 
 static DEBLOCK_APPLY_8BPC: OnceLock<DeblockApply8bpcFn> = OnceLock::new();
 static DEBLOCK_APPLY_HBD: OnceLock<DeblockApplyHbdFn> = OnceLock::new();
+static DEBLOCK_H_SB64Y_8BPC: OnceLock<Option<DeblockSb64Fn>> = OnceLock::new();
+static DEBLOCK_V_SB64Y_8BPC: OnceLock<Option<DeblockSb64Fn>> = OnceLock::new();
+static DEBLOCK_H_SB64UV_8BPC: OnceLock<Option<DeblockSb64Fn>> = OnceLock::new();
+static DEBLOCK_V_SB64UV_8BPC: OnceLock<Option<DeblockSb64Fn>> = OnceLock::new();
 
 #[inline]
 fn resolve_deblock_apply_8bpc() -> DeblockApply8bpcFn {
@@ -655,7 +661,7 @@ fn resolve_deblock_apply_8bpc() -> DeblockApply8bpcFn {
         let mut f = deblock_apply_8bpc_scalar as DeblockApply8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
                 f = crate::neon::deblock_apply_8bpc_neon as DeblockApply8bpcFn;
             }
         }
@@ -682,7 +688,7 @@ fn resolve_deblock_apply_hbd() -> DeblockApplyHbdFn {
         let mut f = deblock_apply_hbd_scalar as DeblockApplyHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
                 f = crate::neon::deblock_apply_hbd_neon as DeblockApplyHbdFn;
             }
         }
@@ -702,6 +708,117 @@ fn resolve_deblock_apply_hbd() -> DeblockApplyHbdFn {
         f
     })
 }
+
+#[inline]
+fn resolve_deblock_h_sb64y_8bpc() -> Option<DeblockSb64Fn> {
+    *DEBLOCK_H_SB64Y_8BPC.get_or_init(|| {
+        let mut f: Option<DeblockSb64Fn> = None;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
+                f = Some(crate::neon::deblock_h_sb64y_8bpc_neon as DeblockSb64Fn);
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = Some(crate::avx::deblock_h_sb64y_8bpc_avx2 as DeblockSb64Fn);
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_deblock_v_sb64y_8bpc() -> Option<DeblockSb64Fn> {
+    *DEBLOCK_V_SB64Y_8BPC.get_or_init(|| {
+        let mut f: Option<DeblockSb64Fn> = None;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
+                f = Some(crate::neon::deblock_v_sb64y_8bpc_neon as DeblockSb64Fn);
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = Some(crate::avx::deblock_v_sb64y_8bpc_avx2 as DeblockSb64Fn);
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_deblock_h_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
+    *DEBLOCK_H_SB64UV_8BPC.get_or_init(|| {
+        let mut f: Option<DeblockSb64Fn> = None;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
+                f = Some(crate::neon::deblock_h_sb64uv_8bpc_neon as DeblockSb64Fn);
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = Some(crate::avx::deblock_h_sb64uv_8bpc_avx2 as DeblockSb64Fn);
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_deblock_v_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
+    *DEBLOCK_V_SB64UV_8BPC.get_or_init(|| {
+        let mut f: Option<DeblockSb64Fn> = None;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
+                f = Some(crate::neon::deblock_v_sb64uv_8bpc_neon as DeblockSb64Fn);
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = Some(crate::avx::deblock_v_sb64uv_8bpc_avx2 as DeblockSb64Fn);
+            }
+        }
+        f
+    })
+}
+
+macro_rules! define_try_deblock_sb64_8bpc {
+    ($name:ident, $resolver:ident) => {
+        #[allow(clippy::too_many_arguments)]
+        #[inline]
+        pub(crate) fn $name(
+            dst: &mut [u8],
+            dst_off: usize,
+            stride: usize,
+            vmask: &[u16],
+            ll_mask: &[u16],
+            q_thr: &[u8],
+            side_thr: &[u8],
+            edge: bool,
+        ) -> bool {
+            let Some(f) = $resolver() else {
+                return false;
+            };
+            // SAFETY: the resolver returns target-feature entry points only after
+            // the corresponding runtime feature probe succeeds. Otherwise the
+            // caller continues into the existing scalar/generic path.
+            unsafe { f(dst, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge) };
+            true
+        }
+    };
+}
+
+define_try_deblock_sb64_8bpc!(try_deblock_h_sb64y_8bpc, resolve_deblock_h_sb64y_8bpc);
+define_try_deblock_sb64_8bpc!(try_deblock_v_sb64y_8bpc, resolve_deblock_v_sb64y_8bpc);
+define_try_deblock_sb64_8bpc!(try_deblock_h_sb64uv_8bpc, resolve_deblock_h_sb64uv_8bpc);
+define_try_deblock_sb64_8bpc!(try_deblock_v_sb64uv_8bpc, resolve_deblock_v_sb64uv_8bpc);
 
 #[allow(clippy::too_many_arguments)]
 #[inline]

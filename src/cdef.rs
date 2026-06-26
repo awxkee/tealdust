@@ -138,75 +138,14 @@ pub(crate) fn cdef_find_dir_bd<BD: BitDepth>(
     stride: usize,
     var: &mut u32,
 ) -> i32 {
-    let bitdepth_min_8 = bd.bitdepth_min_8();
-    let mut partial_sum_hv = [[0i32; 8]; 2];
-    let mut partial_sum_diag = [[0i32; 15]; 2];
-    let mut partial_sum_alt = [[0i32; 11]; 4];
-
-    for y in 0..8usize {
-        for x in 0..8usize {
-            let px = (Into::<i32>::into(img[y * stride + x]) >> bitdepth_min_8) - 128;
-
-            partial_sum_diag[0][y + x] += px;
-            partial_sum_alt[0][y + (x >> 1)] += px;
-            partial_sum_hv[0][y] += px;
-            partial_sum_alt[1][3 + y - (x >> 1)] += px;
-            partial_sum_diag[1][7 + y - x] += px;
-            partial_sum_alt[2][3 - (y >> 1) + x] += px;
-            partial_sum_hv[1][x] += px;
-            partial_sum_alt[3][(y >> 1) + x] += px;
-        }
+    if let Some(img8) = <BD::Pixel as Pixel>::try_as_u8_slice(img) {
+        return crate::cdef_dispatch::cdef_find_dir_8bpc(img8, stride, var);
+    }
+    if let Some(imgh) = <BD::Pixel as Pixel>::try_as_u16_slice(img) {
+        return crate::cdef_dispatch::cdef_find_dir_hbd(imgh, stride, bd.bitdepth_min_8(), var);
     }
 
-    let mut cost = [0u32; 8];
-    for n in 0..8 {
-        cost[2] += (partial_sum_hv[0][n] * partial_sum_hv[0][n]) as u32;
-        cost[6] += (partial_sum_hv[1][n] * partial_sum_hv[1][n]) as u32;
-    }
-    cost[2] *= 105;
-    cost[6] *= 105;
-
-    static DIV_TABLE: [u32; 7] = [840, 420, 280, 210, 168, 140, 120];
-    for n in 0..7usize {
-        let d = DIV_TABLE[n];
-        cost[0] += ((partial_sum_diag[0][n] * partial_sum_diag[0][n]
-            + partial_sum_diag[0][14 - n] * partial_sum_diag[0][14 - n])
-            as u32)
-            * d;
-        cost[4] += ((partial_sum_diag[1][n] * partial_sum_diag[1][n]
-            + partial_sum_diag[1][14 - n] * partial_sum_diag[1][14 - n])
-            as u32)
-            * d;
-    }
-    cost[0] += (partial_sum_diag[0][7] * partial_sum_diag[0][7]) as u32 * 105;
-    cost[4] += (partial_sum_diag[1][7] * partial_sum_diag[1][7]) as u32 * 105;
-
-    for n in 0..4usize {
-        let ci = n * 2 + 1;
-        for m in 0..5usize {
-            cost[ci] += (partial_sum_alt[n][3 + m] * partial_sum_alt[n][3 + m]) as u32;
-        }
-        cost[ci] *= 105;
-        for m in 0..3usize {
-            let d = DIV_TABLE[2 * m + 1];
-            cost[ci] += ((partial_sum_alt[n][m] * partial_sum_alt[n][m]
-                + partial_sum_alt[n][10 - m] * partial_sum_alt[n][10 - m])
-                as u32)
-                * d;
-        }
-    }
-
-    let mut best_dir = 0i32;
-    let mut best_cost = cost[0];
-    for n in 1..8 {
-        if cost[n] > best_cost {
-            best_cost = cost[n];
-            best_dir = n as i32;
-        }
-    }
-
-    *var = (best_cost - cost[(best_dir ^ 4) as usize]) >> 10;
-    best_dir
+    unreachable!("unsupported CDEF pixel storage")
 }
 
 pub(crate) fn adjust_strength(strength: i32, var: u32) -> i32 {

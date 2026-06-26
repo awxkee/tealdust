@@ -490,12 +490,12 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
         let ridx = root_sby as usize;
         let slot = &mut lr_db_line[ridx];
         if slot[0].len() != y_ls * num_lines {
-            slot[0] = vec![0u8; y_ls * num_lines];
+            slot[0].resize(y_ls * num_lines, 0u8);
         }
         if seq_hdr.layout != crate::headers::PixelLayout::I400 {
             for b in slot.iter_mut().skip(1) {
                 if b.len() != uv_ls * num_lines {
-                    *b = vec![0u8; uv_ls * num_lines];
+                    b.resize(uv_ls * num_lines, 0u8);
                 }
             }
         }
@@ -833,12 +833,12 @@ fn filter_sb64_hbd(
         let ridx = root_sby as usize;
         let slot = &mut lr_db_line[ridx];
         if slot[0].len() != y_ls * num_lines {
-            slot[0] = vec![0u16; y_ls * num_lines];
+            slot[0].resize(y_ls * num_lines, 0u16);
         }
         if seq_hdr.layout != crate::headers::PixelLayout::I400 {
             for b in slot.iter_mut().skip(1) {
                 if b.len() != uv_ls * num_lines {
-                    *b = vec![0u16; uv_ls * num_lines];
+                    b.resize(uv_ls * num_lines, 0u16);
                 }
             }
         }

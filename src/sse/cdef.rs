@@ -32,47 +32,41 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-#[inline(always)]
-fn load_i16x4_i32(a: &[i16; 4]) -> __m128i {
-    unsafe { _mm_cvtepi16_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn load_i16x4(tmp: &[i16], p: isize, off: isize) -> __m128i {
+    unsafe { _mm_loadl_epi64(tmp.as_ptr().offset(p + off).cast()) }
 }
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn store_i32x4_u8(a: &mut [u8; 4], v: __m128i) {
-    let p16 = _mm_packs_epi32(v, v);
-    let p8 = _mm_packus_epi16(p16, p16);
+fn cdef_min_i16(a: __m128i, b: __m128i) -> __m128i {
+    _mm_min_epu16(a, b)
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn constrain_i16(diff: __m128i, threshold: __m128i, shc: __m128i) -> __m128i {
+    let zero = _mm_setzero_si128();
+    let adiff = _mm_abs_epi16(diff);
+    let t = _mm_max_epi16(zero, _mm_sub_epi16(threshold, _mm_srl_epi16(adiff, shc)));
+    let m = _mm_min_epu16(adiff, t);
+    _mm_blendv_epi8(m, _mm_sub_epi16(zero, m), _mm_cmpgt_epi16(zero, diff))
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn madd_i16(sum: __m128i, v: __m128i, tap: i32) -> __m128i {
+    _mm_add_epi16(sum, _mm_mullo_epi16(v, _mm_set1_epi16(tap as i16)))
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn store_i16x4_u8(dst: &mut [u8], p: usize, v: __m128i) {
+    let packed = _mm_packus_epi16(v, v);
     unsafe {
-        _mm_store_ss(a.as_mut_ptr().cast(), _mm_castsi128_ps(p8));
+        _mm_store_ss(dst.as_mut_ptr().add(p).cast(), _mm_castsi128_ps(packed));
     }
-}
-
-/// `constrain(diff, threshold, shift)` over i32 lanes:
-/// `apply_sign(min(|d|, max(0, threshold - (|d| >> shift))), d)`.
-#[inline]
-#[target_feature(enable = "sse4.1")]
-fn constrain_v(diff: __m128i, threshold: __m128i, shc: __m128i) -> __m128i {
-    let adiff = _mm_abs_epi32(diff);
-    let t = _mm_max_epi32(
-        _mm_setzero_si128(),
-        _mm_sub_epi32(threshold, _mm_srl_epi32(adiff, shc)),
-    );
-    let m = _mm_min_epi32(adiff, t);
-    // apply_sign: negate where diff < 0 (m is 0 when diff == 0, so exact)
-    _mm_blendv_epi8(
-        m,
-        _mm_sub_epi32(_mm_setzero_si128(), m),
-        _mm_cmpgt_epi32(_mm_setzero_si128(), diff),
-    )
-}
-
-#[inline]
-#[target_feature(enable = "sse4.1")]
-fn mul_i32x4_i16_n(v: __m128i, k: i32) -> __m128i {
-    let v16 = _mm_packs_epi32(v, _mm_setzero_si128());
-    let vz = _mm_unpacklo_epi16(v16, _mm_setzero_si128());
-    let kz = _mm_set1_epi32((k as i16 as u16) as i32);
-    _mm_madd_epi16(vz, kz)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -97,25 +91,23 @@ pub(crate) fn cdef_filter_block_8bpc_sse41(
     let has_pri = pri_strength != 0;
     let has_sec = sec_strength != 0;
     let clip = has_pri && has_sec;
-    let pri_s = _mm_set1_epi32(pri_strength);
-    let sec_s = _mm_set1_epi32(sec_strength);
+    let pri_s = _mm_set1_epi16(pri_strength as i16);
+    let sec_s = _mm_set1_epi16(sec_strength as i16);
     let pri_shc = _mm_cvtsi32_si128(pri_shift);
     let sec_shc = _mm_cvtsi32_si128(sec_shift);
     let zero = _mm_setzero_si128();
-    let eight = _mm_set1_epi32(8);
-    let lowmask = _mm_set1_epi32(0xFF);
+    let eight = _mm_set1_epi16(8);
+    let lowmask = _mm_set1_epi16(0xff);
     let dirs = &crate::tables::CDEF_DIRECTIONS;
     let groups = w / 4;
     let mut dp = dst_off;
     let mut tp = o;
 
-    for _y in 0..h {
+    for _ in 0..h {
         for g in 0..groups {
             let bx = g * 4;
             let tpx = (tp + bx) as isize;
-            let load = |off: isize| {
-                load_i16x4_i32((&tmp[(tpx + off) as usize..][..4]).try_into().unwrap())
-            };
+            let load = |off: isize| load_i16x4(tmp, tpx, off);
             let px = load(0);
             let mut sum = zero;
             let mut min_v = px;
@@ -124,22 +116,23 @@ pub(crate) fn cdef_filter_block_8bpc_sse41(
             if has_pri {
                 let mut ptap = pri_tap;
                 for k in 0..2 {
-                    let off1 = dirs[dir + 2][k] as isize;
-                    let p0 = load(off1);
-                    let p1 = load(-off1);
-                    let pt = ptap;
-                    sum = _mm_add_epi32(
+                    let off = dirs[dir + 2][k] as isize;
+                    let p0 = load(off);
+                    let p1 = load(-off);
+                    sum = madd_i16(
                         sum,
-                        mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(p0, px), pri_s, pri_shc), pt),
+                        constrain_i16(_mm_sub_epi16(p0, px), pri_s, pri_shc),
+                        ptap,
                     );
-                    sum = _mm_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(p1, px), pri_s, pri_shc), pt),
+                        constrain_i16(_mm_sub_epi16(p1, px), pri_s, pri_shc),
+                        ptap,
                     );
                     ptap = (ptap & 3) | 2;
                     if clip {
-                        min_v = _mm_min_epi32(min_v, _mm_min_epi32(p0, p1));
-                        max_v = _mm_max_epi32(max_v, _mm_max_epi32(p0, p1));
+                        min_v = cdef_min_i16(min_v, cdef_min_i16(p0, p1));
+                        max_v = _mm_max_epi16(max_v, _mm_max_epi16(p0, p1));
                     }
                     if has_sec {
                         let off2 = dirs[dir + 4][k] as isize;
@@ -149,29 +142,33 @@ pub(crate) fn cdef_filter_block_8bpc_sse41(
                         let s2 = load(off3);
                         let s3 = load(-off3);
                         let st = 2 - k as i32;
-                        sum = _mm_add_epi32(
+                        sum = madd_i16(
                             sum,
-                            mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(s0, px), sec_s, sec_shc), st),
+                            constrain_i16(_mm_sub_epi16(s0, px), sec_s, sec_shc),
+                            st,
                         );
-                        sum = _mm_add_epi32(
+                        sum = madd_i16(
                             sum,
-                            mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(s1, px), sec_s, sec_shc), st),
+                            constrain_i16(_mm_sub_epi16(s1, px), sec_s, sec_shc),
+                            st,
                         );
-                        sum = _mm_add_epi32(
+                        sum = madd_i16(
                             sum,
-                            mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(s2, px), sec_s, sec_shc), st),
+                            constrain_i16(_mm_sub_epi16(s2, px), sec_s, sec_shc),
+                            st,
                         );
-                        sum = _mm_add_epi32(
+                        sum = madd_i16(
                             sum,
-                            mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(s3, px), sec_s, sec_shc), st),
+                            constrain_i16(_mm_sub_epi16(s3, px), sec_s, sec_shc),
+                            st,
                         );
-                        min_v = _mm_min_epi32(
+                        min_v = cdef_min_i16(
                             min_v,
-                            _mm_min_epi32(_mm_min_epi32(s0, s1), _mm_min_epi32(s2, s3)),
+                            cdef_min_i16(cdef_min_i16(s0, s1), cdef_min_i16(s2, s3)),
                         );
-                        max_v = _mm_max_epi32(
+                        max_v = _mm_max_epi16(
                             max_v,
-                            _mm_max_epi32(_mm_max_epi32(s0, s1), _mm_max_epi32(s2, s3)),
+                            _mm_max_epi16(_mm_max_epi16(s0, s1), _mm_max_epi16(s2, s3)),
                         );
                     }
                 }
@@ -184,38 +181,56 @@ pub(crate) fn cdef_filter_block_8bpc_sse41(
                     let s2 = load(off2);
                     let s3 = load(-off2);
                     let st = 2 - k as i32;
-                    sum = _mm_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(s0, px), sec_s, sec_shc), st),
+                        constrain_i16(_mm_sub_epi16(s0, px), sec_s, sec_shc),
+                        st,
                     );
-                    sum = _mm_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(s1, px), sec_s, sec_shc), st),
+                        constrain_i16(_mm_sub_epi16(s1, px), sec_s, sec_shc),
+                        st,
                     );
-                    sum = _mm_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(s2, px), sec_s, sec_shc), st),
+                        constrain_i16(_mm_sub_epi16(s2, px), sec_s, sec_shc),
+                        st,
                     );
-                    sum = _mm_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x4_i16_n(constrain_v(_mm_sub_epi32(s3, px), sec_s, sec_shc), st),
+                        constrain_i16(_mm_sub_epi16(s3, px), sec_s, sec_shc),
+                        st,
                     );
                 }
             }
 
-            // delta = (sum - (sum < 0) + 8) >> 4 ; (sum<0) mask is -1, so sum + mask
-            let mask = _mm_cmpgt_epi32(zero, sum);
-            let delta = _mm_srai_epi32::<4>(_mm_add_epi32(_mm_add_epi32(sum, mask), eight));
-            let mut res = _mm_add_epi32(px, delta);
+            let mask = _mm_cmpgt_epi16(zero, sum);
+            let delta = _mm_srai_epi16::<4>(_mm_add_epi16(_mm_add_epi16(sum, mask), eight));
+            let mut res = _mm_add_epi16(px, delta);
             if clip {
-                res = _mm_min_epi32(_mm_max_epi32(res, min_v), max_v);
+                res = _mm_min_epi16(_mm_max_epi16(res, min_v), max_v);
             }
             res = _mm_and_si128(res, lowmask);
-            store_i32x4_u8((&mut dst[dp + bx..dp + bx + 4]).try_into().unwrap(), res);
+            store_i16x4_u8(dst, dp + bx, res);
         }
         dp += dst_stride;
         tp += tmp_stride;
     }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn cdef_find_dir_8bpc_sse41(img: &[u8], stride: usize, var: &mut u32) -> i32 {
+    let mut rows = [[0i16; 8]; 8];
+    let bias = _mm_set1_epi16(128);
+    for (y, row) in rows.iter_mut().enumerate() {
+        let src = unsafe { img.as_ptr().add(y * stride) };
+        let raw = unsafe { _mm_loadl_epi64(src.cast()) };
+        let pix = _mm_cvtepu8_epi16(raw);
+        let centered = _mm_sub_epi16(pix, bias);
+        unsafe { _mm_storeu_si128(row.as_mut_ptr().cast(), centered) };
+    }
+    crate::cdef_dispatch::cdef_find_dir_from_i16_rows(&rows, var)
 }
 
 #[cfg(test)]

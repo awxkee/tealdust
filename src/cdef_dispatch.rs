@@ -65,6 +65,127 @@ pub(crate) type CdefFilterHbdFn = unsafe fn(
     usize,
 );
 
+pub(crate) type CdefDir8Fn = unsafe fn(&[u8], usize, &mut u32) -> i32;
+pub(crate) type CdefDirHbdFn = unsafe fn(&[u16], usize, i32, &mut u32) -> i32;
+
+#[inline(always)]
+fn cdef_min(a: i32, b: i32) -> i32 {
+    // Padding sentinel is i16::MIN. Treating values as unsigned makes the
+    // sentinel larger than every valid pixel, matching dav2d's pminuw path.
+    if (a as u32) < (b as u32) { a } else { b }
+}
+
+#[inline(always)]
+pub(crate) fn cdef_find_dir_from_i16_rows(rows: &[[i16; 8]; 8], var: &mut u32) -> i32 {
+    let mut partial_sum_hv = [[0i32; 8]; 2];
+    let mut partial_sum_diag = [[0i32; 15]; 2];
+    let mut partial_sum_alt = [[0i32; 11]; 4];
+
+    for y in 0..8usize {
+        let mut row_sum = 0i32;
+        for x in 0..8usize {
+            let px = rows[y][x] as i32;
+            row_sum += px;
+            partial_sum_diag[0][y + x] += px;
+            partial_sum_alt[0][y + (x >> 1)] += px;
+            partial_sum_alt[1][3 + y - (x >> 1)] += px;
+            partial_sum_diag[1][7 + y - x] += px;
+            partial_sum_alt[2][3 - (y >> 1) + x] += px;
+            partial_sum_hv[1][x] += px;
+            partial_sum_alt[3][(y >> 1) + x] += px;
+        }
+        partial_sum_hv[0][y] = row_sum;
+    }
+
+    cdef_find_dir_from_partials(&partial_sum_hv, &partial_sum_diag, &partial_sum_alt, var)
+}
+
+#[inline(always)]
+pub(crate) fn cdef_find_dir_from_partials(
+    partial_sum_hv: &[[i32; 8]; 2],
+    partial_sum_diag: &[[i32; 15]; 2],
+    partial_sum_alt: &[[i32; 11]; 4],
+    var: &mut u32,
+) -> i32 {
+    let mut cost = [0u32; 8];
+    for n in 0..8usize {
+        cost[2] += (partial_sum_hv[0][n] * partial_sum_hv[0][n]) as u32;
+        cost[6] += (partial_sum_hv[1][n] * partial_sum_hv[1][n]) as u32;
+    }
+    cost[2] *= 105;
+    cost[6] *= 105;
+
+    const DIV_TABLE: [u32; 7] = [840, 420, 280, 210, 168, 140, 120];
+    for n in 0..7usize {
+        let d = DIV_TABLE[n];
+        cost[0] += ((partial_sum_diag[0][n] * partial_sum_diag[0][n]
+            + partial_sum_diag[0][14 - n] * partial_sum_diag[0][14 - n])
+            as u32)
+            * d;
+        cost[4] += ((partial_sum_diag[1][n] * partial_sum_diag[1][n]
+            + partial_sum_diag[1][14 - n] * partial_sum_diag[1][14 - n])
+            as u32)
+            * d;
+    }
+    cost[0] += (partial_sum_diag[0][7] * partial_sum_diag[0][7]) as u32 * 105;
+    cost[4] += (partial_sum_diag[1][7] * partial_sum_diag[1][7]) as u32 * 105;
+
+    for n in 0..4usize {
+        let ci = n * 2 + 1;
+        for m in 0..5usize {
+            cost[ci] += (partial_sum_alt[n][3 + m] * partial_sum_alt[n][3 + m]) as u32;
+        }
+        cost[ci] *= 105;
+        for m in 0..3usize {
+            let d = DIV_TABLE[2 * m + 1];
+            cost[ci] += ((partial_sum_alt[n][m] * partial_sum_alt[n][m]
+                + partial_sum_alt[n][10 - m] * partial_sum_alt[n][10 - m])
+                as u32)
+                * d;
+        }
+    }
+
+    let mut best_dir = 0i32;
+    let mut best_cost = cost[0];
+    for (n, &c) in cost.iter().enumerate().skip(1) {
+        if c > best_cost {
+            best_cost = c;
+            best_dir = n as i32;
+        }
+    }
+
+    *var = (best_cost - cost[(best_dir ^ 4) as usize]) >> 10;
+    best_dir
+}
+
+#[inline]
+pub(crate) fn cdef_find_dir_8bpc_scalar(img: &[u8], stride: usize, var: &mut u32) -> i32 {
+    let mut rows = [[0i16; 8]; 8];
+    for y in 0..8usize {
+        for x in 0..8usize {
+            rows[y][x] = img[y * stride + x] as i16 - 128;
+        }
+    }
+    cdef_find_dir_from_i16_rows(&rows, var)
+}
+
+#[inline]
+pub(crate) fn cdef_find_dir_hbd_scalar(
+    img: &[u16],
+    stride: usize,
+    bitdepth_min_8: i32,
+    var: &mut u32,
+) -> i32 {
+    let shift = bitdepth_min_8 as u32;
+    let mut rows = [[0i16; 8]; 8];
+    for y in 0..8usize {
+        for x in 0..8usize {
+            rows[y][x] = (img[y * stride + x] >> shift) as i16 - 128;
+        }
+    }
+    cdef_find_dir_from_i16_rows(&rows, var)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cdef_filter_block_hbd_scalar(
     dst: &mut [u16],
@@ -99,7 +220,7 @@ pub(crate) fn cdef_filter_block_hbd_scalar(
                     sum += ptap * constrain(p0 - px, pri_strength, pri_shift);
                     sum += ptap * constrain(p1 - px, pri_strength, pri_shift);
                     ptap = (ptap & 3) | 2;
-                    min_v = p0.min(min_v).min(p1);
+                    min_v = cdef_min(cdef_min(min_v, p0), p1);
                     max_v = p0.max(max_v).max(p1);
                     let off2 = CDEF_DIRECTIONS[dir + 4][k] as isize;
                     let off3 = CDEF_DIRECTIONS[dir][k] as isize;
@@ -112,7 +233,7 @@ pub(crate) fn cdef_filter_block_hbd_scalar(
                     sum += st * constrain(s1 - px, sec_strength, sec_shift);
                     sum += st * constrain(s2 - px, sec_strength, sec_shift);
                     sum += st * constrain(s3 - px, sec_strength, sec_shift);
-                    min_v = s0.min(min_v).min(s1).min(s2).min(s3);
+                    min_v = cdef_min(cdef_min(cdef_min(cdef_min(min_v, s0), s1), s2), s3);
                     max_v = s0.max(max_v).max(s1).max(s2).max(s3);
                 }
                 let v = px + ((sum - (sum < 0) as i32 + 8) >> 4);
@@ -200,7 +321,7 @@ pub(crate) fn cdef_filter_block_8bpc_scalar(
                     sum += ptap * constrain(p0 - px, pri_strength, pri_shift);
                     sum += ptap * constrain(p1 - px, pri_strength, pri_shift);
                     ptap = (ptap & 3) | 2;
-                    min_v = p0.min(min_v).min(p1);
+                    min_v = cdef_min(cdef_min(min_v, p0), p1);
                     max_v = p0.max(max_v).max(p1);
                     let off2 = CDEF_DIRECTIONS[dir + 4][k] as isize;
                     let off3 = CDEF_DIRECTIONS[dir][k] as isize;
@@ -213,7 +334,7 @@ pub(crate) fn cdef_filter_block_8bpc_scalar(
                     sum += st * constrain(s1 - px, sec_strength, sec_shift);
                     sum += st * constrain(s2 - px, sec_strength, sec_shift);
                     sum += st * constrain(s3 - px, sec_strength, sec_shift);
-                    min_v = s0.min(min_v).min(s1).min(s2).min(s3);
+                    min_v = cdef_min(cdef_min(cdef_min(cdef_min(min_v, s0), s1), s2), s3);
                     max_v = s0.max(max_v).max(s1).max(s2).max(s3);
                 }
                 let v = px + ((sum - (sum < 0) as i32 + 8) >> 4);
@@ -265,6 +386,81 @@ pub(crate) fn cdef_filter_block_8bpc_scalar(
             tp += tmp_stride;
         }
     }
+}
+
+static CDEF_DIR_8BPC: OnceLock<CdefDir8Fn> = OnceLock::new();
+
+#[inline]
+fn resolve_cdef_dir_8bpc() -> CdefDir8Fn {
+    *CDEF_DIR_8BPC.get_or_init(|| {
+        let mut f = cdef_find_dir_8bpc_scalar as CdefDir8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::cdef_find_dir_8bpc_neon as CdefDir8Fn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::cdef_find_dir_8bpc_sse41 as CdefDir8Fn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::cdef_find_dir_8bpc_avx2 as CdefDir8Fn;
+            }
+        }
+        f
+    })
+}
+
+static CDEF_DIR_HBD: OnceLock<CdefDirHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_cdef_dir_hbd() -> CdefDirHbdFn {
+    *CDEF_DIR_HBD.get_or_init(|| {
+        let mut f = cdef_find_dir_hbd_scalar as CdefDirHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::cdef_find_dir_hbd_neon as CdefDirHbdFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = crate::sse::cdef_find_dir_hbd_sse41 as CdefDirHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::cdef_find_dir_hbd_avx2 as CdefDirHbdFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn cdef_find_dir_8bpc(img: &[u8], stride: usize, var: &mut u32) -> i32 {
+    // SAFETY: architecture-specific entries are installed only after runtime
+    // feature detection; the scalar default is always sound.
+    unsafe { resolve_cdef_dir_8bpc()(img, stride, var) }
+}
+
+#[inline]
+pub(crate) fn cdef_find_dir_hbd(
+    img: &[u16],
+    stride: usize,
+    bitdepth_min_8: i32,
+    var: &mut u32,
+) -> i32 {
+    // SAFETY: architecture-specific entries are installed only after runtime
+    // feature detection; the scalar default is always sound.
+    unsafe { resolve_cdef_dir_hbd()(img, stride, bitdepth_min_8, var) }
 }
 
 static CDEF_FILTER: OnceLock<CdefFilterFn> = OnceLock::new();

@@ -2656,12 +2656,7 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
                 });
                 return Ok(());
             }
-            (1, 1)
-                if flt != CFL_FLT_TYPE_VSTRIP as u32
-                    && flt != CFL_FLT_TYPE_GAUSS as u32
-                    && !skiph
-                    && !skipv =>
-            {
+            (1, 1) => {
                 crate::cfl_dispatch::cfl_apply_420_8bpc(crate::cfl_dispatch::CflApply8 {
                     y: y_u8,
                     u: u_u8,
@@ -2724,12 +2719,7 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
                 });
                 return Ok(());
             }
-            (1, 1)
-                if flt != CFL_FLT_TYPE_VSTRIP as u32
-                    && flt != CFL_FLT_TYPE_GAUSS as u32
-                    && !skiph
-                    && !skipv =>
-            {
+            (1, 1) => {
                 crate::cfl_dispatch::cfl_apply_420_hbd(crate::cfl_dispatch::CflApplyHbd {
                     y: y_u16,
                     u: u_u16,

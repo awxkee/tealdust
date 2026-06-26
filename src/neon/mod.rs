@@ -44,11 +44,17 @@ mod looprestoration_hd;
 
 pub(crate) use ccso::{ccso_add_8bpc_neon, ccso_prep_lut_8bpc_neon};
 pub(crate) use ccso_hd::{ccso_add_hbd_neon, ccso_prep_lut_hbd_neon};
-pub(crate) use cdef::cdef_filter_block_8bpc_neon;
-pub(crate) use cdef_hd::cdef_filter_block_hbd_neon;
-pub(crate) use cfl::{cfl_apply_420_8bpc_neon, cfl_apply_422_8bpc_neon, cfl_apply_444_8bpc_neon};
+pub(crate) use cdef::{cdef_filter_block_8bpc_neon, cdef_find_dir_8bpc_neon};
+pub(crate) use cdef_hd::{cdef_filter_block_hbd_neon, cdef_find_dir_hbd_neon};
+pub(crate) use cfl::{
+    cfl_apply_420_8bpc_neon, cfl_apply_420_8bpc_neon_rdm, cfl_apply_422_8bpc_neon,
+    cfl_apply_422_8bpc_neon_rdm, cfl_apply_444_8bpc_neon, cfl_apply_444_8bpc_neon_rdm,
+};
 pub(crate) use cfl_hd::{cfl_apply_420_hbd_neon, cfl_apply_422_hbd_neon, cfl_apply_444_hbd_neon};
-pub(crate) use deblocking::{deblock_apply_8bpc_neon, deblock_apply_hbd_neon};
+pub(crate) use deblocking::{
+    deblock_apply_8bpc_neon, deblock_apply_hbd_neon, deblock_h_sb64uv_8bpc_neon,
+    deblock_h_sb64y_8bpc_neon, deblock_v_sb64uv_8bpc_neon, deblock_v_sb64y_8bpc_neon,
+};
 pub(crate) use filter::{
     avg_row_8bpc_neon, blend_row_8bpc_neon, cctx_row_i16_neon, cctx_row_neon, dc_add_row_8bpc_neon,
     gdf_add_run_8bpc_neon, gdf_gradient_group_neon, mask_row_8bpc_neon, morph_row_8bpc_neon,

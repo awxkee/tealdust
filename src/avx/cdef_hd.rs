@@ -29,47 +29,334 @@
 
 use std::arch::x86_64::*;
 
-#[inline(always)]
-fn load_i16x8_i32(a: &[i16; 8]) -> __m256i {
-    unsafe { _mm256_cvtepi16_epi32(_mm_loadu_si128(a.as_ptr() as *const __m128i)) }
-}
-
-#[inline(always)]
-fn store_i32x8_u16(a: &mut [u16; 8], v: __m256i) {
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_i16x16_2rows(tmp: &[i16], p0: isize, p1: isize, off: isize) -> __m256i {
     unsafe {
-        let p16 = _mm256_permute4x64_epi64::<0xd8>(_mm256_packus_epi32(v, v));
-        _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, _mm256_castsi256_si128(p16));
+        let lo = _mm_loadu_si128(tmp.as_ptr().offset(p0 + off).cast());
+        let hi = _mm_loadu_si128(tmp.as_ptr().offset(p1 + off).cast());
+        _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi)
     }
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn constrain_v(diff: __m256i, threshold: __m256i, shc: __m128i) -> __m256i {
-    let adiff = _mm256_abs_epi32(diff);
-    let t = _mm256_max_epi32(
-        _mm256_setzero_si256(),
-        _mm256_sub_epi32(threshold, _mm256_srl_epi32(adiff, shc)),
-    );
-    let m = _mm256_min_epi32(adiff, t);
-    _mm256_blendv_epi8(
-        m,
-        _mm256_sub_epi32(_mm256_setzero_si256(), m),
-        _mm256_cmpgt_epi32(_mm256_setzero_si256(), diff),
-    )
+fn load_i16xw_2rows<const W: usize>(tmp: &[i16], p0: isize, p1: isize, off: isize) -> __m256i {
+    debug_assert!(W == 4 || W == 8);
+    unsafe {
+        let lo = if W == 8 {
+            _mm_loadu_si128(tmp.as_ptr().offset(p0 + off).cast())
+        } else {
+            _mm_loadl_epi64(tmp.as_ptr().offset(p0 + off).cast())
+        };
+        let hi = if W == 8 {
+            _mm_loadu_si128(tmp.as_ptr().offset(p1 + off).cast())
+        } else {
+            _mm_loadl_epi64(tmp.as_ptr().offset(p1 + off).cast())
+        };
+        _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi)
+    }
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn mul_i32x8_i16_n(v: __m256i, k: i32) -> __m256i {
-    let lo = _mm256_castsi256_si128(v);
-    let hi = _mm256_extracti128_si256::<1>(v);
-    let v16 = _mm_packs_epi32(lo, hi);
-    let zero = _mm_setzero_si128();
-    let loz = _mm_unpacklo_epi16(v16, zero);
-    let hiz = _mm_unpackhi_epi16(v16, zero);
-    let vz = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(loz), hiz);
-    let kz = _mm256_set1_epi32((k as i16 as u16) as i32);
-    _mm256_madd_epi16(vz, kz)
+fn cdef_min_i16(a: __m256i, b: __m256i) -> __m256i {
+    _mm256_min_epu16(a, b)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn constrain_i16(diff: __m256i, threshold: __m256i, shc: __m128i) -> __m256i {
+    let zero = _mm256_setzero_si256();
+    let adiff = _mm256_abs_epi16(diff);
+    let t = _mm256_max_epi16(
+        zero,
+        _mm256_sub_epi16(threshold, _mm256_srl_epi16(adiff, shc)),
+    );
+    let m = _mm256_min_epu16(adiff, t);
+    _mm256_blendv_epi8(m, _mm256_sub_epi16(zero, m), _mm256_cmpgt_epi16(zero, diff))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn madd_i16(sum: __m256i, v: __m256i, tap: i32) -> __m256i {
+    _mm256_add_epi16(sum, _mm256_mullo_epi16(v, _mm256_set1_epi16(tap as i16)))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_u16x8_2rows(dst: &mut [u16], p0: usize, p1: usize, v: __m256i) {
+    unsafe {
+        _mm_storeu_si128(dst.as_mut_ptr().add(p0).cast(), _mm256_castsi256_si128(v));
+        _mm_storeu_si128(
+            dst.as_mut_ptr().add(p1).cast(),
+            _mm256_extracti128_si256::<1>(v),
+        );
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_u16xw_2rows<const W: usize>(dst: &mut [u16], p0: usize, p1: usize, v: __m256i) {
+    debug_assert!(W == 4 || W == 8);
+    unsafe {
+        if W == 8 {
+            _mm_storeu_si128(dst.as_mut_ptr().add(p0).cast(), _mm256_castsi256_si128(v));
+            _mm_storeu_si128(
+                dst.as_mut_ptr().add(p1).cast(),
+                _mm256_extracti128_si256::<1>(v),
+            );
+        } else {
+            _mm_storel_epi64(dst.as_mut_ptr().add(p0).cast(), _mm256_castsi256_si128(v));
+            _mm_storel_epi64(
+                dst.as_mut_ptr().add(p1).cast(),
+                _mm256_extracti128_si256::<1>(v),
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+fn cdef_filter_block_hbd_avx2_shape<const W: usize, const H: usize>(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    debug_assert!(W == 4 || W == 8);
+    debug_assert!(H == 4 || H == 8);
+    let has_pri = pri_strength != 0;
+    let has_sec = sec_strength != 0;
+    let clip = has_pri && has_sec;
+    let pri_s = _mm256_set1_epi16(pri_strength as i16);
+    let sec_s = _mm256_set1_epi16(sec_strength as i16);
+    let pri_shc = _mm_cvtsi32_si128(pri_shift);
+    let sec_shc = _mm_cvtsi32_si128(sec_shift);
+    let zero = _mm256_setzero_si256();
+    let eight = _mm256_set1_epi16(8);
+    let dirs = &crate::tables::CDEF_DIRECTIONS;
+    let mut y = 0usize;
+
+    while y < H {
+        let t0 = (o + y * tmp_stride) as isize;
+        let t1 = t0 + tmp_stride as isize;
+        let load = |off: isize| load_i16xw_2rows::<W>(tmp, t0, t1, off);
+        let px = load(0);
+        let mut sum = zero;
+        let mut min_v = px;
+        let mut max_v = px;
+
+        if has_pri {
+            let mut ptap = pri_tap;
+            for k in 0..2 {
+                let off = dirs[dir + 2][k] as isize;
+                let p0 = load(off);
+                let p1 = load(-off);
+                sum = madd_i16(
+                    sum,
+                    constrain_i16(_mm256_sub_epi16(p0, px), pri_s, pri_shc),
+                    ptap,
+                );
+                sum = madd_i16(
+                    sum,
+                    constrain_i16(_mm256_sub_epi16(p1, px), pri_s, pri_shc),
+                    ptap,
+                );
+                ptap = (ptap & 3) | 2;
+                if clip {
+                    min_v = cdef_min_i16(min_v, cdef_min_i16(p0, p1));
+                    max_v = _mm256_max_epi16(max_v, _mm256_max_epi16(p0, p1));
+                }
+                if has_sec {
+                    let off2 = dirs[dir + 4][k] as isize;
+                    let off3 = dirs[dir][k] as isize;
+                    let s0 = load(off2);
+                    let s1 = load(-off2);
+                    let s2 = load(off3);
+                    let s3 = load(-off3);
+                    let st = 2 - k as i32;
+                    sum = madd_i16(
+                        sum,
+                        constrain_i16(_mm256_sub_epi16(s0, px), sec_s, sec_shc),
+                        st,
+                    );
+                    sum = madd_i16(
+                        sum,
+                        constrain_i16(_mm256_sub_epi16(s1, px), sec_s, sec_shc),
+                        st,
+                    );
+                    sum = madd_i16(
+                        sum,
+                        constrain_i16(_mm256_sub_epi16(s2, px), sec_s, sec_shc),
+                        st,
+                    );
+                    sum = madd_i16(
+                        sum,
+                        constrain_i16(_mm256_sub_epi16(s3, px), sec_s, sec_shc),
+                        st,
+                    );
+                    min_v = cdef_min_i16(
+                        min_v,
+                        cdef_min_i16(cdef_min_i16(s0, s1), cdef_min_i16(s2, s3)),
+                    );
+                    max_v = _mm256_max_epi16(
+                        max_v,
+                        _mm256_max_epi16(_mm256_max_epi16(s0, s1), _mm256_max_epi16(s2, s3)),
+                    );
+                }
+            }
+        } else {
+            for k in 0..2 {
+                let off1 = dirs[dir + 4][k] as isize;
+                let off2 = dirs[dir][k] as isize;
+                let s0 = load(off1);
+                let s1 = load(-off1);
+                let s2 = load(off2);
+                let s3 = load(-off2);
+                let st = 2 - k as i32;
+                sum = madd_i16(
+                    sum,
+                    constrain_i16(_mm256_sub_epi16(s0, px), sec_s, sec_shc),
+                    st,
+                );
+                sum = madd_i16(
+                    sum,
+                    constrain_i16(_mm256_sub_epi16(s1, px), sec_s, sec_shc),
+                    st,
+                );
+                sum = madd_i16(
+                    sum,
+                    constrain_i16(_mm256_sub_epi16(s2, px), sec_s, sec_shc),
+                    st,
+                );
+                sum = madd_i16(
+                    sum,
+                    constrain_i16(_mm256_sub_epi16(s3, px), sec_s, sec_shc),
+                    st,
+                );
+            }
+        }
+
+        let mask = _mm256_cmpgt_epi16(zero, sum);
+        let delta = _mm256_srai_epi16::<4>(_mm256_add_epi16(_mm256_add_epi16(sum, mask), eight));
+        let mut res = _mm256_add_epi16(px, delta);
+        if clip {
+            res = _mm256_min_epi16(_mm256_max_epi16(res, min_v), max_v);
+        }
+        let d0 = dst_off + y * dst_stride;
+        let d1 = d0 + dst_stride;
+        store_u16xw_2rows::<W>(dst, d0, d1, res);
+        y += 2;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) fn cdef_filter_block_8x8_hbd_avx2(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_hbd_avx2_shape::<8, 8>(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) fn cdef_filter_block_4x8_hbd_avx2(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_hbd_avx2_shape::<4, 8>(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) fn cdef_filter_block_4x4_hbd_avx2(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_hbd_avx2_shape::<4, 4>(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -91,6 +378,61 @@ pub(crate) fn cdef_filter_block_hbd_avx2(
     w: usize,
     h: usize,
 ) {
+    match (w, h) {
+        (8, 8) => {
+            cdef_filter_block_8x8_hbd_avx2(
+                dst,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            );
+            return;
+        }
+        (4, 8) => {
+            cdef_filter_block_4x8_hbd_avx2(
+                dst,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            );
+            return;
+        }
+        (4, 4) => {
+            cdef_filter_block_4x4_hbd_avx2(
+                dst,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            );
+            return;
+        }
+        _ => {}
+    }
+
     if w < 8 {
         crate::cdef_dispatch::cdef_filter_block_hbd_scalar(
             dst,
@@ -114,24 +456,23 @@ pub(crate) fn cdef_filter_block_hbd_avx2(
     let has_pri = pri_strength != 0;
     let has_sec = sec_strength != 0;
     let clip = has_pri && has_sec;
-    let pri_s = _mm256_set1_epi32(pri_strength);
-    let sec_s = _mm256_set1_epi32(sec_strength);
+    let pri_s = _mm256_set1_epi16(pri_strength as i16);
+    let sec_s = _mm256_set1_epi16(sec_strength as i16);
     let pri_shc = _mm_cvtsi32_si128(pri_shift);
     let sec_shc = _mm_cvtsi32_si128(sec_shift);
     let zero = _mm256_setzero_si256();
-    let eight = _mm256_set1_epi32(8);
+    let eight = _mm256_set1_epi16(8);
     let dirs = &crate::tables::CDEF_DIRECTIONS;
     let groups = w / 8;
-    let mut dp = dst_off;
-    let mut tp = o;
+    let mut y = 0usize;
 
-    for _y in 0..h {
+    while y < h {
+        let paired = y + 1 < h;
         for g in 0..groups {
             let bx = g * 8;
-            let tpx = (tp + bx) as isize;
-            let load = |off: isize| {
-                load_i16x8_i32((&tmp[(tpx + off) as usize..][..8]).try_into().unwrap())
-            };
+            let t0 = (o + y * tmp_stride + bx) as isize;
+            let t1 = if paired { t0 + tmp_stride as isize } else { t0 };
+            let load = |off: isize| load_i16x16_2rows(tmp, t0, t1, off);
             let px = load(0);
             let mut sum = zero;
             let mut min_v = px;
@@ -140,22 +481,23 @@ pub(crate) fn cdef_filter_block_hbd_avx2(
             if has_pri {
                 let mut ptap = pri_tap;
                 for k in 0..2 {
-                    let off1 = dirs[dir + 2][k] as isize;
-                    let p0 = load(off1);
-                    let p1 = load(-off1);
-                    let pt = ptap;
-                    sum = _mm256_add_epi32(
+                    let off = dirs[dir + 2][k] as isize;
+                    let p0 = load(off);
+                    let p1 = load(-off);
+                    sum = madd_i16(
                         sum,
-                        mul_i32x8_i16_n(constrain_v(_mm256_sub_epi32(p0, px), pri_s, pri_shc), pt),
+                        constrain_i16(_mm256_sub_epi16(p0, px), pri_s, pri_shc),
+                        ptap,
                     );
-                    sum = _mm256_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x8_i16_n(constrain_v(_mm256_sub_epi32(p1, px), pri_s, pri_shc), pt),
+                        constrain_i16(_mm256_sub_epi16(p1, px), pri_s, pri_shc),
+                        ptap,
                     );
                     ptap = (ptap & 3) | 2;
                     if clip {
-                        min_v = _mm256_min_epi32(min_v, _mm256_min_epi32(p0, p1));
-                        max_v = _mm256_max_epi32(max_v, _mm256_max_epi32(p0, p1));
+                        min_v = cdef_min_i16(min_v, cdef_min_i16(p0, p1));
+                        max_v = _mm256_max_epi16(max_v, _mm256_max_epi16(p0, p1));
                     }
                     if has_sec {
                         let off2 = dirs[dir + 4][k] as isize;
@@ -165,41 +507,33 @@ pub(crate) fn cdef_filter_block_hbd_avx2(
                         let s2 = load(off3);
                         let s3 = load(-off3);
                         let st = 2 - k as i32;
-                        sum = _mm256_add_epi32(
+                        sum = madd_i16(
                             sum,
-                            mul_i32x8_i16_n(
-                                constrain_v(_mm256_sub_epi32(s0, px), sec_s, sec_shc),
-                                st,
-                            ),
+                            constrain_i16(_mm256_sub_epi16(s0, px), sec_s, sec_shc),
+                            st,
                         );
-                        sum = _mm256_add_epi32(
+                        sum = madd_i16(
                             sum,
-                            mul_i32x8_i16_n(
-                                constrain_v(_mm256_sub_epi32(s1, px), sec_s, sec_shc),
-                                st,
-                            ),
+                            constrain_i16(_mm256_sub_epi16(s1, px), sec_s, sec_shc),
+                            st,
                         );
-                        sum = _mm256_add_epi32(
+                        sum = madd_i16(
                             sum,
-                            mul_i32x8_i16_n(
-                                constrain_v(_mm256_sub_epi32(s2, px), sec_s, sec_shc),
-                                st,
-                            ),
+                            constrain_i16(_mm256_sub_epi16(s2, px), sec_s, sec_shc),
+                            st,
                         );
-                        sum = _mm256_add_epi32(
+                        sum = madd_i16(
                             sum,
-                            mul_i32x8_i16_n(
-                                constrain_v(_mm256_sub_epi32(s3, px), sec_s, sec_shc),
-                                st,
-                            ),
+                            constrain_i16(_mm256_sub_epi16(s3, px), sec_s, sec_shc),
+                            st,
                         );
-                        min_v = _mm256_min_epi32(
+                        min_v = cdef_min_i16(
                             min_v,
-                            _mm256_min_epi32(_mm256_min_epi32(s0, s1), _mm256_min_epi32(s2, s3)),
+                            cdef_min_i16(cdef_min_i16(s0, s1), cdef_min_i16(s2, s3)),
                         );
-                        max_v = _mm256_max_epi32(
+                        max_v = _mm256_max_epi16(
                             max_v,
-                            _mm256_max_epi32(_mm256_max_epi32(s0, s1), _mm256_max_epi32(s2, s3)),
+                            _mm256_max_epi16(_mm256_max_epi16(s0, s1), _mm256_max_epi16(s2, s3)),
                         );
                     }
                 }
@@ -212,37 +546,77 @@ pub(crate) fn cdef_filter_block_hbd_avx2(
                     let s2 = load(off2);
                     let s3 = load(-off2);
                     let st = 2 - k as i32;
-                    sum = _mm256_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x8_i16_n(constrain_v(_mm256_sub_epi32(s0, px), sec_s, sec_shc), st),
+                        constrain_i16(_mm256_sub_epi16(s0, px), sec_s, sec_shc),
+                        st,
                     );
-                    sum = _mm256_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x8_i16_n(constrain_v(_mm256_sub_epi32(s1, px), sec_s, sec_shc), st),
+                        constrain_i16(_mm256_sub_epi16(s1, px), sec_s, sec_shc),
+                        st,
                     );
-                    sum = _mm256_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x8_i16_n(constrain_v(_mm256_sub_epi32(s2, px), sec_s, sec_shc), st),
+                        constrain_i16(_mm256_sub_epi16(s2, px), sec_s, sec_shc),
+                        st,
                     );
-                    sum = _mm256_add_epi32(
+                    sum = madd_i16(
                         sum,
-                        mul_i32x8_i16_n(constrain_v(_mm256_sub_epi32(s3, px), sec_s, sec_shc), st),
+                        constrain_i16(_mm256_sub_epi16(s3, px), sec_s, sec_shc),
+                        st,
                     );
                 }
             }
 
-            let mask = _mm256_cmpgt_epi32(zero, sum);
+            let mask = _mm256_cmpgt_epi16(zero, sum);
             let delta =
-                _mm256_srai_epi32::<4>(_mm256_add_epi32(_mm256_add_epi32(sum, mask), eight));
-            let mut res = _mm256_add_epi32(px, delta);
+                _mm256_srai_epi16::<4>(_mm256_add_epi16(_mm256_add_epi16(sum, mask), eight));
+            let mut res = _mm256_add_epi16(px, delta);
             if clip {
-                res = _mm256_min_epi32(_mm256_max_epi32(res, min_v), max_v);
+                res = _mm256_min_epi16(_mm256_max_epi16(res, min_v), max_v);
             }
-            store_i32x8_u16((&mut dst[dp + bx..dp + bx + 8]).try_into().unwrap(), res);
+            let d0 = dst_off + y * dst_stride + bx;
+            let d1 = if paired { d0 + dst_stride } else { d0 };
+            store_u16x8_2rows(dst, d0, d1, res);
         }
-        dp += dst_stride;
-        tp += tmp_stride;
+        y += if paired { 2 } else { 1 };
     }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_dir_hbd_pair(img: &[u16], stride: usize, y: usize, sh: __m128i) -> __m256i {
+    let lo = unsafe { _mm_loadu_si128(img.as_ptr().add(y * stride).cast()) };
+    let hi = unsafe { _mm_loadu_si128(img.as_ptr().add((y + 4) * stride).cast()) };
+    let raw = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi);
+    _mm256_sub_epi16(_mm256_srl_epi16(raw, sh), _mm256_set1_epi16(128))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) fn cdef_find_dir_hbd_avx2(
+    img: &[u16],
+    stride: usize,
+    bitdepth_min_8: i32,
+    var: &mut u32,
+) -> i32 {
+    let z = _mm_setzero_si128();
+    let mut rows = [z; 8];
+    let sh = _mm_cvtsi32_si128(bitdepth_min_8);
+    let r04 = load_dir_hbd_pair(img, stride, 0, sh);
+    let r15 = load_dir_hbd_pair(img, stride, 1, sh);
+    let r26 = load_dir_hbd_pair(img, stride, 2, sh);
+    let r37 = load_dir_hbd_pair(img, stride, 3, sh);
+    rows[0] = _mm256_castsi256_si128(r04);
+    rows[4] = _mm256_extracti128_si256::<1>(r04);
+    rows[1] = _mm256_castsi256_si128(r15);
+    rows[5] = _mm256_extracti128_si256::<1>(r15);
+    rows[2] = _mm256_castsi256_si128(r26);
+    rows[6] = _mm256_extracti128_si256::<1>(r26);
+    rows[3] = _mm256_castsi256_si128(r37);
+    rows[7] = _mm256_extracti128_si256::<1>(r37);
+    super::cdef::cdef_find_dir_from_rows_avx2(&rows, var)
 }
 
 #[cfg(test)]

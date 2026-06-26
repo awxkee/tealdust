@@ -29,43 +29,860 @@
 
 use std::arch::aarch64::*;
 
-#[inline(always)]
+#[inline]
 fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> int32x4_t {
-    let arr: [u8; 4] = if stride_line == 1 {
-        dst[base as usize..base as usize + 4].try_into().unwrap()
-    } else {
-        [
-            dst[base as usize],
-            dst[(base + stride_line) as usize],
-            dst[(base + 2 * stride_line) as usize],
-            dst[(base + 3 * stride_line) as usize],
-        ]
-    };
-    let dup = unsafe { vreinterpret_u8_u32(vdup_n_u32(u32::from_le_bytes(arr))) };
-    unsafe { vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(dup)))) }
+    unsafe {
+        let p = dst.as_ptr();
+        if stride_line == 1 {
+            let b = vreinterpret_u8_u32(vld1_lane_u32::<0>(
+                p.add(base as usize).cast::<u32>(),
+                vdup_n_u32(0),
+            ));
+            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(b))))
+        } else {
+            let arr = [
+                *p.add(base as usize) as i32,
+                *p.add((base + stride_line) as usize) as i32,
+                *p.add((base + 2 * stride_line) as usize) as i32,
+                *p.add((base + 3 * stride_line) as usize) as i32,
+            ];
+            vld1q_s32(arr.as_ptr())
+        }
+    }
 }
 
 #[inline]
-#[target_feature(enable = "neon")]
+#[target_feature(enable = "rdm")]
 fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: int32x4_t) {
-    if stride_line == 1 {
+    unsafe {
+        let p = dst.as_mut_ptr();
         let u16x4 = vqmovun_s32(v);
         let u8x8 = vqmovn_u16(vcombine_u16(u16x4, u16x4));
-        let lane = vget_lane_u32::<0>(vreinterpret_u32_u8(u8x8));
-        dst[base as usize..base as usize + 4].copy_from_slice(&lane.to_le_bytes());
-    } else {
-        let mut arr = [0i32; 4];
-        unsafe { vst1q_s32(arr.as_mut_ptr(), v) };
-        dst[base as usize] = arr[0] as u8;
-        dst[(base + stride_line) as usize] = arr[1] as u8;
-        dst[(base + 2 * stride_line) as usize] = arr[2] as u8;
-        dst[(base + 3 * stride_line) as usize] = arr[3] as u8;
+        if stride_line == 1 {
+            vst1_lane_u32::<0>(
+                p.add(base as usize).cast::<u32>(),
+                vreinterpret_u32_u8(u8x8),
+            );
+        } else {
+            let packed = vget_lane_u32::<0>(vreinterpret_u32_u8(u8x8));
+            *p.add(base as usize) = (packed & 0xff) as u8;
+            *p.add((base + stride_line) as usize) = ((packed >> 8) & 0xff) as u8;
+            *p.add((base + 2 * stride_line) as usize) = ((packed >> 16) & 0xff) as u8;
+            *p.add((base + 3 * stride_line) as usize) = (packed >> 24) as u8;
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn load4_u8_i16_oriented<const CONTIG: bool>(
+    dst: &[u8],
+    base: isize,
+    stride_line: isize,
+) -> int16x8_t {
+    unsafe {
+        let p = dst.as_ptr();
+        if CONTIG {
+            let b = vreinterpret_u8_u32(vld1_lane_u32::<0>(
+                p.add(base as usize).cast::<u32>(),
+                vdup_n_u32(0),
+            ));
+            vreinterpretq_s16_u16(vmovl_u8(b))
+        } else {
+            let mut v = vdupq_n_s16(0);
+            v = vsetq_lane_s16::<0>(*p.add(base as usize) as i16, v);
+            v = vsetq_lane_s16::<1>(*p.add((base + stride_line) as usize) as i16, v);
+            v = vsetq_lane_s16::<2>(*p.add((base + 2 * stride_line) as usize) as i16, v);
+            vsetq_lane_s16::<3>(*p.add((base + 3 * stride_line) as usize) as i16, v)
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn store4_clip_u8_i16_oriented<const CONTIG: bool>(
+    dst: &mut [u8],
+    base: isize,
+    stride_line: isize,
+    v: int16x8_t,
+) {
+    unsafe {
+        let p = dst.as_mut_ptr();
+        let u8x8 = vreinterpret_u32_u8(vqmovun_s16(v));
+        if CONTIG {
+            vst1_lane_u32::<0>(p.add(base as usize).cast::<u32>(), u8x8);
+        } else {
+            let packed = vget_lane_u32::<0>(u8x8);
+            *p.add(base as usize) = (packed & 0xff) as u8;
+            *p.add((base + stride_line) as usize) = ((packed >> 8) & 0xff) as u8;
+            *p.add((base + 2 * stride_line) as usize) = ((packed >> 16) & 0xff) as u8;
+            *p.add((base + 3 * stride_line) as usize) = (packed >> 24) as u8;
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_delta_i16(
+    d0: int16x8_t,
+    dm1: int16x8_t,
+    dp1: int16x8_t,
+    dm2: int16x8_t,
+    nqc: int16x8_t,
+    qc: int16x8_t,
+) -> int16x8_t {
+    let d0_m1 = vsubq_s16(d0, dm1);
+    let dp1_m2 = vsubq_s16(dp1, dm2);
+    let inner = vsubq_s16(vaddq_s16(d0_m1, vaddq_s16(d0_m1, d0_m1)), dp1_m2);
+    vminq_s16(vmaxq_s16(vshlq_n_s16::<2>(inner), nqc), qc)
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_mla_i16(acc: int16x8_t, delta: int16x8_t, width: i32, tap: i32, sign: i32) -> int16x8_t {
+    let coeff = (crate::deblock::W_MULT[(width - 1) as usize] as i32 * tap * 16 * sign) as i16;
+    vqrdmlahq_s16(acc, delta, vdupq_n_s16(coeff))
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_extract_i16(v: int16x8_t, lane: i32) -> i16 {
+    match lane {
+        0 => vgetq_lane_s16::<0>(v),
+        1 => vgetq_lane_s16::<1>(v),
+        2 => vgetq_lane_s16::<2>(v),
+        _ => vgetq_lane_s16::<3>(v),
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn load_i16x8(a: [i16; 8]) -> int16x8_t {
+    unsafe { vld1q_s16(a.as_ptr()) }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_8bpc_neon_h_sym4_rows(
+    dst: &mut [u8],
+    off: isize,
+    stride_line: isize,
+    delta: int16x8_t,
+    apply_neg: bool,
+    apply_pos: bool,
+) {
+    let wm = (crate::deblock::W_MULT[3] as i16) * 16;
+    let neg = if apply_neg { wm } else { 0 };
+    let pos = if apply_pos { -wm } else { 0 };
+    let coeff = load_i16x8([
+        neg,
+        neg * 2,
+        neg * 3,
+        neg * 4,
+        pos * 4,
+        pos * 3,
+        pos * 2,
+        pos,
+    ]);
+
+    unsafe {
+        let p = dst.as_mut_ptr();
+        let mut r = 0;
+        while r < 4 {
+            let row = off + r * stride_line - 4;
+            let bytes = vld1_u8(p.add(row as usize));
+            let pix = vreinterpretq_s16_u16(vmovl_u8(bytes));
+            let d = deblock_extract_i16(delta, r as i32);
+            let res = vqrdmlahq_s16(pix, vdupq_n_s16(d), coeff);
+            vst1_u8(p.add(row as usize), vqmovun_s16(res));
+            r += 1;
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_8bpc_neon_h_sym8_rows(
+    dst: &mut [u8],
+    off: isize,
+    stride_line: isize,
+    delta: int16x8_t,
+    apply_neg: bool,
+    apply_pos: bool,
+) {
+    let wm = (crate::deblock::W_MULT[7] as i16) * 16;
+    let neg = if apply_neg { wm } else { 0 };
+    let pos = if apply_pos { -wm } else { 0 };
+    let coeff_lo = load_i16x8([
+        neg,
+        neg * 2,
+        neg * 3,
+        neg * 4,
+        neg * 5,
+        neg * 6,
+        neg * 7,
+        neg * 8,
+    ]);
+    let coeff_hi = load_i16x8([
+        pos * 8,
+        pos * 7,
+        pos * 6,
+        pos * 5,
+        pos * 4,
+        pos * 3,
+        pos * 2,
+        pos,
+    ]);
+
+    unsafe {
+        let p = dst.as_mut_ptr();
+        let mut r = 0;
+        while r < 4 {
+            let row = off + r * stride_line - 8;
+            let bytes = vld1q_u8(p.add(row as usize));
+            let pix_lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(bytes)));
+            let pix_hi = vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(bytes)));
+            let d = deblock_extract_i16(delta, r as i32);
+            let d_v = vdupq_n_s16(d);
+            let res_lo = vqrdmlahq_s16(pix_lo, d_v, coeff_lo);
+            let res_hi = vqrdmlahq_s16(pix_hi, d_v, coeff_hi);
+            vst1q_u8(
+                p.add(row as usize),
+                vcombine_u8(vqmovun_s16(res_lo), vqmovun_s16(res_hi)),
+            );
+            r += 1;
+        }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "neon")]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_8bpc_neon_const_oriented<const WN: i32, const WP: i32, const CONTIG: bool>(
+    dst: &mut [u8],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    q_thr_clamp: i32,
+    neg_lossless: bool,
+    pos_lossless: bool,
+) {
+    debug_assert!((1..=8).contains(&WN));
+    debug_assert!((1..=8).contains(&WP));
+    let apply_neg = !neg_lossless;
+    let apply_pos = !pos_lossless;
+    debug_assert!(apply_neg || apply_pos);
+    debug_assert!(q_thr_clamp <= i16::MAX as i32);
+
+    let qc = vdupq_n_s16(q_thr_clamp as i16);
+    let nqc = vdupq_n_s16(-(q_thr_clamp as i16));
+    let d0 = load4_u8_i16_oriented::<CONTIG>(dst, off, stride_line);
+    let dm1 = load4_u8_i16_oriented::<CONTIG>(dst, off - stride_tap, stride_line);
+    let dp1 = load4_u8_i16_oriented::<CONTIG>(dst, off + stride_tap, stride_line);
+    let dm2 = load4_u8_i16_oriented::<CONTIG>(dst, off - 2 * stride_tap, stride_line);
+    let delta = deblock_delta_i16(d0, dm1, dp1, dm2, nqc, qc);
+
+    if !CONTIG && stride_tap == 1 && WN == WP {
+        if WN == 8 {
+            deblock_apply_8bpc_neon_h_sym8_rows(dst, off, stride_line, delta, apply_neg, apply_pos);
+            return;
+        }
+        if WN == 4 {
+            deblock_apply_8bpc_neon_h_sym4_rows(dst, off, stride_line, delta, apply_neg, apply_pos);
+            return;
+        }
+    }
+
+    if apply_neg {
+        let mut j = 0;
+        while j < WN {
+            let base = off + (-(j as isize) - 1) * stride_tap;
+            let cur = load4_u8_i16_oriented::<CONTIG>(dst, base, stride_line);
+            let res = deblock_mla_i16(cur, delta, WN, WN - j, 1);
+            store4_clip_u8_i16_oriented::<CONTIG>(dst, base, stride_line, res);
+            j += 1;
+        }
+    }
+
+    if apply_pos {
+        let mut j = 0;
+        while j < WP {
+            let base = off + (j as isize) * stride_tap;
+            let cur = load4_u8_i16_oriented::<CONTIG>(dst, base, stride_line);
+            let res = deblock_mla_i16(cur, delta, WP, WP - j, -1);
+            store4_clip_u8_i16_oriented::<CONTIG>(dst, base, stride_line, res);
+            j += 1;
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn transpose16x16_u8_neon(r: &mut [uint8x16_t; 16]) {
+    // Native NEON transpose spelling.  vtrn de-interleaves even/odd elements at
+    // each stage, so the raw outputs are produced in bit-reversed column order:
+    // 0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15.
+    // The final assignment below restores the natural column order.
+    let z = vdupq_n_u8(0);
+    let mut t = [z; 16];
+    let mut u = [z; 16];
+    let mut v = [z; 16];
+    let mut o = [z; 16];
+
+    let mut i = 0;
+    while i < 8 {
+        let a = r[i * 2];
+        let b = r[i * 2 + 1];
+        t[i * 2] = vtrn1q_u8(a, b);
+        t[i * 2 + 1] = vtrn2q_u8(a, b);
+        i += 1;
+    }
+
+    i = 0;
+    while i < 4 {
+        let b = i * 4;
+        let t0 = vreinterpretq_u16_u8(t[b]);
+        let t1 = vreinterpretq_u16_u8(t[b + 1]);
+        let t2 = vreinterpretq_u16_u8(t[b + 2]);
+        let t3 = vreinterpretq_u16_u8(t[b + 3]);
+        u[b] = vreinterpretq_u8_u16(vtrn1q_u16(t0, t2));
+        u[b + 1] = vreinterpretq_u8_u16(vtrn2q_u16(t0, t2));
+        u[b + 2] = vreinterpretq_u8_u16(vtrn1q_u16(t1, t3));
+        u[b + 3] = vreinterpretq_u8_u16(vtrn2q_u16(t1, t3));
+        i += 1;
+    }
+
+    i = 0;
+    while i < 2 {
+        let b = i * 8;
+        let u0 = vreinterpretq_u32_u8(u[b]);
+        let u1 = vreinterpretq_u32_u8(u[b + 1]);
+        let u2 = vreinterpretq_u32_u8(u[b + 2]);
+        let u3 = vreinterpretq_u32_u8(u[b + 3]);
+        let u4 = vreinterpretq_u32_u8(u[b + 4]);
+        let u5 = vreinterpretq_u32_u8(u[b + 5]);
+        let u6 = vreinterpretq_u32_u8(u[b + 6]);
+        let u7 = vreinterpretq_u32_u8(u[b + 7]);
+        v[b] = vreinterpretq_u8_u32(vtrn1q_u32(u0, u4));
+        v[b + 1] = vreinterpretq_u8_u32(vtrn2q_u32(u0, u4));
+        v[b + 2] = vreinterpretq_u8_u32(vtrn1q_u32(u1, u5));
+        v[b + 3] = vreinterpretq_u8_u32(vtrn2q_u32(u1, u5));
+        v[b + 4] = vreinterpretq_u8_u32(vtrn1q_u32(u2, u6));
+        v[b + 5] = vreinterpretq_u8_u32(vtrn2q_u32(u2, u6));
+        v[b + 6] = vreinterpretq_u8_u32(vtrn1q_u32(u3, u7));
+        v[b + 7] = vreinterpretq_u8_u32(vtrn2q_u32(u3, u7));
+        i += 1;
+    }
+
+    let v0 = vreinterpretq_u64_u8(v[0]);
+    let v1 = vreinterpretq_u64_u8(v[1]);
+    let v2 = vreinterpretq_u64_u8(v[2]);
+    let v3 = vreinterpretq_u64_u8(v[3]);
+    let v4 = vreinterpretq_u64_u8(v[4]);
+    let v5 = vreinterpretq_u64_u8(v[5]);
+    let v6 = vreinterpretq_u64_u8(v[6]);
+    let v7 = vreinterpretq_u64_u8(v[7]);
+    let v8 = vreinterpretq_u64_u8(v[8]);
+    let v9 = vreinterpretq_u64_u8(v[9]);
+    let v10 = vreinterpretq_u64_u8(v[10]);
+    let v11 = vreinterpretq_u64_u8(v[11]);
+    let v12 = vreinterpretq_u64_u8(v[12]);
+    let v13 = vreinterpretq_u64_u8(v[13]);
+    let v14 = vreinterpretq_u64_u8(v[14]);
+    let v15 = vreinterpretq_u64_u8(v[15]);
+
+    o[0] = vreinterpretq_u8_u64(vtrn1q_u64(v0, v8));
+    o[1] = vreinterpretq_u8_u64(vtrn2q_u64(v0, v8));
+    o[2] = vreinterpretq_u8_u64(vtrn1q_u64(v1, v9));
+    o[3] = vreinterpretq_u8_u64(vtrn2q_u64(v1, v9));
+    o[4] = vreinterpretq_u8_u64(vtrn1q_u64(v2, v10));
+    o[5] = vreinterpretq_u8_u64(vtrn2q_u64(v2, v10));
+    o[6] = vreinterpretq_u8_u64(vtrn1q_u64(v3, v11));
+    o[7] = vreinterpretq_u8_u64(vtrn2q_u64(v3, v11));
+    o[8] = vreinterpretq_u8_u64(vtrn1q_u64(v4, v12));
+    o[9] = vreinterpretq_u8_u64(vtrn2q_u64(v4, v12));
+    o[10] = vreinterpretq_u8_u64(vtrn1q_u64(v5, v13));
+    o[11] = vreinterpretq_u8_u64(vtrn2q_u64(v5, v13));
+    o[12] = vreinterpretq_u8_u64(vtrn1q_u64(v6, v14));
+    o[13] = vreinterpretq_u8_u64(vtrn2q_u64(v6, v14));
+    o[14] = vreinterpretq_u8_u64(vtrn1q_u64(v7, v15));
+    o[15] = vreinterpretq_u8_u64(vtrn2q_u64(v7, v15));
+
+    r[0] = o[0];
+    r[1] = o[8];
+    r[2] = o[4];
+    r[3] = o[12];
+    r[4] = o[2];
+    r[5] = o[10];
+    r[6] = o[6];
+    r[7] = o[14];
+    r[8] = o[1];
+    r[9] = o[9];
+    r[10] = o[5];
+    r[11] = o[13];
+    r[12] = o[3];
+    r[13] = o[11];
+    r[14] = o[7];
+    r[15] = o[15];
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn cvtepu8_lo_i16(v: uint8x16_t) -> int16x8_t {
+    vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v)))
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn cvtepu8_hi_i16(v: uint8x16_t) -> int16x8_t {
+    vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(v)))
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn pack_u8_from_i16x2(lo: int16x8_t, hi: int16x8_t) -> uint8x16_t {
+    vcombine_u8(vqmovun_s16(lo), vqmovun_s16(hi))
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn repeated_qclamp4_w8(q_thr: &[u8], qi: usize) -> (int16x8_t, int16x8_t) {
+    let m = crate::deblock::Q_THRESH_MULTS[7] as i16;
+    let q0 = (q_thr[qi] as i16) * m;
+    let q1 = (q_thr[qi + 1] as i16) * m;
+    let q2 = (q_thr[qi + 2] as i16) * m;
+    let q3 = (q_thr[qi + 3] as i16) * m;
+    (
+        load_i16x8([q0, q0, q0, q0, q1, q1, q1, q1]),
+        load_i16x8([q2, q2, q2, q2, q3, q3, q3, q3]),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn repeated_apply_mask4(ll: u16, qi: usize) -> (int16x8_t, int16x8_t) {
+    let m0 = if (ll & (1u16 << qi)) == 0 { -1i16 } else { 0 };
+    let m1 = if (ll & (1u16 << (qi + 1))) == 0 {
+        -1i16
+    } else {
+        0
+    };
+    let m2 = if (ll & (1u16 << (qi + 2))) == 0 {
+        -1i16
+    } else {
+        0
+    };
+    let m3 = if (ll & (1u16 << (qi + 3))) == 0 {
+        -1i16
+    } else {
+        0
+    };
+    (
+        load_i16x8([m0, m0, m0, m0, m1, m1, m1, m1]),
+        load_i16x8([m2, m2, m2, m2, m3, m3, m3, m3]),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn and_s16(a: int16x8_t, b: int16x8_t) -> int16x8_t {
+    vreinterpretq_s16_u16(vandq_u16(
+        vreinterpretq_u16_s16(a),
+        vreinterpretq_u16_s16(b),
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_8bpc_neon_h_w8x4_transpose(
+    dst: &mut [u8],
+    off: isize,
+    stride: isize,
+    qlo: int16x8_t,
+    qhi: int16x8_t,
+    neg_mask_lo: int16x8_t,
+    neg_mask_hi: int16x8_t,
+    pos_mask_lo: int16x8_t,
+    pos_mask_hi: int16x8_t,
+) {
+    unsafe {
+        let p = dst.as_mut_ptr();
+        let z8 = vdupq_n_u8(0);
+        let z16 = vdupq_n_s16(0);
+        let mut cols = [z8; 16];
+
+        let mut r = 0;
+        while r < 16 {
+            let row = off + r as isize * stride - 8;
+            cols[r] = vld1q_u8(p.add(row as usize));
+            r += 1;
+        }
+
+        transpose16x16_u8_neon(&mut cols);
+
+        let d0_lo = cvtepu8_lo_i16(cols[8]);
+        let d0_hi = cvtepu8_hi_i16(cols[8]);
+        let dm1_lo = cvtepu8_lo_i16(cols[7]);
+        let dm1_hi = cvtepu8_hi_i16(cols[7]);
+        let dp1_lo = cvtepu8_lo_i16(cols[9]);
+        let dp1_hi = cvtepu8_hi_i16(cols[9]);
+        let dm2_lo = cvtepu8_lo_i16(cols[6]);
+        let dm2_hi = cvtepu8_hi_i16(cols[6]);
+
+        let delta_lo = deblock_delta_i16(d0_lo, dm1_lo, dp1_lo, dm2_lo, vsubq_s16(z16, qlo), qlo);
+        let delta_hi = deblock_delta_i16(d0_hi, dm1_hi, dp1_hi, dm2_hi, vsubq_s16(z16, qhi), qhi);
+        let wm = (crate::deblock::W_MULT[7] as i16) * 16;
+
+        let mut c = 0;
+        while c < 8 {
+            let tap = (c + 1) as i16;
+            let coeff = vdupq_n_s16(wm * tap);
+            let coeff_lo = and_s16(coeff, neg_mask_lo);
+            let coeff_hi = and_s16(coeff, neg_mask_hi);
+            let pix_lo = cvtepu8_lo_i16(cols[c]);
+            let pix_hi = cvtepu8_hi_i16(cols[c]);
+            cols[c] = pack_u8_from_i16x2(
+                vqrdmlahq_s16(pix_lo, delta_lo, coeff_lo),
+                vqrdmlahq_s16(pix_hi, delta_hi, coeff_hi),
+            );
+            c += 1;
+        }
+
+        c = 8;
+        while c < 16 {
+            let tap = (16 - c) as i16;
+            let coeff = vdupq_n_s16(-(wm * tap));
+            let coeff_lo = and_s16(coeff, pos_mask_lo);
+            let coeff_hi = and_s16(coeff, pos_mask_hi);
+            let pix_lo = cvtepu8_lo_i16(cols[c]);
+            let pix_hi = cvtepu8_hi_i16(cols[c]);
+            cols[c] = pack_u8_from_i16x2(
+                vqrdmlahq_s16(pix_lo, delta_lo, coeff_lo),
+                vqrdmlahq_s16(pix_hi, delta_hi, coeff_hi),
+            );
+            c += 1;
+        }
+
+        transpose16x16_u8_neon(&mut cols);
+
+        r = 0;
+        while r < 16 {
+            let row = off + r as isize * stride - 8;
+            vst1q_u8(p.add(row as usize), cols[r]);
+            r += 1;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_8bpc_neon_const<const WN: i32, const WP: i32>(
+    dst: &mut [u8],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    q_thr_clamp: i32,
+    neg_lossless: bool,
+    pos_lossless: bool,
+) {
+    if stride_line == 1 {
+        deblock_apply_8bpc_neon_const_oriented::<WN, WP, true>(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+        );
+    } else {
+        debug_assert_eq!(stride_tap, 1);
+        deblock_apply_8bpc_neon_const_oriented::<WN, WP, false>(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+        );
+    }
+}
+
+macro_rules! dispatch_8bpc_pair_neon {
+    ($dst:expr, $off:expr, $stride_line:expr, $stride_tap:expr, $q:expr, $neg_ll:expr, $pos_ll:expr, $wn:literal, $wp:literal) => {{
+        deblock_apply_8bpc_neon_const::<$wn, $wp>(
+            $dst,
+            $off,
+            $stride_line,
+            $stride_tap,
+            $q,
+            $neg_ll,
+            $pos_ll,
+        )
+    }};
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_8bpc_neon_specialized(
+    dst: &mut [u8],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    width_neg: i32,
+    width_pos: i32,
+    q_thr_clamp: i32,
+    neg_lossless: bool,
+    pos_lossless: bool,
+) -> bool {
+    if q_thr_clamp > i16::MAX as i32 {
+        return false;
+    }
+
+    match (width_neg, width_pos) {
+        (1, 1) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            1,
+            1
+        ),
+        (1, 2) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            1,
+            2
+        ),
+        (2, 2) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            2,
+            2
+        ),
+        (2, 3) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            2,
+            3
+        ),
+        (1, 3) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            1,
+            3
+        ),
+        (3, 3) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            3,
+            3
+        ),
+        (1, 4) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            1,
+            4
+        ),
+        (2, 4) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            2,
+            4
+        ),
+        (3, 4) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            3,
+            4
+        ),
+        (4, 4) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            4,
+            4
+        ),
+        (1, 6) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            1,
+            6
+        ),
+        (2, 6) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            2,
+            6
+        ),
+        (3, 6) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            3,
+            6
+        ),
+        (4, 6) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            4,
+            6
+        ),
+        (6, 6) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            6,
+            6
+        ),
+        (1, 8) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            1,
+            8
+        ),
+        (2, 8) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            2,
+            8
+        ),
+        (3, 8) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            3,
+            8
+        ),
+        (4, 8) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            4,
+            8
+        ),
+        (6, 8) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            6,
+            8
+        ),
+        (8, 8) => dispatch_8bpc_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            8,
+            8
+        ),
+        _ => return false,
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
 pub(crate) fn deblock_apply_8bpc_neon(
     dst: &mut [u8],
     off: isize,
@@ -77,21 +894,37 @@ pub(crate) fn deblock_apply_8bpc_neon(
     neg_lossless: bool,
     pos_lossless: bool,
 ) {
+    if q_thr_clamp <= 0 || (neg_lossless && pos_lossless) {
+        return;
+    }
+
+    if deblock_apply_8bpc_neon_specialized(
+        dst,
+        off,
+        stride_line,
+        stride_tap,
+        width_neg,
+        width_pos,
+        q_thr_clamp,
+        neg_lossless,
+        pos_lossless,
+    ) {
+        return;
+    }
+
     let qc = vdupq_n_s32(q_thr_clamp);
     let nqc = vdupq_n_s32(-q_thr_clamp);
     let rnd = vdupq_n_s32(1 << 10);
     let zero = vdupq_n_s32(0);
     let v255 = vdupq_n_s32(255);
-    let three = vdupq_n_s32(3);
-    let four = vdupq_n_s32(4);
-
     let d0 = load4_u8_i32(dst, off, stride_line);
     let dm1 = load4_u8_i32(dst, off - stride_tap, stride_line);
     let dp1 = load4_u8_i32(dst, off + stride_tap, stride_line);
     let dm2 = load4_u8_i32(dst, off - 2 * stride_tap, stride_line);
-    // delta_m2 = clip(4*(3*(d0-dm1) - (dp1-dm2)), -qc, qc)
-    let inner = vsubq_s32(vmulq_s32(three, vsubq_s32(d0, dm1)), vsubq_s32(dp1, dm2));
-    let delta = vminq_s32(vmaxq_s32(vmulq_s32(four, inner), nqc), qc);
+    let d0_m1 = vsubq_s32(d0, dm1);
+    let dp1_m2 = vsubq_s32(dp1, dm2);
+    let inner = vsubq_s32(vaddq_s32(d0_m1, vaddq_s32(d0_m1, d0_m1)), dp1_m2);
+    let delta = vminq_s32(vmaxq_s32(vshlq_n_s32::<2>(inner), nqc), qc);
 
     if !neg_lossless {
         let dn = vmulq_s32(
@@ -123,41 +956,537 @@ pub(crate) fn deblock_apply_8bpc_neon(
     }
 }
 
-#[inline(always)]
+#[inline]
 fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> int32x4_t {
-    let v = if stride_line == 1 {
-        unsafe { vld1_u16(dst.as_ptr().add(base as usize)) }
-    } else {
-        let arr = [
-            dst[base as usize],
-            dst[(base + stride_line) as usize],
-            dst[(base + 2 * stride_line) as usize],
-            dst[(base + 3 * stride_line) as usize],
-        ];
-        unsafe { vld1_u16(arr.as_ptr()) }
-    };
-    unsafe { vreinterpretq_s32_u32(vmovl_u16(v)) }
+    unsafe {
+        let p = dst.as_ptr();
+        if stride_line == 1 {
+            vreinterpretq_s32_u32(vmovl_u16(vld1_u16(p.add(base as usize))))
+        } else {
+            let arr = [
+                *p.add(base as usize) as i32,
+                *p.add((base + stride_line) as usize) as i32,
+                *p.add((base + 2 * stride_line) as usize) as i32,
+                *p.add((base + 3 * stride_line) as usize) as i32,
+            ];
+            vld1q_s32(arr.as_ptr())
+        }
+    }
 }
 
 #[inline]
-#[target_feature(enable = "neon")]
+#[target_feature(enable = "rdm")]
 fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: int32x4_t) {
-    let u16x4 = vqmovun_s32(v);
-    if stride_line == 1 {
-        unsafe { vst1_u16(dst.as_mut_ptr().add(base as usize), u16x4) };
-    } else {
-        let mut arr = [0u16; 4];
-        unsafe { vst1_u16(arr.as_mut_ptr(), u16x4) };
-        dst[base as usize] = arr[0];
-        dst[(base + stride_line) as usize] = arr[1];
-        dst[(base + 2 * stride_line) as usize] = arr[2];
-        dst[(base + 3 * stride_line) as usize] = arr[3];
+    unsafe {
+        let p = dst.as_mut_ptr();
+        let u16x4 = vqmovun_s32(v);
+        if stride_line == 1 {
+            vst1_u16(p.add(base as usize), u16x4);
+        } else {
+            *p.add(base as usize) = vget_lane_u16::<0>(u16x4);
+            *p.add((base + stride_line) as usize) = vget_lane_u16::<1>(u16x4);
+            *p.add((base + 2 * stride_line) as usize) = vget_lane_u16::<2>(u16x4);
+            *p.add((base + 3 * stride_line) as usize) = vget_lane_u16::<3>(u16x4);
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn load4_u16_i32_oriented<const CONTIG: bool>(
+    dst: &[u16],
+    base: isize,
+    stride_line: isize,
+) -> int32x4_t {
+    unsafe {
+        let p = dst.as_ptr();
+        if CONTIG {
+            vreinterpretq_s32_u32(vmovl_u16(vld1_u16(p.add(base as usize))))
+        } else {
+            let mut v = vdupq_n_s32(0);
+            v = vsetq_lane_s32::<0>(*p.add(base as usize) as i32, v);
+            v = vsetq_lane_s32::<1>(*p.add((base + stride_line) as usize) as i32, v);
+            v = vsetq_lane_s32::<2>(*p.add((base + 2 * stride_line) as usize) as i32, v);
+            vsetq_lane_s32::<3>(*p.add((base + 3 * stride_line) as usize) as i32, v)
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn store4_clip_u16_oriented<const CONTIG: bool>(
+    dst: &mut [u16],
+    base: isize,
+    stride_line: isize,
+    v: int32x4_t,
+) {
+    unsafe {
+        let p = dst.as_mut_ptr();
+        let u16x4 = vqmovun_s32(v);
+        if CONTIG {
+            vst1_u16(p.add(base as usize), u16x4);
+        } else {
+            *p.add(base as usize) = vget_lane_u16::<0>(u16x4);
+            *p.add((base + stride_line) as usize) = vget_lane_u16::<1>(u16x4);
+            *p.add((base + 2 * stride_line) as usize) = vget_lane_u16::<2>(u16x4);
+            *p.add((base + 3 * stride_line) as usize) = vget_lane_u16::<3>(u16x4);
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_delta_i32(
+    d0: int32x4_t,
+    dm1: int32x4_t,
+    dp1: int32x4_t,
+    dm2: int32x4_t,
+    nqc: int32x4_t,
+    qc: int32x4_t,
+) -> int32x4_t {
+    let d0_m1 = vsubq_s32(d0, dm1);
+    let dp1_m2 = vsubq_s32(dp1, dm2);
+    let inner = vsubq_s32(vaddq_s32(d0_m1, vaddq_s32(d0_m1, d0_m1)), dp1_m2);
+    vminq_s32(vmaxq_s32(vshlq_n_s32::<2>(inner), nqc), qc)
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_diff_i32(delta: int32x4_t, width: i32, tap: i32) -> int32x4_t {
+    let rnd = vdupq_n_s32(1 << 10);
+    let w = vdupq_n_s32(crate::deblock::W_MULT[(width - 1) as usize] as i32 * tap);
+    vshrq_n_s32::<11>(vaddq_s32(vmulq_s32(delta, w), rnd))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_hbd_neon_const_oriented<
+    const WN: i32,
+    const WP: i32,
+    const CONTIG: bool,
+    const APPLY_NEG: bool,
+    const APPLY_POS: bool,
+>(
+    dst: &mut [u16],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    q_thr_clamp: i32,
+    bitdepth_max: i32,
+) {
+    debug_assert!((1..=8).contains(&WN));
+    debug_assert!((1..=8).contains(&WP));
+    debug_assert!(APPLY_NEG || APPLY_POS);
+
+    let qc = vdupq_n_s32(q_thr_clamp);
+    let nqc = vdupq_n_s32(-q_thr_clamp);
+    let zero = vdupq_n_s32(0);
+    let vmax = vdupq_n_s32(bitdepth_max);
+
+    let d0 = load4_u16_i32_oriented::<CONTIG>(dst, off, stride_line);
+    let dm1 = load4_u16_i32_oriented::<CONTIG>(dst, off - stride_tap, stride_line);
+    let dp1 = load4_u16_i32_oriented::<CONTIG>(dst, off + stride_tap, stride_line);
+    let dm2 = load4_u16_i32_oriented::<CONTIG>(dst, off - 2 * stride_tap, stride_line);
+    let delta = deblock_delta_i32(d0, dm1, dp1, dm2, nqc, qc);
+
+    if APPLY_NEG {
+        let mut j = 0;
+        while j < WN {
+            let diff = deblock_diff_i32(delta, WN, WN - j);
+            let base = off + (-(j as isize) - 1) * stride_tap;
+            let cur = load4_u16_i32_oriented::<CONTIG>(dst, base, stride_line);
+            let res = vminq_s32(vmaxq_s32(vaddq_s32(cur, diff), zero), vmax);
+            store4_clip_u16_oriented::<CONTIG>(dst, base, stride_line, res);
+            j += 1;
+        }
+    }
+
+    if APPLY_POS {
+        let mut j = 0;
+        while j < WP {
+            let diff = deblock_diff_i32(delta, WP, WP - j);
+            let base = off + (j as isize) * stride_tap;
+            let cur = load4_u16_i32_oriented::<CONTIG>(dst, base, stride_line);
+            let res = vminq_s32(vmaxq_s32(vsubq_s32(cur, diff), zero), vmax);
+            store4_clip_u16_oriented::<CONTIG>(dst, base, stride_line, res);
+            j += 1;
+        }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "neon")]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_hbd_neon_const_sides<const WN: i32, const WP: i32, const CONTIG: bool>(
+    dst: &mut [u16],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    q_thr_clamp: i32,
+    neg_lossless: bool,
+    pos_lossless: bool,
+    bitdepth_max: i32,
+) {
+    match (neg_lossless, pos_lossless) {
+        (false, false) => deblock_apply_hbd_neon_const_oriented::<WN, WP, CONTIG, true, true>(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            bitdepth_max,
+        ),
+        (false, true) => deblock_apply_hbd_neon_const_oriented::<WN, WP, CONTIG, true, false>(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            bitdepth_max,
+        ),
+        (true, false) => deblock_apply_hbd_neon_const_oriented::<WN, WP, CONTIG, false, true>(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            bitdepth_max,
+        ),
+        (true, true) => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_hbd_neon_const<const WN: i32, const WP: i32>(
+    dst: &mut [u16],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    q_thr_clamp: i32,
+    neg_lossless: bool,
+    pos_lossless: bool,
+    bitdepth_max: i32,
+) {
+    if stride_line == 1 {
+        deblock_apply_hbd_neon_const_sides::<WN, WP, true>(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+        );
+    } else {
+        debug_assert_eq!(stride_tap, 1);
+        deblock_apply_hbd_neon_const_sides::<WN, WP, false>(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+        );
+    }
+}
+
+macro_rules! dispatch_hbd_pair_neon {
+    ($dst:expr, $off:expr, $stride_line:expr, $stride_tap:expr, $q:expr, $neg_ll:expr, $pos_ll:expr, $bdmax:expr, $wn:literal, $wp:literal) => {{
+        deblock_apply_hbd_neon_const::<$wn, $wp>(
+            $dst,
+            $off,
+            $stride_line,
+            $stride_tap,
+            $q,
+            $neg_ll,
+            $pos_ll,
+            $bdmax,
+        )
+    }};
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_hbd_neon_specialized(
+    dst: &mut [u16],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    width_neg: i32,
+    width_pos: i32,
+    q_thr_clamp: i32,
+    neg_lossless: bool,
+    pos_lossless: bool,
+    bitdepth_max: i32,
+) -> bool {
+    match (width_neg, width_pos) {
+        (1, 1) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            1,
+            1
+        ),
+        (1, 2) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            1,
+            2
+        ),
+        (2, 2) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            2,
+            2
+        ),
+        (2, 3) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            2,
+            3
+        ),
+        (1, 3) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            1,
+            3
+        ),
+        (3, 3) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            3,
+            3
+        ),
+        (1, 4) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            1,
+            4
+        ),
+        (2, 4) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            2,
+            4
+        ),
+        (3, 4) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            3,
+            4
+        ),
+        (4, 4) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            4,
+            4
+        ),
+        (1, 6) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            1,
+            6
+        ),
+        (2, 6) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            2,
+            6
+        ),
+        (3, 6) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            3,
+            6
+        ),
+        (4, 6) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            4,
+            6
+        ),
+        (6, 6) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            6,
+            6
+        ),
+        (1, 8) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            1,
+            8
+        ),
+        (2, 8) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            2,
+            8
+        ),
+        (3, 8) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            3,
+            8
+        ),
+        (4, 8) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            4,
+            8
+        ),
+        (6, 8) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            6,
+            8
+        ),
+        (8, 8) => dispatch_hbd_pair_neon!(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+            8,
+            8
+        ),
+        _ => return false,
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
 pub(crate) fn deblock_apply_hbd_neon(
     dst: &mut [u16],
     off: isize,
@@ -170,20 +1499,36 @@ pub(crate) fn deblock_apply_hbd_neon(
     pos_lossless: bool,
     bitdepth_max: i32,
 ) {
+    if q_thr_clamp <= 0 || (neg_lossless && pos_lossless) {
+        return;
+    }
+
+    if deblock_apply_hbd_neon_specialized(
+        dst,
+        off,
+        stride_line,
+        stride_tap,
+        width_neg,
+        width_pos,
+        q_thr_clamp,
+        neg_lossless,
+        pos_lossless,
+        bitdepth_max,
+    ) {
+        return;
+    }
+
     let qc = vdupq_n_s32(q_thr_clamp);
     let nqc = vdupq_n_s32(-q_thr_clamp);
     let rnd = vdupq_n_s32(1 << 10);
     let zero = vdupq_n_s32(0);
     let vmax = vdupq_n_s32(bitdepth_max);
-    let three = vdupq_n_s32(3);
-    let four = vdupq_n_s32(4);
 
     let d0 = load4_u16_i32(dst, off, stride_line);
     let dm1 = load4_u16_i32(dst, off - stride_tap, stride_line);
     let dp1 = load4_u16_i32(dst, off + stride_tap, stride_line);
     let dm2 = load4_u16_i32(dst, off - 2 * stride_tap, stride_line);
-    let inner = vsubq_s32(vmulq_s32(three, vsubq_s32(d0, dm1)), vsubq_s32(dp1, dm2));
-    let delta = vminq_s32(vmaxq_s32(vmulq_s32(four, inner), nqc), qc);
+    let delta = deblock_delta_i32(d0, dm1, dp1, dm2, nqc, qc);
 
     if !neg_lossless {
         let dn = vmulq_s32(
@@ -211,6 +1556,890 @@ pub(crate) fn deblock_apply_hbd_neon(
             let cur = load4_u16_i32(dst, base, stride_line);
             let res = vminq_s32(vmaxq_s32(vsubq_s32(cur, diff), zero), vmax);
             store4_clip_u16(dst, base, stride_line, res);
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn select_i32(mask: bool, yes: i32, no: i32) -> i32 {
+    let m = -(mask as i32);
+    (yes & m) | (no & !m)
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn filter_avg_abs2_from_lanes(v: int16x4_t) -> u32 {
+    ((vget_lane_s16::<0>(v) as u32 + vget_lane_s16::<1>(v) as u32) + 1) >> 1
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn filter_second_deriv_8bpc_neon(
+    buf: &[u8],
+    s: isize,
+    t: isize,
+    stride: isize,
+    dist: isize,
+) -> u32 {
+    unsafe {
+        let p = buf.as_ptr();
+        let s0 = *p.add((s + (dist - 1) * stride) as usize) as i16;
+        let s1 = *p.add((s + dist * stride) as usize) as i16;
+        let s2 = *p.add((s + (dist + 1) * stride) as usize) as i16;
+        let t0 = *p.add((t + (dist - 1) * stride) as usize) as i16;
+        let t1 = *p.add((t + dist * stride) as usize) as i16;
+        let t2 = *p.add((t + (dist + 1) * stride) as usize) as i16;
+        let a = vset_lane_s16::<1>(t0, vset_lane_s16::<0>(s0, vdup_n_s16(0)));
+        let b = vset_lane_s16::<1>(t1, vset_lane_s16::<0>(s1, vdup_n_s16(0)));
+        let c = vset_lane_s16::<1>(t2, vset_lane_s16::<0>(s2, vdup_n_s16(0)));
+        let deriv = vadd_s16(vsub_s16(a, vadd_s16(b, b)), c);
+        filter_avg_abs2_from_lanes(vabs_s16(deriv))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn filter_end_deriv_8bpc_neon(
+    buf: &[u8],
+    s0: isize,
+    s1: isize,
+    s2: isize,
+    t0: isize,
+    t1: isize,
+    t2: isize,
+    c0: i16,
+    c1: i16,
+    c2: i16,
+) -> u32 {
+    unsafe {
+        let p = buf.as_ptr();
+        let a = vset_lane_s16::<1>(
+            *p.add(t0 as usize) as i16,
+            vset_lane_s16::<0>(*p.add(s0 as usize) as i16, vdup_n_s16(0)),
+        );
+        let b = vset_lane_s16::<1>(
+            *p.add(t1 as usize) as i16,
+            vset_lane_s16::<0>(*p.add(s1 as usize) as i16, vdup_n_s16(0)),
+        );
+        let c = vset_lane_s16::<1>(
+            *p.add(t2 as usize) as i16,
+            vset_lane_s16::<0>(*p.add(s2 as usize) as i16, vdup_n_s16(0)),
+        );
+        let v = vadd_s16(
+            vadd_s16(vmul_n_s16(a, c0), vmul_n_s16(b, c1)),
+            vmul_n_s16(c, c2),
+        );
+        filter_avg_abs2_from_lanes(vabs_s16(v))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn filter_choice_8bpc_neon_const<const MAX_WIDTH_NEG: i32, const MAX_WIDTH_POS: i32>(
+    buf: &[u8],
+    s: isize,
+    t: isize,
+    stride: isize,
+    q_thr: u32,
+    side_thr: u32,
+) -> i32 {
+    debug_assert!((1..=8).contains(&MAX_WIDTH_POS));
+    debug_assert!((1..=8).contains(&MAX_WIDTH_NEG));
+    debug_assert!(MAX_WIDTH_NEG <= MAX_WIDTH_POS);
+
+    let sd_m2 = filter_second_deriv_8bpc_neon(buf, s, t, stride, -2);
+    let sd_m1 = filter_second_deriv_8bpc_neon(buf, s, t, stride, -1);
+    let sd_0 = filter_second_deriv_8bpc_neon(buf, s, t, stride, 0);
+    let sd_1 = filter_second_deriv_8bpc_neon(buf, s, t, stride, 1);
+
+    let high_deriv = sd_m2.max(sd_1);
+    let transition = sd_m1 + sd_0;
+
+    let fail0 = high_deriv > side_thr;
+    if MAX_WIDTH_POS == 1 {
+        return select_i32(fail0, 0, 1);
+    }
+
+    let fail1 = high_deriv > (side_thr >> 2) || transition > q_thr * 4;
+
+    let end_thr = (side_thr * 3) >> 4;
+    let neg3_fail = if MAX_WIDTH_NEG >= 3 {
+        filter_end_deriv_8bpc_neon(
+            buf,
+            s - stride,
+            s - 2 * stride,
+            s - 4 * stride,
+            t - stride,
+            t - 2 * stride,
+            t - 4 * stride,
+            -2,
+            3,
+            -1,
+        ) > end_thr
+    } else {
+        false
+    };
+    let pos3_fail = filter_end_deriv_8bpc_neon(
+        buf,
+        s,
+        s + stride,
+        s + 3 * stride,
+        t,
+        t + stride,
+        t + 3 * stride,
+        -2,
+        3,
+        -1,
+    ) > end_thr;
+    let fail2 = high_deriv > (side_thr >> 3) || transition > q_thr * 3 || neg3_fail || pos3_fail;
+
+    if MAX_WIDTH_POS == 3 {
+        let mut width = 3;
+        width = select_i32(fail2, 2, width);
+        width = select_i32(fail1, 1, width);
+        return select_i32(fail0, 0, width);
+    }
+
+    let transition4 = transition << 4;
+    let mut fail4 = false;
+    let mut fail6 = false;
+    let mut fail8 = false;
+
+    if MAX_WIDTH_POS >= 4 {
+        let dist = 4i32;
+        let dist2 = 4i32;
+        let end_thr4 = (side_thr * dist as u32) >> 4;
+        let neg_fail = if MAX_WIDTH_NEG >= dist2 {
+            filter_end_deriv_8bpc_neon(
+                buf,
+                s - stride,
+                s - (dist2 as isize + 1) * stride,
+                s - 2 * stride,
+                t - stride,
+                t - (dist2 as isize + 1) * stride,
+                t - 2 * stride,
+                (1 - dist2) as i16,
+                -1,
+                dist2 as i16,
+            ) > end_thr4
+        } else {
+            false
+        };
+        let pos_fail = filter_end_deriv_8bpc_neon(
+            buf,
+            s,
+            s + dist2 as isize * stride,
+            s + stride,
+            t,
+            t + dist2 as isize * stride,
+            t + stride,
+            (1 - dist2) as i16,
+            -1,
+            dist2 as i16,
+        ) > end_thr4;
+        fail4 = transition4 > q_thr * crate::deblock::Q_FIRST[0] as u32 || neg_fail || pos_fail;
+    }
+
+    if MAX_WIDTH_POS >= 6 {
+        let dist = 6i32;
+        let dist2 = 6i32;
+        let end_thr4 = (side_thr * dist as u32) >> 4;
+        let neg_fail = if MAX_WIDTH_NEG >= dist2 {
+            filter_end_deriv_8bpc_neon(
+                buf,
+                s - stride,
+                s - (dist2 as isize + 1) * stride,
+                s - 2 * stride,
+                t - stride,
+                t - (dist2 as isize + 1) * stride,
+                t - 2 * stride,
+                (1 - dist2) as i16,
+                -1,
+                dist2 as i16,
+            ) > end_thr4
+        } else {
+            false
+        };
+        let pos_fail = filter_end_deriv_8bpc_neon(
+            buf,
+            s,
+            s + dist2 as isize * stride,
+            s + stride,
+            t,
+            t + dist2 as isize * stride,
+            t + stride,
+            (1 - dist2) as i16,
+            -1,
+            dist2 as i16,
+        ) > end_thr4;
+        fail6 = transition4 > q_thr * crate::deblock::Q_FIRST[1] as u32 || neg_fail || pos_fail;
+    }
+
+    if MAX_WIDTH_POS >= 8 {
+        let dist = 8i32;
+        let dist2 = 7i32;
+        let end_thr4 = (side_thr * dist as u32) >> 4;
+        let neg_fail = if MAX_WIDTH_NEG >= dist2 {
+            filter_end_deriv_8bpc_neon(
+                buf,
+                s - stride,
+                s - (dist2 as isize + 1) * stride,
+                s - 2 * stride,
+                t - stride,
+                t - (dist2 as isize + 1) * stride,
+                t - 2 * stride,
+                (1 - dist2) as i16,
+                -1,
+                dist2 as i16,
+            ) > end_thr4
+        } else {
+            false
+        };
+        let pos_fail = filter_end_deriv_8bpc_neon(
+            buf,
+            s,
+            s + dist2 as isize * stride,
+            s + stride,
+            t,
+            t + dist2 as isize * stride,
+            t + stride,
+            (1 - dist2) as i16,
+            -1,
+            dist2 as i16,
+        ) > end_thr4;
+        fail8 = transition4 > q_thr * crate::deblock::Q_FIRST[2] as u32 || neg_fail || pos_fail;
+    }
+
+    let mut width = MAX_WIDTH_POS;
+    width = select_i32(MAX_WIDTH_POS >= 8 && fail8, 6, width);
+    width = select_i32(MAX_WIDTH_POS >= 6 && fail6, 4, width);
+    width = select_i32(MAX_WIDTH_POS >= 4 && fail4, 3, width);
+    width = select_i32(fail2, 2, width);
+    width = select_i32(fail1, 1, width);
+    select_i32(fail0, 0, width)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_apply_8bpc_neon_width_constmax<const MAX_WIDTH_NEG: i32, const CONTIG: bool>(
+    dst: &mut [u8],
+    off: isize,
+    stride_line: isize,
+    stride_tap: isize,
+    width: i32,
+    q_thr_clamp: i32,
+    neg_lossless: bool,
+    pos_lossless: bool,
+) {
+    debug_assert!((1..=8).contains(&MAX_WIDTH_NEG));
+    debug_assert!(q_thr_clamp <= i16::MAX as i32);
+
+    match width {
+        1 => deblock_apply_8bpc_neon_const_oriented::<1, 1, CONTIG>(
+            dst,
+            off,
+            stride_line,
+            stride_tap,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+        ),
+        2 => {
+            if MAX_WIDTH_NEG >= 2 {
+                deblock_apply_8bpc_neon_const_oriented::<2, 2, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else {
+                deblock_apply_8bpc_neon_const_oriented::<1, 2, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            }
+        }
+        3 => {
+            if MAX_WIDTH_NEG >= 3 {
+                deblock_apply_8bpc_neon_const_oriented::<3, 3, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 2 {
+                deblock_apply_8bpc_neon_const_oriented::<2, 3, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else {
+                deblock_apply_8bpc_neon_const_oriented::<1, 3, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            }
+        }
+        4 => {
+            if MAX_WIDTH_NEG >= 4 {
+                deblock_apply_8bpc_neon_const_oriented::<4, 4, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 3 {
+                deblock_apply_8bpc_neon_const_oriented::<3, 4, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 2 {
+                deblock_apply_8bpc_neon_const_oriented::<2, 4, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else {
+                deblock_apply_8bpc_neon_const_oriented::<1, 4, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            }
+        }
+        6 => {
+            if MAX_WIDTH_NEG >= 6 {
+                deblock_apply_8bpc_neon_const_oriented::<6, 6, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 4 {
+                deblock_apply_8bpc_neon_const_oriented::<4, 6, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 3 {
+                deblock_apply_8bpc_neon_const_oriented::<3, 6, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 2 {
+                deblock_apply_8bpc_neon_const_oriented::<2, 6, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else {
+                deblock_apply_8bpc_neon_const_oriented::<1, 6, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            }
+        }
+        8 => {
+            if MAX_WIDTH_NEG >= 8 {
+                deblock_apply_8bpc_neon_const_oriented::<8, 8, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 6 {
+                deblock_apply_8bpc_neon_const_oriented::<6, 8, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 4 {
+                deblock_apply_8bpc_neon_const_oriented::<4, 8, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 3 {
+                deblock_apply_8bpc_neon_const_oriented::<3, 8, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else if MAX_WIDTH_NEG >= 2 {
+                deblock_apply_8bpc_neon_const_oriented::<2, 8, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            } else {
+                deblock_apply_8bpc_neon_const_oriented::<1, 8, CONTIG>(
+                    dst,
+                    off,
+                    stride_line,
+                    stride_tap,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                )
+            }
+        }
+        _ => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_8bpc_neon_const_max<
+    const MAX_WIDTH_NEG: i32,
+    const MAX_WIDTH_POS: i32,
+    const CONTIG: bool,
+>(
+    dst: &mut [u8],
+    off: isize,
+    q_thr: u32,
+    side_thr: u32,
+    stridea: isize,
+    strideb: isize,
+    pos_lossless: bool,
+    neg_lossless: bool,
+) {
+    debug_assert!((1..=8).contains(&MAX_WIDTH_POS));
+    debug_assert!((1..=8).contains(&MAX_WIDTH_NEG));
+    debug_assert!(MAX_WIDTH_NEG <= MAX_WIDTH_POS);
+
+    let width = filter_choice_8bpc_neon_const::<MAX_WIDTH_NEG, MAX_WIDTH_POS>(
+        dst,
+        off,
+        off + 3 * stridea,
+        strideb,
+        q_thr,
+        side_thr,
+    );
+    if width < 1 || (neg_lossless && pos_lossless) {
+        return;
+    }
+
+    let q_thr_clamp = q_thr as i32 * crate::deblock::Q_THRESH_MULTS[(width - 1) as usize] as i32;
+    if q_thr_clamp <= 0 {
+        return;
+    }
+
+    if q_thr_clamp > i16::MAX as i32 {
+        deblock_apply_8bpc_neon(
+            dst,
+            off,
+            stridea,
+            strideb,
+            width.min(MAX_WIDTH_NEG),
+            width,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+        );
+        return;
+    }
+
+    deblock_apply_8bpc_neon_width_constmax::<MAX_WIDTH_NEG, CONTIG>(
+        dst,
+        off,
+        stridea,
+        strideb,
+        width,
+        q_thr_clamp,
+        neg_lossless,
+        pos_lossless,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn try_deblock_h_sb64_w8_run4_transpose(
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+    qi: usize,
+    vm: u32,
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+) -> bool {
+    debug_assert!(qi + 3 < 16);
+    let run = 0x0fu32 << qi;
+    if (vm & run) != run {
+        return false;
+    }
+
+    let mut i = 0;
+    while i < 4 {
+        let bit = 1u16 << (qi + i);
+        let q = q_thr[qi + i] as u32;
+        if q == 0 || ((ll_mask[0] & bit) != 0 && (ll_mask[1] & bit) != 0) {
+            return false;
+        }
+        let off = (dst_off + (qi + i) * 4 * stride) as isize;
+        let width = filter_choice_8bpc_neon_const::<8, 8>(
+            dst,
+            off,
+            off + 3 * stride as isize,
+            1,
+            q,
+            side_thr[qi + i] as u32,
+        );
+        if width != 8 {
+            return false;
+        }
+        i += 1;
+    }
+
+    let (qlo, qhi) = repeated_qclamp4_w8(q_thr, qi);
+    let (neg_mask_lo, neg_mask_hi) = repeated_apply_mask4(ll_mask[0], qi);
+    let (pos_mask_lo, pos_mask_hi) = repeated_apply_mask4(ll_mask[1], qi);
+    let off = (dst_off + qi * 4 * stride) as isize;
+    deblock_apply_8bpc_neon_h_w8x4_transpose(
+        dst,
+        off,
+        stride as isize,
+        qlo,
+        qhi,
+        neg_mask_lo,
+        neg_mask_hi,
+        pos_mask_lo,
+        pos_mask_hi,
+    );
+    true
+}
+
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_mask_class_bits(mask: u16, higher: u16, both_lossless: u16) -> u32 {
+    (mask & !higher & !both_lossless) as u32
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+fn deblock_sb64_8bpc_neon_mask<
+    const MAX_WIDTH_NEG: i32,
+    const MAX_WIDTH_POS: i32,
+    const HORIZONTAL: bool,
+    const CONTIG: bool,
+>(
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+    mut vm: u32,
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+) {
+    debug_assert!(MAX_WIDTH_NEG <= MAX_WIDTH_POS);
+
+    if HORIZONTAL && !CONTIG && MAX_WIDTH_NEG == 8 && MAX_WIDTH_POS == 8 {
+        let mut qi = 0usize;
+        while qi <= 12 {
+            let run = 0x0fu32 << qi;
+            if (vm & run) == run
+                && try_deblock_h_sb64_w8_run4_transpose(
+                    dst, dst_off, stride, qi, vm, ll_mask, q_thr, side_thr,
+                )
+            {
+                vm &= !run;
+            }
+            qi += 4;
+        }
+    }
+
+    while vm != 0 {
+        let qi = vm.trailing_zeros() as usize;
+        let bit = 1u32 << qi;
+        let q = q_thr[qi] as u32;
+        if q != 0 {
+            let pos_ll = (ll_mask[1] as u32 & bit) != 0;
+            let neg_ll = (ll_mask[0] as u32 & bit) != 0;
+            if !(pos_ll && neg_ll) {
+                let side = side_thr[qi] as u32;
+                let off = if HORIZONTAL {
+                    (dst_off + qi * 4 * stride) as isize
+                } else {
+                    (dst_off + qi * 4) as isize
+                };
+                let stridea = if HORIZONTAL { stride as isize } else { 1 };
+                let strideb = if HORIZONTAL { 1 } else { stride as isize };
+                deblock_8bpc_neon_const_max::<MAX_WIDTH_NEG, MAX_WIDTH_POS, CONTIG>(
+                    dst, off, q, side, stridea, strideb, pos_ll, neg_ll,
+                );
+            }
+        }
+        vm &= vm - 1;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+pub(crate) fn deblock_h_sb64y_8bpc_neon(
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m3 = deblock_mask_class_bits(vmask[3], 0, both_lossless);
+    let m2 = deblock_mask_class_bits(vmask[2], vmask[3], both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2] | vmask[3], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2] | vmask[3], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_8bpc_neon_mask::<1, 1, true, false>(
+            dst, dst_off, stride, m0, ll_mask, q_thr, side_thr,
+        );
+    }
+    if m1 != 0 {
+        deblock_sb64_8bpc_neon_mask::<3, 3, true, false>(
+            dst, dst_off, stride, m1, ll_mask, q_thr, side_thr,
+        );
+    }
+    if m2 != 0 {
+        deblock_sb64_8bpc_neon_mask::<6, 6, true, false>(
+            dst, dst_off, stride, m2, ll_mask, q_thr, side_thr,
+        );
+    }
+    if m3 != 0 {
+        if edge {
+            deblock_sb64_8bpc_neon_mask::<6, 8, true, false>(
+                dst, dst_off, stride, m3, ll_mask, q_thr, side_thr,
+            );
+        } else {
+            deblock_sb64_8bpc_neon_mask::<8, 8, true, false>(
+                dst, dst_off, stride, m3, ll_mask, q_thr, side_thr,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+pub(crate) fn deblock_v_sb64y_8bpc_neon(
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m3 = deblock_mask_class_bits(vmask[3], 0, both_lossless);
+    let m2 = deblock_mask_class_bits(vmask[2], vmask[3], both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2] | vmask[3], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2] | vmask[3], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_8bpc_neon_mask::<1, 1, false, true>(
+            dst, dst_off, stride, m0, ll_mask, q_thr, side_thr,
+        );
+    }
+    if m1 != 0 {
+        deblock_sb64_8bpc_neon_mask::<3, 3, false, true>(
+            dst, dst_off, stride, m1, ll_mask, q_thr, side_thr,
+        );
+    }
+    if m2 != 0 {
+        deblock_sb64_8bpc_neon_mask::<6, 6, false, true>(
+            dst, dst_off, stride, m2, ll_mask, q_thr, side_thr,
+        );
+    }
+    if m3 != 0 {
+        if edge {
+            deblock_sb64_8bpc_neon_mask::<6, 8, false, true>(
+                dst, dst_off, stride, m3, ll_mask, q_thr, side_thr,
+            );
+        } else {
+            deblock_sb64_8bpc_neon_mask::<8, 8, false, true>(
+                dst, dst_off, stride, m3, ll_mask, q_thr, side_thr,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+pub(crate) fn deblock_h_sb64uv_8bpc_neon(
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m2 = deblock_mask_class_bits(vmask[2], 0, both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_8bpc_neon_mask::<1, 1, true, false>(
+            dst, dst_off, stride, m0, ll_mask, q_thr, side_thr,
+        );
+    }
+    if m1 != 0 {
+        if edge {
+            deblock_sb64_8bpc_neon_mask::<2, 3, true, false>(
+                dst, dst_off, stride, m1, ll_mask, q_thr, side_thr,
+            );
+        } else {
+            deblock_sb64_8bpc_neon_mask::<3, 3, true, false>(
+                dst, dst_off, stride, m1, ll_mask, q_thr, side_thr,
+            );
+        }
+    }
+    if m2 != 0 {
+        if edge {
+            deblock_sb64_8bpc_neon_mask::<2, 4, true, false>(
+                dst, dst_off, stride, m2, ll_mask, q_thr, side_thr,
+            );
+        } else {
+            deblock_sb64_8bpc_neon_mask::<4, 4, true, false>(
+                dst, dst_off, stride, m2, ll_mask, q_thr, side_thr,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "rdm")]
+pub(crate) fn deblock_v_sb64uv_8bpc_neon(
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m2 = deblock_mask_class_bits(vmask[2], 0, both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_8bpc_neon_mask::<1, 1, false, true>(
+            dst, dst_off, stride, m0, ll_mask, q_thr, side_thr,
+        );
+    }
+    if m1 != 0 {
+        if edge {
+            deblock_sb64_8bpc_neon_mask::<2, 3, false, true>(
+                dst, dst_off, stride, m1, ll_mask, q_thr, side_thr,
+            );
+        } else {
+            deblock_sb64_8bpc_neon_mask::<3, 3, false, true>(
+                dst, dst_off, stride, m1, ll_mask, q_thr, side_thr,
+            );
+        }
+    }
+    if m2 != 0 {
+        if edge {
+            deblock_sb64_8bpc_neon_mask::<2, 4, false, true>(
+                dst, dst_off, stride, m2, ll_mask, q_thr, side_thr,
+            );
+        } else {
+            deblock_sb64_8bpc_neon_mask::<4, 4, false, true>(
+                dst, dst_off, stride, m2, ll_mask, q_thr, side_thr,
+            );
         }
     }
 }

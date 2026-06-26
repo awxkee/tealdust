@@ -311,15 +311,11 @@ pub(crate) fn deblock_h_sb64y_bd<BD: BitDepth>(
     side_thr: &[u8],
     edge: bool,
 ) {
-    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
-    {
-        if BD::BPC == 8 && std::arch::is_x86_feature_detected!("avx2") {
-            if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-                unsafe {
-                    crate::avx::deblock_h_sb64y_8bpc_avx2(
-                        d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
-                    );
-                }
+    if BD::BPC == 8 {
+        if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+            if crate::deblock_dispatch::try_deblock_h_sb64y_8bpc(
+                d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
+            ) {
                 return;
             }
         }
@@ -372,15 +368,11 @@ pub(crate) fn deblock_v_sb64y_bd<BD: BitDepth>(
     side_thr: &[u8],
     edge: bool,
 ) {
-    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
-    {
-        if BD::BPC == 8 && std::arch::is_x86_feature_detected!("avx2") {
-            if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-                unsafe {
-                    crate::avx::deblock_v_sb64y_8bpc_avx2(
-                        d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
-                    );
-                }
+    if BD::BPC == 8 {
+        if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+            if crate::deblock_dispatch::try_deblock_v_sb64y_8bpc(
+                d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
+            ) {
                 return;
             }
         }
@@ -433,15 +425,11 @@ pub(crate) fn deblock_h_sb64uv_bd<BD: BitDepth>(
     side_thr: &[u8],
     edge: bool,
 ) {
-    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
-    {
-        if BD::BPC == 8 && std::arch::is_x86_feature_detected!("avx2") {
-            if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-                unsafe {
-                    crate::avx::deblock_h_sb64uv_8bpc_avx2(
-                        d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
-                    );
-                }
+    if BD::BPC == 8 {
+        if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+            if crate::deblock_dispatch::try_deblock_h_sb64uv_8bpc(
+                d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
+            ) {
                 return;
             }
         }
@@ -492,15 +480,11 @@ pub(crate) fn deblock_v_sb64uv_bd<BD: BitDepth>(
     side_thr: &[u8],
     edge: bool,
 ) {
-    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
-    {
-        if BD::BPC == 8 && std::arch::is_x86_feature_detected!("avx2") {
-            if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-                unsafe {
-                    crate::avx::deblock_v_sb64uv_8bpc_avx2(
-                        d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
-                    );
-                }
+    if BD::BPC == 8 {
+        if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+            if crate::deblock_dispatch::try_deblock_v_sb64uv_8bpc(
+                d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
+            ) {
                 return;
             }
         }

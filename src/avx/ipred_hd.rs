@@ -48,7 +48,7 @@ const fn shuffle(z: u32, y: u32, x: u32, w: u32) -> i32 {
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn _mm_hsumv_epi32(v: __m128i) -> __m128i {
+pub(crate) fn _mm_hsumv_epi32(v: __m128i) -> __m128i {
     let mut hi = _mm_shuffle_epi32(v, shuffle(0, 0, 3, 2));
     let mut v = _mm_add_epi32(v, hi);
 
@@ -59,7 +59,7 @@ fn _mm_hsumv_epi32(v: __m128i) -> __m128i {
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn _mm256_hsum_epi32(v: __m256i) -> u32 {
+pub(crate) fn _mm256_hsum_epi32(v: __m256i) -> u32 {
     let lo = _mm_hsumv_epi32(_mm256_castsi256_si128(v));
     let hi = _mm_hsumv_epi32(_mm256_extracti128_si256::<1>(v));
     _mm_cvtsi128_si32(_mm_add_epi32(lo, hi)) as u32

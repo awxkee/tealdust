@@ -45,14 +45,12 @@ fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
     } else {
         // Four rows of the same horizontal edge.  This is still a gather, but it
         // stays register-only instead of using a temporary stack array.
-        unsafe {
-            _mm_setr_epi32(
-                dst[base as usize] as i32,
-                dst[(base + stride_line) as usize] as i32,
-                dst[(base + 2 * stride_line) as usize] as i32,
-                dst[(base + 3 * stride_line) as usize] as i32,
-            )
-        }
+        _mm_setr_epi32(
+            dst[base as usize] as i32,
+            dst[(base + stride_line) as usize] as i32,
+            dst[(base + 2 * stride_line) as usize] as i32,
+            dst[(base + 3 * stride_line) as usize] as i32,
+        )
     }
 }
 
@@ -156,14 +154,12 @@ fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> __m128i {
             ))
         }
     } else {
-        unsafe {
-            _mm_setr_epi32(
-                dst[base as usize] as i32,
-                dst[(base + stride_line) as usize] as i32,
-                dst[(base + 2 * stride_line) as usize] as i32,
-                dst[(base + 3 * stride_line) as usize] as i32,
-            )
-        }
+        _mm_setr_epi32(
+            dst[base as usize] as i32,
+            dst[(base + stride_line) as usize] as i32,
+            dst[(base + 2 * stride_line) as usize] as i32,
+            dst[(base + 3 * stride_line) as usize] as i32,
+        )
     }
 }
 

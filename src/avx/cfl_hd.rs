@@ -45,6 +45,14 @@ fn pad_bottom(plane: &mut [u16], row0: usize, stride: usize, w: usize, h: usize,
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn load_u16x8(a: &[u16; 8]) -> __m256i {
+    _mm256_inserti128_si256::<0>(_mm256_setzero_si256(), unsafe {
+        _mm_loadu_si128(a.as_ptr() as *const __m128i)
+    })
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn load_u16x16(a: &[u16; 16]) -> __m256i {
     unsafe { _mm256_loadu_si256(a.as_ptr() as *const __m256i) }
 }
@@ -53,6 +61,36 @@ fn load_u16x16(a: &[u16; 16]) -> __m256i {
 #[target_feature(enable = "avx2")]
 fn load_u16x8_i32(a: &[u16; 8]) -> __m256i {
     _mm256_cvtepu16_epi32(unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) })
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_u16x4_i32(a: &[u16; 4]) -> __m256i {
+    _mm256_cvtepu16_epi32(unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) })
+}
+
+#[inline(always)]
+fn load_u16x4_tail(src: &[u16]) -> __m256i {
+    debug_assert!(src.len() >= 4);
+    let mut tmp = [0u16; 8];
+    tmp[..4].copy_from_slice(&src[..4]);
+    unsafe { load_u16x8(&tmp) }
+}
+
+#[inline(always)]
+fn load_u16x2_i32_tail(src: &[u16]) -> __m256i {
+    debug_assert!(src.len() >= 2);
+    let mut tmp = [0u16; 4];
+    tmp[..2].copy_from_slice(&src[..2]);
+    unsafe { load_u16x4_i32(&tmp) }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_i32x4_u16_clip(a: &mut [u16; 4], v: __m256i, max_v: __m256i) {
+    let v = _mm256_min_epi32(_mm256_max_epi32(v, _mm256_setzero_si256()), max_v);
+    let p = _mm_packus_epi32(_mm256_castsi256_si128(v), _mm_setzero_si128());
+    unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, p) };
 }
 
 #[inline]
@@ -67,10 +105,97 @@ fn store_i32x8_u16_clip(a: &mut [u16; 8], v: __m256i, max_v: __m256i) {
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn store_i32x2_u16_clip(a: &mut [u16], v: __m256i, max_v: __m256i) {
+    debug_assert!(a.len() >= 2);
+    let v = _mm256_min_epi32(_mm256_max_epi32(v, _mm256_setzero_si256()), max_v);
+    let p = _mm_packus_epi32(_mm256_castsi256_si128(v), _mm_setzero_si128());
+    let packed = _mm_cvtsi128_si32(p) as u32;
+    a[0] = packed as u16;
+    a[1] = (packed >> 16) as u16;
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn ac8_420_i32(top: __m256i, bot: __m256i, ones: __m256i, dc0v: __m256i) -> __m256i {
     let top = _mm256_madd_epi16(top, ones);
     let bot = _mm256_madd_epi16(bot, ones);
     _mm256_sub_epi32(_mm256_slli_epi32::<1>(_mm256_add_epi32(top, bot)), dc0v)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn even_u16x8_to_i32(src: __m256i, even_mask: __m256i) -> __m256i {
+    let even = _mm256_shuffle_epi8(src, even_mask);
+    let even = _mm256_permute4x64_epi64::<0xd8>(even);
+    _mm256_cvtepu16_epi32(_mm256_castsi256_si128(even))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn left_u16x8_to_i32(src: __m256i, prev_sample: u16, left_mask: __m128i) -> __m256i {
+    let lo = _mm256_castsi256_si128(src);
+    let hi = _mm256_extracti128_si256::<1>(src);
+    let prev = _mm_set1_epi16(prev_sample as i16);
+
+    // Shift by one u16 while preserving the 128-bit lane boundary.  The upper
+    // lane receives the low lane's last sample, matching dav2d's palignr shape.
+    let shifted_lo = _mm_alignr_epi8::<14>(lo, prev);
+    let shifted_hi = _mm_alignr_epi8::<14>(hi, lo);
+    let left_lo = _mm_shuffle_epi8(shifted_lo, left_mask);
+    let left_hi = _mm_shuffle_epi8(shifted_hi, left_mask);
+    _mm256_cvtepu16_epi32(_mm_unpacklo_epi64(left_lo, left_hi))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn ac8_420_vstrip_i32(
+    cur: __m256i,
+    bot: __m256i,
+    prev_cur: u16,
+    prev_bot: u16,
+    center_right_w: __m256i,
+    left_mask: __m128i,
+    dc0v: __m256i,
+) -> __m256i {
+    let cur_left = left_u16x8_to_i32(cur, prev_cur, left_mask);
+    let bot_left = left_u16x8_to_i32(bot, prev_bot, left_mask);
+    let cur_center_right = _mm256_madd_epi16(cur, center_right_w);
+    let bot_center_right = _mm256_madd_epi16(bot, center_right_w);
+    _mm256_sub_epi32(
+        _mm256_add_epi32(
+            _mm256_add_epi32(cur_left, bot_left),
+            _mm256_add_epi32(cur_center_right, bot_center_right),
+        ),
+        dc0v,
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn ac8_420_gauss_i32(
+    cur: __m256i,
+    top: __m256i,
+    bot: __m256i,
+    prev_cur: u16,
+    center_right_w: __m256i,
+    even_mask: __m256i,
+    left_mask: __m128i,
+    dc0v: __m256i,
+) -> __m256i {
+    // ss_hor=ss_ver=1 GAUSS uses:
+    //   left + 4 * center + right + top + bottom - dc
+    // with top clamped to the current row at 64-luma vertical boundaries.
+    let left = left_u16x8_to_i32(cur, prev_cur, left_mask);
+    let center_right = _mm256_madd_epi16(cur, center_right_w);
+    let top = even_u16x8_to_i32(top, even_mask);
+    let bot = even_u16x8_to_i32(bot, even_mask);
+    _mm256_sub_epi32(
+        _mm256_add_epi32(
+            _mm256_add_epi32(left, center_right),
+            _mm256_add_epi32(top, bot),
+        ),
+        dc0v,
+    )
 }
 
 #[inline]
@@ -90,6 +215,36 @@ fn ac8_422_gauss_i32(src: __m256i, dc0v: __m256i) -> __m256i {
     let even = _mm256_permute4x64_epi64::<0xd8>(even);
     let y = _mm256_cvtepu16_epi32(_mm256_castsi256_si128(even));
     _mm256_sub_epi32(_mm256_slli_epi32::<3>(y), dc0v)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn ac8_422_vstrip_i32(
+    src: __m256i,
+    prev_sample: u16,
+    center_right_w: __m256i,
+    left_mask: __m128i,
+    dc0v: __m256i,
+) -> __m256i {
+    let lo = _mm256_castsi256_si128(src);
+    let hi = _mm256_extracti128_si256::<1>(src);
+    let prev = _mm_set1_epi16(prev_sample as i16);
+
+    // Shift by one u16 while preserving the 128-bit lane boundary. The upper
+    // lane receives the low lane's last sample, which is the left neighbour of
+    // its first pair.
+    let shifted_lo = _mm_alignr_epi8::<14>(lo, prev);
+    let shifted_hi = _mm_alignr_epi8::<14>(hi, lo);
+    let left_lo = _mm_shuffle_epi8(shifted_lo, left_mask);
+    let left_hi = _mm_shuffle_epi8(shifted_hi, left_mask);
+    let left = _mm_unpacklo_epi64(left_lo, left_hi);
+    let left = _mm256_cvtepu16_epi32(left);
+
+    let center_right = _mm256_madd_epi16(src, center_right_w);
+    _mm256_sub_epi32(
+        _mm256_slli_epi32::<1>(_mm256_add_epi32(center_right, left)),
+        dc0v,
+    )
 }
 
 #[inline]
@@ -125,8 +280,90 @@ fn apply8_i32_ac(ac: __m256i, alpha: i32, dc_v: __m256i) -> __m256i {
     _mm256_add_epi32(dc_v, signed)
 }
 
+#[inline(always)]
+fn cfl_ac_420_hbd_scalar_filter<const FILTER: u32>(
+    y: &[u16],
+    yrow: usize,
+    ystride: usize,
+    cy: usize,
+    x: usize,
+    dc0: i32,
+) -> i32 {
+    let xl = x << 1;
+    let left = ((xl as i32) & -64).max(xl as i32 - 1) as usize;
+    if FILTER == CFL_FLT_TYPE_GAUSS {
+        let top = if (cy & 31) == 0 {
+            yrow + xl
+        } else {
+            yrow + xl - ystride
+        };
+        y[yrow + left] as i32
+            + 4 * y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[top] as i32
+            + y[yrow + xl + ystride] as i32
+            - dc0
+    } else if FILTER == CFL_FLT_TYPE_VSTRIP {
+        y[yrow + left] as i32
+            + 2 * y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[yrow + left + ystride] as i32
+            + 2 * y[yrow + xl + ystride] as i32
+            + y[yrow + xl + ystride + 1] as i32
+            - dc0
+    } else {
+        ((y[yrow + xl] as i32
+            + y[yrow + xl + 1] as i32
+            + y[yrow + xl + ystride] as i32
+            + y[yrow + xl + ystride + 1] as i32)
+            << 1)
+            - dc0
+    }
+}
+
+#[inline]
 #[target_feature(enable = "avx2")]
-pub(crate) fn cfl_apply_420_hbd_avx2(args: CflApplyHbd<'_>) {
+fn ac8_420_filter_i32<const FILTER: u32>(
+    cur: __m256i,
+    top: __m256i,
+    bot: __m256i,
+    prev_cur: u16,
+    prev_bot: u16,
+    ones: __m256i,
+    even_mask: __m256i,
+    vstrip_center_right_w: __m256i,
+    gauss_center_right_w: __m256i,
+    left_mask: __m128i,
+    dc0v: __m256i,
+) -> __m256i {
+    if FILTER == CFL_FLT_TYPE_VSTRIP {
+        ac8_420_vstrip_i32(
+            cur,
+            bot,
+            prev_cur,
+            prev_bot,
+            vstrip_center_right_w,
+            left_mask,
+            dc0v,
+        )
+    } else if FILTER == CFL_FLT_TYPE_GAUSS {
+        ac8_420_gauss_i32(
+            cur,
+            top,
+            bot,
+            prev_cur,
+            gauss_center_right_w,
+            even_mask,
+            left_mask,
+            dc0v,
+        )
+    } else {
+        ac8_420_i32(cur, bot, ones, dc0v)
+    }
+}
+
+#[target_feature(enable = "avx2")]
+fn cfl_apply_420_hbd_avx2_impl<const FILTER: u32>(args: CflApplyHbd<'_>) {
     let CflApplyHbd {
         y,
         u,
@@ -164,6 +401,13 @@ pub(crate) fn cfl_apply_420_hbd_avx2(args: CflApplyHbd<'_>) {
     let lfull = nfull * 16;
 
     let ones = _mm256_set1_epi16(1);
+    let vstrip_center_right_w = _mm256_setr_epi16(2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1);
+    let gauss_center_right_w = _mm256_setr_epi16(4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1);
+    let even_mask = _mm256_setr_epi8(
+        0, 1, 4, 5, 8, 9, 12, 13, -1, -1, -1, -1, -1, -1, -1, -1, 0, 1, 4, 5, 8, 9, 12, 13, -1, -1,
+        -1, -1, -1, -1, -1, -1,
+    );
+    let vstrip_left_mask = _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, -1, -1, -1, -1, -1, -1, -1, -1);
     let dc0v = _mm256_set1_epi32(dc0);
     let dc1v = _mm256_set1_epi32(dc1);
     let dc2v = _mm256_set1_epi32(dc2);
@@ -172,8 +416,15 @@ pub(crate) fn cfl_apply_420_hbd_avx2(args: CflApplyHbd<'_>) {
     let mut yrow = yrow0;
     let mut urow = urow0;
     let mut vrow = vrow0;
-    for _y in 0..ylim {
-        let top = y[yrow..yrow + lfull].as_chunks::<16>().0;
+    for cy in 0..ylim {
+        let cur = y[yrow..yrow + lfull].as_chunks::<16>().0;
+        let top = if FILTER == CFL_FLT_TYPE_GAUSS && (cy & 31) != 0 {
+            y[yrow - ystride..yrow - ystride + lfull]
+                .as_chunks::<16>()
+                .0
+        } else {
+            cur
+        };
         let bot = y[yrow + ystride..yrow + ystride + lfull]
             .as_chunks::<16>()
             .0;
@@ -181,41 +432,265 @@ pub(crate) fn cfl_apply_420_hbd_avx2(args: CflApplyHbd<'_>) {
             (true, true) => {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
-                for (((du, dv), t), b) in u_chunks
+                for (i, (((du, dv), yy), (tt, bb))) in u_chunks
                     .iter_mut()
                     .zip(v_chunks.iter_mut())
-                    .zip(top)
-                    .zip(bot)
+                    .zip(cur.iter())
+                    .zip(top.iter().zip(bot.iter()))
+                    .enumerate()
                 {
-                    let ac = ac8_420_i32(load_u16x16(t), load_u16x16(b), ones, dc0v);
+                    let xl = (i * 8) << 1;
+                    let prev_cur = if FILTER == CFL_FLT_TYPE_VSTRIP || FILTER == CFL_FLT_TYPE_GAUSS
+                    {
+                        if (xl & 63) == 0 {
+                            y[yrow + xl]
+                        } else {
+                            y[yrow + xl - 1]
+                        }
+                    } else {
+                        0
+                    };
+                    let prev_bot = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                        if (xl & 63) == 0 {
+                            y[yrow + ystride + xl]
+                        } else {
+                            y[yrow + ystride + xl - 1]
+                        }
+                    } else {
+                        0
+                    };
+                    let ac = ac8_420_filter_i32::<FILTER>(
+                        load_u16x16(yy),
+                        load_u16x16(tt),
+                        load_u16x16(bb),
+                        prev_cur,
+                        prev_bot,
+                        ones,
+                        even_mask,
+                        vstrip_center_right_w,
+                        gauss_center_right_w,
+                        vstrip_left_mask,
+                        dc0v,
+                    );
                     store_i32x8_u16_clip(du, apply8_i32_ac(ac, alpha0, dc1v), max_v);
                     store_i32x8_u16_clip(dv, apply8_i32_ac(ac, alpha1, dc2v), max_v);
                 }
             }
             (true, false) => {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
-                for ((du, t), b) in u_chunks.iter_mut().zip(top).zip(bot) {
-                    let ac = ac8_420_i32(load_u16x16(t), load_u16x16(b), ones, dc0v);
+                for (i, ((du, yy), (tt, bb))) in u_chunks
+                    .iter_mut()
+                    .zip(cur.iter())
+                    .zip(top.iter().zip(bot.iter()))
+                    .enumerate()
+                {
+                    let xl = (i * 8) << 1;
+                    let prev_cur = if FILTER == CFL_FLT_TYPE_VSTRIP || FILTER == CFL_FLT_TYPE_GAUSS
+                    {
+                        if (xl & 63) == 0 {
+                            y[yrow + xl]
+                        } else {
+                            y[yrow + xl - 1]
+                        }
+                    } else {
+                        0
+                    };
+                    let prev_bot = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                        if (xl & 63) == 0 {
+                            y[yrow + ystride + xl]
+                        } else {
+                            y[yrow + ystride + xl - 1]
+                        }
+                    } else {
+                        0
+                    };
+                    let ac = ac8_420_filter_i32::<FILTER>(
+                        load_u16x16(yy),
+                        load_u16x16(tt),
+                        load_u16x16(bb),
+                        prev_cur,
+                        prev_bot,
+                        ones,
+                        even_mask,
+                        vstrip_center_right_w,
+                        gauss_center_right_w,
+                        vstrip_left_mask,
+                        dc0v,
+                    );
                     store_i32x8_u16_clip(du, apply8_i32_ac(ac, alpha0, dc1v), max_v);
                 }
             }
             (false, true) => {
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
-                for ((dv, t), b) in v_chunks.iter_mut().zip(top).zip(bot) {
-                    let ac = ac8_420_i32(load_u16x16(t), load_u16x16(b), ones, dc0v);
+                for (i, ((dv, yy), (tt, bb))) in v_chunks
+                    .iter_mut()
+                    .zip(cur.iter())
+                    .zip(top.iter().zip(bot.iter()))
+                    .enumerate()
+                {
+                    let xl = (i * 8) << 1;
+                    let prev_cur = if FILTER == CFL_FLT_TYPE_VSTRIP || FILTER == CFL_FLT_TYPE_GAUSS
+                    {
+                        if (xl & 63) == 0 {
+                            y[yrow + xl]
+                        } else {
+                            y[yrow + xl - 1]
+                        }
+                    } else {
+                        0
+                    };
+                    let prev_bot = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                        if (xl & 63) == 0 {
+                            y[yrow + ystride + xl]
+                        } else {
+                            y[yrow + ystride + xl - 1]
+                        }
+                    } else {
+                        0
+                    };
+                    let ac = ac8_420_filter_i32::<FILTER>(
+                        load_u16x16(yy),
+                        load_u16x16(tt),
+                        load_u16x16(bb),
+                        prev_cur,
+                        prev_bot,
+                        ones,
+                        even_mask,
+                        vstrip_center_right_w,
+                        gauss_center_right_w,
+                        vstrip_left_mask,
+                        dc0v,
+                    );
                     store_i32x8_u16_clip(dv, apply8_i32_ac(ac, alpha1, dc2v), max_v);
                 }
             }
             (false, false) => unreachable!(),
         }
-        for x in xfull..xlim {
-            let xl = x << 1;
-            let ac = ((y[yrow + xl] as i32
-                + y[yrow + xl + 1] as i32
-                + y[yrow + xl + ystride] as i32
-                + y[yrow + xl + ystride + 1] as i32)
-                << 1)
-                - dc0;
+
+        let mut xtail = xfull;
+        if xlim - xtail >= 4 {
+            let xl = xtail << 1;
+            let yy = &y[yrow + xl..yrow + xl + 8].as_chunks::<8>().0[0];
+            let tt = if FILTER == CFL_FLT_TYPE_GAUSS && (cy & 31) != 0 {
+                &y[yrow - ystride + xl..yrow - ystride + xl + 8]
+                    .as_chunks::<8>()
+                    .0[0]
+            } else {
+                yy
+            };
+            let bb = &y[yrow + ystride + xl..yrow + ystride + xl + 8]
+                .as_chunks::<8>()
+                .0[0];
+            let prev_cur = if FILTER == CFL_FLT_TYPE_VSTRIP || FILTER == CFL_FLT_TYPE_GAUSS {
+                if (xl & 63) == 0 {
+                    y[yrow + xl]
+                } else {
+                    y[yrow + xl - 1]
+                }
+            } else {
+                0
+            };
+            let prev_bot = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                if (xl & 63) == 0 {
+                    y[yrow + ystride + xl]
+                } else {
+                    y[yrow + ystride + xl - 1]
+                }
+            } else {
+                0
+            };
+            let ac = ac8_420_filter_i32::<FILTER>(
+                load_u16x8(yy),
+                load_u16x8(tt),
+                load_u16x8(bb),
+                prev_cur,
+                prev_bot,
+                ones,
+                even_mask,
+                vstrip_center_right_w,
+                gauss_center_right_w,
+                vstrip_left_mask,
+                dc0v,
+            );
+            match (do_u, do_v) {
+                (true, true) => {
+                    let (du, _) = u[urow + xtail..urow + xtail + 4].as_chunks_mut::<4>();
+                    let (dv, _) = v[vrow + xtail..vrow + xtail + 4].as_chunks_mut::<4>();
+                    store_i32x4_u16_clip(&mut du[0], apply8_i32_ac(ac, alpha0, dc1v), max_v);
+                    store_i32x4_u16_clip(&mut dv[0], apply8_i32_ac(ac, alpha1, dc2v), max_v);
+                }
+                (true, false) => {
+                    let (du, _) = u[urow + xtail..urow + xtail + 4].as_chunks_mut::<4>();
+                    store_i32x4_u16_clip(&mut du[0], apply8_i32_ac(ac, alpha0, dc1v), max_v);
+                }
+                (false, true) => {
+                    let (dv, _) = v[vrow + xtail..vrow + xtail + 4].as_chunks_mut::<4>();
+                    store_i32x4_u16_clip(&mut dv[0], apply8_i32_ac(ac, alpha1, dc2v), max_v);
+                }
+                (false, false) => unreachable!(),
+            }
+            xtail += 4;
+        }
+
+        if xlim - xtail >= 2 {
+            let xl = xtail << 1;
+            let yy = load_u16x4_tail(&y[yrow + xl..]);
+            let tt = if FILTER == CFL_FLT_TYPE_GAUSS && (cy & 31) != 0 {
+                load_u16x4_tail(&y[yrow - ystride + xl..])
+            } else {
+                yy
+            };
+            let bb = load_u16x4_tail(&y[yrow + ystride + xl..]);
+            let prev_cur = if FILTER == CFL_FLT_TYPE_VSTRIP || FILTER == CFL_FLT_TYPE_GAUSS {
+                if (xl & 63) == 0 {
+                    y[yrow + xl]
+                } else {
+                    y[yrow + xl - 1]
+                }
+            } else {
+                0
+            };
+            let prev_bot = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                if (xl & 63) == 0 {
+                    y[yrow + ystride + xl]
+                } else {
+                    y[yrow + ystride + xl - 1]
+                }
+            } else {
+                0
+            };
+            let ac = ac8_420_filter_i32::<FILTER>(
+                yy,
+                tt,
+                bb,
+                prev_cur,
+                prev_bot,
+                ones,
+                even_mask,
+                vstrip_center_right_w,
+                gauss_center_right_w,
+                vstrip_left_mask,
+                dc0v,
+            );
+            if do_u {
+                store_i32x2_u16_clip(
+                    &mut u[urow + xtail..urow + xtail + 2],
+                    apply8_i32_ac(ac, alpha0, dc1v),
+                    max_v,
+                );
+            }
+            if do_v {
+                store_i32x2_u16_clip(
+                    &mut v[vrow + xtail..vrow + xtail + 2],
+                    apply8_i32_ac(ac, alpha1, dc2v),
+                    max_v,
+                );
+            }
+            xtail += 2;
+        }
+
+        for x in xtail..xlim {
+            let ac = cfl_ac_420_hbd_scalar_filter::<FILTER>(y, yrow, ystride, cy, x, dc0);
             if do_u {
                 u[urow + x] = crate::cfl_dispatch::predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
             }
@@ -244,7 +719,16 @@ pub(crate) fn cfl_apply_420_hbd_avx2(args: CflApplyHbd<'_>) {
 }
 
 #[target_feature(enable = "avx2")]
-fn cfl_apply_422_hbd_avx2_impl<const GAUSS: bool>(args: CflApplyHbd<'_>) {
+pub(crate) fn cfl_apply_420_hbd_avx2(args: CflApplyHbd<'_>) {
+    match args.params.filter_type {
+        CFL_FLT_TYPE_VSTRIP => cfl_apply_420_hbd_avx2_impl::<CFL_FLT_TYPE_VSTRIP>(args),
+        CFL_FLT_TYPE_GAUSS => cfl_apply_420_hbd_avx2_impl::<CFL_FLT_TYPE_GAUSS>(args),
+        _ => cfl_apply_420_hbd_avx2_impl::<0>(args),
+    }
+}
+
+#[target_feature(enable = "avx2")]
+fn cfl_apply_422_hbd_avx2_impl<const FILTER: u32>(args: CflApplyHbd<'_>) {
     let CflApplyHbd {
         y,
         u,
@@ -282,6 +766,8 @@ fn cfl_apply_422_hbd_avx2_impl<const GAUSS: bool>(args: CflApplyHbd<'_>) {
     let lfull = nfull * 16;
 
     let ones = _mm256_set1_epi16(1);
+    let vstrip_center_right_w = _mm256_setr_epi16(2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1);
+    let vstrip_left_mask = _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, -1, -1, -1, -1, -1, -1, -1, -1);
     let dc0v = _mm256_set1_epi32(dc0);
     let dc1v = _mm256_set1_epi32(dc1);
     let dc2v = _mm256_set1_epi32(dc2);
@@ -296,9 +782,22 @@ fn cfl_apply_422_hbd_avx2_impl<const GAUSS: bool>(args: CflApplyHbd<'_>) {
             (true, true) => {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
-                for ((du, dv), s) in u_chunks.iter_mut().zip(v_chunks.iter_mut()).zip(src) {
+                for (i, ((du, dv), s)) in u_chunks
+                    .iter_mut()
+                    .zip(v_chunks.iter_mut())
+                    .zip(src)
+                    .enumerate()
+                {
                     let src = load_u16x16(s);
-                    let ac = if GAUSS {
+                    let ac = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                        let x = (i * 8) << 1;
+                        let prev = if (x & 63) == 0 {
+                            y[yrow + x]
+                        } else {
+                            y[yrow + x - 1]
+                        };
+                        ac8_422_vstrip_i32(src, prev, vstrip_center_right_w, vstrip_left_mask, dc0v)
+                    } else if FILTER == CFL_FLT_TYPE_GAUSS {
                         ac8_422_gauss_i32(src, dc0v)
                     } else {
                         ac8_422_uniform_i32(src, ones, dc0v)
@@ -309,9 +808,17 @@ fn cfl_apply_422_hbd_avx2_impl<const GAUSS: bool>(args: CflApplyHbd<'_>) {
             }
             (true, false) => {
                 let u_chunks = u[urow..urow + xfull].as_chunks_mut::<8>().0;
-                for (du, s) in u_chunks.iter_mut().zip(src) {
+                for (i, (du, s)) in u_chunks.iter_mut().zip(src).enumerate() {
                     let src = load_u16x16(s);
-                    let ac = if GAUSS {
+                    let ac = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                        let x = (i * 8) << 1;
+                        let prev = if (x & 63) == 0 {
+                            y[yrow + x]
+                        } else {
+                            y[yrow + x - 1]
+                        };
+                        ac8_422_vstrip_i32(src, prev, vstrip_center_right_w, vstrip_left_mask, dc0v)
+                    } else if FILTER == CFL_FLT_TYPE_GAUSS {
                         ac8_422_gauss_i32(src, dc0v)
                     } else {
                         ac8_422_uniform_i32(src, ones, dc0v)
@@ -321,9 +828,17 @@ fn cfl_apply_422_hbd_avx2_impl<const GAUSS: bool>(args: CflApplyHbd<'_>) {
             }
             (false, true) => {
                 let v_chunks = v[vrow..vrow + xfull].as_chunks_mut::<8>().0;
-                for (dv, s) in v_chunks.iter_mut().zip(src) {
+                for (i, (dv, s)) in v_chunks.iter_mut().zip(src).enumerate() {
                     let src = load_u16x16(s);
-                    let ac = if GAUSS {
+                    let ac = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                        let x = (i * 8) << 1;
+                        let prev = if (x & 63) == 0 {
+                            y[yrow + x]
+                        } else {
+                            y[yrow + x - 1]
+                        };
+                        ac8_422_vstrip_i32(src, prev, vstrip_center_right_w, vstrip_left_mask, dc0v)
+                    } else if FILTER == CFL_FLT_TYPE_GAUSS {
                         ac8_422_gauss_i32(src, dc0v)
                     } else {
                         ac8_422_uniform_i32(src, ones, dc0v)
@@ -333,14 +848,77 @@ fn cfl_apply_422_hbd_avx2_impl<const GAUSS: bool>(args: CflApplyHbd<'_>) {
             }
             (false, false) => unreachable!(),
         }
-        for x in xfull..xlim {
-            let ac = crate::cfl_dispatch::cfl_ac_422_hbd_scalar(
-                y,
-                yrow,
-                x,
-                dc0,
-                if GAUSS { CFL_FLT_TYPE_GAUSS } else { 0 },
-            );
+        let mut xtail = xfull;
+        if xlim - xtail >= 4 {
+            let xl = xtail << 1;
+            let s = &y[yrow + xl..yrow + xl + 8].as_chunks::<8>().0[0];
+            let src = load_u16x8(s);
+            let ac = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                let prev = if (xl & 63) == 0 {
+                    y[yrow + xl]
+                } else {
+                    y[yrow + xl - 1]
+                };
+                ac8_422_vstrip_i32(src, prev, vstrip_center_right_w, vstrip_left_mask, dc0v)
+            } else if FILTER == CFL_FLT_TYPE_GAUSS {
+                ac8_422_gauss_i32(src, dc0v)
+            } else {
+                ac8_422_uniform_i32(src, ones, dc0v)
+            };
+            match (do_u, do_v) {
+                (true, true) => {
+                    let (du, _) = u[urow + xtail..urow + xtail + 4].as_chunks_mut::<4>();
+                    let (dv, _) = v[vrow + xtail..vrow + xtail + 4].as_chunks_mut::<4>();
+                    store_i32x4_u16_clip(&mut du[0], apply8_i32_ac(ac, alpha0, dc1v), max_v);
+                    store_i32x4_u16_clip(&mut dv[0], apply8_i32_ac(ac, alpha1, dc2v), max_v);
+                }
+                (true, false) => {
+                    let (du, _) = u[urow + xtail..urow + xtail + 4].as_chunks_mut::<4>();
+                    store_i32x4_u16_clip(&mut du[0], apply8_i32_ac(ac, alpha0, dc1v), max_v);
+                }
+                (false, true) => {
+                    let (dv, _) = v[vrow + xtail..vrow + xtail + 4].as_chunks_mut::<4>();
+                    store_i32x4_u16_clip(&mut dv[0], apply8_i32_ac(ac, alpha1, dc2v), max_v);
+                }
+                (false, false) => unreachable!(),
+            }
+            xtail += 4;
+        }
+
+        if xlim - xtail >= 2 {
+            let xl = xtail << 1;
+            let src = load_u16x4_tail(&y[yrow + xl..]);
+            let ac = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                let prev = if (xl & 63) == 0 {
+                    y[yrow + xl]
+                } else {
+                    y[yrow + xl - 1]
+                };
+                ac8_422_vstrip_i32(src, prev, vstrip_center_right_w, vstrip_left_mask, dc0v)
+            } else if FILTER == CFL_FLT_TYPE_GAUSS {
+                ac8_422_gauss_i32(src, dc0v)
+            } else {
+                ac8_422_uniform_i32(src, ones, dc0v)
+            };
+            if do_u {
+                store_i32x2_u16_clip(
+                    &mut u[urow + xtail..urow + xtail + 2],
+                    apply8_i32_ac(ac, alpha0, dc1v),
+                    max_v,
+                );
+            }
+            if do_v {
+                store_i32x2_u16_clip(
+                    &mut v[vrow + xtail..vrow + xtail + 2],
+                    apply8_i32_ac(ac, alpha1, dc2v),
+                    max_v,
+                );
+            }
+            xtail += 2;
+        }
+
+        for x in xtail..xlim {
+            let ac = crate::cfl_dispatch::cfl_ac_422_hbd_scalar(y, yrow, x, dc0, FILTER);
             if do_u {
                 u[urow + x] = crate::cfl_dispatch::predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
             }
@@ -440,7 +1018,50 @@ pub(crate) fn cfl_apply_444_hbd_avx2(args: CflApplyHbd<'_>) {
             }
             (false, false) => unreachable!(),
         }
-        for x in xfull..xlim {
+        let mut xtail = xfull;
+
+        if xlim - xtail >= 4 {
+            let yy = &y[yrow + xtail..yrow + xtail + 4].as_chunks::<4>().0[0];
+            let ac = ac8_444_i32(load_u16x4_i32(yy), dc0v);
+            if do_u {
+                let (du, _) = u[urow + xtail..urow + xtail + 4].as_chunks_mut::<4>();
+                store_i32x4_u16_clip(
+                    du.last_mut().unwrap(),
+                    apply8_i32_ac(ac, alpha0, dc1v),
+                    max_v,
+                );
+            }
+            if do_v {
+                let (dv, _) = v[vrow + xtail..vrow + xtail + 4].as_chunks_mut::<4>();
+                store_i32x4_u16_clip(
+                    dv.last_mut().unwrap(),
+                    apply8_i32_ac(ac, alpha1, dc2v),
+                    max_v,
+                );
+            }
+            xtail += 4;
+        }
+
+        if xlim - xtail >= 2 {
+            let ac = ac8_444_i32(load_u16x2_i32_tail(&y[yrow + xtail..]), dc0v);
+            if do_u {
+                store_i32x2_u16_clip(
+                    &mut u[urow + xtail..urow + xtail + 2],
+                    apply8_i32_ac(ac, alpha0, dc1v),
+                    max_v,
+                );
+            }
+            if do_v {
+                store_i32x2_u16_clip(
+                    &mut v[vrow + xtail..vrow + xtail + 2],
+                    apply8_i32_ac(ac, alpha1, dc2v),
+                    max_v,
+                );
+            }
+            xtail += 2;
+        }
+
+        for x in xtail..xlim {
             let ac = ((y[yrow + x] as i32) << 3) - dc0;
             if do_u {
                 u[urow + x] = crate::cfl_dispatch::predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
@@ -472,8 +1093,8 @@ pub(crate) fn cfl_apply_444_hbd_avx2(args: CflApplyHbd<'_>) {
 #[target_feature(enable = "avx2")]
 pub(crate) fn cfl_apply_422_hbd_avx2(args: CflApplyHbd<'_>) {
     match args.params.filter_type {
-        CFL_FLT_TYPE_VSTRIP => crate::cfl_dispatch::cfl_apply_422_hbd_scalar(args),
-        CFL_FLT_TYPE_GAUSS => cfl_apply_422_hbd_avx2_impl::<true>(args),
-        _ => cfl_apply_422_hbd_avx2_impl::<false>(args),
+        CFL_FLT_TYPE_VSTRIP => cfl_apply_422_hbd_avx2_impl::<CFL_FLT_TYPE_VSTRIP>(args),
+        CFL_FLT_TYPE_GAUSS => cfl_apply_422_hbd_avx2_impl::<CFL_FLT_TYPE_GAUSS>(args),
+        _ => cfl_apply_422_hbd_avx2_impl::<0>(args),
     }
 }

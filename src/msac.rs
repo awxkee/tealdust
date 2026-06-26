@@ -219,6 +219,7 @@ pub(crate) struct MsacState {
     pub(crate) cnt: i32,
 }
 
+#[allow(dead_code)]
 pub(crate) type MsacContext<'a, const UPDATE_CDF: bool> = MsacContextScalar<'a, UPDATE_CDF>;
 
 pub(crate) struct ScalarMsacBackend;

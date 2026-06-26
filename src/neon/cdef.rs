@@ -29,35 +29,510 @@
 
 use std::arch::aarch64::*;
 
-#[inline(always)]
-fn load_i16x4_i32(a: &[i16; 4]) -> int32x4_t {
-    unsafe { vmovl_s16(vld1_s16(a.as_ptr())) }
+#[inline]
+#[target_feature(enable = "neon")]
+fn square_weighted4(vals: [i32; 4], mirror: [i32; 4], weights: [i32; 4]) -> u32 {
+    let a = unsafe { vld1q_s32(vals.as_ptr()) };
+    let b = unsafe { vld1q_s32(mirror.as_ptr()) };
+    let w = unsafe { vld1q_s32(weights.as_ptr()) };
+    let sq = vaddq_s32(vmulq_s32(a, a), vmulq_s32(b, b));
+    vaddvq_s32(vmulq_s32(sq, w)) as u32
 }
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn store_i32x4_u8(a: &mut [u8; 4], v: int32x4_t) {
-    let u16x4 = vqmovun_s32(v);
-    let u8x8 = vqmovn_u16(vcombine_u16(u16x4, u16x4));
+fn square_weighted_sym15_neon(p: &[i32; 15]) -> u32 {
+    square_weighted4(
+        [p[0], p[1], p[2], p[3]],
+        [p[14], p[13], p[12], p[11]],
+        [840, 420, 280, 210],
+    ) + square_weighted4(
+        [p[4], p[5], p[6], p[7]],
+        [p[10], p[9], p[8], 0],
+        [168, 140, 120, 105],
+    )
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn square_weighted_alt11_neon(p: &[i32; 11]) -> u32 {
+    square_weighted4(
+        [p[0], p[1], p[2], p[3]],
+        [p[10], p[9], p[8], 0],
+        [420, 210, 140, 105],
+    ) + square_weighted4([p[4], p[5], p[6], p[7]], [0, 0, 0, 0], [105, 105, 105, 105])
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn finish_cdef_dir_neon(
+    partial_sum_hv: &[[i32; 8]; 2],
+    partial_sum_diag: &[[i32; 15]; 2],
+    partial_sum_alt: &[[i32; 11]; 4],
+    var: &mut u32,
+) -> i32 {
+    let hv0a = unsafe { vld1q_s32(partial_sum_hv[0].as_ptr()) };
+    let hv0b = unsafe { vld1q_s32(partial_sum_hv[0].as_ptr().add(4)) };
+    let hv1a = unsafe { vld1q_s32(partial_sum_hv[1].as_ptr()) };
+    let hv1b = unsafe { vld1q_s32(partial_sum_hv[1].as_ptr().add(4)) };
+    let mut cost = [0u32; 8];
+    cost[2] =
+        (vaddvq_s32(vmulq_s32(hv0a, hv0a)) as u32 + vaddvq_s32(vmulq_s32(hv0b, hv0b)) as u32) * 105;
+    cost[6] =
+        (vaddvq_s32(vmulq_s32(hv1a, hv1a)) as u32 + vaddvq_s32(vmulq_s32(hv1b, hv1b)) as u32) * 105;
+    cost[0] = square_weighted_sym15_neon(&partial_sum_diag[0]);
+    cost[4] = square_weighted_sym15_neon(&partial_sum_diag[1]);
+    cost[1] = square_weighted_alt11_neon(&partial_sum_alt[0]);
+    cost[3] = square_weighted_alt11_neon(&partial_sum_alt[1]);
+    cost[5] = square_weighted_alt11_neon(&partial_sum_alt[2]);
+    cost[7] = square_weighted_alt11_neon(&partial_sum_alt[3]);
+
+    let mut best_dir = 0i32;
+    let mut best_cost = cost[0];
+    for (n, &c) in cost.iter().enumerate().skip(1) {
+        if c > best_cost {
+            best_cost = c;
+            best_dir = n as i32;
+        }
+    }
+
+    *var = (best_cost - cost[(best_dir ^ 4) as usize]) >> 10;
+    best_dir
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn hsum_i16x8(v: int16x8_t) -> i32 {
+    let pair = vpaddlq_s16(v);
+    let sum2 = vadd_s32(vget_low_s32(pair), vget_high_s32(pair));
+    let sum1 = vpadd_s32(sum2, sum2);
+    vget_lane_s32::<0>(sum1)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+pub(super) fn cdef_find_dir_from_rows_neon(rows: &[int16x8_t; 8], var: &mut u32) -> i32 {
+    let mut partial_sum_hv = [[0i32; 8]; 2];
+    let mut partial_sum_diag = [[0i32; 15]; 2];
+    let mut partial_sum_alt = [[0i32; 11]; 4];
+    let mut row_pixels = [[0i16; 8]; 8];
+    let mut col_sum = vdupq_n_s16(0);
+
+    for y in 0..8usize {
+        let row = rows[y];
+        partial_sum_hv[0][y] = hsum_i16x8(row);
+        col_sum = vaddq_s16(col_sum, row);
+        unsafe { vst1q_s16(row_pixels[y].as_mut_ptr(), row) };
+    }
+
+    let mut cols = [0i16; 8];
+    unsafe { vst1q_s16(cols.as_mut_ptr(), col_sum) };
+    for x in 0..8usize {
+        partial_sum_hv[1][x] = cols[x] as i32;
+    }
+
+    for y in 0..8usize {
+        for x in 0..8usize {
+            let px = row_pixels[y][x] as i32;
+            partial_sum_diag[0][y + x] += px;
+            partial_sum_alt[0][y + (x >> 1)] += px;
+            partial_sum_alt[1][3 + y - (x >> 1)] += px;
+            partial_sum_diag[1][7 + y - x] += px;
+            partial_sum_alt[2][3 - (y >> 1) + x] += px;
+            partial_sum_alt[3][(y >> 1) + x] += px;
+        }
+    }
+
+    finish_cdef_dir_neon(&partial_sum_hv, &partial_sum_diag, &partial_sum_alt, var)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load_i16x4(tmp: &[i16], p: isize, off: isize) -> int16x4_t {
+    unsafe { vld1_s16(tmp.as_ptr().offset(p + off)) }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load_i16x8(tmp: &[i16], p: isize, off: isize) -> int16x8_t {
+    unsafe { vld1q_s16(tmp.as_ptr().offset(p + off)) }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn cdef_min_i16(a: int16x4_t, b: int16x4_t) -> int16x4_t {
+    vreinterpret_s16_u16(vmin_u16(vreinterpret_u16_s16(a), vreinterpret_u16_s16(b)))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn cdef_min_i16q(a: int16x8_t, b: int16x8_t) -> int16x8_t {
+    vreinterpretq_s16_u16(vminq_u16(
+        vreinterpretq_u16_s16(a),
+        vreinterpretq_u16_s16(b),
+    ))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn constrain_i16(diff: int16x4_t, threshold: int16x4_t, nsh: int16x4_t) -> int16x4_t {
+    let zero = vdup_n_s16(0);
+    let adiff = vabs_s16(diff);
+    let t = vmax_s16(zero, vsub_s16(threshold, vshl_s16(adiff, nsh)));
+    let m = vreinterpret_s16_u16(vmin_u16(
+        vreinterpret_u16_s16(adiff),
+        vreinterpret_u16_s16(t),
+    ));
+    vbsl_s16(vclt_s16(diff, zero), vsub_s16(zero, m), m)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn constrain_i16q(diff: int16x8_t, threshold: int16x8_t, nsh: int16x8_t) -> int16x8_t {
+    let zero = vdupq_n_s16(0);
+    let adiff = vabsq_s16(diff);
+    let t = vmaxq_s16(zero, vsubq_s16(threshold, vshlq_s16(adiff, nsh)));
+    let m = vreinterpretq_s16_u16(vminq_u16(
+        vreinterpretq_u16_s16(adiff),
+        vreinterpretq_u16_s16(t),
+    ));
+    vbslq_s16(vcltq_s16(diff, zero), vsubq_s16(zero, m), m)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn madd_i16(sum: int16x4_t, v: int16x4_t, tap: i32) -> int16x4_t {
+    vadd_s16(sum, vmul_n_s16(v, tap as i16))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn madd_i16q(sum: int16x8_t, v: int16x8_t, tap: i32) -> int16x8_t {
+    vaddq_s16(sum, vmulq_n_s16(v, tap as i16))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn mask_u8(v: int16x4_t) -> int16x4_t {
+    vreinterpret_s16_u16(vand_u16(vreinterpret_u16_s16(v), vdup_n_u16(0xff)))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn mask_u8q(v: int16x8_t) -> int16x8_t {
+    vreinterpretq_s16_u16(vandq_u16(vreinterpretq_u16_s16(v), vdupq_n_u16(0xff)))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn store_i16x4_u8(dst: &mut [u8], p: usize, v: int16x4_t) {
+    let packed = vqmovun_s16(vcombine_s16(v, vdup_n_s16(0)));
     unsafe {
-        vst1_lane_u32::<0>(a.as_mut_ptr().cast(), vreinterpret_u32_u8(u8x8));
+        vst1_lane_u32::<0>(dst.as_mut_ptr().add(p).cast(), vreinterpret_u32_u8(packed));
     }
 }
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn constrain_v(diff: int32x4_t, threshold: int32x4_t, nsh: int32x4_t) -> int32x4_t {
-    let adiff = vabsq_s32(diff);
-    let t = vmaxq_s32(vdupq_n_s32(0), vsubq_s32(threshold, vshlq_s32(adiff, nsh)));
-    let m = vminq_s32(adiff, t);
-    let neg = vsubq_s32(vdupq_n_s32(0), m);
-    vbslq_s32(vcltq_s32(diff, vdupq_n_s32(0)), neg, m)
+fn store_i16x8_u8(dst: &mut [u8], p: usize, v: int16x8_t) {
+    let packed = vqmovun_s16(v);
+    unsafe { vst1_u8(dst.as_mut_ptr().add(p), packed) };
 }
 
+#[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
-fn mul_i32x4_i16_n(v: int32x4_t, k: i32) -> int32x4_t {
-    vmull_n_s16(vqmovn_s32(v), k as i16)
+fn cdef_filter_block_4w_8bpc_neon_shape<const H: usize>(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    debug_assert!(H == 4 || H == 8);
+    let has_pri = pri_strength != 0;
+    let has_sec = sec_strength != 0;
+    let clip = has_pri && has_sec;
+    let pri_s = vdup_n_s16(pri_strength as i16);
+    let sec_s = vdup_n_s16(sec_strength as i16);
+    let pri_nsh = vdup_n_s16(-(pri_shift as i16));
+    let sec_nsh = vdup_n_s16(-(sec_shift as i16));
+    let zero = vdup_n_s16(0);
+    let eight = vdup_n_s16(8);
+    let dirs = &crate::tables::CDEF_DIRECTIONS;
+    let mut dp = dst_off;
+    let mut tp = o;
+
+    for _ in 0..H {
+        let tpx = tp as isize;
+        let load = |off: isize| load_i16x4(tmp, tpx, off);
+        let px = load(0);
+        let mut sum = zero;
+        let mut min_v = px;
+        let mut max_v = px;
+
+        if has_pri {
+            let mut ptap = pri_tap;
+            for k in 0..2 {
+                let off = dirs[dir + 2][k] as isize;
+                let p0 = load(off);
+                let p1 = load(-off);
+                sum = madd_i16(sum, constrain_i16(vsub_s16(p0, px), pri_s, pri_nsh), ptap);
+                sum = madd_i16(sum, constrain_i16(vsub_s16(p1, px), pri_s, pri_nsh), ptap);
+                ptap = (ptap & 3) | 2;
+                if clip {
+                    min_v = cdef_min_i16(min_v, cdef_min_i16(p0, p1));
+                    max_v = vmax_s16(max_v, vmax_s16(p0, p1));
+                }
+                if has_sec {
+                    let off2 = dirs[dir + 4][k] as isize;
+                    let off3 = dirs[dir][k] as isize;
+                    let s0 = load(off2);
+                    let s1 = load(-off2);
+                    let s2 = load(off3);
+                    let s3 = load(-off3);
+                    let st = 2 - k as i32;
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(s0, px), sec_s, sec_nsh), st);
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(s1, px), sec_s, sec_nsh), st);
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(s2, px), sec_s, sec_nsh), st);
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(s3, px), sec_s, sec_nsh), st);
+                    min_v = cdef_min_i16(
+                        min_v,
+                        cdef_min_i16(cdef_min_i16(s0, s1), cdef_min_i16(s2, s3)),
+                    );
+                    max_v = vmax_s16(max_v, vmax_s16(vmax_s16(s0, s1), vmax_s16(s2, s3)));
+                }
+            }
+        } else {
+            for k in 0..2 {
+                let off1 = dirs[dir + 4][k] as isize;
+                let off2 = dirs[dir][k] as isize;
+                let s0 = load(off1);
+                let s1 = load(-off1);
+                let s2 = load(off2);
+                let s3 = load(-off2);
+                let st = 2 - k as i32;
+                sum = madd_i16(sum, constrain_i16(vsub_s16(s0, px), sec_s, sec_nsh), st);
+                sum = madd_i16(sum, constrain_i16(vsub_s16(s1, px), sec_s, sec_nsh), st);
+                sum = madd_i16(sum, constrain_i16(vsub_s16(s2, px), sec_s, sec_nsh), st);
+                sum = madd_i16(sum, constrain_i16(vsub_s16(s3, px), sec_s, sec_nsh), st);
+            }
+        }
+
+        let mask = vreinterpret_s16_u16(vclt_s16(sum, zero));
+        let delta = vshr_n_s16::<4>(vadd_s16(vadd_s16(sum, mask), eight));
+        let mut res = vadd_s16(px, delta);
+        if clip {
+            res = vmin_s16(vmax_s16(res, min_v), max_v);
+        }
+        store_i16x4_u8(dst, dp, mask_u8(res));
+        dp += dst_stride;
+        tp += tmp_stride;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "neon")]
+fn cdef_filter_block_8x8_8bpc_neon_shape(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    let has_pri = pri_strength != 0;
+    let has_sec = sec_strength != 0;
+    let clip = has_pri && has_sec;
+    let pri_s = vdupq_n_s16(pri_strength as i16);
+    let sec_s = vdupq_n_s16(sec_strength as i16);
+    let pri_nsh = vdupq_n_s16(-(pri_shift as i16));
+    let sec_nsh = vdupq_n_s16(-(sec_shift as i16));
+    let zero = vdupq_n_s16(0);
+    let eight = vdupq_n_s16(8);
+    let dirs = &crate::tables::CDEF_DIRECTIONS;
+    let mut dp = dst_off;
+    let mut tp = o;
+
+    for _ in 0..8 {
+        let tpx = tp as isize;
+        let load = |off: isize| load_i16x8(tmp, tpx, off);
+        let px = load(0);
+        let mut sum = zero;
+        let mut min_v = px;
+        let mut max_v = px;
+
+        if has_pri {
+            let mut ptap = pri_tap;
+            for k in 0..2 {
+                let off = dirs[dir + 2][k] as isize;
+                let p0 = load(off);
+                let p1 = load(-off);
+                sum = madd_i16q(sum, constrain_i16q(vsubq_s16(p0, px), pri_s, pri_nsh), ptap);
+                sum = madd_i16q(sum, constrain_i16q(vsubq_s16(p1, px), pri_s, pri_nsh), ptap);
+                ptap = (ptap & 3) | 2;
+                if clip {
+                    min_v = cdef_min_i16q(min_v, cdef_min_i16q(p0, p1));
+                    max_v = vmaxq_s16(max_v, vmaxq_s16(p0, p1));
+                }
+                if has_sec {
+                    let off2 = dirs[dir + 4][k] as isize;
+                    let off3 = dirs[dir][k] as isize;
+                    let s0 = load(off2);
+                    let s1 = load(-off2);
+                    let s2 = load(off3);
+                    let s3 = load(-off3);
+                    let st = 2 - k as i32;
+                    sum = madd_i16q(sum, constrain_i16q(vsubq_s16(s0, px), sec_s, sec_nsh), st);
+                    sum = madd_i16q(sum, constrain_i16q(vsubq_s16(s1, px), sec_s, sec_nsh), st);
+                    sum = madd_i16q(sum, constrain_i16q(vsubq_s16(s2, px), sec_s, sec_nsh), st);
+                    sum = madd_i16q(sum, constrain_i16q(vsubq_s16(s3, px), sec_s, sec_nsh), st);
+                    min_v = cdef_min_i16q(
+                        min_v,
+                        cdef_min_i16q(cdef_min_i16q(s0, s1), cdef_min_i16q(s2, s3)),
+                    );
+                    max_v = vmaxq_s16(max_v, vmaxq_s16(vmaxq_s16(s0, s1), vmaxq_s16(s2, s3)));
+                }
+            }
+        } else {
+            for k in 0..2 {
+                let off1 = dirs[dir + 4][k] as isize;
+                let off2 = dirs[dir][k] as isize;
+                let s0 = load(off1);
+                let s1 = load(-off1);
+                let s2 = load(off2);
+                let s3 = load(-off2);
+                let st = 2 - k as i32;
+                sum = madd_i16q(sum, constrain_i16q(vsubq_s16(s0, px), sec_s, sec_nsh), st);
+                sum = madd_i16q(sum, constrain_i16q(vsubq_s16(s1, px), sec_s, sec_nsh), st);
+                sum = madd_i16q(sum, constrain_i16q(vsubq_s16(s2, px), sec_s, sec_nsh), st);
+                sum = madd_i16q(sum, constrain_i16q(vsubq_s16(s3, px), sec_s, sec_nsh), st);
+            }
+        }
+
+        let mask = vreinterpretq_s16_u16(vcltq_s16(sum, zero));
+        let delta = vshrq_n_s16::<4>(vaddq_s16(vaddq_s16(sum, mask), eight));
+        let mut res = vaddq_s16(px, delta);
+        if clip {
+            res = vminq_s16(vmaxq_s16(res, min_v), max_v);
+        }
+        store_i16x8_u8(dst, dp, mask_u8q(res));
+        dp += dst_stride;
+        tp += tmp_stride;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "neon")]
+pub(crate) fn cdef_filter_block_8x8_8bpc_neon(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_8x8_8bpc_neon_shape(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "neon")]
+pub(crate) fn cdef_filter_block_4x8_8bpc_neon(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_4w_8bpc_neon_shape::<8>(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "neon")]
+pub(crate) fn cdef_filter_block_4x4_8bpc_neon(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_4w_8bpc_neon_shape::<4>(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -79,28 +554,80 @@ pub(crate) fn cdef_filter_block_8bpc_neon(
     w: usize,
     h: usize,
 ) {
+    match (w, h) {
+        (8, 8) => {
+            cdef_filter_block_8x8_8bpc_neon(
+                dst,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            );
+            return;
+        }
+        (4, 8) => {
+            cdef_filter_block_4x8_8bpc_neon(
+                dst,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            );
+            return;
+        }
+        (4, 4) => {
+            cdef_filter_block_4x4_8bpc_neon(
+                dst,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            );
+            return;
+        }
+        _ => {}
+    }
+
     let has_pri = pri_strength != 0;
     let has_sec = sec_strength != 0;
     let clip = has_pri && has_sec;
-    let pri_s = vdupq_n_s32(pri_strength);
-    let sec_s = vdupq_n_s32(sec_strength);
-    let pri_nsh = vdupq_n_s32(-pri_shift);
-    let sec_nsh = vdupq_n_s32(-sec_shift);
-    let zero = vdupq_n_s32(0);
-    let eight = vdupq_n_s32(8);
-    let lowmask = vdupq_n_s32(0xFF);
+    let pri_s = vdup_n_s16(pri_strength as i16);
+    let sec_s = vdup_n_s16(sec_strength as i16);
+    let pri_nsh = vdup_n_s16(-(pri_shift as i16));
+    let sec_nsh = vdup_n_s16(-(sec_shift as i16));
+    let zero = vdup_n_s16(0);
+    let eight = vdup_n_s16(8);
     let dirs = &crate::tables::CDEF_DIRECTIONS;
     let groups = w / 4;
     let mut dp = dst_off;
     let mut tp = o;
 
-    for _y in 0..h {
+    for _ in 0..h {
         for g in 0..groups {
             let bx = g * 4;
             let tpx = (tp + bx) as isize;
-            let load = |off: isize| {
-                load_i16x4_i32((&tmp[(tpx + off) as usize..][..4]).try_into().unwrap())
-            };
+            let load = |off: isize| load_i16x4(tmp, tpx, off);
             let px = load(0);
             let mut sum = zero;
             let mut min_v = px;
@@ -109,22 +636,15 @@ pub(crate) fn cdef_filter_block_8bpc_neon(
             if has_pri {
                 let mut ptap = pri_tap;
                 for k in 0..2 {
-                    let off1 = dirs[dir + 2][k] as isize;
-                    let p0 = load(off1);
-                    let p1 = load(-off1);
-                    let pt = ptap;
-                    sum = vaddq_s32(
-                        sum,
-                        mul_i32x4_i16_n(constrain_v(vsubq_s32(p0, px), pri_s, pri_nsh), pt),
-                    );
-                    sum = vaddq_s32(
-                        sum,
-                        mul_i32x4_i16_n(constrain_v(vsubq_s32(p1, px), pri_s, pri_nsh), pt),
-                    );
+                    let off = dirs[dir + 2][k] as isize;
+                    let p0 = load(off);
+                    let p1 = load(-off);
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(p0, px), pri_s, pri_nsh), ptap);
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(p1, px), pri_s, pri_nsh), ptap);
                     ptap = (ptap & 3) | 2;
                     if clip {
-                        min_v = vminq_s32(min_v, vminq_s32(p0, p1));
-                        max_v = vmaxq_s32(max_v, vmaxq_s32(p0, p1));
+                        min_v = cdef_min_i16(min_v, cdef_min_i16(p0, p1));
+                        max_v = vmax_s16(max_v, vmax_s16(p0, p1));
                     }
                     if has_sec {
                         let off2 = dirs[dir + 4][k] as isize;
@@ -134,24 +654,15 @@ pub(crate) fn cdef_filter_block_8bpc_neon(
                         let s2 = load(off3);
                         let s3 = load(-off3);
                         let st = 2 - k as i32;
-                        sum = vaddq_s32(
-                            sum,
-                            mul_i32x4_i16_n(constrain_v(vsubq_s32(s0, px), sec_s, sec_nsh), st),
+                        sum = madd_i16(sum, constrain_i16(vsub_s16(s0, px), sec_s, sec_nsh), st);
+                        sum = madd_i16(sum, constrain_i16(vsub_s16(s1, px), sec_s, sec_nsh), st);
+                        sum = madd_i16(sum, constrain_i16(vsub_s16(s2, px), sec_s, sec_nsh), st);
+                        sum = madd_i16(sum, constrain_i16(vsub_s16(s3, px), sec_s, sec_nsh), st);
+                        min_v = cdef_min_i16(
+                            min_v,
+                            cdef_min_i16(cdef_min_i16(s0, s1), cdef_min_i16(s2, s3)),
                         );
-                        sum = vaddq_s32(
-                            sum,
-                            mul_i32x4_i16_n(constrain_v(vsubq_s32(s1, px), sec_s, sec_nsh), st),
-                        );
-                        sum = vaddq_s32(
-                            sum,
-                            mul_i32x4_i16_n(constrain_v(vsubq_s32(s2, px), sec_s, sec_nsh), st),
-                        );
-                        sum = vaddq_s32(
-                            sum,
-                            mul_i32x4_i16_n(constrain_v(vsubq_s32(s3, px), sec_s, sec_nsh), st),
-                        );
-                        min_v = vminq_s32(min_v, vminq_s32(vminq_s32(s0, s1), vminq_s32(s2, s3)));
-                        max_v = vmaxq_s32(max_v, vmaxq_s32(vmaxq_s32(s0, s1), vmaxq_s32(s2, s3)));
+                        max_v = vmax_s16(max_v, vmax_s16(vmax_s16(s0, s1), vmax_s16(s2, s3)));
                     }
                 }
             } else {
@@ -163,36 +674,35 @@ pub(crate) fn cdef_filter_block_8bpc_neon(
                     let s2 = load(off2);
                     let s3 = load(-off2);
                     let st = 2 - k as i32;
-                    sum = vaddq_s32(
-                        sum,
-                        mul_i32x4_i16_n(constrain_v(vsubq_s32(s0, px), sec_s, sec_nsh), st),
-                    );
-                    sum = vaddq_s32(
-                        sum,
-                        mul_i32x4_i16_n(constrain_v(vsubq_s32(s1, px), sec_s, sec_nsh), st),
-                    );
-                    sum = vaddq_s32(
-                        sum,
-                        mul_i32x4_i16_n(constrain_v(vsubq_s32(s2, px), sec_s, sec_nsh), st),
-                    );
-                    sum = vaddq_s32(
-                        sum,
-                        mul_i32x4_i16_n(constrain_v(vsubq_s32(s3, px), sec_s, sec_nsh), st),
-                    );
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(s0, px), sec_s, sec_nsh), st);
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(s1, px), sec_s, sec_nsh), st);
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(s2, px), sec_s, sec_nsh), st);
+                    sum = madd_i16(sum, constrain_i16(vsub_s16(s3, px), sec_s, sec_nsh), st);
                 }
             }
 
-            // delta = (sum - (sum < 0) + 8) >> 4 ; mask = -1 where sum<0, so sum + mask
-            let mask = vreinterpretq_s32_u32(vcltq_s32(sum, zero));
-            let delta = vshrq_n_s32::<4>(vaddq_s32(vaddq_s32(sum, mask), eight));
-            let mut res = vaddq_s32(px, delta);
+            let mask = vreinterpret_s16_u16(vclt_s16(sum, zero));
+            let delta = vshr_n_s16::<4>(vadd_s16(vadd_s16(sum, mask), eight));
+            let mut res = vadd_s16(px, delta);
             if clip {
-                res = vminq_s32(vmaxq_s32(res, min_v), max_v);
+                res = vmin_s16(vmax_s16(res, min_v), max_v);
             }
-            res = vandq_s32(res, lowmask);
-            store_i32x4_u8((&mut dst[dp + bx..dp + bx + 4]).try_into().unwrap(), res);
+            store_i16x4_u8(dst, dp + bx, mask_u8(res));
         }
         dp += dst_stride;
         tp += tmp_stride;
     }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+pub(crate) fn cdef_find_dir_8bpc_neon(img: &[u8], stride: usize, var: &mut u32) -> i32 {
+    let mut rows = [vdupq_n_s16(0); 8];
+    let bias = vdupq_n_s16(128);
+    for y in 0..8usize {
+        let src = unsafe { img.as_ptr().add(y * stride) };
+        let pix = vreinterpretq_s16_u16(vmovl_u8(unsafe { vld1_u8(src) }));
+        rows[y] = vsubq_s16(pix, bias);
+    }
+    cdef_find_dir_from_rows_neon(&rows, var)
 }
