@@ -54,7 +54,10 @@ pub(crate) use cdef::cdef_filter_block_8bpc_avx2;
 pub(crate) use cdef_hd::cdef_filter_block_hbd_avx2;
 pub(crate) use cfl::{cfl_apply_420_8bpc_avx2, cfl_apply_422_8bpc_avx2, cfl_apply_444_8bpc_avx2};
 pub(crate) use cfl_hd::{cfl_apply_420_hbd_avx2, cfl_apply_422_hbd_avx2, cfl_apply_444_hbd_avx2};
-pub(crate) use deblocking::{deblock_apply_8bpc_avx2, deblock_apply_hbd_avx2};
+pub(crate) use deblocking::{
+    deblock_apply_8bpc_avx2, deblock_apply_hbd_avx2, deblock_h_sb64uv_8bpc_avx2,
+    deblock_h_sb64y_8bpc_avx2, deblock_v_sb64uv_8bpc_avx2, deblock_v_sb64y_8bpc_avx2,
+};
 pub(crate) use filter::{
     avg_row_8bpc_avx2, blend_row_8bpc_avx2, cctx_row_avx2, cctx_row_i16_avx2, dc_add_row_8bpc_avx2,
     gdf_add_run_8bpc_avx2, gdf_gradient_group_avx2, mask_row_8bpc_avx2, morph_row_8bpc_avx2,

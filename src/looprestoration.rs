@@ -2072,24 +2072,29 @@ fn lr_sbrow(
         let next_u_idx = unit_idx_base + ((next_iter_lru_start_x >> (shift_hor - 2)) & 3);
         let next_sb_idx = sb_idx + (next_iter_lru_start_x >> shift_hor);
 
-        let n = if plane != 0 { 2 } else { 6 };
-        let border_src_off = cur_p_off + 64;
-        if border_src_off + n <= p.len() {
-            for row in 0..(row_h - y) as usize {
-                let src_row = border_src_off + row * abs_stride;
-                if src_row >= n && src_row < p.len() {
-                    let start = src_row - n;
-                    for i in 0..n.min(6) {
-                        pre_lr_border[bit][row][6 - n + i] = p[start + i];
+        let lr_sb = lr_idx_0;
+        let lr_u = lr_unit_0;
+        // Skip border copy and stripe call entirely for None units — the common
+        // case when the encoder chose not to apply LR for this segment.
+        if lr_sb < ctx.lr_mask.len()
+            && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len()
+            && ctx.lr_mask[lr_sb].lr[plane as usize][lr_u].restoration_type
+                != RestorationType::None as u8
+        {
+            let lr_unit = &ctx.lr_mask[lr_sb].lr[plane as usize][lr_u];
+            let n = if plane != 0 { 2 } else { 6 };
+            let border_src_off = cur_p_off + 64;
+            if border_src_off + n <= p.len() {
+                for row in 0..(row_h - y) as usize {
+                    let src_row = border_src_off + row * abs_stride;
+                    if src_row >= n && src_row < p.len() {
+                        let start = src_row - n;
+                        for i in 0..n.min(6) {
+                            pre_lr_border[bit][row][6 - n + i] = p[start + i];
+                        }
                     }
                 }
             }
-        }
-
-        let lr_sb = lr_idx_0;
-        let lr_u = lr_unit_0;
-        if lr_sb < ctx.lr_mask.len() && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len() {
-            let lr_unit = &ctx.lr_mask[lr_sb].lr[plane as usize][lr_u];
             lr_stripe_8bpc(
                 ctx,
                 p,
@@ -2119,7 +2124,11 @@ fn lr_sbrow(
     let end_w = w - x;
     let lr_sb = lr_idx_0;
     let lr_u = lr_unit_0;
-    if lr_sb < ctx.lr_mask.len() && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len() {
+    if lr_sb < ctx.lr_mask.len()
+        && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len()
+        && ctx.lr_mask[lr_sb].lr[plane as usize][lr_u].restoration_type
+            != RestorationType::None as u8
+    {
         let lr_unit = &ctx.lr_mask[lr_sb].lr[plane as usize][lr_u];
         lr_stripe_8bpc(
             ctx,
@@ -2140,6 +2149,11 @@ fn lr_sbrow(
 }
 
 pub(crate) fn lr_sbrow_8bpc(ctx: &LrContext, dst: &mut [&mut [u8]; 3], sby: i32) {
+    // Fast path: if the Wiener in-loop filter is disabled globally, no LR unit
+    // can have a non-None type, so the entire function is a no-op.
+    if ctx.inloop_filters & INLOOPFILTER_WIENER == 0 {
+        return;
+    }
     let dst_stride = ctx.cur_stride;
     // For monochrome frames the chroma destination planes are empty; a malformed
     // stream can still signal chroma restoration, so mask off the U/V restore

@@ -85,6 +85,7 @@ pub(crate) fn init_deblock_thr_lut_uv(
     }
 }
 
+#[inline(always)]
 fn filter_choice_bd<P: Pixel>(
     buf: &[P],
     s: isize,
@@ -193,6 +194,7 @@ fn filter_choice_bd<P: Pixel>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn deblock_bd<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
@@ -220,11 +222,14 @@ fn deblock_bd<BD: BitDepth>(
     let width_neg = imin(width, max_width_neg);
     let width_pos = width;
 
-    if width_pos < 1 {
+    if width_pos < 1 || (neg_lossless && pos_lossless) {
         return;
     }
 
     let q_thr_clamp = q_thr as i32 * Q_THRESH_MULTS[(width - 1) as usize] as i32;
+    if q_thr_clamp <= 0 {
+        return;
+    }
 
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
@@ -294,6 +299,7 @@ fn deblock_bd<BD: BitDepth>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 pub(crate) fn deblock_h_sb64y_bd<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
@@ -305,46 +311,56 @@ pub(crate) fn deblock_h_sb64y_bd<BD: BitDepth>(
     side_thr: &[u8],
     edge: bool,
 ) {
-    let vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32 | vmask[3] as u32;
-    let mut y: u32 = 1;
-    let mut dp = dst_off;
-    let mut qi: usize = 0;
-    while (vm & !(y - 1)) != 0 {
-        if (vm & y) != 0 {
-            let idx = if (vmask[3] as u32 & y) != 0 {
-                3usize
-            } else if (vmask[2] as u32 & y) != 0 {
-                2
-            } else {
-                ((vmask[1] as u32 & y) != 0) as usize
-            };
-            let max_width_pos = MAX_WIDTH_Y[idx] as i32;
-            let max_width_neg = if edge {
-                imin(6, max_width_pos)
-            } else {
-                max_width_pos
-            };
-            deblock_bd(
-                bd,
-                dst,
-                dp as isize,
-                q_thr[qi] as u32,
-                side_thr[qi] as u32,
-                stride as isize,
-                1,
-                max_width_pos,
-                max_width_neg,
-                (ll_mask[1] as u32 & y) != 0,
-                (ll_mask[0] as u32 & y) != 0,
-            );
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+    {
+        if BD::BPC == 8 && std::arch::is_x86_feature_detected!("avx2") {
+            if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+                unsafe {
+                    crate::avx::deblock_h_sb64y_8bpc_avx2(
+                        d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
+                    );
+                }
+                return;
+            }
         }
-        y <<= 1;
-        dp += 4 * stride;
-        qi += 1;
+    }
+
+    let mut vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32 | vmask[3] as u32;
+    while vm != 0 {
+        let qi = vm.trailing_zeros() as usize;
+        let y = 1u32 << qi;
+        let idx = if (vmask[3] as u32 & y) != 0 {
+            3usize
+        } else if (vmask[2] as u32 & y) != 0 {
+            2
+        } else {
+            ((vmask[1] as u32 & y) != 0) as usize
+        };
+        let max_width_pos = MAX_WIDTH_Y[idx] as i32;
+        let max_width_neg = if edge {
+            imin(6, max_width_pos)
+        } else {
+            max_width_pos
+        };
+        deblock_bd(
+            bd,
+            dst,
+            (dst_off + qi * 4 * stride) as isize,
+            q_thr[qi] as u32,
+            side_thr[qi] as u32,
+            stride as isize,
+            1,
+            max_width_pos,
+            max_width_neg,
+            (ll_mask[1] as u32 & y) != 0,
+            (ll_mask[0] as u32 & y) != 0,
+        );
+        vm &= vm - 1;
     }
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 pub(crate) fn deblock_v_sb64y_bd<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
@@ -356,46 +372,56 @@ pub(crate) fn deblock_v_sb64y_bd<BD: BitDepth>(
     side_thr: &[u8],
     edge: bool,
 ) {
-    let vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32 | vmask[3] as u32;
-    let mut x: u32 = 1;
-    let mut dp = dst_off;
-    let mut qi: usize = 0;
-    while (vm & !(x - 1)) != 0 {
-        if (vm & x) != 0 {
-            let idx = if (vmask[3] as u32 & x) != 0 {
-                3usize
-            } else if (vmask[2] as u32 & x) != 0 {
-                2
-            } else {
-                ((vmask[1] as u32 & x) != 0) as usize
-            };
-            let max_width_pos = MAX_WIDTH_Y[idx] as i32;
-            let max_width_neg = if edge {
-                imin(6, max_width_pos)
-            } else {
-                max_width_pos
-            };
-            deblock_bd(
-                bd,
-                dst,
-                dp as isize,
-                q_thr[qi] as u32,
-                side_thr[qi] as u32,
-                1,
-                stride as isize,
-                max_width_pos,
-                max_width_neg,
-                (ll_mask[1] as u32 & x) != 0,
-                (ll_mask[0] as u32 & x) != 0,
-            );
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+    {
+        if BD::BPC == 8 && std::arch::is_x86_feature_detected!("avx2") {
+            if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+                unsafe {
+                    crate::avx::deblock_v_sb64y_8bpc_avx2(
+                        d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
+                    );
+                }
+                return;
+            }
         }
-        x <<= 1;
-        dp += 4;
-        qi += 1;
+    }
+
+    let mut vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32 | vmask[3] as u32;
+    while vm != 0 {
+        let qi = vm.trailing_zeros() as usize;
+        let x = 1u32 << qi;
+        let idx = if (vmask[3] as u32 & x) != 0 {
+            3usize
+        } else if (vmask[2] as u32 & x) != 0 {
+            2
+        } else {
+            ((vmask[1] as u32 & x) != 0) as usize
+        };
+        let max_width_pos = MAX_WIDTH_Y[idx] as i32;
+        let max_width_neg = if edge {
+            imin(6, max_width_pos)
+        } else {
+            max_width_pos
+        };
+        deblock_bd(
+            bd,
+            dst,
+            (dst_off + qi * 4) as isize,
+            q_thr[qi] as u32,
+            side_thr[qi] as u32,
+            1,
+            stride as isize,
+            max_width_pos,
+            max_width_neg,
+            (ll_mask[1] as u32 & x) != 0,
+            (ll_mask[0] as u32 & x) != 0,
+        );
+        vm &= vm - 1;
     }
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 pub(crate) fn deblock_h_sb64uv_bd<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
@@ -407,44 +433,54 @@ pub(crate) fn deblock_h_sb64uv_bd<BD: BitDepth>(
     side_thr: &[u8],
     edge: bool,
 ) {
-    let vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32;
-    let mut y: u32 = 1;
-    let mut dp = dst_off;
-    let mut qi: usize = 0;
-    while (vm & !(y - 1)) != 0 {
-        if (vm & y) != 0 {
-            let idx = if (vmask[2] as u32 & y) != 0 {
-                2usize
-            } else {
-                ((vmask[1] as u32 & y) != 0) as usize
-            };
-            let max_width_pos = MAX_WIDTH_UV[idx] as i32;
-            let max_width_neg = if edge {
-                imin(2, max_width_pos)
-            } else {
-                max_width_pos
-            };
-            deblock_bd(
-                bd,
-                dst,
-                dp as isize,
-                q_thr[qi] as u32,
-                side_thr[qi] as u32,
-                stride as isize,
-                1,
-                max_width_pos,
-                max_width_neg,
-                (ll_mask[1] as u32 & y) != 0,
-                (ll_mask[0] as u32 & y) != 0,
-            );
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+    {
+        if BD::BPC == 8 && std::arch::is_x86_feature_detected!("avx2") {
+            if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+                unsafe {
+                    crate::avx::deblock_h_sb64uv_8bpc_avx2(
+                        d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
+                    );
+                }
+                return;
+            }
         }
-        y <<= 1;
-        dp += 4 * stride;
-        qi += 1;
+    }
+
+    let mut vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32;
+    while vm != 0 {
+        let qi = vm.trailing_zeros() as usize;
+        let y = 1u32 << qi;
+        let idx = if (vmask[2] as u32 & y) != 0 {
+            2usize
+        } else {
+            ((vmask[1] as u32 & y) != 0) as usize
+        };
+        let max_width_pos = MAX_WIDTH_UV[idx] as i32;
+        let max_width_neg = if edge {
+            imin(2, max_width_pos)
+        } else {
+            max_width_pos
+        };
+        deblock_bd(
+            bd,
+            dst,
+            (dst_off + qi * 4 * stride) as isize,
+            q_thr[qi] as u32,
+            side_thr[qi] as u32,
+            stride as isize,
+            1,
+            max_width_pos,
+            max_width_neg,
+            (ll_mask[1] as u32 & y) != 0,
+            (ll_mask[0] as u32 & y) != 0,
+        );
+        vm &= vm - 1;
     }
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 pub(crate) fn deblock_v_sb64uv_bd<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
@@ -456,40 +492,49 @@ pub(crate) fn deblock_v_sb64uv_bd<BD: BitDepth>(
     side_thr: &[u8],
     edge: bool,
 ) {
-    let vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32;
-    let mut x: u32 = 1;
-    let mut dp = dst_off;
-    let mut qi: usize = 0;
-    while (vm & !(x - 1)) != 0 {
-        if (vm & x) != 0 {
-            let idx = if (vmask[2] as u32 & x) != 0 {
-                2usize
-            } else {
-                ((vmask[1] as u32 & x) != 0) as usize
-            };
-            let max_width_pos = MAX_WIDTH_UV[idx] as i32;
-            let max_width_neg = if edge {
-                imin(2, max_width_pos)
-            } else {
-                max_width_pos
-            };
-            deblock_bd(
-                bd,
-                dst,
-                dp as isize,
-                q_thr[qi] as u32,
-                side_thr[qi] as u32,
-                1,
-                stride as isize,
-                max_width_pos,
-                max_width_neg,
-                (ll_mask[1] as u32 & x) != 0,
-                (ll_mask[0] as u32 & x) != 0,
-            );
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+    {
+        if BD::BPC == 8 && std::arch::is_x86_feature_detected!("avx2") {
+            if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+                unsafe {
+                    crate::avx::deblock_v_sb64uv_8bpc_avx2(
+                        d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
+                    );
+                }
+                return;
+            }
         }
-        x <<= 1;
-        dp += 4;
-        qi += 1;
+    }
+
+    let mut vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32;
+    while vm != 0 {
+        let qi = vm.trailing_zeros() as usize;
+        let x = 1u32 << qi;
+        let idx = if (vmask[2] as u32 & x) != 0 {
+            2usize
+        } else {
+            ((vmask[1] as u32 & x) != 0) as usize
+        };
+        let max_width_pos = MAX_WIDTH_UV[idx] as i32;
+        let max_width_neg = if edge {
+            imin(2, max_width_pos)
+        } else {
+            max_width_pos
+        };
+        deblock_bd(
+            bd,
+            dst,
+            (dst_off + qi * 4) as isize,
+            q_thr[qi] as u32,
+            side_thr[qi] as u32,
+            1,
+            stride as isize,
+            max_width_pos,
+            max_width_neg,
+            (ll_mask[1] as u32 & x) != 0,
+            (ll_mask[0] as u32 & x) != 0,
+        );
+        vm &= vm - 1;
     }
 }
 
@@ -606,8 +651,6 @@ pub(crate) struct DeblockCtx<'a> {
     pub(crate) layout: PixelLayout,
 }
 
-static PLACEHOLDER_SEGMAP: [u8; 16] = [0; 16];
-
 #[inline]
 fn edge_thr(cur: i32, prev: i32) -> i32 {
     if cur != 0 && prev != 0 {
@@ -617,7 +660,115 @@ fn edge_thr(cur: i32, prev: i32) -> i32 {
     }
 }
 
+#[inline(always)]
+fn mask_has_luma_col(
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    sb64y: usize,
+    w4: usize,
+    have_left: bool,
+) -> bool {
+    let start = (!have_left) as usize;
+    if start >= w4 {
+        return false;
+    }
+    for hmask in mask[bx4_base + start..bx4_base + w4].iter() {
+        if (hmask[0][sb64y] | hmask[1][sb64y] | hmask[2][sb64y] | hmask[3][sb64y]) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline(always)]
+fn mask_has_luma_row(
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    sidx: usize,
+    h4: usize,
+    have_top: bool,
+) -> bool {
+    let start = (!have_top) as usize;
+    if start >= h4 {
+        return false;
+    }
+    for row in mask[starty4 + start..starty4 + h4].iter() {
+        if (row[0][sidx] | row[1][sidx] | row[2][sidx] | row[3][sidx]) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline(always)]
+fn mask_has_chroma_col(
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    y64: i32,
+    ss_ver: i32,
+    w4: usize,
+    have_left: bool,
+) -> bool {
+    let start = (!have_left) as usize;
+    if start >= w4 {
+        return false;
+    }
+    let mask_idx = ((y64 & 3) >> ss_ver) as usize;
+    let mask_shift: u32 = if (y64 & 3) & ss_ver != 0 { 8 } else { 0 };
+    let bytes_mask: u32 = if ss_ver != 0 { 0xff } else { 0xffff };
+    for hmask in mask[bx4_base + start..bx4_base + w4].iter() {
+        let m0 = ((hmask[0][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+        let m1 = ((hmask[1][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+        let m2 = ((hmask[2][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+        if (m0 | m1 | m2) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline(always)]
+fn mask_has_chroma_row(
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    sb64x: i32,
+    ss_hor: i32,
+    h4: usize,
+    have_top: bool,
+) -> bool {
+    let start = (!have_top) as usize;
+    if start >= h4 {
+        return false;
+    }
+    let mask_idx = ((sb64x & 3) >> ss_hor) as usize;
+    let mask_shift: u32 = if (sb64x & 3) & ss_hor != 0 { 8 } else { 0 };
+    let bytes_mask: u32 = if ss_hor != 0 { 0xff } else { 0xffff };
+    for row in mask[starty4 + start..starty4 + h4].iter() {
+        let m0 = ((row[0][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+        let m1 = ((row[1][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+        let m2 = ((row[2][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+        if (m0 | m1 | m2) != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline(always)]
+fn fill_left_thr_from_lut(
+    left_q_thr: &mut [u8; 16],
+    left_side_thr: &mut [u8; 16],
+    lut: &[[u32; 16]; 2],
+    h4: usize,
+) {
+    let q = lut[0][0] as u8;
+    let side = lut[1][0] as u8;
+    left_q_thr[..h4].fill(q);
+    left_side_thr[..h4].fill(side);
+}
+
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn setup_thr_cols(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
@@ -703,8 +854,223 @@ fn setup_thr_cols(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn setup_thr_cols_simple(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    thr_lut: &[[u32; 16]; 2],
+    y64: i32,
+    ss_ver: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+
+    let w = w4 as usize;
+    let h = h4 as usize;
+    let mask_idx = (y64 >> ss_ver) as usize;
+    assert!(mask_idx < 4);
+    assert!(bx4_base + w <= 64);
+
+    let mask_shift: u32 = if (y64 & ss_ver) != 0 { 8 } else { 0 };
+    let q = thr_lut[0][0];
+    let side = thr_lut[1][0];
+    let mask_cols = &mask[bx4_base..bx4_base + w];
+
+    for y4 in 0..h {
+        let shift = mask_shift + y4 as u32;
+        let q_out = q_thr_dst[y4..].iter_mut().step_by(16).take(w);
+        let side_out = side_thr_dst[y4..].iter_mut().step_by(16).take(w);
+        for ((mask_col, q_dst), side_dst) in mask_cols.iter().zip(q_out).zip(side_out) {
+            let subpu = 3 * (((mask_col[4][mask_idx] >> shift) & 1) as u32);
+            *q_dst = (q >> subpu) as u8;
+            *side_dst = (side >> subpu) as u8;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn setup_thr_cols_dq(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    thr_lut: &[[u32; 16]; 2],
+    left_q_thr: &mut [u8; 16],
+    left_side_thr: &mut [u8; 16],
+    y64: i32,
+    ss_ver: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+
+    let w = w4 as usize;
+    let h = h4 as usize;
+    if w == 0 || h == 0 {
+        return;
+    }
+
+    let mask_idx = (y64 >> ss_ver) as usize;
+    assert!(mask_idx < 4);
+    assert!(bx4_base + w <= 64);
+
+    let mask_shift: u32 = if (y64 & ss_ver) != 0 { 8 } else { 0 };
+    let q = thr_lut[0][0];
+    let side = thr_lut[1][0];
+    let mask_cols = &mask[bx4_base..bx4_base + w];
+
+    for y4 in 0..h {
+        let shift = mask_shift + y4 as u32;
+        let q_out = q_thr_dst[y4..].iter_mut().step_by(16).take(w);
+        let side_out = side_thr_dst[y4..].iter_mut().step_by(16).take(w);
+        let first_subpu = 3 * (((mask_cols[0][4][mask_idx] >> shift) & 1) as u32);
+        let first_q = (edge_thr(q as i32, i32::from(left_q_thr[y4])) >> first_subpu) as u8;
+        let first_side = (edge_thr(side as i32, i32::from(left_side_thr[y4])) >> first_subpu) as u8;
+
+        for (x4, ((mask_col, q_dst), side_dst)) in
+            mask_cols.iter().zip(q_out).zip(side_out).enumerate()
+        {
+            if x4 == 0 {
+                *q_dst = first_q;
+                *side_dst = first_side;
+            } else {
+                let subpu = 3 * (((mask_col[4][mask_idx] >> shift) & 1) as u32);
+                *q_dst = (q >> subpu) as u8;
+                *side_dst = (side >> subpu) as u8;
+            }
+        }
+
+        left_q_thr[y4] = q as u8;
+        left_side_thr[y4] = side as u8;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn setup_thr_rows_simple(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    thr_lut: &[[u32; 16]; 2],
+    sb64x: i32,
+    ss_hor: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+
+    let w = w4 as usize;
+    let h = h4 as usize;
+    let mask_idx = (sb64x >> ss_hor) as usize;
+    assert!(mask_idx < 4);
+    assert!(starty4 + h <= 64);
+
+    let mask_shift: u32 = if (sb64x & ss_hor) != 0 { 8 } else { 0 };
+    let q = thr_lut[0][0];
+    let side = thr_lut[1][0];
+    let mask_rows = &mask[starty4..starty4 + h];
+
+    for ((q_row, side_row), mask_row) in q_thr_dst
+        .chunks_exact_mut(16)
+        .zip(side_thr_dst.chunks_exact_mut(16))
+        .zip(mask_rows.iter())
+        .take(h)
+    {
+        let q_row = &mut q_row[..w];
+        let side_row = &mut side_row[..w];
+        for (x4, (q_dst, side_dst)) in q_row.iter_mut().zip(side_row.iter_mut()).enumerate() {
+            let subpu = 3 * (((mask_row[4][mask_idx] >> (mask_shift + x4 as u32)) & 1) as u32);
+            *q_dst = (q >> subpu) as u8;
+            *side_dst = (side >> subpu) as u8;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn setup_thr_rows_dq(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    thr_lut: &[[u32; 16]; 2],
+    above_thr_lut: Option<&[[u32; 16]; 2]>,
+    above_seg: Option<(&[u8], isize)>,
+    sb64x: i32,
+    ss_hor: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+
+    let w = w4 as usize;
+    let h = h4 as usize;
+    if w == 0 || h == 0 {
+        return;
+    }
+
+    let mask_idx = (sb64x >> ss_hor) as usize;
+    assert!(mask_idx < 4);
+    assert!(starty4 + h <= 64);
+
+    let mask_shift: u32 = if (sb64x & ss_hor) != 0 { 8 } else { 0 };
+    let q = thr_lut[0][0];
+    let side = thr_lut[1][0];
+    let mask_rows = &mask[starty4..starty4 + h];
+
+    let mut above_q = [0u8; 16];
+    let mut above_side = [0u8; 16];
+    if let Some(above_lut) = above_thr_lut {
+        if let Some((aseg, aoff)) = above_seg {
+            let aoff = usize::try_from(aoff).expect("negative above segment offset");
+            assert!(aoff + w <= aseg.len());
+            for (x4, &seg) in aseg[aoff..aoff + w].iter().enumerate() {
+                let seg_id = usize::from(seg);
+                assert!(seg_id < 16);
+                above_q[x4] = above_lut[0][seg_id] as u8;
+                above_side[x4] = above_lut[1][seg_id] as u8;
+            }
+        } else {
+            above_q[..w].fill(above_lut[0][0] as u8);
+            above_side[..w].fill(above_lut[1][0] as u8);
+        }
+    }
+
+    for (y4, ((q_row, side_row), mask_row)) in q_thr_dst
+        .chunks_exact_mut(16)
+        .zip(side_thr_dst.chunks_exact_mut(16))
+        .zip(mask_rows.iter())
+        .take(h)
+        .enumerate()
+    {
+        let q_row = &mut q_row[..w];
+        let side_row = &mut side_row[..w];
+        for (x4, (q_dst, side_dst)) in q_row.iter_mut().zip(side_row.iter_mut()).enumerate() {
+            let subpu = 3 * (((mask_row[4][mask_idx] >> (mask_shift + x4 as u32)) & 1) as u32);
+            if y4 == 0 {
+                *q_dst = (edge_thr(q as i32, i32::from(above_q[x4])) >> subpu) as u8;
+                *side_dst = (edge_thr(side as i32, i32::from(above_side[x4])) >> subpu) as u8;
+            } else {
+                *q_dst = (q >> subpu) as u8;
+                *side_dst = (side >> subpu) as u8;
+            }
+        }
+    }
+}
+
 /// Port of `setup_thr_rows_sb64`.
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn setup_thr_rows(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
@@ -888,6 +1254,8 @@ fn deblock64_cols<BD: BitDepth>(
     let h4 = imin(ctx.bh - y64 * 16, 16);
     let uv_h4 = h4 >> ctx.ss_ver;
     let y64idx = ((y64 & 3) << 2) as usize;
+    let seg_enabled = !ctx.cur_segmap.is_empty();
+    let any_lossless = ctx.frame_hdr.any_lossless != 0;
 
     let seg_stride = if !ctx.cur_segmap.is_empty() {
         ctx.b4_stride
@@ -908,6 +1276,8 @@ fn deblock64_cols<BD: BitDepth>(
         let mut left_q_thr = [0u8; 16];
         let mut left_side_thr = [0u8; 16];
         let mut ll_mask = [0u16; 17];
+        let mut q_thr = [0u8; 256];
+        let mut side_thr = [0u8; 256];
         let n64 = (ctx.bw + 15) >> 4;
         for x64 in 0..n64 {
             let have_left = x64 > 0;
@@ -917,42 +1287,81 @@ fn deblock64_cols<BD: BitDepth>(
             }
             let col_lflvl = &ctx.mask[col];
             let cur_qidx = col_lflvl.qidx[((x64 & 3) as usize) + y64idx] as i32;
-            if cur_qidx != l_qidx {
+            let q_changed = cur_qidx != l_qidx;
+            if q_changed {
                 lut = init_lut_y(ctx, 0, cur_qidx);
-                l_qidx = cur_qidx;
             }
             let bx4_base = ((x64 & 3) * 16) as usize;
             let w4 = imin(ctx.bw - x64 * 16, 16);
-            let mut q_thr = [0u8; 256];
-            let mut side_thr = [0u8; 256];
-            let (seg, seg_off): (&[u8], isize) = if !ctx.cur_segmap.is_empty() {
-                (ctx.cur_segmap, seg_band + (x64 as isize) * 16)
+            if !seg_enabled
+                && !mask_has_luma_col(
+                    &col_lflvl.filter_y[0],
+                    bx4_base,
+                    (y64 & 3) as usize,
+                    w4 as usize,
+                    have_left,
+                )
+            {
+                if q_changed {
+                    fill_left_thr_from_lut(&mut left_q_thr, &mut left_side_thr, &lut, h4 as usize);
+                }
+                l_qidx = cur_qidx;
+                continue;
+            }
+            if seg_enabled {
+                setup_thr_cols(
+                    &mut q_thr,
+                    &mut side_thr,
+                    ctx.cur_segmap,
+                    seg_band + (x64 as isize) * 16,
+                    seg_stride,
+                    &col_lflvl.filter_y[0],
+                    bx4_base,
+                    &lut,
+                    &mut left_q_thr,
+                    &mut left_side_thr,
+                    y64 & 3,
+                    0,
+                    w4,
+                    h4,
+                );
+            } else if q_changed {
+                setup_thr_cols_dq(
+                    &mut q_thr,
+                    &mut side_thr,
+                    &col_lflvl.filter_y[0],
+                    bx4_base,
+                    &lut,
+                    &mut left_q_thr,
+                    &mut left_side_thr,
+                    y64 & 3,
+                    0,
+                    w4,
+                    h4,
+                );
             } else {
-                (&PLACEHOLDER_SEGMAP, 0)
-            };
-            setup_thr_cols(
-                &mut q_thr,
-                &mut side_thr,
-                seg,
-                seg_off,
-                seg_stride,
-                &col_lflvl.filter_y[0],
-                bx4_base,
-                &lut,
-                &mut left_q_thr,
-                &mut left_side_thr,
-                y64 & 3,
-                0,
-                w4,
-                h4,
-            );
-            lf_transpose_lossless_mask(
-                &mut ll_mask,
-                &col_lflvl.lossless_mask_y[starty4..],
-                (x64 & 3) as usize,
-                0,
-                0,
-            );
+                setup_thr_cols_simple(
+                    &mut q_thr,
+                    &mut side_thr,
+                    &col_lflvl.filter_y[0],
+                    bx4_base,
+                    &lut,
+                    y64 & 3,
+                    0,
+                    w4,
+                    h4,
+                );
+            }
+            l_qidx = cur_qidx;
+            if any_lossless {
+                lf_transpose_lossless_mask(
+                    &mut ll_mask,
+                    &col_lflvl.lossless_mask_y[starty4..],
+                    (x64 & 3) as usize,
+                    0,
+                    0,
+                );
+            }
             // filter_plane_cols_y
             let cur_off = y_off + (x64 as usize) * 64;
             let ls = ctx.y_stride;
@@ -965,13 +1374,19 @@ fn deblock64_cols<BD: BitDepth>(
                 // always 0). For multi-y64 superblock rows this read must select
                 // the correct sb64 sub-row.
                 let sb64y = (y64 & 3) as usize;
-                let vmask = [
-                    hmask[0][sb64y],
-                    hmask[1][sb64y],
-                    hmask[2][sb64y],
-                    hmask[3][sb64y],
-                ];
-                let llm = [ll_mask[x], ll_mask[x + 1]];
+                let m0 = hmask[0][sb64y];
+                let m1 = hmask[1][sb64y];
+                let m2 = hmask[2][sb64y];
+                let m3 = hmask[3][sb64y];
+                if (m0 | m1 | m2 | m3) == 0 {
+                    continue;
+                }
+                let vmask = [m0, m1, m2, m3];
+                let llm = if any_lossless {
+                    [ll_mask[x], ll_mask[x + 1]]
+                } else {
+                    [0, 0]
+                };
                 // first column of an x64 that begins a new tile; for single-tile
                 // frames it is always false. Passing `x == 0` here would wrongly
                 // clamp max_width_neg at every superblock-column's left edge.
@@ -1013,6 +1428,8 @@ fn deblock64_cols<BD: BitDepth>(
     let mut left_q_thr = [[0u8; 16]; 2];
     let mut left_side_thr = [[0u8; 16]; 2];
     let mut ll_mask = [0u16; 17];
+    let mut q_thr = [[0u8; 256]; 2];
+    let mut side_thr = [[0u8; 256]; 2];
     let n64 = (ctx.bw + 15) >> 4;
     let apply_u = ctx.frame_hdr.deblock.level_u != 0;
     let apply_v = ctx.frame_hdr.deblock.level_v != 0;
@@ -1024,47 +1441,91 @@ fn deblock64_cols<BD: BitDepth>(
         }
         let col_lflvl = &ctx.mask[col];
         let cur_qidx = col_lflvl.qidx[((x64 & 3) as usize) + y64idx] as i32;
-        if cur_qidx != prev_qidx {
+        let q_changed = cur_qidx != prev_qidx;
+        if q_changed {
             lut = init_lut_uv(ctx, cur_qidx);
-            prev_qidx = cur_qidx;
         }
         let bx4_base = (((x64 & 3) * 16) >> ctx.ss_hor) as usize;
         let uv_w4 = imin(ctx.bw - x64 * 16, 16) >> ctx.ss_hor;
-        let (seg, seg_off): (&[u8], isize) = if !ctx.segmap_uv.is_empty() {
-            (
-                ctx.segmap_uv,
-                uv_seg_band + (x64 as isize) * (16 >> ctx.ss_hor) as isize,
-            )
-        } else {
-            (&PLACEHOLDER_SEGMAP, 0)
-        };
-        let mut q_thr = [[0u8; 256]; 2];
-        let mut side_thr = [[0u8; 256]; 2];
-        for pl in 0..2 {
-            setup_thr_cols(
-                &mut q_thr[pl],
-                &mut side_thr[pl],
-                seg,
-                seg_off,
-                uv_seg_stride,
+        if ctx.segmap_uv.is_empty()
+            && !mask_has_chroma_col(
                 &col_lflvl.filter_uv[0],
                 bx4_base,
-                &lut[pl],
-                &mut left_q_thr[pl],
-                &mut left_side_thr[pl],
-                y64 & 3,
+                y64,
                 ctx.ss_ver,
-                uv_w4,
-                uv_h4,
+                uv_w4 as usize,
+                have_left,
+            )
+        {
+            if q_changed {
+                for pl in 0..2 {
+                    fill_left_thr_from_lut(
+                        &mut left_q_thr[pl],
+                        &mut left_side_thr[pl],
+                        &lut[pl],
+                        uv_h4 as usize,
+                    );
+                }
+            }
+            prev_qidx = cur_qidx;
+            continue;
+        }
+        for pl in 0..2 {
+            if !ctx.segmap_uv.is_empty() {
+                setup_thr_cols(
+                    &mut q_thr[pl],
+                    &mut side_thr[pl],
+                    ctx.segmap_uv,
+                    uv_seg_band + (x64 as isize) * (16 >> ctx.ss_hor) as isize,
+                    uv_seg_stride,
+                    &col_lflvl.filter_uv[0],
+                    bx4_base,
+                    &lut[pl],
+                    &mut left_q_thr[pl],
+                    &mut left_side_thr[pl],
+                    y64 & 3,
+                    ctx.ss_ver,
+                    uv_w4,
+                    uv_h4,
+                );
+            } else if q_changed {
+                setup_thr_cols_dq(
+                    &mut q_thr[pl],
+                    &mut side_thr[pl],
+                    &col_lflvl.filter_uv[0],
+                    bx4_base,
+                    &lut[pl],
+                    &mut left_q_thr[pl],
+                    &mut left_side_thr[pl],
+                    y64 & 3,
+                    ctx.ss_ver,
+                    uv_w4,
+                    uv_h4,
+                );
+            } else {
+                setup_thr_cols_simple(
+                    &mut q_thr[pl],
+                    &mut side_thr[pl],
+                    &col_lflvl.filter_uv[0],
+                    bx4_base,
+                    &lut[pl],
+                    y64 & 3,
+                    ctx.ss_ver,
+                    uv_w4,
+                    uv_h4,
+                );
+            }
+        }
+        prev_qidx = cur_qidx;
+        if any_lossless {
+            lf_transpose_lossless_mask(
+                &mut ll_mask,
+                &col_lflvl.lossless_mask_uv[(starty4 >> ctx.ss_ver)..],
+                (x64 & 3) as usize,
+                ctx.ss_hor,
+                ctx.ss_ver,
             );
         }
-        lf_transpose_lossless_mask(
-            &mut ll_mask,
-            &col_lflvl.lossless_mask_uv[(starty4 >> ctx.ss_ver)..],
-            (x64 & 3) as usize,
-            ctx.ss_hor,
-            ctx.ss_ver,
-        );
         let cur_off = uv_off + (x64 as usize) * (64 >> ctx.ss_hor) as usize;
         let ls = ctx.uv_stride;
         let mask_idx = ((y64 & 3) >> ctx.ss_ver) as usize;
@@ -1075,12 +1536,18 @@ fn deblock64_cols<BD: BitDepth>(
                 continue;
             }
             let hmask = &col_lflvl.filter_uv[0][bx4_base + x];
-            let vmask = [
-                ((hmask[0][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16,
-                ((hmask[1][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16,
-                ((hmask[2][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16,
-            ];
-            let llm = [ll_mask[x], ll_mask[x + 1]];
+            let m0 = ((hmask[0][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+            let m1 = ((hmask[1][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+            let m2 = ((hmask[2][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+            if (m0 | m1 | m2) == 0 {
+                continue;
+            }
+            let vmask = [m0, m1, m2];
+            let llm = if any_lossless {
+                [ll_mask[x], ll_mask[x + 1]]
+            } else {
+                [0, 0]
+            };
             // Single-tile: tile_edge is always false (see luma above).
             if apply_u {
                 deblock_h_sb64uv_bd(
@@ -1131,6 +1598,8 @@ fn deblock64_rows<BD: BitDepth>(
     let uv_h4 = h4 >> ctx.ss_ver;
     let y64idx = ((y64 & 3) << 2) as usize;
     let a_y64idx = (((y64 + 3) & 3) << 2) as usize;
+    let seg_enabled = !ctx.cur_segmap.is_empty();
+    let any_lossless = ctx.frame_hdr.any_lossless != 0;
 
     // above SB256 row for cross-SB-row context (single tile: prev mask row).
     let a_row: Option<usize> = if have_top {
@@ -1157,6 +1626,8 @@ fn deblock64_rows<BD: BitDepth>(
         let mut lut = [[0u32; 16]; 2];
         let mut a_lut = [[0u32; 16]; 2];
         let mut ll_mask = [0u16; 17];
+        let mut q_thr = [0u8; 256];
+        let mut side_thr = [0u8; 256];
         let n64 = (ctx.bw + 15) >> 4;
         for x64 in 0..n64 {
             let col = lflvl_row + (x64 >> 2) as usize;
@@ -1164,60 +1635,100 @@ fn deblock64_rows<BD: BitDepth>(
                 break;
             }
             let col_lflvl = &ctx.mask[col];
-            for y in 0..h4 as usize {
-                ll_mask[y + 1] = col_lflvl.lossless_mask_y[starty4 + y][(x64 & 3) as usize];
-            }
             let cur_qidx = col_lflvl.qidx[((x64 & 3) as usize) + y64idx] as i32;
-            if cur_qidx != l_qidx {
+            let w4 = imin(ctx.bw - x64 * 16, 16);
+            if !mask_has_luma_row(
+                &col_lflvl.filter_y[1],
+                starty4,
+                (x64 & 3) as usize,
+                h4 as usize,
+                have_top,
+            ) {
+                // Do not advance the LUT cache on a skipped block without also
+                // rebuilding the LUT; otherwise the next active block with the
+                // same qidx would reuse an uninitialized/stale threshold table.
+                l_qidx = -1;
+                continue;
+            }
+            if any_lossless {
+                for y in 0..h4 as usize {
+                    ll_mask[y + 1] = col_lflvl.lossless_mask_y[starty4 + y][(x64 & 3) as usize];
+                }
+            }
+            let q_changed = cur_qidx != l_qidx;
+            if q_changed {
                 lut = init_lut_y(ctx, 1, cur_qidx);
-                l_qidx = cur_qidx;
             }
             let mut above_seg: Option<(&[u8], isize)> = None;
             let mut above_lut: Option<&[[u32; 16]; 2]> = None;
+            let mut above_qdiff = false;
             if let Some(ar) = a_row {
                 let acol = ar + (x64 >> 2) as usize;
                 if acol < ctx.mask.len() {
                     let a_lflvl = &ctx.mask[acol];
-                    ll_mask[0] = a_lflvl.lossless_mask_y[(starty4 + 63) & 63][(x64 & 3) as usize];
+                    if any_lossless {
+                        ll_mask[0] =
+                            a_lflvl.lossless_mask_y[(starty4 + 63) & 63][(x64 & 3) as usize];
+                    }
                     let a_qidx = a_lflvl.qidx[((x64 & 3) as usize) + a_y64idx] as i32;
+                    above_qdiff = a_qidx != cur_qidx;
                     if a_qidx != al_qidx {
                         a_lut = init_lut_y(ctx, 1, a_qidx);
                         al_qidx = a_qidx;
                     }
                     above_lut = Some(&a_lut);
                     // above segmap row is the row directly above seg_band.
-                    if !ctx.cur_segmap.is_empty() {
+                    if seg_enabled {
                         above_seg =
                             Some((ctx.cur_segmap, seg_band + (x64 as isize) * 16 - seg_stride));
-                    } else {
-                        above_seg = Some((&PLACEHOLDER_SEGMAP, 0));
                     }
                 }
             }
-            let w4 = imin(ctx.bw - x64 * 16, 16);
-            let mut q_thr = [0u8; 256];
-            let mut side_thr = [0u8; 256];
-            let (seg, seg_off): (&[u8], isize) = if !ctx.cur_segmap.is_empty() {
-                (ctx.cur_segmap, seg_band + (x64 as isize) * 16)
+            if seg_enabled {
+                setup_thr_rows(
+                    &mut q_thr,
+                    &mut side_thr,
+                    ctx.cur_segmap,
+                    seg_band + (x64 as isize) * 16,
+                    seg_stride,
+                    &col_lflvl.filter_y[1],
+                    starty4,
+                    &lut,
+                    above_lut,
+                    above_seg,
+                    x64 & 3,
+                    0,
+                    w4,
+                    h4,
+                );
+            } else if above_qdiff {
+                setup_thr_rows_dq(
+                    &mut q_thr,
+                    &mut side_thr,
+                    &col_lflvl.filter_y[1],
+                    starty4,
+                    &lut,
+                    above_lut,
+                    None,
+                    x64 & 3,
+                    0,
+                    w4,
+                    h4,
+                );
             } else {
-                (&PLACEHOLDER_SEGMAP, 0)
-            };
-            setup_thr_rows(
-                &mut q_thr,
-                &mut side_thr,
-                seg,
-                seg_off,
-                seg_stride,
-                &col_lflvl.filter_y[1],
-                starty4,
-                &lut,
-                above_lut,
-                above_seg,
-                x64 & 3,
-                0,
-                w4,
-                h4,
-            );
+                setup_thr_rows_simple(
+                    &mut q_thr,
+                    &mut side_thr,
+                    &col_lflvl.filter_y[1],
+                    starty4,
+                    &lut,
+                    x64 & 3,
+                    0,
+                    w4,
+                    h4,
+                );
+            }
+            l_qidx = cur_qidx;
             let cur_off = y_off + (x64 as usize) * 64;
             let ls = ctx.y_stride;
             for y in 0..h4 as usize {
@@ -1225,13 +1736,20 @@ fn deblock64_rows<BD: BitDepth>(
                     continue;
                 }
                 let row = &col_lflvl.filter_y[1][starty4 + y];
-                let vmask = [
-                    row[0][(x64 & 3) as usize],
-                    row[1][(x64 & 3) as usize],
-                    row[2][(x64 & 3) as usize],
-                    row[3][(x64 & 3) as usize],
-                ];
-                let llm = [ll_mask[y], ll_mask[y + 1]];
+                let sidx = (x64 & 3) as usize;
+                let m0 = row[0][sidx];
+                let m1 = row[1][sidx];
+                let m2 = row[2][sidx];
+                let m3 = row[3][sidx];
+                if (m0 | m1 | m2 | m3) == 0 {
+                    continue;
+                }
+                let vmask = [m0, m1, m2, m3];
+                let llm = if any_lossless {
+                    [ll_mask[y], ll_mask[y + 1]]
+                } else {
+                    [0, 0]
+                };
                 deblock_v_sb64y_bd(
                     bd,
                     p_y,
@@ -1269,6 +1787,8 @@ fn deblock64_rows<BD: BitDepth>(
     let mut lut = [[[0u32; 16]; 2]; 2];
     let mut a_lut = [[[0u32; 16]; 2]; 2];
     let mut ll_mask = [0u16; 17];
+    let mut q_thr = [[0u8; 256]; 2];
+    let mut side_thr = [[0u8; 256]; 2];
     let n64 = (ctx.bw + 15) >> 4;
     let apply_u = ctx.frame_hdr.deblock.level_u != 0;
     let apply_v = ctx.frame_hdr.deblock.level_v != 0;
@@ -1278,24 +1798,44 @@ fn deblock64_rows<BD: BitDepth>(
             break;
         }
         let col_lflvl = &ctx.mask[col];
-        for y in 0..uv_h4 as usize {
-            ll_mask[y + 1] =
-                col_lflvl.lossless_mask_uv[(starty4 >> ctx.ss_ver) + y][(x64 & 3) as usize];
-        }
         let cur_qidx = col_lflvl.qidx[((x64 & 3) as usize) + y64idx] as i32;
-        if cur_qidx != l_qidx {
+        let uv_w4 = imin(ctx.bw - x64 * 16, 16) >> ctx.ss_hor;
+        if !mask_has_chroma_row(
+            &col_lflvl.filter_uv[1],
+            starty4 >> ctx.ss_ver,
+            x64,
+            ctx.ss_hor,
+            uv_h4 as usize,
+            have_top,
+        ) {
+            // Same cache rule as luma rows: skipped blocks do not materialize
+            // `lut`, so force the next active block to refresh it.
+            l_qidx = -1;
+            continue;
+        }
+        if any_lossless {
+            for y in 0..uv_h4 as usize {
+                ll_mask[y + 1] =
+                    col_lflvl.lossless_mask_uv[(starty4 >> ctx.ss_ver) + y][(x64 & 3) as usize];
+            }
+        }
+        let q_changed = cur_qidx != l_qidx;
+        if q_changed {
             lut = init_lut_uv(ctx, cur_qidx);
-            l_qidx = cur_qidx;
         }
         let mut above_seg: Option<(&[u8], isize)> = None;
         let mut above_present = false;
+        let mut above_qdiff = false;
         if let Some(ar) = a_row {
             let acol = ar + (x64 >> 2) as usize;
             if acol < ctx.mask.len() {
                 let a_lflvl = &ctx.mask[acol];
-                ll_mask[0] = a_lflvl.lossless_mask_uv[((starty4 + 63) & 63) >> ctx.ss_ver]
-                    [(x64 & 3) as usize];
+                if any_lossless {
+                    ll_mask[0] = a_lflvl.lossless_mask_uv[((starty4 + 63) & 63) >> ctx.ss_ver]
+                        [(x64 & 3) as usize];
+                }
                 let a_qidx = a_lflvl.qidx[((x64 & 3) as usize) + a_y64idx] as i32;
+                above_qdiff = a_qidx != cur_qidx;
                 if a_qidx != al_qidx {
                     a_lut = init_lut_uv(ctx, a_qidx);
                     al_qidx = a_qidx;
@@ -1306,44 +1846,61 @@ fn deblock64_rows<BD: BitDepth>(
                         ctx.segmap_uv,
                         uv_seg_band + (x64 as isize) * (16 >> ctx.ss_hor) as isize - uv_seg_stride,
                     ));
-                } else {
-                    above_seg = Some((&PLACEHOLDER_SEGMAP, 0));
                 }
             }
         }
-        let uv_w4 = imin(ctx.bw - x64 * 16, 16) >> ctx.ss_hor;
-        let (seg, seg_off): (&[u8], isize) = if !ctx.segmap_uv.is_empty() {
-            (
-                ctx.segmap_uv,
-                uv_seg_band + (x64 as isize) * (16 >> ctx.ss_hor) as isize,
-            )
-        } else {
-            (&PLACEHOLDER_SEGMAP, 0)
-        };
-        let mut q_thr = [[0u8; 256]; 2];
-        let mut side_thr = [[0u8; 256]; 2];
         for pl in 0..2 {
-            setup_thr_rows(
-                &mut q_thr[pl],
-                &mut side_thr[pl],
-                seg,
-                seg_off,
-                uv_seg_stride,
-                &col_lflvl.filter_uv[1],
-                starty4 >> ctx.ss_ver,
-                &lut[pl],
-                if above_present {
-                    Some(&a_lut[pl])
-                } else {
-                    None
-                },
-                above_seg,
-                x64 & 3,
-                ctx.ss_hor,
-                uv_w4,
-                uv_h4,
-            );
+            let above_lut = if above_present {
+                Some(&a_lut[pl])
+            } else {
+                None
+            };
+            if !ctx.segmap_uv.is_empty() {
+                setup_thr_rows(
+                    &mut q_thr[pl],
+                    &mut side_thr[pl],
+                    ctx.segmap_uv,
+                    uv_seg_band + (x64 as isize) * (16 >> ctx.ss_hor) as isize,
+                    uv_seg_stride,
+                    &col_lflvl.filter_uv[1],
+                    starty4 >> ctx.ss_ver,
+                    &lut[pl],
+                    above_lut,
+                    above_seg,
+                    x64 & 3,
+                    ctx.ss_hor,
+                    uv_w4,
+                    uv_h4,
+                );
+            } else if above_qdiff {
+                setup_thr_rows_dq(
+                    &mut q_thr[pl],
+                    &mut side_thr[pl],
+                    &col_lflvl.filter_uv[1],
+                    starty4 >> ctx.ss_ver,
+                    &lut[pl],
+                    above_lut,
+                    None,
+                    x64 & 3,
+                    ctx.ss_hor,
+                    uv_w4,
+                    uv_h4,
+                );
+            } else {
+                setup_thr_rows_simple(
+                    &mut q_thr[pl],
+                    &mut side_thr[pl],
+                    &col_lflvl.filter_uv[1],
+                    starty4 >> ctx.ss_ver,
+                    &lut[pl],
+                    x64 & 3,
+                    ctx.ss_hor,
+                    uv_w4,
+                    uv_h4,
+                );
+            }
         }
+        l_qidx = cur_qidx;
         let cur_off = uv_off + (x64 as usize) * (64 >> ctx.ss_hor) as usize;
         let ls = ctx.uv_stride;
         let mask_idx = ((x64 & 3) >> ctx.ss_hor) as usize;
@@ -1354,12 +1911,18 @@ fn deblock64_rows<BD: BitDepth>(
                 continue;
             }
             let row = &col_lflvl.filter_uv[1][(starty4 >> ctx.ss_ver) + y];
-            let vmask = [
-                ((row[0][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16,
-                ((row[1][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16,
-                ((row[2][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16,
-            ];
-            let llm = [ll_mask[y], ll_mask[y + 1]];
+            let m0 = ((row[0][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+            let m1 = ((row[1][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+            let m2 = ((row[2][mask_idx] as u32 >> mask_shift) & bytes_mask) as u16;
+            if (m0 | m1 | m2) == 0 {
+                continue;
+            }
+            let vmask = [m0, m1, m2];
+            let llm = if any_lossless {
+                [ll_mask[y], ll_mask[y + 1]]
+            } else {
+                [0, 0]
+            };
             if apply_u {
                 deblock_v_sb64uv_bd(
                     bd,

@@ -35,17 +35,25 @@ use std::arch::x86_64::*;
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
-    let arr: [u8; 4] = if stride_line == 1 {
-        dst[base as usize..base as usize + 4].try_into().unwrap()
+    if stride_line == 1 {
+        // Load four adjacent 8bpc samples and zero-extend them to four i32 lanes.
+        // Keeping the four bytes packed in one i32 lane breaks the deblock math
+        // and makes the vertical SIMD path unlike dav2d's lane-wise arithmetic.
+        let word =
+            unsafe { std::ptr::read_unaligned(dst.as_ptr().add(base as usize).cast::<i32>()) };
+        _mm_cvtepu8_epi32(_mm_cvtsi32_si128(word))
     } else {
-        [
-            dst[base as usize],
-            dst[(base + stride_line) as usize],
-            dst[(base + 2 * stride_line) as usize],
-            dst[(base + 3 * stride_line) as usize],
-        ]
-    };
-    _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(arr)))
+        // Four rows of the same horizontal edge.  This is still a gather, but it
+        // stays register-only instead of using a temporary stack array.
+        unsafe {
+            _mm_setr_epi32(
+                dst[base as usize] as i32,
+                dst[(base + stride_line) as usize] as i32,
+                dst[(base + 2 * stride_line) as usize] as i32,
+                dst[(base + 3 * stride_line) as usize] as i32,
+            )
+        }
+    }
 }
 
 #[inline]
@@ -53,15 +61,20 @@ fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
 fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: __m128i) {
     if stride_line == 1 {
         let p8 = _mm_packus_epi16(_mm_packs_epi32(v, v), _mm_packs_epi32(v, v));
-        let bytes = (_mm_cvtsi128_si32(p8) as u32).to_le_bytes();
-        dst[base as usize..base as usize + 4].copy_from_slice(&bytes);
+        unsafe {
+            _mm_store_ss(
+                dst.as_mut_ptr().add(base as usize).cast(),
+                _mm_castsi128_ps(p8),
+            )
+        }
     } else {
-        let mut arr = [0i32; 4];
-        unsafe { _mm_storeu_si128(arr.as_mut_ptr() as *mut __m128i, v) };
-        dst[base as usize] = arr[0] as u8;
-        dst[(base + stride_line) as usize] = arr[1] as u8;
-        dst[(base + 2 * stride_line) as usize] = arr[2] as u8;
-        dst[(base + 3 * stride_line) as usize] = arr[3] as u8;
+        // Register scatter of four clipped i32 lanes.  Dav2d's horizontal AVX2
+        // path is a full transpose kernel; this keeps the current Rust apply
+        // structure SIMD without the old store-to-stack penalty.
+        dst[base as usize] = _mm_cvtsi128_si32(v) as u8;
+        dst[(base + stride_line) as usize] = _mm_extract_epi32::<1>(v) as u8;
+        dst[(base + 2 * stride_line) as usize] = _mm_extract_epi32::<2>(v) as u8;
+        dst[(base + 3 * stride_line) as usize] = _mm_extract_epi32::<3>(v) as u8;
     }
 }
 
@@ -133,7 +146,8 @@ pub(crate) fn deblock_apply_8bpc_sse41(
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> __m128i {
     if stride_line == 1 {
         unsafe {
@@ -154,20 +168,19 @@ fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> __m128i {
 }
 
 /// Scatter a pre-clipped (`0..=bitdepth_max`) i32x4 back to 4 HBD samples.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: __m128i) {
     if stride_line == 1 {
-        let p16 = unsafe { _mm_packus_epi32(v, v) };
+        let p16 = _mm_packus_epi32(v, v);
         unsafe {
             _mm_storel_epi64(dst.as_mut_ptr().add(base as usize) as *mut __m128i, p16);
         }
     } else {
-        let mut arr = [0i32; 4];
-        unsafe { _mm_storeu_si128(arr.as_mut_ptr() as *mut __m128i, v) };
-        dst[base as usize] = arr[0] as u16;
-        dst[(base + stride_line) as usize] = arr[1] as u16;
-        dst[(base + 2 * stride_line) as usize] = arr[2] as u16;
-        dst[(base + 3 * stride_line) as usize] = arr[3] as u16;
+        dst[base as usize] = _mm_cvtsi128_si32(v) as u16;
+        dst[(base + stride_line) as usize] = _mm_extract_epi32::<1>(v) as u16;
+        dst[(base + 2 * stride_line) as usize] = _mm_extract_epi32::<2>(v) as u16;
+        dst[(base + 3 * stride_line) as usize] = _mm_extract_epi32::<3>(v) as u16;
     }
 }
 
