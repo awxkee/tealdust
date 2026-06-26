@@ -28,7 +28,9 @@
  */
 
 use crate::avx::msac512::{AlignedSse8, AlignedSse9};
-use crate::msac::{MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState};
+use crate::msac::{
+    MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState, msac_load_be64_unchecked, msac_refill_eob,
+};
 use core::arch::x86_64::*;
 
 pub(crate) struct MsacContextAvx<'a, const UPDATE_CDF: bool> {
@@ -77,40 +79,25 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
     #[inline(always)]
     pub(crate) fn ctx_refill(&mut self) {
         let start = self.buf_pos;
-        let len = self.buf.len();
-
-        if start >= len {
-            return;
-        }
-
         let c = 40 - self.cnt;
         debug_assert!(c >= 0);
         debug_assert!(c <= 55);
 
         let c = c as u32;
-        let available = len - start;
-        let n = ((c as usize >> 3) + 1).min(available);
+        let n = (c as usize >> 3) + 1;
 
-        if available >= 8 {
-            let chunk = &self.buf[start..start + 8];
-            let val = u64::from_be_bytes(chunk.try_into().unwrap());
+        if start + 8 <= self.buf.len() {
+            let val = unsafe { msac_load_be64_unchecked(self.buf, start) };
             let refill = (val >> (56 - c)) & (u64::MAX << (c & 7));
 
             self.dif ^= refill;
             self.buf_pos = start + n;
             self.cnt += (n as i32) * 8;
         } else {
-            let mut c_shift = c;
-            let mut dif = self.dif;
-
-            for &byte in &self.buf[start..start + n] {
-                dif ^= (byte as u64) << c_shift;
-                c_shift -= 8;
-            }
-
+            let (dif, buf_pos, cnt_inc) = msac_refill_eob(self.buf, start, c, self.dif);
             self.dif = dif;
-            self.buf_pos = start + n;
-            self.cnt += (n as i32) * 8;
+            self.buf_pos = buf_pos;
+            self.cnt += cnt_inc;
         }
     }
 
@@ -541,7 +528,7 @@ fn msac_unary_bypass_ret_avx2(dif: u64, rng: u32, max_bits: u32) -> u32 {
 }
 
 #[inline]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "sse2")]
 fn load_cdf<const N: usize>(cdf: &[u16]) -> __m128i {
     unsafe {
         if N <= 4 {
@@ -553,7 +540,7 @@ fn load_cdf<const N: usize>(cdf: &[u16]) -> __m128i {
 }
 
 #[inline]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "sse2")]
 fn load_min_prob<const N: usize>() -> __m128i {
     let ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
     unsafe {
@@ -566,7 +553,7 @@ fn load_min_prob<const N: usize>() -> __m128i {
 }
 
 #[inline]
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "sse2")]
 fn update_cdf_avx2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m128i, rate: u8) {
     debug_assert!((1..=7).contains(&N));
     debug_assert!(cdf.len() > N);
@@ -593,7 +580,7 @@ fn update_cdf_avx2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m
     cdf[..N].copy_from_slice(&initialized[..N]);
 }
 
-#[target_feature(enable = "avx2")]
+#[target_feature(enable = "sse2")]
 fn msac_decode_symbol_adapt_avx2<const UPDATE_CDF: bool, const N: usize>(
     s: &mut MsacContextAvx<'_, UPDATE_CDF>,
     cdf: &mut [u16],

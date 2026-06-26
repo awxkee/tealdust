@@ -170,6 +170,39 @@ static MSAC_MIN_PROB_INNER: Aligned<[[u16; 8]; 7]> = Aligned([
 
 pub(crate) static MSAC_MIN_PROB: &[[u16; 8]; 7] = &MSAC_MIN_PROB_INNER.0;
 
+#[inline(always)]
+pub(crate) unsafe fn msac_load_be64_unchecked(buf: &[u8], start: usize) -> u64 {
+    debug_assert!(start + 8 <= buf.len());
+    // Unaligned big-endian load matching dav2d's x86 REFILL fast path
+    // (`mov` + `bswap`).  The caller performs the single hot-path end check;
+    // this helper itself intentionally does not create a slice, so the refill
+    // path does not carry bounds-check scaffolding.
+    unsafe {
+        u64::from_be(core::ptr::read_unaligned(
+            buf.as_ptr().add(start).cast::<u64>(),
+        ))
+    }
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn msac_refill_eob(buf: &[u8], start: usize, c: u32, mut dif: u64) -> (u64, usize, i32) {
+    let len = buf.len();
+    if start >= len {
+        return (dif, start, 0);
+    }
+
+    let n = ((c as usize >> 3) + 1).min(len - start);
+    let mut c_shift = c;
+
+    for &byte in &buf[start..start + n] {
+        dif ^= (byte as u64) << c_shift;
+        c_shift -= 8;
+    }
+
+    (dif, start + n, (n as i32) * 8)
+}
+
 pub(crate) struct MsacContextScalar<'a, const UPDATE_CDF: bool> {
     pub(crate) buf_pos: usize,
     pub(crate) buf: &'a [u8],
@@ -292,6 +325,7 @@ pub(crate) trait MsacReader<const UPDATE_CDF: bool> {
 }
 
 impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
+    #[inline(always)]
     pub(crate) fn new(data: &'a [u8]) -> Self {
         let mut s = Self {
             buf_pos: 0,
@@ -317,6 +351,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
     /// Rebuild a live context from an owned buffer plus a prior snapshot. No
     /// `ctx_refill` here: the snapshot already reflects a refilled state, so this
     /// is a pure restore (re-running refill would consume extra bytes).
+    #[inline(always)]
     pub(crate) fn resume(data: &'a [u8], st: MsacState) -> Self {
         Self {
             buf_pos: st.buf_pos,
@@ -327,48 +362,32 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn ctx_refill(&mut self) {
         let start = self.buf_pos;
-        let len = self.buf.len();
-
-        if start >= len {
-            return;
-        }
-
         let c = 40 - self.cnt;
         debug_assert!(c >= 0);
         debug_assert!(c <= 55);
 
         let c = c as u32;
-        let available = len - start;
-        let n = ((c as usize >> 3) + 1).min(available);
+        let n = (c as usize >> 3) + 1;
 
-        if available >= 8 {
-            let chunk = &self.buf[start..start + 8];
-            let val = u64::from_be_bytes(chunk.try_into().unwrap());
-
+        if start + 8 <= self.buf.len() {
+            let val = unsafe { msac_load_be64_unchecked(self.buf, start) };
             let refill = (val >> (56 - c)) & (u64::MAX << (c & 7));
 
             self.dif ^= refill;
             self.buf_pos = start + n;
             self.cnt += (n as i32) * 8;
         } else {
-            let mut c_shift = c;
-            let mut dif = self.dif;
-
-            for &byte in &self.buf[start..start + n] {
-                dif ^= (byte as u64) << c_shift;
-                c_shift -= 8;
-            }
-
+            let (dif, buf_pos, cnt_inc) = msac_refill_eob(self.buf, start, c, self.dif);
             self.dif = dif;
-            self.buf_pos = start + n;
-            self.cnt += (n as i32) * 8;
+            self.buf_pos = buf_pos;
+            self.cnt += cnt_inc;
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn ctx_norm(&mut self, dif: u64, rng: u32) {
         debug_assert!(rng <= 65535 && rng > 0);
 
