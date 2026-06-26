@@ -956,6 +956,120 @@ pub(crate) fn ipred_z2(
     );
 }
 
+pub(crate) type DipPred8Fn = unsafe fn(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    width: usize,
+    height: usize,
+    mode: i32,
+);
+
+#[inline]
+pub(crate) fn ipred_dip_8bpc_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    width: usize,
+    height: usize,
+    mode: i32,
+) {
+    crate::ipred::ipred_dip_8bpc(dst, stride, tl, o, width, height, mode);
+}
+
+static IPRED_DIP_8BPC: OnceLock<DipPred8Fn> = OnceLock::new();
+
+#[inline]
+fn resolve_ipred_dip_8bpc() -> DipPred8Fn {
+    *IPRED_DIP_8BPC.get_or_init(|| {
+        let mut f: DipPred8Fn = ipred_dip_8bpc_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_dip_8bpc_neon;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ipred_dip_8bpc_avx2;
+            }
+        }
+        f
+    })
+}
+
+pub(crate) fn ipred_dip_8bpc(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    width: usize,
+    height: usize,
+    mode: i32,
+) {
+    call_ipred!(
+        resolve_ipred_dip_8bpc(),
+        dst,
+        stride,
+        tl,
+        o,
+        width,
+        height,
+        mode
+    );
+}
+
+pub(crate) type PalPred8Fn =
+    unsafe fn(dst: &mut [u8], stride: usize, pal: &[u8], idx: &[u8], w: usize, h: usize);
+
+#[inline]
+pub(crate) fn pal_pred_8bpc_scalar(
+    dst: &mut [u8],
+    stride: usize,
+    pal: &[u8],
+    idx: &[u8],
+    w: usize,
+    h: usize,
+) {
+    crate::ipred::pal_pred(dst, stride, pal, idx, w, h);
+}
+
+static PAL_PRED_8BPC: OnceLock<PalPred8Fn> = OnceLock::new();
+
+#[inline]
+fn resolve_pal_pred_8bpc() -> PalPred8Fn {
+    *PAL_PRED_8BPC.get_or_init(|| {
+        let mut f: PalPred8Fn = pal_pred_8bpc_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::pal_pred_8bpc_neon;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::pal_pred_8bpc_avx2;
+            }
+        }
+        f
+    })
+}
+
+pub(crate) fn pal_pred_8bpc(
+    dst: &mut [u8],
+    stride: usize,
+    pal: &[u8],
+    idx: &[u8],
+    w: usize,
+    h: usize,
+) {
+    call_ipred!(resolve_pal_pred_8bpc(), dst, stride, pal, idx, w, h);
+}
+
 pub(crate) type IntraPredHbdFn = unsafe fn(
     dst: &mut [u16],
     stride: usize,
@@ -1006,6 +1120,40 @@ pub(crate) type Z2PredHbdFn = unsafe fn(
     max_height: i32,
     bitdepth_max: u16,
 );
+
+pub(crate) type DipPredHbdFn = unsafe fn(
+    dst: &mut [u16],
+    stride: usize,
+    tl: &[u16],
+    o: usize,
+    width: usize,
+    height: usize,
+    mode: i32,
+    bitdepth_max: u16,
+);
+
+#[inline]
+pub(crate) fn ipred_dip_hbd_scalar(
+    dst: &mut [u16],
+    stride: usize,
+    tl: &[u16],
+    o: usize,
+    width: usize,
+    height: usize,
+    mode: i32,
+    bitdepth_max: u16,
+) {
+    crate::ipred::ipred_dip(
+        hbd_from_max(bitdepth_max),
+        dst,
+        stride,
+        tl,
+        o,
+        width,
+        height,
+        mode,
+    );
+}
 
 #[inline(always)]
 fn hbd_from_max(bitdepth_max: u16) -> crate::pixel::BitDepth16 {
@@ -1323,6 +1471,7 @@ static IPRED_SMOOTH_H_HBD: OnceLock<SmoothPredHbdFn> = OnceLock::new();
 static IPRED_Z1_HBD: OnceLock<Z1PredHbdFn> = OnceLock::new();
 static IPRED_Z2_HBD: OnceLock<Z2PredHbdFn> = OnceLock::new();
 static IPRED_Z3_HBD: OnceLock<Z1PredHbdFn> = OnceLock::new();
+static IPRED_DIP_HBD: OnceLock<DipPredHbdFn> = OnceLock::new();
 
 macro_rules! resolve_hbd_ipred {
     ($lock:ident, $scalar:path, $sse:path, $avx:path, $neon:path, $ty:ty) => {{
@@ -1423,17 +1572,13 @@ fn resolve_ipred_dc_128_hbd() -> DcPred128HbdFn {
     )
 }
 
-// The AVX HBD smooth/paeth entries currently delegate to the SSE4.1 kernels.
-// Resolve directly to the SSE target-feature body on AVX2 CPUs to avoid an
-// extra AVX wrapper call in the hot intra-prediction dispatch.
-
 #[inline]
 fn resolve_ipred_paeth_hbd() -> SmoothPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_PAETH_HBD,
         ipred_paeth_hbd_scalar,
         crate::sse::ipred_paeth_hbd_sse41,
-        crate::sse::ipred_paeth_hbd_sse41,
+        crate::avx::ipred_paeth_hbd_avx2,
         crate::neon::ipred_paeth_hbd_neon,
         SmoothPredHbdFn
     )
@@ -1445,7 +1590,7 @@ fn resolve_ipred_smooth_hbd() -> SmoothPredHbdFn {
         IPRED_SMOOTH_HBD,
         ipred_smooth_hbd_scalar,
         crate::sse::ipred_smooth_hbd_sse41,
-        crate::sse::ipred_smooth_hbd_sse41,
+        crate::avx::ipred_smooth_hbd_avx2,
         crate::neon::ipred_smooth_hbd_neon,
         SmoothPredHbdFn
     )
@@ -1457,7 +1602,7 @@ fn resolve_ipred_smooth_v_hbd() -> SmoothPredHbdFn {
         IPRED_SMOOTH_V_HBD,
         ipred_smooth_v_hbd_scalar,
         crate::sse::ipred_smooth_v_hbd_sse41,
-        crate::sse::ipred_smooth_v_hbd_sse41,
+        crate::avx::ipred_smooth_v_hbd_avx2,
         crate::neon::ipred_smooth_v_hbd_neon,
         SmoothPredHbdFn
     )
@@ -1469,7 +1614,7 @@ fn resolve_ipred_smooth_h_hbd() -> SmoothPredHbdFn {
         IPRED_SMOOTH_H_HBD,
         ipred_smooth_h_hbd_scalar,
         crate::sse::ipred_smooth_h_hbd_sse41,
-        crate::sse::ipred_smooth_h_hbd_sse41,
+        crate::avx::ipred_smooth_h_hbd_avx2,
         crate::neon::ipred_smooth_h_hbd_neon,
         SmoothPredHbdFn
     )
@@ -1511,10 +1656,30 @@ fn resolve_ipred_z3_hbd() -> Z1PredHbdFn {
     )
 }
 
+#[inline]
+fn resolve_ipred_dip_hbd() -> DipPredHbdFn {
+    *IPRED_DIP_HBD.get_or_init(|| {
+        let mut f: DipPredHbdFn = ipred_dip_hbd_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::ipred_dip_hbd_neon;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::ipred_dip_hbd_avx2;
+            }
+        }
+        f
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_ipred_hbd(
     m: u8,
-    bitdepth: u8,
+    _bitdepth: u8,
     bitdepth_max: u16,
     dst: &mut [u16],
     dst_off: usize,
@@ -1544,7 +1709,7 @@ pub(crate) fn dispatch_ipred_hbd(
         _ if m == Z1_PRED => call_ipred!(resolve_ipred_z1_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights, bitdepth_max),
         _ if m == Z2_PRED => call_ipred!(resolve_ipred_z2_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, bitdepth_max),
         _ if m == Z3_PRED => call_ipred!(resolve_ipred_z3_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights, bitdepth_max),
-        _ if m == DIP_PRED => crate::ipred::ipred_dip(crate::pixel::BitDepth16::new(bitdepth), d, stride, edge, edge_o, w, h, angle),
+        _ if m == DIP_PRED => call_ipred!(resolve_ipred_dip_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
         _ => call_ipred!(resolve_ipred_dc_128_hbd(), d, stride, w, h, bitdepth_max),
     }
 }

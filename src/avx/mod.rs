@@ -35,6 +35,7 @@ mod cfl_hd;
 mod deblocking;
 mod filter;
 mod filter_hd;
+mod inter;
 mod inter_hd;
 mod ipred;
 mod ipred_hd;
@@ -67,6 +68,7 @@ pub(crate) use filter_hd::{
     avg_row_hbd_avx2, blend_row_hbd_avx2, dc_add_row_hbd_avx2, mask_row_hbd_avx2,
     morph_row_hbd_avx2, residual_add_row_hbd_avx2, w_avg_row_hbd_avx2,
 };
+pub(crate) use inter::*;
 pub(crate) use inter_hd::*;
 pub(crate) use ipred::*;
 pub(crate) use ipred_hd::*;

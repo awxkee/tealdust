@@ -478,46 +478,72 @@ pub(crate) fn morph_row_8bpc_avx2(dst: &mut [u8], alpha: i32, beta: i32, n: usiz
     }
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_i8x16_i16(a: &[i8]) -> __m256i {
+    unsafe { _mm256_cvtepi8_epi16(_mm_loadu_si128(a.as_ptr().cast())) }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_u8x16_i16_slice(a: &[u8]) -> __m256i {
+    unsafe { _mm256_cvtepu8_epi16(_mm_loadu_si128(a.as_ptr().cast())) }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_u8x16_from_i16(a: &mut [u8], v: __m256i) {
+    unsafe {
+        let p8 = _mm256_packus_epi16(v, v);
+        let lo = _mm256_castsi256_si128(p8);
+        let hi = _mm256_extracti128_si256::<1>(p8);
+        _mm_storeu_si128(a.as_mut_ptr().cast(), _mm_unpacklo_epi64(lo, hi));
+    }
+}
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn gdf_add_run_8bpc_avx2(dst: &mut [u8], err: &[i8], scale: i32, n: usize) {
-    let sc = _mm256_set1_epi32(scale);
-    let rnd = _mm256_set1_epi32(8);
+    let sc = _mm256_set1_epi16(scale as i16);
+    let rnd = _mm256_set1_epi16(8);
     let zero = _mm256_setzero_si256();
     let adj = |e: __m256i| {
-        let diff = _mm256_mullo_epi32(e, sc);
-        let mag = _mm256_srai_epi32::<4>(_mm256_add_epi32(_mm256_abs_epi32(diff), rnd));
+        let diff = _mm256_mullo_epi16(e, sc);
+        let mag = _mm256_srai_epi16::<4>(_mm256_add_epi16(_mm256_abs_epi16(diff), rnd));
         _mm256_blendv_epi8(
             mag,
-            _mm256_sub_epi32(zero, mag),
-            _mm256_cmpgt_epi32(zero, diff),
+            _mm256_sub_epi16(zero, mag),
+            _mm256_cmpgt_epi16(zero, diff),
         )
     };
-    let (c16, r16) = dst[..n].as_chunks_mut::<16>();
-    let (e16, _) = err[..n].as_chunks::<16>();
-    for (d, e) in c16.iter_mut().zip(e16) {
-        let a_lo = adj(load_i8x8_i32((&e[..8]).try_into().unwrap()));
-        let a_hi = adj(load_i8x8_i32((&e[8..]).try_into().unwrap()));
-        let d_lo = load_u8x8_i32((&d[..8]).try_into().unwrap());
-        let d_hi = load_u8x8_i32((&d[8..]).try_into().unwrap());
-        store_i32x16_u8(
-            d,
-            _mm256_add_epi32(d_lo, a_lo),
-            _mm256_add_epi32(d_hi, a_hi),
+
+    let mut x = 0usize;
+    while x + 16 <= n {
+        let a = adj(load_i8x16_i16(unsafe { err.get_unchecked(x..) }));
+        let d = load_u8x16_i16_slice(unsafe { dst.get_unchecked(x..) });
+        store_u8x16_from_i16(
+            unsafe { dst.get_unchecked_mut(x..) },
+            _mm256_add_epi16(d, a),
         );
+        x += 16;
     }
-    let done = c16.len() * 16;
-    let (c8, r8) = r16.as_chunks_mut::<8>();
-    let (e8, er) = err[done..n].as_chunks::<8>();
-    for (d, e) in c8.iter_mut().zip(e8) {
-        let a = adj(load_i8x8_i32(e));
-        let dv = load_u8x8_i32(d);
-        store_i32x8_u8(d, _mm256_add_epi32(dv, a));
+    while x + 8 <= n {
+        let a = adj(_mm256_cvtepi8_epi16(unsafe {
+            _mm_loadl_epi64(err.as_ptr().add(x).cast())
+        }));
+        let d = _mm256_cvtepu8_epi16(unsafe { _mm_loadl_epi64(dst.as_ptr().add(x).cast()) });
+        let out = _mm256_add_epi16(d, a);
+        unsafe {
+            let p8 = _mm256_packus_epi16(out, out);
+            _mm_storel_epi64(dst.as_mut_ptr().add(x).cast(), _mm256_castsi256_si128(p8));
+        }
+        x += 8;
     }
-    for (d, &e) in r8.iter_mut().zip(er) {
-        let diff = e as i32 * scale;
+    while x < n {
+        let diff = err[x] as i32 * scale;
         let mag = (diff.abs() + 8) >> 4;
         let a = if diff < 0 { -mag } else { mag };
-        *d = ((*d as i32) + a).clamp(0, 255) as u8;
+        dst[x] = (dst[x] as i32 + a).clamp(0, 255) as u8;
+        x += 1;
     }
 }
 
@@ -534,43 +560,26 @@ pub(crate) fn gdf_gradient_group_avx2(
     dx: i32,
     shift: u32,
 ) {
-    let mut acc = _mm256_setzero_si256();
+    let mut acc = _mm_setzero_si128();
     let sh = _mm_cvtsi32_si128(shift as i32);
     for y in 0..2 {
         let bcol = col0 - 1;
         let acol = (bcol as i32 - dx) as usize;
         let ccol = (bcol as i32 + dx) as usize;
-        let b: &[u8; 8] = center_rows[y][bcol..bcol + 8].try_into().unwrap();
-        let a: &[u8; 8] = a_rows[y][acol..acol + 8].try_into().unwrap();
-        let c: &[u8; 8] = c_rows[y][ccol..ccol + 8].try_into().unwrap();
-        let bv = _mm256_srl_epi32(load_u8x8_i32(b), sh);
-        let av = _mm256_srl_epi32(load_u8x8_i32(a), sh);
-        let cv = _mm256_srl_epi32(load_u8x8_i32(c), sh);
-        acc = _mm256_add_epi32(
-            acc,
-            _mm256_abs_epi32(_mm256_sub_epi32(
-                _mm256_sub_epi32(_mm256_add_epi32(bv, bv), av),
-                cv,
-            )),
-        );
+        let b = unsafe { _mm_loadl_epi64(center_rows[y].as_ptr().add(bcol).cast()) };
+        let a = unsafe { _mm_loadl_epi64(a_rows[y].as_ptr().add(acol).cast()) };
+        let c = unsafe { _mm_loadl_epi64(c_rows[y].as_ptr().add(ccol).cast()) };
+        let b = _mm_srl_epi16(_mm_cvtepu8_epi16(b), sh);
+        let a = _mm_srl_epi16(_mm_cvtepu8_epi16(a), sh);
+        let c = _mm_srl_epi16(_mm_cvtepu8_epi16(c), sh);
+        let t = _mm_sub_epi16(_mm_sub_epi16(_mm_add_epi16(b, b), a), c);
+        acc = _mm_add_epi16(acc, _mm_abs_epi16(t));
     }
-    let pair = _mm256_hadd_epi32(acc, acc);
-    let mut out = [0i32; 8];
-    unsafe {
-        _mm256_storeu_si256(out.as_mut_ptr() as *mut __m256i, pair);
-    }
-    // After lane-local hadd: [0+1, 2+3, 0+1, 2+3 | 4+5, 6+7, 4+5, 6+7]
-    if ncells > 0 {
-        dst[base_cell][d] = out[0] as u16;
-    }
-    if ncells > 1 {
-        dst[base_cell + 1][d] = out[1] as u16;
-    }
-    if ncells > 2 {
-        dst[base_cell + 2][d] = out[4] as u16;
-    }
-    if ncells > 3 {
-        dst[base_cell + 3][d] = out[5] as u16;
+    let pair = _mm_madd_epi16(acc, _mm_set1_epi16(1));
+    let mut out = [0i32; 4];
+    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), pair) };
+    for k in 0..ncells {
+        dst[base_cell + k][d] = out[k] as u16;
     }
 }
 

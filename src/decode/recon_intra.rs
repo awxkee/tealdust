@@ -123,14 +123,27 @@ where
         let dst_off = 4 * (by as usize * stride + bx as usize);
         let pal: [BD::Pixel; 8] =
             std::array::from_fn(|i| BD::Pixel::from_i32(recon.scratch.pal[i] as i32));
-        crate::ipred::pal_pred(
-            &mut recon.dst_y[dst_off..],
-            stride,
-            &pal,
-            &recon.scratch.pal_idx_y[..],
-            bw,
-            bh,
-        );
+        if BD::BPC == 8 {
+            let dst8 = BD::Pixel::slice_as_ne_bytes_mut(&mut recon.dst_y);
+            let pal8 = BD::Pixel::slice_as_ne_bytes(&pal);
+            crate::ipred_dispatch::pal_pred_8bpc(
+                &mut dst8[dst_off..],
+                stride,
+                pal8,
+                &recon.scratch.pal_idx_y[..],
+                bw,
+                bh,
+            );
+        } else {
+            crate::ipred::pal_pred(
+                &mut recon.dst_y[dst_off..],
+                stride,
+                &pal,
+                &recon.scratch.pal_idx_y[..],
+                bw,
+                bh,
+            );
+        }
     }
 
     if lossless {
@@ -1985,7 +1998,6 @@ fn dispatch_ipred_8bpc(
     max_h: i32,
     ibp_weights: &[[[u8; 16]; 16]; 7],
 ) {
-    use crate::ipred::*;
     use crate::levels::*;
     let d = &mut dst[dst_off..];
     match m {
@@ -2006,7 +2018,7 @@ fn dispatch_ipred_8bpc(
         _ if m == Z3_PRED => {
             crate::ipred_dispatch::ipred_z3(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
         }
-        _ if m == DIP_PRED => ipred_dip_8bpc(d, stride, edge, edge_o, w, h, angle),
+        _ if m == DIP_PRED => crate::ipred_dispatch::ipred_dip_8bpc(d, stride, edge, edge_o, w, h, angle),
         _ => crate::ipred_dispatch::ipred_dc_128(d, stride, w, h),
     }
 }

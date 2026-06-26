@@ -426,8 +426,100 @@ pub(crate) fn prep_8tap_hbd(
     }
 }
 
+pub(crate) type PutBilin8bpcFn = unsafe fn(&mut [u8], usize, &[u8], usize, usize, usize, i32, i32);
+pub(crate) type PrepBilin8bpcFn =
+    unsafe fn(&mut [i16], usize, &[u8], usize, usize, usize, i32, i32);
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn put_8tap_8bpc(
+pub(crate) fn put_bilin_8bpc_scalar_dispatch(
+    dst: &mut [u8],
+    dst_stride: usize,
+    src: &[u8],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+) {
+    crate::mc::put_bilin_8bpc(dst, dst_stride, src, src_stride, w, h, mx, my);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prep_bilin_8bpc_scalar_dispatch(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u8],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+) {
+    crate::mc::prep_bilin_8bpc(tmp, tmp_stride, src, src_stride, w, h, mx, my);
+}
+
+static PUT_BILIN_8BPC: OnceLock<PutBilin8bpcFn> = OnceLock::new();
+static PREP_BILIN_8BPC: OnceLock<PrepBilin8bpcFn> = OnceLock::new();
+
+#[inline]
+fn resolve_put_bilin_8bpc() -> PutBilin8bpcFn {
+    *PUT_BILIN_8BPC.get_or_init(|| {
+        let mut f = put_bilin_8bpc_scalar_dispatch as PutBilin8bpcFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::put_bilin_8bpc_neon as PutBilin8bpcFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = put_bilin_8bpc_scalar_dispatch as PutBilin8bpcFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::put_bilin_8bpc_avx2 as PutBilin8bpcFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_prep_bilin_8bpc() -> PrepBilin8bpcFn {
+    *PREP_BILIN_8BPC.get_or_init(|| {
+        let mut f = prep_bilin_8bpc_scalar_dispatch as PrepBilin8bpcFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::prep_bilin_8bpc_neon as PrepBilin8bpcFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = prep_bilin_8bpc_scalar_dispatch as PrepBilin8bpcFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::prep_bilin_8bpc_avx2 as PrepBilin8bpcFn;
+            }
+        }
+        f
+    })
+}
+
+pub(crate) type Put8tap8bpcFn =
+    unsafe fn(&mut [u8], usize, &[u8], usize, usize, usize, usize, i32, i32, i32);
+pub(crate) type Prep8tap8bpcFn =
+    unsafe fn(&mut [i16], usize, &[u8], usize, usize, usize, usize, i32, i32, i32);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn put_8tap_8bpc_scalar_dispatch(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -454,7 +546,7 @@ pub(crate) fn put_8tap_8bpc(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn prep_8tap_8bpc(
+pub(crate) fn prep_8tap_8bpc_scalar_dispatch(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -480,7 +572,125 @@ pub(crate) fn prep_8tap_8bpc(
     );
 }
 
+static PUT_8TAP_8BPC: OnceLock<Put8tap8bpcFn> = OnceLock::new();
+static PREP_8TAP_8BPC: OnceLock<Prep8tap8bpcFn> = OnceLock::new();
+
+#[inline]
+fn resolve_put_8tap_8bpc() -> Put8tap8bpcFn {
+    *PUT_8TAP_8BPC.get_or_init(|| {
+        let mut f = put_8tap_8bpc_scalar_dispatch as Put8tap8bpcFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::put_8tap_8bpc_neon as Put8tap8bpcFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = put_8tap_8bpc_scalar_dispatch as Put8tap8bpcFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::put_8tap_8bpc_avx2 as Put8tap8bpcFn;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_prep_8tap_8bpc() -> Prep8tap8bpcFn {
+    *PREP_8TAP_8BPC.get_or_init(|| {
+        let mut f = prep_8tap_8bpc_scalar_dispatch as Prep8tap8bpcFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::prep_8tap_8bpc_neon as Prep8tap8bpcFn;
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                f = prep_8tap_8bpc_scalar_dispatch as Prep8tap8bpcFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::prep_8tap_8bpc_avx2 as Prep8tap8bpcFn;
+            }
+        }
+        f
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn put_8tap_8bpc(
+    dst: &mut [u8],
+    dst_stride: usize,
+    src: &[u8],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+) {
+    // SAFETY: resolver only installs SIMD kernels after runtime feature detection.
+    unsafe {
+        resolve_put_8tap_8bpc()(
+            dst,
+            dst_stride,
+            src,
+            src_off,
+            src_stride,
+            w,
+            h,
+            mx,
+            my,
+            filter_type,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn prep_8tap_8bpc(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u8],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+) {
+    // SAFETY: resolver only installs SIMD kernels after runtime feature detection.
+    unsafe {
+        resolve_prep_8tap_8bpc()(
+            tmp,
+            tmp_stride,
+            src,
+            src_off,
+            src_stride,
+            w,
+            h,
+            mx,
+            my,
+            filter_type,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
 pub(crate) fn put_bilin_8bpc(
     dst: &mut [u8],
     dst_stride: usize,
@@ -491,10 +701,12 @@ pub(crate) fn put_bilin_8bpc(
     mx: i32,
     my: i32,
 ) {
-    crate::mc::put_bilin_8bpc(dst, dst_stride, src, src_stride, w, h, mx, my);
+    // SAFETY: resolver only installs SIMD kernels after runtime feature detection.
+    unsafe { resolve_put_bilin_8bpc()(dst, dst_stride, src, src_stride, w, h, mx, my) }
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline]
 pub(crate) fn prep_bilin_8bpc(
     tmp: &mut [i16],
     tmp_stride: usize,
@@ -505,7 +717,8 @@ pub(crate) fn prep_bilin_8bpc(
     mx: i32,
     my: i32,
 ) {
-    crate::mc::prep_bilin_8bpc(tmp, tmp_stride, src, src_stride, w, h, mx, my);
+    // SAFETY: resolver only installs SIMD kernels after runtime feature detection.
+    unsafe { resolve_prep_bilin_8bpc()(tmp, tmp_stride, src, src_stride, w, h, mx, my) }
 }
 
 pub(crate) fn avg_8bpc(

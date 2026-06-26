@@ -29,7 +29,10 @@
 
 use std::arch::x86_64::*;
 
+use crate::dip_tables::DIP_WEIGHTS;
+use crate::intops::ulog2;
 use crate::levels::{ANGLE_IBP_FLAG, ANGLE_MULTI_MRL_FLAG};
+use crate::tables::SM_WEIGHTS;
 
 #[inline(always)]
 fn load_u16x16(a: &[u16; 16]) -> __m256i {
@@ -39,6 +42,83 @@ fn load_u16x16(a: &[u16; 16]) -> __m256i {
 #[inline(always)]
 fn store_u16x16(a: &mut [u16; 16], v: __m256i) {
     unsafe { _mm256_storeu_si256(a.as_mut_ptr() as *mut __m256i, v) };
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avg_pred_hbd_avx2(dst: &mut [u16], stride: usize, tmp: &[u16], w: usize, h: usize) {
+    for y in 0..h {
+        let dst_row = &mut dst[y * stride..y * stride + w];
+        let tmp_row = &tmp[y * 64..y * 64 + w];
+        let (d16, drem) = dst_row.as_chunks_mut::<16>();
+        for (d, t) in d16.iter_mut().zip(tmp_row.as_chunks::<16>().0.iter()) {
+            store_u16x16(d, _mm256_avg_epu16(load_u16x16(d), load_u16x16(t)));
+        }
+        let base = d16.len() * 16;
+        for (i, d) in drem.iter_mut().enumerate() {
+            *d = ((*d as u32 + tmp_row[base + i] as u32 + 1) >> 1) as u16;
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn ibp_blend_hbd_avx2(
+    dst: &mut [u16],
+    stride: usize,
+    tmp: &[u16],
+    w: usize,
+    h: usize,
+    inv: bool,
+    weights: &[[u8; 16]; 16],
+    bitdepth_max: u16,
+) {
+    let x_shift = w >> 5;
+    let y_shift = h >> 5;
+    let c128 = _mm256_set1_epi32(128);
+    let c64 = _mm256_set1_epi32(64);
+    let mut wrow = [0u16; 128];
+    for y in 0..h {
+        let wy = y >> y_shift;
+        for x in 0..w {
+            let wx = x >> x_shift;
+            wrow[x] = (if inv {
+                weights[wx][wy]
+            } else {
+                weights[wy][wx]
+            }) as u16;
+        }
+        let dst_row = &mut dst[y * stride..y * stride + w];
+        let tmp_row = &tmp[y * 64..y * 64 + w];
+        let mut x = 0usize;
+        while x + 8 <= w {
+            let wv = load_u16x8_i32_slice(&wrow[x..]);
+            let dv = load_u16x8_i32_slice(&dst_row[x..]);
+            let tv = load_u16x8_i32_slice(&tmp_row[x..]);
+            let acc = _mm256_add_epi32(
+                _mm256_add_epi32(
+                    _mm256_mullo_epi32(tv, _mm256_sub_epi32(c128, wv)),
+                    _mm256_mullo_epi32(dv, wv),
+                ),
+                c64,
+            );
+            store_i32x8_u16_max(&mut dst_row[x..], _mm256_srli_epi32::<7>(acc), bitdepth_max);
+            x += 8;
+        }
+        while x < w {
+            let wx = x >> x_shift;
+            let weight = (if inv {
+                weights[wx][wy]
+            } else {
+                weights[wy][wx]
+            }) as u32;
+            let t = tmp_row[x] as u32;
+            let d = dst_row[x] as u32;
+            dst_row[x] =
+                ((t * (128 - weight) + d * weight + 64) >> 7).min(bitdepth_max as u32) as u16;
+            x += 1;
+        }
+    }
 }
 
 #[inline(always)]
@@ -248,6 +328,326 @@ pub(crate) fn ipred_dc_hbd_avx2(
     splat_fill_avx2(dst, stride, 0, w, h, dc);
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn sra_i32x8(v: __m256i, shift: i32) -> __m256i {
+    _mm256_sra_epi32(v, _mm_cvtsi32_si128(shift))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn dist8_hbd(base: i32) -> __m256i {
+    _mm256_sub_epi32(_mm256_set1_epi32(base), setr_i32x8(0, 1, 2, 3, 4, 5, 6, 7))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn weights8_hbd(w: &[u8]) -> __m256i {
+    debug_assert!(w.len() >= 8);
+    setr_i32x8(
+        w[0] as i32,
+        w[1] as i32,
+        w[2] as i32,
+        w[3] as i32,
+        w[4] as i32,
+        w[5] as i32,
+        w[6] as i32,
+        w[7] as i32,
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn abs_i32x8(v: __m256i) -> __m256i {
+    let m = _mm256_srai_epi32::<31>(v);
+    _mm256_sub_epi32(_mm256_xor_si256(v, m), m)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn le_i32x8(a: __m256i, b: __m256i) -> __m256i {
+    _mm256_andnot_si256(_mm256_cmpgt_epi32(a, b), _mm256_cmpeq_epi32(a, a))
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) fn ipred_smooth_v_hbd_avx2(
+    dst: &mut [u16],
+    stride: usize,
+    tl: &[u16],
+    o: usize,
+    w: usize,
+    h: usize,
+    bitdepth_max: u16,
+) {
+    if w < 8 {
+        crate::sse::ipred_smooth_v_hbd_sse41(dst, stride, tl, o, w, h, bitdepth_max);
+        return;
+    }
+
+    let bhl2 = ulog2(h as u32) as i32;
+    let rnd = _mm256_set1_epi32((h >> 1) as i32);
+    let scale = (w * h >= 64) as usize + (w * h > 512) as usize;
+    let weights = &SM_WEIGHTS[scale];
+    let bottom_s = tl[o - h - 1] as i32;
+    let bottom = _mm256_set1_epi32(bottom_s);
+    let add32 = _mm256_set1_epi32(32);
+    let mut off = 0usize;
+    for y in 0..h {
+        let off_y = _mm256_set1_epi32((h - 1 - y) as i32);
+        let w_ver = _mm256_set1_epi32(weights[y] as i32);
+        let row = &mut dst[off..off + w];
+        let top_src = &tl[o + 1..o + 1 + w];
+        let (chunks, rem) = row.as_chunks_mut::<8>();
+        for (d, t) in chunks.iter_mut().zip(top_src.as_chunks::<8>().0.iter()) {
+            let above = load_u16x8_i32_slice(t);
+            let pred = _mm256_add_epi32(
+                bottom,
+                sra_i32x8(
+                    _mm256_add_epi32(
+                        _mm256_mullo_epi32(_mm256_sub_epi32(above, bottom), off_y),
+                        rnd,
+                    ),
+                    bhl2,
+                ),
+            );
+            let out = _mm256_add_epi32(
+                pred,
+                _mm256_srai_epi32::<6>(_mm256_add_epi32(
+                    _mm256_mullo_epi32(_mm256_sub_epi32(above, pred), w_ver),
+                    add32,
+                )),
+            );
+            store_i32x8_u16_max(d, out, bitdepth_max);
+        }
+        let base = chunks.len() * 8;
+        for (i, d) in rem.iter_mut().enumerate() {
+            let x = base + i;
+            let above = tl[o + 1 + x] as i32;
+            let pred = bottom_s
+                + (((above - bottom_s) * (h as i32 - 1 - y as i32) + (h >> 1) as i32) >> bhl2);
+            *d = (pred + (((above - pred) * weights[y] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+        }
+        off += stride;
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) fn ipred_smooth_h_hbd_avx2(
+    dst: &mut [u16],
+    stride: usize,
+    tl: &[u16],
+    o: usize,
+    w: usize,
+    h: usize,
+    bitdepth_max: u16,
+) {
+    if w < 8 {
+        crate::sse::ipred_smooth_h_hbd_sse41(dst, stride, tl, o, w, h, bitdepth_max);
+        return;
+    }
+
+    let bwl2 = ulog2(w as u32) as i32;
+    let rnd = _mm256_set1_epi32((w >> 1) as i32);
+    let scale = (w * h >= 64) as usize + (w * h > 512) as usize;
+    let weights = &SM_WEIGHTS[scale];
+    let right_s = tl[o + w + 1] as i32;
+    let right = _mm256_set1_epi32(right_s);
+    let add32 = _mm256_set1_epi32(32);
+    let mut off = 0usize;
+    for y in 0..h {
+        let left_s = tl[o - 1 - y] as i32;
+        let left = _mm256_set1_epi32(left_s);
+        let diff = _mm256_set1_epi32(left_s - right_s);
+        let row = &mut dst[off..off + w];
+        let (chunks, rem) = row.as_chunks_mut::<8>();
+        for (ci, (d, wx)) in chunks
+            .iter_mut()
+            .zip(weights[..w].as_chunks::<8>().0.iter())
+            .enumerate()
+        {
+            let x0 = (w - 1 - ci * 8) as i32;
+            let pred = _mm256_add_epi32(
+                right,
+                sra_i32x8(
+                    _mm256_add_epi32(_mm256_mullo_epi32(diff, dist8_hbd(x0)), rnd),
+                    bwl2,
+                ),
+            );
+            let out = _mm256_add_epi32(
+                pred,
+                _mm256_srai_epi32::<6>(_mm256_add_epi32(
+                    _mm256_mullo_epi32(_mm256_sub_epi32(left, pred), weights8_hbd(wx)),
+                    add32,
+                )),
+            );
+            store_i32x8_u16_max(d, out, bitdepth_max);
+        }
+        let base = chunks.len() * 8;
+        for (i, d) in rem.iter_mut().enumerate() {
+            let x = base + i;
+            let pred = right_s
+                + (((left_s - right_s) * (w as i32 - 1 - x as i32) + (w >> 1) as i32) >> bwl2);
+            *d = (pred + (((left_s - pred) * weights[x] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+        }
+        off += stride;
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) fn ipred_smooth_hbd_avx2(
+    dst: &mut [u16],
+    stride: usize,
+    tl: &[u16],
+    o: usize,
+    w: usize,
+    h: usize,
+    bitdepth_max: u16,
+) {
+    if w < 8 {
+        crate::sse::ipred_smooth_hbd_sse41(dst, stride, tl, o, w, h, bitdepth_max);
+        return;
+    }
+
+    let bwl2 = ulog2(w as u32) as i32;
+    let bhl2 = ulog2(h as u32) as i32;
+    let rnd_ver = _mm256_set1_epi32((h >> 1) as i32);
+    let rnd_hor = _mm256_set1_epi32((w >> 1) as i32);
+    let scale = (w * h >= 64) as usize + (w * h > 512) as usize;
+    let weights = &SM_WEIGHTS[scale];
+    let right_s = tl[o + w + 1] as i32;
+    let bottom_s = tl[o - h - 1] as i32;
+    let right = _mm256_set1_epi32(right_s);
+    let bottom = _mm256_set1_epi32(bottom_s);
+    let add32 = _mm256_set1_epi32(32);
+    let one = _mm256_set1_epi32(1);
+    let mut off = 0usize;
+    for y in 0..h {
+        let left_s = tl[o - 1 - y] as i32;
+        let left = _mm256_set1_epi32(left_s);
+        let diff_hor = _mm256_set1_epi32(left_s - right_s);
+        let off_ver = _mm256_set1_epi32((h - 1 - y) as i32);
+        let w_ver = _mm256_set1_epi32(weights[y] as i32);
+        let row = &mut dst[off..off + w];
+        let top_src = &tl[o + 1..o + 1 + w];
+        let (chunks, rem) = row.as_chunks_mut::<8>();
+        for (ci, ((d, t), wx)) in chunks
+            .iter_mut()
+            .zip(top_src.as_chunks::<8>().0.iter())
+            .zip(weights[..w].as_chunks::<8>().0.iter())
+            .enumerate()
+        {
+            let above = load_u16x8_i32_slice(t);
+            let pv = _mm256_add_epi32(
+                bottom,
+                sra_i32x8(
+                    _mm256_add_epi32(
+                        _mm256_mullo_epi32(_mm256_sub_epi32(above, bottom), off_ver),
+                        rnd_ver,
+                    ),
+                    bhl2,
+                ),
+            );
+            let x0 = (w - 1 - ci * 8) as i32;
+            let ph = _mm256_add_epi32(
+                right,
+                sra_i32x8(
+                    _mm256_add_epi32(_mm256_mullo_epi32(diff_hor, dist8_hbd(x0)), rnd_hor),
+                    bwl2,
+                ),
+            );
+            let pv = _mm256_add_epi32(
+                pv,
+                _mm256_srai_epi32::<6>(_mm256_add_epi32(
+                    _mm256_mullo_epi32(_mm256_sub_epi32(above, pv), w_ver),
+                    add32,
+                )),
+            );
+            let ph = _mm256_add_epi32(
+                ph,
+                _mm256_srai_epi32::<6>(_mm256_add_epi32(
+                    _mm256_mullo_epi32(_mm256_sub_epi32(left, ph), weights8_hbd(wx)),
+                    add32,
+                )),
+            );
+            store_i32x8_u16_max(
+                d,
+                _mm256_srai_epi32::<1>(_mm256_add_epi32(_mm256_add_epi32(pv, ph), one)),
+                bitdepth_max,
+            );
+        }
+        let base = chunks.len() * 8;
+        for (i, d) in rem.iter_mut().enumerate() {
+            let x = base + i;
+            let above = tl[o + 1 + x] as i32;
+            let mut pv = bottom_s
+                + (((above - bottom_s) * (h as i32 - 1 - y as i32) + (h >> 1) as i32) >> bhl2);
+            let mut ph = right_s
+                + (((left_s - right_s) * (w as i32 - 1 - x as i32) + (w >> 1) as i32) >> bwl2);
+            pv += ((above - pv) * weights[y] as i32 + 32) >> 6;
+            ph += ((left_s - ph) * weights[x] as i32 + 32) >> 6;
+            *d = ((pv + ph + 1) >> 1).clamp(0, bitdepth_max as i32) as u16;
+        }
+        off += stride;
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) fn ipred_paeth_hbd_avx2(
+    dst: &mut [u16],
+    stride: usize,
+    tl: &[u16],
+    o: usize,
+    w: usize,
+    h: usize,
+    bitdepth_max: u16,
+) {
+    if w < 8 {
+        crate::sse::ipred_paeth_hbd_sse41(dst, stride, tl, o, w, h, bitdepth_max);
+        return;
+    }
+
+    let topleft_s = tl[o] as i32;
+    let topleft = _mm256_set1_epi32(topleft_s);
+    let all = _mm256_cmpeq_epi32(topleft, topleft);
+    let mut off = 0usize;
+    for y in 0..h {
+        let left_s = tl[o - 1 - y] as i32;
+        let left = _mm256_set1_epi32(left_s);
+        let row = &mut dst[off..off + w];
+        let top_src = &tl[o + 1..o + 1 + w];
+        let (chunks, rem) = row.as_chunks_mut::<8>();
+        for (d, t) in chunks.iter_mut().zip(top_src.as_chunks::<8>().0.iter()) {
+            let top = load_u16x8_i32_slice(t);
+            let base = _mm256_sub_epi32(_mm256_add_epi32(left, top), topleft);
+            let ld = abs_i32x8(_mm256_sub_epi32(left, base));
+            let td = abs_i32x8(_mm256_sub_epi32(top, base));
+            let tld = abs_i32x8(_mm256_sub_epi32(topleft, base));
+            let left_mask = _mm256_and_si256(le_i32x8(ld, td), le_i32x8(ld, tld));
+            let top_mask = _mm256_and_si256(_mm256_andnot_si256(left_mask, all), le_i32x8(td, tld));
+            let inner = _mm256_blendv_epi8(topleft, top, top_mask);
+            store_i32x8_u16_max(d, _mm256_blendv_epi8(inner, left, left_mask), bitdepth_max);
+        }
+        let base_x = chunks.len() * 8;
+        for (i, d) in rem.iter_mut().enumerate() {
+            let top_s = tl[o + 1 + base_x + i] as i32;
+            let base = left_s + top_s - topleft_s;
+            let ld = (left_s - base).abs();
+            let td = (top_s - base).abs();
+            let tld = (topleft_s - base).abs();
+            *d = if ld <= td && ld <= tld {
+                left_s
+            } else if td <= tld {
+                top_s
+            } else {
+                topleft_s
+            } as u16;
+        }
+        off += stride;
+    }
+}
+
 #[inline(always)]
 fn load_u16x8_i32_slice(s: &[u16]) -> __m256i {
     debug_assert!(s.len() >= 8);
@@ -335,6 +735,45 @@ fn z1_luma_row_hbd_avx2(
     dst_row[n_filter..w].fill(fill);
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn z1_chroma_row_hbd_avx2(
+    filt: &[u16],
+    top_off: usize,
+    base0: i32,
+    max_base_x: i32,
+    fill: u16,
+    shift: usize,
+    dst_row: &mut [u16],
+    w: usize,
+    bitdepth_max: u16,
+) {
+    let n_filter = ((max_base_x - base0 + 1).max(0) as usize).min(w);
+    let iw = _mm256_set1_epi32((32 - shift) as i32);
+    let sw = _mm256_set1_epi32(shift as i32);
+    let rnd = _mm256_set1_epi32(16);
+    let base_const = (top_off as i32 + base0) as usize;
+    let mut x = 0usize;
+    while x + 8 <= n_filter {
+        let bi = base_const + x;
+        let a = load_u16x8_i32_slice(&filt[bi..]);
+        let b = load_u16x8_i32_slice(&filt[bi + 1..]);
+        let v = _mm256_srli_epi32::<5>(_mm256_add_epi32(
+            _mm256_add_epi32(_mm256_mullo_epi32(a, iw), _mm256_mullo_epi32(b, sw)),
+            rnd,
+        ));
+        store_i32x8_u16_max(&mut dst_row[x..], v, bitdepth_max);
+        x += 8;
+    }
+    while x < n_filter {
+        let bi = base_const + x;
+        let v = (32 - shift as i32) * filt[bi] as i32 + shift as i32 * filt[bi + 1] as i32;
+        dst_row[x] = (((v + 16) >> 5).clamp(0, bitdepth_max as i32)) as u16;
+        x += 1;
+    }
+    dst_row[n_filter..w].fill(fill);
+}
+
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
 pub(crate) fn ipred_z1_hbd_avx2(
@@ -355,32 +794,92 @@ pub(crate) fn ipred_z1_hbd_avx2(
     let is_luma = angle & ANGLE_IS_LUMA != 0;
     let enable_ibp = angle & ANGLE_IBP_FLAG != 0;
     let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
-    if mrl_mul || enable_ibp || !is_luma || mrl_idx != 0 || w < 8 {
-        return crate::sse::ipred_z1_hbd_sse41(
+    let a = angle & 511;
+    if mrl_mul {
+        let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
+        let mut tmp = vec![0u16; 64 * 64];
+        let base_angle = a | ANGLE_IS_LUMA;
+        let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
+        ipred_z1_hbd_avx2(
+            &mut tmp,
+            64,
+            tl,
+            o,
+            w,
+            h,
+            first_angle,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ipred_z1_hbd_avx2(
+            dst,
+            stride,
+            tl,
+            o + e_stride,
+            w,
+            h,
+            base_angle,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        avg_pred_hbd_avx2(dst, stride, &tmp, w, h);
+        return;
+    }
+    if enable_ibp {
+        let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
+        let mode_idx = (10 - (a >> 3)).min(6) as usize;
+        let mut tmp = vec![0u16; 64 * 64];
+        ipred_z1_hbd_avx2(
             dst,
             stride,
             tl,
             o,
             w,
             h,
-            angle,
+            angle & !ANGLE_IBP_FLAG,
             max_width,
             max_height,
             ibp_weights,
             bitdepth_max,
         );
+        ipred_z3_hbd_avx2(
+            &mut tmp,
+            64,
+            tl,
+            o,
+            w,
+            h,
+            (180 + a) | angle_flags,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ibp_blend_hbd_avx2(
+            dst,
+            stride,
+            &tmp,
+            w,
+            h,
+            false,
+            &ibp_weights[mode_idx],
+            bitdepth_max,
+        );
+        return;
     }
-
     let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
     let enable_intra_edge_filter = angle & ANGLE_USE_EDGE_FILTER_FLAG != 0;
     let have_top = angle & ANGLE_HAS_TOP_FLAG != 0;
-    let a = angle & 511;
     let dx = crate::tables::DR_INTRA_DERIVATIVE[a as usize] as i32;
-    let max_base_x = (w + h) as i32 - 1;
+    let max_base_x = (w + h) as i32 - 1 + (mrl_idx as i32 * 2);
     let mut filt = [0u16; 141];
-    let top_off = 2usize;
-    let sz = 1 + w + h;
-    let str = if enable_intra_edge_filter && have_top {
+    let top_off = 2usize + mrl_idx;
+    let sz = 1 + mrl_idx + w + h + mrl_idx * 2;
+    let str = if enable_intra_edge_filter && have_top && mrl_idx == 0 {
         crate::ipred::filter_strength((w + h) as i32, 90 - a, is_sm_t)
     } else {
         0
@@ -403,7 +902,7 @@ pub(crate) fn ipred_z1_hbd_avx2(
     filt[sz + 1] = filt[sz];
     filt[sz + 2] = filt[sz + 1];
 
-    let mut ypos = dx;
+    let mut ypos = dx * (1 + mrl_idx as i32);
     for y in 0..h {
         let base0 = ypos >> 6;
         let fill = filt[top_off + max_base_x as usize];
@@ -416,17 +915,31 @@ pub(crate) fn ipred_z1_hbd_avx2(
         let shift = ((ypos & 0x3F) >> 1) as usize;
         let f = &crate::ipred::DR_INTERP_FILTER[shift];
         let dst_row = &mut dst[y * stride..y * stride + w];
-        z1_luma_row_hbd_avx2(
-            &filt,
-            top_off,
-            base0,
-            max_base_x,
-            fill,
-            f,
-            dst_row,
-            w,
-            bitdepth_max,
-        );
+        if is_luma {
+            z1_luma_row_hbd_avx2(
+                &filt,
+                top_off,
+                base0,
+                max_base_x,
+                fill,
+                f,
+                dst_row,
+                w,
+                bitdepth_max,
+            );
+        } else {
+            z1_chroma_row_hbd_avx2(
+                &filt,
+                top_off,
+                base0,
+                max_base_x,
+                fill,
+                shift,
+                dst_row,
+                w,
+                bitdepth_max,
+            );
+        }
         ypos += dx;
     }
 }
@@ -513,6 +1026,63 @@ fn z3_luma_col_hbd_avx2(
     col[n_filter..h].fill(fill);
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn z3_chroma_col_hbd_avx2(
+    filt: &[u16],
+    left_off: usize,
+    base0: i32,
+    max_base_y: i32,
+    fill: u16,
+    shift: usize,
+    col: &mut [u16],
+    h: usize,
+    bitdepth_max: u16,
+) {
+    let n_filter = ((max_base_y - base0 + 1).max(0) as usize).min(h);
+    let iw = _mm256_set1_epi32((32 - shift) as i32);
+    let sw = _mm256_set1_epi32(shift as i32);
+    let rnd = _mm256_set1_epi32(16);
+    let lob = left_off as i32 - base0;
+    let mut y = 0usize;
+    while y + 8 <= n_filter {
+        let bi = lob - y as i32;
+        let a = setr_i32x8(
+            filt[bi as usize] as i32,
+            filt[(bi - 1) as usize] as i32,
+            filt[(bi - 2) as usize] as i32,
+            filt[(bi - 3) as usize] as i32,
+            filt[(bi - 4) as usize] as i32,
+            filt[(bi - 5) as usize] as i32,
+            filt[(bi - 6) as usize] as i32,
+            filt[(bi - 7) as usize] as i32,
+        );
+        let b = setr_i32x8(
+            filt[(bi - 1) as usize] as i32,
+            filt[(bi - 2) as usize] as i32,
+            filt[(bi - 3) as usize] as i32,
+            filt[(bi - 4) as usize] as i32,
+            filt[(bi - 5) as usize] as i32,
+            filt[(bi - 6) as usize] as i32,
+            filt[(bi - 7) as usize] as i32,
+            filt[(bi - 8) as usize] as i32,
+        );
+        let v = _mm256_srli_epi32::<5>(_mm256_add_epi32(
+            _mm256_add_epi32(_mm256_mullo_epi32(a, iw), _mm256_mullo_epi32(b, sw)),
+            rnd,
+        ));
+        store_i32x8_u16_max(&mut col[y..], v, bitdepth_max);
+        y += 8;
+    }
+    while y < n_filter {
+        let bi = (lob - y as i32) as usize;
+        let v = (32 - shift as i32) * filt[bi] as i32 + shift as i32 * filt[bi - 1] as i32;
+        col[y] = (((v + 16) >> 5).clamp(0, bitdepth_max as i32)) as u16;
+        y += 1;
+    }
+    col[n_filter..h].fill(fill);
+}
+
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
 pub(crate) fn ipred_z3_hbd_avx2(
@@ -533,7 +1103,99 @@ pub(crate) fn ipred_z3_hbd_avx2(
     let is_luma = angle & ANGLE_IS_LUMA != 0;
     let enable_ibp = angle & ANGLE_IBP_FLAG != 0;
     let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
-    if mrl_mul || enable_ibp || !is_luma || mrl_idx != 0 || !(8..=64).contains(&h) {
+    let a = angle & 511;
+    if mrl_mul {
+        let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
+        let mut tmp = vec![0u16; 64 * 64];
+        let base_angle = a | ANGLE_IS_LUMA;
+        let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
+        ipred_z3_hbd_avx2(
+            &mut tmp,
+            64,
+            tl,
+            o,
+            w,
+            h,
+            first_angle,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ipred_z3_hbd_avx2(
+            dst,
+            stride,
+            tl,
+            o + e_stride,
+            w,
+            h,
+            base_angle,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        avg_pred_hbd_avx2(dst, stride, &tmp, w, h);
+        return;
+    }
+    if enable_ibp {
+        if h > 64 {
+            return crate::sse::ipred_z3_hbd_sse41(
+                dst,
+                stride,
+                tl,
+                o,
+                w,
+                h,
+                angle,
+                max_width,
+                max_height,
+                ibp_weights,
+                bitdepth_max,
+            );
+        }
+        let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
+        let mode_idx = ((a - 183) >> 3).min(6) as usize;
+        let mut tmp = vec![0u16; 64 * 64];
+        ipred_z3_hbd_avx2(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle & !ANGLE_IBP_FLAG,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ipred_z1_hbd_avx2(
+            &mut tmp,
+            64,
+            tl,
+            o,
+            w,
+            h,
+            (a - 180) | angle_flags,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ibp_blend_hbd_avx2(
+            dst,
+            stride,
+            &tmp,
+            w,
+            h,
+            true,
+            &ibp_weights[mode_idx],
+            bitdepth_max,
+        );
+        return;
+    }
+    if h > 64 {
         return crate::sse::ipred_z3_hbd_sse41(
             dst,
             stride,
@@ -552,13 +1214,12 @@ pub(crate) fn ipred_z3_hbd_avx2(
     let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;
     let enable_intra_edge_filter = angle & ANGLE_USE_EDGE_FILTER_FLAG != 0;
     let have_left = angle & ANGLE_HAS_LEFT_FLAG != 0;
-    let a = angle & 511;
     let dy = crate::tables::DR_INTRA_DERIVATIVE[(270 - a) as usize] as i32;
-    let max_base_y = (w + h) as i32 - 1;
+    let max_base_y = (w + h) as i32 - 1 + (mrl_idx as i32 * 2);
     let mut filt = [0u16; 141];
-    let left_off = 1 + w + h;
-    let sz = 1 + w + h;
-    let str = if enable_intra_edge_filter && have_left {
+    let left_off = 1 + w + h + mrl_idx * 2;
+    let sz = 1 + mrl_idx + w + h + mrl_idx * 2;
+    let str = if enable_intra_edge_filter && have_left && mrl_idx == 0 {
         crate::ipred::filter_strength((w + h) as i32, a - 180, is_sm_l)
     } else {
         0
@@ -581,24 +1242,38 @@ pub(crate) fn ipred_z3_hbd_avx2(
     filt[1] = filt[2];
     filt[sz + 2] = filt[sz + 1];
 
-    let mut col = [0u16; 64];
-    let mut ypos = dy;
+    let mut col = [0u16; 128];
+    let mut ypos = dy * (1 + mrl_idx as i32);
     for x in 0..w {
         let shift = ((ypos & 0x3F) >> 1) as usize;
         let f = &crate::ipred::DR_INTERP_FILTER[shift];
         let base0 = ypos >> 6;
         let fill = filt[left_off - max_base_y as usize];
-        z3_luma_col_hbd_avx2(
-            &filt,
-            left_off,
-            base0,
-            max_base_y,
-            fill,
-            f,
-            &mut col,
-            h,
-            bitdepth_max,
-        );
+        if is_luma {
+            z3_luma_col_hbd_avx2(
+                &filt,
+                left_off,
+                base0,
+                max_base_y,
+                fill,
+                f,
+                &mut col,
+                h,
+                bitdepth_max,
+            );
+        } else {
+            z3_chroma_col_hbd_avx2(
+                &filt,
+                left_off,
+                base0,
+                max_base_y,
+                fill,
+                shift,
+                &mut col,
+                h,
+                bitdepth_max,
+            );
+        }
         for (y, &c) in col[..h].iter().enumerate() {
             dst[y * stride + x] = c;
         }
@@ -651,6 +1326,50 @@ fn z2_top_span_hbd_avx2(
     }
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn z2_top_span_chroma_hbd_avx2(
+    filt: &[u16],
+    top_off: usize,
+    mut xpos: i32,
+    shift: usize,
+    dst_row: &mut [u16],
+    x_start: usize,
+    w: usize,
+    bitdepth_max: u16,
+) {
+    let iw = _mm256_set1_epi32((32 - shift) as i32);
+    let sw = _mm256_set1_epi32(shift as i32);
+    let rnd = _mm256_set1_epi32(16);
+    let mut x = x_start;
+    while x + 8 <= w {
+        let base_x = xpos >> 6;
+        let ti0 = top_off as i32 + base_x;
+        if ti0 + 2 < 0 || ti0 + 11 > filt.len() as i32 {
+            break;
+        }
+        let sa = (ti0 + 2) as usize;
+        let a = load_u16x8_i32_slice(&filt[sa..]);
+        let b = load_u16x8_i32_slice(&filt[sa + 1..]);
+        let v = _mm256_srli_epi32::<5>(_mm256_add_epi32(
+            _mm256_add_epi32(_mm256_mullo_epi32(a, iw), _mm256_mullo_epi32(b, sw)),
+            rnd,
+        ));
+        store_i32x8_u16_max(&mut dst_row[x..], v, bitdepth_max);
+        x += 8;
+        xpos += 64 * 8;
+    }
+    while x < w {
+        let base_x = xpos >> 6;
+        let ti = top_off as i32 + base_x;
+        let v = (32 - shift as i32) * filt[(ti + 2) as usize] as i32
+            + shift as i32 * filt[(ti + 3) as usize] as i32;
+        dst_row[x] = (((v + 16) >> 5).clamp(0, bitdepth_max as i32)) as u16;
+        x += 1;
+        xpos += 64;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
 pub(crate) fn ipred_z2_hbd_avx2(
@@ -669,33 +1388,51 @@ pub(crate) fn ipred_z2_hbd_avx2(
     let mrl_mul = angle & ANGLE_MULTI_MRL_FLAG != 0;
     let is_luma = angle & ANGLE_IS_LUMA != 0;
     let mrl_idx = ((angle & ANGLE_MRL_IDX_MASK) >> ANGLE_MRL_IDX_SHIFT) as usize;
-    if mrl_mul || !is_luma || mrl_idx != 0 || w < 8 {
-        return crate::sse::ipred_z2_hbd_sse41(
-            dst,
-            stride,
+    let a = angle & 511;
+    if mrl_mul {
+        let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
+        let mut tmp = vec![0u16; 64 * 64];
+        let base_angle = a | ANGLE_IS_LUMA;
+        let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
+        ipred_z2_hbd_avx2(
+            &mut tmp,
+            64,
             tl,
             o,
             w,
             h,
-            angle,
+            first_angle,
             max_width,
             max_height,
             bitdepth_max,
         );
+        ipred_z2_hbd_avx2(
+            dst,
+            stride,
+            tl,
+            o + e_stride,
+            w,
+            h,
+            base_angle,
+            max_width,
+            max_height,
+            bitdepth_max,
+        );
+        avg_pred_hbd_avx2(dst, stride, &tmp, w, h);
+        return;
     }
     let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;
     let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
     let enable_intra_edge_filter = angle & ANGLE_USE_EDGE_FILTER_FLAG != 0;
     let have_top = angle & ANGLE_HAS_TOP_FLAG != 0;
     let have_left = angle & ANGLE_HAS_LEFT_FLAG != 0;
-    let a = angle & 511;
     let dy = crate::tables::DR_INTRA_DERIVATIVE[(a - 90) as usize] as i32;
     let dx = crate::tables::DR_INTRA_DERIVATIVE[(180 - a) as usize] as i32;
 
     let mut filt = [0u16; 72];
-    let top_off = 0usize;
-    let sz_t = 1 + w;
-    let str_t = if enable_intra_edge_filter && have_top {
+    let top_off = mrl_idx;
+    let sz_t = 1 + w + mrl_idx;
+    let str_t = if enable_intra_edge_filter && have_top && mrl_idx == 0 {
         crate::ipred::filter_strength((w + h) as i32, a - 90, is_sm_t)
     } else {
         0
@@ -719,8 +1456,8 @@ pub(crate) fn ipred_z2_hbd_avx2(
 
     let mut filt2 = [0u16; 72];
     let left_off: usize = h + 2;
-    let sz_l = 1 + h;
-    let str_l = if enable_intra_edge_filter && have_left {
+    let sz_l = 1 + h + mrl_idx;
+    let str_l = if enable_intra_edge_filter && have_left && mrl_idx == 0 {
         crate::ipred::filter_strength((w + h) as i32, 180 - a, is_sm_l)
     } else {
         0
@@ -731,41 +1468,208 @@ pub(crate) fn ipred_z2_hbd_avx2(
             sz_l,
             h as i32 - max_height,
             sz_l as i32 - 1,
-            &tl[o - h..],
+            &tl[o - (h + mrl_idx)..],
             0,
             sz_l as i32,
             str_l as usize,
         );
     } else {
-        filt2[1..1 + sz_l].copy_from_slice(&tl[o - h..o + 1]);
+        filt2[1..1 + sz_l].copy_from_slice(&tl[o - (h + mrl_idx)..o + 1]);
     }
     filt2[1 + sz_l] = filt2[sz_l];
     filt2[0] = filt2[1];
 
     for y in 0..h {
         let ypos = (y + 1) as i32;
-        let mut xpos = -ypos * dx;
+        let mut xpos = -(ypos + mrl_idx as i32) * dx;
         let mut x = 0usize;
         let dst_row = &mut dst[y * stride..y * stride + w];
-        while x < w && xpos < -64 {
+        while x < w && xpos < -(64 * (1 + mrl_idx as i32)) {
             let xpos_l = (x + 1) as i32;
-            let ypos_l = ((y as i32) << 6) - xpos_l * dy;
+            let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
             let base_y = ypos_l >> 6;
             let shift = ((ypos_l & 0x3F) >> 1) as usize;
             let bi = (left_off as i32 - base_y) as usize;
-            let f = &crate::ipred::DR_INTERP_FILTER[shift];
-            let v = f.a as i32 * filt2[bi - 1] as i32
-                + f.b as i32 * filt2[bi - 2] as i32
-                + f.c as i32 * filt2[bi - 3] as i32
-                + f.d as i32 * filt2[bi - 4] as i32;
-            dst_row[x] = (((v + 64) >> 7).clamp(0, bitdepth_max as i32)) as u16;
+            if is_luma {
+                let f = &crate::ipred::DR_INTERP_FILTER[shift];
+                let v = f.a as i32 * filt2[bi - 1] as i32
+                    + f.b as i32 * filt2[bi - 2] as i32
+                    + f.c as i32 * filt2[bi - 3] as i32
+                    + f.d as i32 * filt2[bi - 4] as i32;
+                dst_row[x] = (((v + 64) >> 7).clamp(0, bitdepth_max as i32)) as u16;
+            } else {
+                let v = (32 - shift as i32) * filt2[bi - 2] as i32
+                    + shift as i32 * filt2[bi - 3] as i32;
+                dst_row[x] = (((v + 16) >> 5).clamp(0, bitdepth_max as i32)) as u16;
+            }
             x += 1;
             xpos += 64;
         }
         if x < w {
             let shift = ((xpos & 0x3F) >> 1) as usize;
-            let f = &crate::ipred::DR_INTERP_FILTER[shift];
-            z2_top_span_hbd_avx2(&filt, top_off, xpos, f, dst_row, x, w, bitdepth_max);
+            if is_luma {
+                let f = &crate::ipred::DR_INTERP_FILTER[shift];
+                z2_top_span_hbd_avx2(&filt, top_off, xpos, f, dst_row, x, w, bitdepth_max);
+            } else {
+                z2_top_span_chroma_hbd_avx2(
+                    &filt,
+                    top_off,
+                    xpos,
+                    shift,
+                    dst_row,
+                    x,
+                    w,
+                    bitdepth_max,
+                );
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "avx2")]
+pub(crate) fn ipred_dip_hbd_avx2(
+    dst: &mut [u16],
+    stride: usize,
+    tl: &[u16],
+    o: usize,
+    width: usize,
+    height: usize,
+    mode: i32,
+    bitdepth_max: u16,
+) {
+    let trans = (mode & 16) != 0;
+    let wd = width >> 2;
+    let hd = height >> 2;
+    let wl2 = ulog2(wd as u32);
+    let hl2 = ulog2(hd as u32);
+    let wrnd = width >> 3;
+    let hrnd = height >> 3;
+    let i_t: usize = if trans { 5 } else { 1 };
+    let i_l: usize = if trans { 1 } else { 5 };
+    let mut inp = [0i32; 11];
+    inp[0] = tl[o] as i32;
+    let mut in_sum = inp[0];
+
+    let mut ti = o + 1;
+    for i in 0..4 {
+        let mut sum = 0i32;
+        for _ in 0..wd {
+            sum += tl[ti] as i32;
+            ti += 1;
+        }
+        inp[i_t + i] = (sum + wrnd as i32) >> wl2;
+        in_sum += inp[i_t + i];
+    }
+
+    let mut li = o;
+    for i in 0..4 {
+        let mut sum = 0i32;
+        for _ in 0..hd {
+            li -= 1;
+            sum += tl[li] as i32;
+        }
+        inp[i_l + i] = (sum + hrnd as i32) >> hl2;
+        in_sum += inp[i_l + i];
+    }
+
+    let mut sum = 0i32;
+    for x in 0..wd {
+        sum += tl[o + x + width + 1] as i32;
+    }
+    let idx_tr = if trans { 10 } else { 9 };
+    inp[idx_tr] = (sum + wrnd as i32) >> wl2;
+    in_sum += inp[idx_tr];
+
+    sum = 0;
+    for y in 0..hd {
+        sum += tl[o - (y + height + 1)] as i32;
+    }
+    let idx_bl = if trans { 9 } else { 10 };
+    inp[idx_bl] = (sum + hrnd as i32) >> hl2;
+    in_sum += inp[idx_bl];
+
+    let m = (mode & 7) as usize;
+    let mut uwl2 = wl2 - 1;
+    let mut dwl2 = 0i32;
+    if uwl2 < 0 {
+        dwl2 = -uwl2;
+        uwl2 = 0;
+    }
+    let step_x = 1usize << uwl2;
+    let dw = 1usize << dwl2;
+    let mut uhl2 = hl2 - 1;
+    let mut dhl2 = 0i32;
+    if uhl2 < 0 {
+        dhl2 = -uhl2;
+        uhl2 = 0;
+    }
+    let step_y = 1usize << uhl2;
+    let dh = 1usize << dhl2;
+    let grid_h = 8usize >> dhl2;
+    let grid_w = 8usize >> dwl2;
+
+    let mut y = step_y - 1;
+    for gy in 0..grid_h {
+        let iy = gy * dh;
+        let mut x = step_x - 1;
+        let dst_row = &mut dst[y * stride..y * stride + width];
+        for gx in 0..grid_w {
+            let ix = gx * dw;
+            let idx = if trans { ix * 8 + iy } else { iy * 8 + ix };
+            let mut s = 0i32;
+            let weights = &DIP_WEIGHTS[m][idx];
+            for i in 0..11 {
+                s += weights[i] as i32 * inp[i];
+            }
+            dst_row[x] = (((s + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
+            x += step_x;
+        }
+        y += step_y;
+    }
+
+    if step_x > 1 {
+        y = step_y - 1;
+        for _gy in 0..grid_h {
+            let mut p1 = tl[o - (y + 1)] as i32;
+            let mut x = 0usize;
+            let dst_row = &mut dst[y * stride..y * stride + width];
+            for _gx in 0..grid_w {
+                let p0 = p1;
+                p1 = dst_row[x + step_x - 1] as i32;
+                for z in 0..step_x - 1 {
+                    let z1 = (z + 1) as i32;
+                    dst_row[x + z] = ((p0 * (step_x as i32 - z1) + p1 * z1) >> uwl2) as u16;
+                }
+                x += step_x;
+            }
+            y += step_y;
+        }
+    }
+
+    if step_y > 1 {
+        let mut p0_buf = [0u16; 128];
+        let mut p1_buf = [0u16; 128];
+        for gy in 0..grid_h {
+            let base_y = gy * step_y;
+            let sparse_y = base_y + step_y - 1;
+            if gy == 0 {
+                p0_buf[..width].copy_from_slice(&tl[o + 1..o + 1 + width]);
+            } else {
+                let prev = (base_y - 1) * stride;
+                p0_buf[..width].copy_from_slice(&dst[prev..prev + width]);
+            }
+            let p1_off = sparse_y * stride;
+            p1_buf[..width].copy_from_slice(&dst[p1_off..p1_off + width]);
+            for z in 0..step_y - 1 {
+                let z1 = (z + 1) as i32;
+                let row_off = (base_y + z) * stride;
+                let row = &mut dst[row_off..row_off + width];
+                for x in 0..width {
+                    row[x] = ((p0_buf[x] as i32 * (step_y as i32 - z1) + p1_buf[x] as i32 * z1)
+                        >> uhl2) as u16;
+                }
+            }
         }
     }
 }

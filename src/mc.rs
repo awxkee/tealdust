@@ -540,22 +540,24 @@ pub(crate) fn put_8tap_scalar<BD: BitDepth>(
     match (fh, fv) {
         (Some(fh), Some(fv)) => {
             let tmp_h = h + 7;
-            let mut mid = vec![0i16; 64 * tmp_h];
+            let mid_stride = w.next_multiple_of(8).max(64);
+            let mut mid = vec![0i16; mid_stride * tmp_h];
             for y in 0..tmp_h {
                 for x in 0..w {
                     let si = (src_off as isize
                         + (y as isize - 3) * src_stride as isize
                         + x as isize) as usize;
-                    mid[y * 64 + x] = ((filter_8tap_px(src, si, &fh, 1)
+                    mid[y * mid_stride + x] = ((filter_8tap_px(src, si, &fh, 1)
                         + ((1 << (bits - intermediate_bits)) >> 1))
-                        >> (bits - intermediate_bits)) as i16;
+                        >> (bits - intermediate_bits))
+                        as i16;
                 }
             }
             for y in 0..h {
                 for x in 0..w {
-                    let mi = (y + 3) * 64 + x;
+                    let mi = (y + 3) * mid_stride + x;
                     dst[y * dst_stride + x] = bd.pixel_clip(
-                        (filter_8tap_i16(&mid, mi, &fv, 64)
+                        (filter_8tap_i16(&mid, mi, &fv, mid_stride as isize)
                             + ((1 << (bits + intermediate_bits)) >> 1))
                             >> (bits + intermediate_bits),
                     );
@@ -685,22 +687,25 @@ pub(crate) fn prep_8tap_scalar<BD: BitDepth>(
     match (fh, fv) {
         (Some(fh), Some(fv)) => {
             let tmp_h = h + 7;
-            let mut mid = vec![0i16; 64 * tmp_h];
+            let mid_stride = w.next_multiple_of(8).max(64);
+            let mut mid = vec![0i16; mid_stride * tmp_h];
             for y in 0..tmp_h {
                 for x in 0..w {
                     let si = (src_off as isize
                         + (y as isize - 3) * src_stride as isize
                         + x as isize) as usize;
-                    mid[y * 64 + x] = ((filter_8tap_px(src, si, &fh, 1)
+                    mid[y * mid_stride + x] = ((filter_8tap_px(src, si, &fh, 1)
                         + ((1 << (bits - intermediate_bits)) >> 1))
-                        >> (bits - intermediate_bits)) as i16;
+                        >> (bits - intermediate_bits))
+                        as i16;
                 }
             }
             for y in 0..h {
                 for x in 0..w {
-                    let mi = (y + 3) * 64 + x;
+                    let mi = (y + 3) * mid_stride + x;
                     tmp[y * tmp_stride + x] =
-                        ((filter_8tap_i16(&mid, mi, &fv, 64) + ((1 << bits) >> 1)) >> bits) as i16
+                        ((filter_8tap_i16(&mid, mi, &fv, mid_stride as isize) + ((1 << bits) >> 1))
+                            >> bits) as i16
                             - bias;
                 }
             }
@@ -910,20 +915,25 @@ pub(crate) fn put_bilin_scalar<BD: BitDepth>(
     let intermediate_rnd = (1 << ib) >> 1;
     if mx != 0 {
         if my != 0 {
-            let mut mid = vec![0i16; 64 * (h + 1)];
+            let mid_stride = w.next_multiple_of(16).max(64);
+            let mut mid = vec![0i16; mid_stride * (h + 1)];
             for y in 0..h + 1 {
                 for x in 0..w {
                     let si = y * src_stride + x;
                     let a: i32 = src[si].into();
                     let b: i32 = src[si + 1].into();
-                    mid[y * 64 + x] = bilin_rnd(a, b, mx, 4 - ib) as i16;
+                    mid[y * mid_stride + x] = bilin_rnd(a, b, mx, 4 - ib) as i16;
                 }
             }
             for y in 0..h {
                 for x in 0..w {
-                    let mi = y * 64 + x;
-                    dst[y * dst_stride + x] =
-                        bd.pixel_clip(bilin_rnd(mid[mi] as i32, mid[mi + 64] as i32, my, 4 + ib));
+                    let mi = y * mid_stride + x;
+                    dst[y * dst_stride + x] = bd.pixel_clip(bilin_rnd(
+                        mid[mi] as i32,
+                        mid[mi + mid_stride] as i32,
+                        my,
+                        4 + ib,
+                    ));
                 }
             }
         } else {
@@ -1011,20 +1021,21 @@ pub(crate) fn prep_bilin_scalar<BD: BitDepth>(
     let bias = prep_bias(bd) as i16;
     if mx != 0 {
         if my != 0 {
-            let mut mid = vec![0i16; 64 * (h + 1)];
+            let mid_stride = w.next_multiple_of(16).max(64);
+            let mut mid = vec![0i16; mid_stride * (h + 1)];
             for y in 0..h + 1 {
                 for x in 0..w {
                     let si = y * src_stride + x;
                     let a: i32 = src[si].into();
                     let b: i32 = src[si + 1].into();
-                    mid[y * 64 + x] = bilin_rnd(a, b, mx, 4 - ib) as i16;
+                    mid[y * mid_stride + x] = bilin_rnd(a, b, mx, 4 - ib) as i16;
                 }
             }
             for y in 0..h {
                 for x in 0..w {
-                    let mi = y * 64 + x;
+                    let mi = y * mid_stride + x;
                     tmp[y * tmp_stride + x] =
-                        bilin_rnd(mid[mi] as i32, mid[mi + 64] as i32, my, 4) as i16 - bias;
+                        bilin_rnd(mid[mi] as i32, mid[mi + mid_stride] as i32, my, 4) as i16 - bias;
                 }
             }
         } else {

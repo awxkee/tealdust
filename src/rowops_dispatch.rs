@@ -488,6 +488,13 @@ fn resolve_morph() -> MorphFn {
 
 #[inline]
 pub(crate) fn morph_row_8bpc(dst: &mut [u8], alpha: i32, beta: i32, n: usize) {
+    if n == 0 || (alpha == 256 && beta == 0) {
+        return;
+    }
+    if alpha == 256 {
+        dc_add_row_8bpc(dst, beta >> 8, n);
+        return;
+    }
     // SAFETY: see `avg_row_8bpc`.
     unsafe { resolve_morph()(dst, alpha, beta, n) };
 }
@@ -856,6 +863,13 @@ fn resolve_morph_hbd() -> MorphHbdFn {
 
 #[inline]
 pub(crate) fn morph_row_hbd(dst: &mut [u16], alpha: i32, beta: i32, n: usize, bitdepth_max: i32) {
+    if n == 0 || (alpha == 256 && beta == 0) {
+        return;
+    }
+    if alpha == 256 {
+        dc_add_row_hbd(dst, beta >> 8, n, bitdepth_max);
+        return;
+    }
     unsafe { resolve_morph_hbd()(dst, alpha, beta, n, bitdepth_max) };
 }
 
@@ -901,6 +915,9 @@ fn resolve_gdf_add() -> GdfAddFn {
 
 #[inline]
 pub(crate) fn gdf_add_run_8bpc(dst: &mut [u8], err: &[i8], scale: i32, n: usize) {
+    if n == 0 || scale == 0 {
+        return;
+    }
     // SAFETY: see `avg_row_8bpc`.
     unsafe { resolve_gdf_add()(dst, err, scale, n) };
 }
