@@ -173,10 +173,6 @@ pub(crate) static MSAC_MIN_PROB: &[[u16; 8]; 7] = &MSAC_MIN_PROB_INNER.0;
 #[inline(always)]
 pub(crate) unsafe fn msac_load_be64_unchecked(buf: &[u8], start: usize) -> u64 {
     debug_assert!(start + 8 <= buf.len());
-    // Unaligned big-endian load matching dav2d's x86 REFILL fast path
-    // (`mov` + `bswap`).  The caller performs the single hot-path end check;
-    // this helper itself intentionally does not create a slice, so the refill
-    // path does not carry bounds-check scaffolding.
     unsafe {
         u64::from_be(core::ptr::read_unaligned(
             buf.as_ptr().add(start).cast::<u64>(),

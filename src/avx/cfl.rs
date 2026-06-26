@@ -159,9 +159,6 @@ fn apply16_i16_ac(
     dc_v: __m256i,
     zero: __m256i,
 ) -> __m128i {
-    // dav2d does the CfL scale as: pmulhrsw(abs(ac) << 4, abs(alpha)).
-    // That is exactly (abs(ac * alpha) + 1024) >> 11, but keeps the hot
-    // 8-bit path in i16 instead of widening every lane to i32.
     let ac_sign = _mm256_cmpgt_epi16(zero, ac);
     let mag = _mm256_mulhrs_epi16(_mm256_slli_epi16::<4>(_mm256_abs_epi16(ac)), alpha_abs);
     let neg_mag = _mm256_sub_epi16(zero, mag);
@@ -305,8 +302,6 @@ fn left_u8x16_to_i16(row: __m256i, prev_byte: u8, left_mask: __m128i) -> __m256i
     let hi = _mm256_extracti128_si256::<1>(row);
     let prev = _mm_set1_epi8(prev_byte as i8);
 
-    // [prev, y0, y1, ...] in each 128-bit lane. The high lane uses the low
-    // lane's last byte as its previous sample, matching dav2d's palignr shape.
     let shifted_lo = _mm_alignr_epi8::<15>(lo, prev);
     let shifted_hi = _mm_alignr_epi8::<15>(hi, lo);
     let left_lo = _mm_shuffle_epi8(shifted_lo, left_mask);

@@ -174,9 +174,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextAvx<'a, UPDATE_CDF> {
         let v = (((r >> 8) * p) >> 7) << 3;
         let vw = (v as u64) << 48;
 
-        // dav2d keeps this branchless with SUB/CMOV.  Express the same state
-        // transition in Rust so LLVM can lower it without a hard branch in the
-        // coefficient hot path.  The returned AV1 bit is one when dif < vw.
         let ge = u32::from(dif >= vw);
         let ge_u64 = ge as u64;
         let ge_mask64 = 0u64.wrapping_sub(ge_u64);
@@ -515,10 +512,6 @@ fn msac_unary_bypass_ret_avx2(dif: u64, rng: u32, max_bits: u32) -> u32 {
         return max_bits;
     }
 
-    // dav2d handles 17..21 with wider AVX2 qword math.  Rust AVX2 lacks a
-    // compact full u64 multiply/compare sequence, so keep the same threshold
-    // model and finish the five remaining candidates scalar.  This remains an
-    // O(1) tail and avoids the old bit-by-bit loop for the 21-bit path.
     for bits in 17..=21 {
         if dif < unary_threshold(rng, bits) {
             return bits - 1;

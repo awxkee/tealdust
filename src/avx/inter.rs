@@ -326,14 +326,12 @@ fn load_u8x8_i32(src: &[u8]) -> __m256i {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn mul_i16x8_n_s32(x: __m128i, k: i32) -> __m256i {
-    unsafe {
-        let zero = _mm_setzero_si128();
-        let lo = _mm_unpacklo_epi16(x, zero);
-        let hi = _mm_unpackhi_epi16(x, zero);
-        let xz = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi);
-        let kz = _mm256_set1_epi32((k as i16 as u16) as i32);
-        _mm256_madd_epi16(xz, kz)
-    }
+    let zero = _mm_setzero_si128();
+    let lo = _mm_unpacklo_epi16(x, zero);
+    let hi = _mm_unpackhi_epi16(x, zero);
+    let xz = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi);
+    let kz = _mm256_set1_epi32((k as i16 as u16) as i32);
+    _mm256_madd_epi16(xz, kz)
 }
 
 #[inline]

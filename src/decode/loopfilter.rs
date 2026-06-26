@@ -884,18 +884,8 @@ fn filter_sb64_hbd(
             build_ccso_plane_cfg(&frame_hdr, 2),
         ];
         let any_lossless = frame_hdr.segmentation.enabled != 0
-            && (0..crate::headers::MAX_SEGMENTS).any(|i| frame_hdr.segmentation.lossless[i] != 0);
+            && (0..MAX_SEGMENTS).any(|i| frame_hdr.segmentation.lossless[i] != 0);
 
-        // Seam line buffers (`cdef_line`/`cdef_top`) are pre-sized once by the
-        // caller to the whole frame (`(bh/2)+2` units), so any band's save/read
-        // lands at a stable absolute index and the parallel FILTER pass never
-        // mutates buffer lengths.
-
-        // Match dav2d_filter_slice_cdef(): by64 is the public unit. Inside a
-        // 128x128 superblock, the second 64 band starts two 4x4 rows early so
-        // the CDEF seam is processed as part of the current sb64 task. At a
-        // root-SB/tile-row boundary, process the two-row seam against the
-        // previous mask row first, then the normal current slice.
         let mut start = by64 * 16;
         let mut n_blks = 16 - 2 * ((by64 + 1 < sb64h) as i32);
         if by64 > 0 {

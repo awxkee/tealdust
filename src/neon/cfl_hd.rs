@@ -62,6 +62,14 @@ fn load_u16x8_tail4(src: &[u16]) -> uint16x8_t {
 }
 
 #[inline(always)]
+fn load_u16x8_tail2(src: &[u16]) -> uint16x8_t {
+    debug_assert!(src.len() >= 2);
+    let mut tmp = [0u16; 8];
+    tmp[..2].copy_from_slice(&src[..2]);
+    load_u16x8(&tmp)
+}
+
+#[inline(always)]
 fn load_u16x4_tail2(src: &[u16]) -> uint16x4_t {
     debug_assert!(src.len() >= 2);
     let mut tmp = [0u16; 4];
@@ -80,6 +88,11 @@ fn store_u16x2(a: &mut [u16], v: uint16x4_t) {
     let mut tmp = [0u16; 4];
     unsafe { vst1_u16(tmp.as_mut_ptr(), v) };
     a[..2].copy_from_slice(&tmp[..2]);
+}
+
+#[inline(always)]
+fn store_u16x1(a: &mut u16, v: uint16x4_t) {
+    *a = unsafe { vget_lane_u16::<0>(v) };
 }
 
 #[inline]
@@ -593,13 +606,20 @@ fn cfl_apply_422_hbd_neon_impl<const FILTER: u32>(args: CflApplyHbd<'_>) {
             x += 2;
         }
 
-        for x in x2full..xlim {
-            let ac = crate::cfl_dispatch::cfl_ac_422_hbd_scalar(y, yrow, x, dc0, FILTER);
+        if x < xlim {
+            let luma_x = x << 1;
+            let prev = if (luma_x & 63) == 0 {
+                y[yrow + luma_x]
+            } else {
+                y[yrow + luma_x - 1]
+            };
+            let ac =
+                ac4_422_filter_i32::<FILTER>(load_u16x8_tail2(&y[yrow + luma_x..]), prev, dc0v);
             if do_u {
-                u[urow + x] = crate::cfl_dispatch::predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+                store_u16x1(&mut u[urow + x], apply4_i32_ac(ac, alpha0, dc1v, max_v));
             }
             if do_v {
-                v[vrow + x] = crate::cfl_dispatch::predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+                store_u16x1(&mut v[vrow + x], apply4_i32_ac(ac, alpha1, dc2v, max_v));
             }
         }
         if do_u {

@@ -117,8 +117,7 @@ fn load4_u8_i16_oriented<const CONTIG: bool>(
     unsafe {
         let p = dst.as_ptr();
         if CONTIG {
-            let word = std::ptr::read_unaligned(p.add(base as usize).cast::<i32>());
-            _mm_cvtepu8_epi16(_mm_cvtsi32_si128(word))
+            _mm_cvtepu8_epi16(_mm_castps_si128(_mm_load_ss(p.add(base as usize).cast())))
         } else {
             _mm_setr_epi16(
                 *p.add(base as usize) as i16,
@@ -555,10 +554,6 @@ fn deblock_apply_8bpc_avx2_const<const WN: i32, const WP: i32>(
     neg_lossless: bool,
     pos_lossless: bool,
 ) {
-    // Split orientation and lossless-side handling once.  Dav2d's kernels do
-    // not carry per-tap lossless branches through the hot arithmetic body; the
-    // const side flags let LLVM erase the unused half-filter for tile/lossless
-    // edge cases while keeping the common both-sides path straight-line.
     if stride_line == 1 {
         deblock_apply_8bpc_avx2_const_oriented::<WN, WP, true>(
             dst,

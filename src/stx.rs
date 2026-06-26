@@ -29,6 +29,12 @@
 
 use crate::intops::{apply_sign, iclip};
 use crate::pixel::Coeff;
+use std::sync::OnceLock;
+
+pub(crate) type Stx4Fn8bpc = unsafe fn(&mut [i16], &[i8], usize, &[u8; 16]);
+pub(crate) type Stx8Fn8bpc = unsafe fn(&mut [i16], &[i8], usize, &[u8; 64], &[u8; 48]);
+pub(crate) type Stx4FnHbd = unsafe fn(&mut [i32], &[i8], usize, i32, &[u8; 16]);
+pub(crate) type Stx8FnHbd = unsafe fn(&mut [i32], &[i8], usize, i32, &[u8; 64], &[u8; 48]);
 
 pub(crate) fn stxfm<C: Coeff>(
     cf_out: &mut [i32],
@@ -50,5 +56,215 @@ pub(crate) fn stxfm<C: Coeff>(
         }
         sum = apply_sign((sum.abs() + 64) >> 7, sum);
         *cf_out = iclip(sum, min, max);
+    }
+}
+
+#[inline]
+pub(crate) unsafe fn stxfm4_8bpc_scalar(
+    cf: &mut [i16],
+    kernel: &[i8],
+    eob: usize,
+    scan_out: &[u8; 16],
+) {
+    let mut sums = [0i32; 16];
+    stxfm(&mut sums, cf, kernel, 16, eob, 255);
+    cf[4..8].fill(0);
+    for n in 0..16 {
+        cf[scan_out[n] as usize] = sums[n] as i16;
+    }
+}
+
+#[inline]
+pub(crate) unsafe fn stxfm8_8bpc_scalar(
+    cf: &mut [i16],
+    kernel: &[i8],
+    eob: usize,
+    scan_out: &[u8; 64],
+    mapping: &[u8; 48],
+) {
+    let mut sums = [0i32; 48];
+    stxfm(&mut sums, cf, kernel, 48, eob, 255);
+    cf[..32].fill(0);
+    for n in 0..48 {
+        cf[scan_out[mapping[n] as usize] as usize] = sums[n] as i16;
+    }
+}
+
+#[inline]
+pub(crate) unsafe fn stxfm4_hbd_scalar(
+    cf: &mut [i32],
+    kernel: &[i8],
+    eob: usize,
+    bitdepth_max: i32,
+    scan_out: &[u8; 16],
+) {
+    let mut sums = [0i32; 16];
+    stxfm(&mut sums, cf, kernel, 16, eob, bitdepth_max);
+    cf[4..8].fill(0);
+    for n in 0..16 {
+        cf[scan_out[n] as usize] = sums[n];
+    }
+}
+
+#[inline]
+pub(crate) unsafe fn stxfm8_hbd_scalar(
+    cf: &mut [i32],
+    kernel: &[i8],
+    eob: usize,
+    bitdepth_max: i32,
+    scan_out: &[u8; 64],
+    mapping: &[u8; 48],
+) {
+    let mut sums = [0i32; 48];
+    stxfm(&mut sums, cf, kernel, 48, eob, bitdepth_max);
+    cf[..32].fill(0);
+    for n in 0..48 {
+        cf[scan_out[mapping[n] as usize] as usize] = sums[n];
+    }
+}
+
+static STX4_8BPC: OnceLock<Stx4Fn8bpc> = OnceLock::new();
+static STX8_8BPC: OnceLock<Stx8Fn8bpc> = OnceLock::new();
+static STX4_HBD: OnceLock<Stx4FnHbd> = OnceLock::new();
+static STX8_HBD: OnceLock<Stx8FnHbd> = OnceLock::new();
+
+#[inline]
+fn resolve_stxfm4_8bpc() -> Stx4Fn8bpc {
+    *STX4_8BPC.get_or_init(|| {
+        let mut f = stxfm4_8bpc_scalar as Stx4Fn8bpc;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::stxfm4_8bpc_neon as Stx4Fn8bpc;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::stxfm4_8bpc_avx2 as Stx4Fn8bpc;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_stxfm8_8bpc() -> Stx8Fn8bpc {
+    *STX8_8BPC.get_or_init(|| {
+        let mut f = stxfm8_8bpc_scalar as Stx8Fn8bpc;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::stxfm8_8bpc_neon as Stx8Fn8bpc;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::stxfm8_8bpc_avx2 as Stx8Fn8bpc;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_stxfm4_hbd() -> Stx4FnHbd {
+    *STX4_HBD.get_or_init(|| {
+        let mut f = stxfm4_hbd_scalar as Stx4FnHbd;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::stxfm4_hbd_neon as Stx4FnHbd;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::stxfm4_hbd_avx2 as Stx4FnHbd;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+fn resolve_stxfm8_hbd() -> Stx8FnHbd {
+    *STX8_HBD.get_or_init(|| {
+        let mut f = stxfm8_hbd_scalar as Stx8FnHbd;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                f = crate::neon::stxfm8_hbd_neon as Stx8FnHbd;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                f = crate::avx::stxfm8_hbd_avx2 as Stx8FnHbd;
+            }
+        }
+        f
+    })
+}
+
+#[inline]
+pub(crate) fn stxfm4_dispatch<C: Coeff>(
+    cf: &mut [C],
+    kernel: &[i8],
+    eob: usize,
+    bitdepth_max: i32,
+    scan_out: &[u8; 16],
+) {
+    if let Some(cf16) = C::try_as_i16_slice_mut(cf) {
+        // SAFETY: resolver installs AVX2/NEON only after runtime feature detection;
+        // scalar fallback has no CPU feature requirement.  All callers pass a
+        // coefficient block large enough for the scan table they selected.
+        unsafe { resolve_stxfm4_8bpc()(cf16, kernel, eob, scan_out) };
+        return;
+    }
+    if let Some(cf32) = C::try_as_i32_slice_mut(cf) {
+        // SAFETY: same dispatch guarantee as the 8bpc path.  HBD keeps i32
+        // coefficient storage, so this path uses separate 32-bit SIMD kernels
+        // and clips to the coded bitdepth STX coefficient range.
+        unsafe { resolve_stxfm4_hbd()(cf32, kernel, eob, bitdepth_max, scan_out) };
+        return;
+    }
+
+    let mut sums = [0i32; 16];
+    stxfm(&mut sums, cf, kernel, 16, eob, bitdepth_max);
+    cf[4..8].fill(C::ZERO);
+    for n in 0..16 {
+        cf[scan_out[n] as usize] = C::from_i32(sums[n]);
+    }
+}
+
+#[inline]
+pub(crate) fn stxfm8_dispatch<C: Coeff>(
+    cf: &mut [C],
+    kernel: &[i8],
+    eob: usize,
+    bitdepth_max: i32,
+    scan_out: &[u8; 64],
+    mapping: &[u8; 48],
+) {
+    if let Some(cf16) = C::try_as_i16_slice_mut(cf) {
+        // SAFETY: see stxfm4_dispatch; the mapping/scan tables are static and
+        // selected with the same indices as the scalar path.
+        unsafe { resolve_stxfm8_8bpc()(cf16, kernel, eob, scan_out, mapping) };
+        return;
+    }
+    if let Some(cf32) = C::try_as_i32_slice_mut(cf) {
+        // SAFETY: same as stxfm4_dispatch; HBD uses i32 coefficients and the
+        // function pointer is resolved once with runtime CPU feature detection.
+        unsafe { resolve_stxfm8_hbd()(cf32, kernel, eob, bitdepth_max, scan_out, mapping) };
+        return;
+    }
+
+    let mut sums = [0i32; 48];
+    stxfm(&mut sums, cf, kernel, 48, eob, bitdepth_max);
+    cf[..32].fill(C::ZERO);
+    for n in 0..48 {
+        cf[scan_out[mapping[n] as usize] as usize] = C::from_i32(sums[n]);
     }
 }

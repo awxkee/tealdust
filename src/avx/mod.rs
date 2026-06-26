@@ -33,6 +33,7 @@ mod cdef_hd;
 mod cfl;
 mod cfl_hd;
 mod deblocking;
+mod filmgrain;
 mod filter;
 mod filter_hd;
 mod inter;
@@ -46,6 +47,7 @@ mod looprestoration_hd;
 mod msac;
 #[cfg(target_arch = "x86_64")]
 mod msac512;
+mod stx;
 
 pub(crate) use itx::*;
 
@@ -58,6 +60,10 @@ pub(crate) use cfl_hd::{cfl_apply_420_hbd_avx2, cfl_apply_422_hbd_avx2, cfl_appl
 pub(crate) use deblocking::{
     deblock_apply_8bpc_avx2, deblock_apply_hbd_avx2, deblock_h_sb64uv_8bpc_avx2,
     deblock_h_sb64y_8bpc_avx2, deblock_v_sb64uv_8bpc_avx2, deblock_v_sb64y_8bpc_avx2,
+};
+pub(crate) use filmgrain::{
+    blend_top_grain_row_avx2, fguv_row_8bpc_avx2, fguv_row_hbd_avx2, fgy_row_8bpc_avx2,
+    fgy_row_hbd_avx2,
 };
 pub(crate) use filter::{
     avg_row_8bpc_avx2, blend_row_8bpc_avx2, cctx_row_avx2, cctx_row_i16_avx2, dc_add_row_8bpc_avx2,
@@ -80,3 +86,4 @@ pub(crate) use looprestoration_hd::{
 };
 pub(crate) use msac::MsacContextAvx;
 pub(crate) use msac512::MsacContextAvx512;
+pub(crate) use stx::{stxfm4_8bpc_avx2, stxfm4_hbd_avx2, stxfm8_8bpc_avx2, stxfm8_hbd_avx2};

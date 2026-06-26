@@ -4260,7 +4260,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const N: usize, const W: usize, con
                 crate::itx_2d::TX_KIND_FLIPADST
             )
         }
-        _ => return,
+        _ => (),
     }
 }
 

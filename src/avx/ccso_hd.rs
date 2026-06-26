@@ -104,6 +104,55 @@ fn ccso_make_idx_8x16(
     )
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_u16x8_step2(ptr: *const u16) -> __m128i {
+    let mask = _mm256_setr_epi8(
+        0, 1, 4, 5, 8, 9, 12, 13, -1, -1, -1, -1, -1, -1, -1, -1, 0, 1, 4, 5, 8, 9, 12, 13, -1, -1,
+        -1, -1, -1, -1, -1, -1,
+    );
+    let v = unsafe { _mm256_loadu_si256(ptr as *const __m256i) };
+    let v = _mm256_shuffle_epi8(v, mask);
+    _mm_unpacklo_epi64(_mm256_castsi256_si128(v), _mm256_extracti128_si256::<1>(v))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_u16x4_step2(ptr: *const u16) -> __m128i {
+    let mask = _mm_setr_epi8(0, 1, 4, 5, 8, 9, 12, 13, -1, -1, -1, -1, -1, -1, -1, -1);
+    let v = unsafe { _mm_loadu_si128(ptr as *const __m128i) };
+    _mm_shuffle_epi8(v, mask)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_u16x8_subsampled(tmp: &[u16], base: usize, ss_hor: usize) -> __m128i {
+    if ss_hor == 0 {
+        unsafe { _mm_loadu_si128(tmp.as_ptr().add(base) as *const __m128i) }
+    } else {
+        load_u16x8_step2(unsafe { tmp.as_ptr().add(base) })
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load_u16x4_subsampled(tmp: &[u16], base: usize, ss_hor: usize) -> __m128i {
+    if ss_hor == 0 {
+        unsafe { _mm_loadl_epi64(tmp.as_ptr().add(base) as *const __m128i) }
+    } else {
+        load_u16x4_step2(unsafe { tmp.as_ptr().add(base) })
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_idx4(dst: &mut [u8], base: usize, out16: __m128i) {
+    let out = _mm_packus_epi16(out16, out16);
+    let packed = _mm_cvtsi128_si32(out) as u32;
+    let bytes = packed.to_le_bytes();
+    dst[base..base + 4].copy_from_slice(&bytes);
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -123,7 +172,7 @@ pub(crate) fn ccso_prep_lut_hbd_avx2(
     edge_clf: u32,
     bo_only: bool,
 ) {
-    if ss_hor != 0 {
+    if ss_hor > 1 {
         crate::ccso::ccso_prep_lut_hbd_scalar(
             dst,
             dst_stride,
@@ -153,7 +202,8 @@ pub(crate) fn ccso_prep_lut_hbd_avx2(
         let mut x = 0usize;
         if bo_only {
             while x + 8 <= w {
-                let c = unsafe { _mm_loadu_si128(tmp.as_ptr().add(row + x) as *const __m128i) };
+                let base = row + (x << ss_hor);
+                let c = load_u16x8_subsampled(tmp, base, ss_hor);
                 let out16 = _mm_srl_epi16(c, shiftv);
                 let out8 = _mm_packus_epi16(out16, out16);
                 unsafe {
@@ -161,29 +211,33 @@ pub(crate) fn ccso_prep_lut_hbd_avx2(
                 };
                 x += 8;
             }
+            if x + 4 <= w {
+                let base = row + (x << ss_hor);
+                let c = load_u16x4_subsampled(tmp, base, ss_hor);
+                store_idx4(dst, dst_base + x, _mm_srl_epi16(c, shiftv));
+                x += 4;
+            }
         } else {
             while x + 8 <= w {
-                let c = unsafe { _mm_loadu_si128(tmp.as_ptr().add(row + x) as *const __m128i) };
-                let p0 = unsafe {
-                    _mm_loadu_si128(
-                        tmp.as_ptr()
-                            .add(((row + x) as isize + luma_offset) as usize)
-                            as *const __m128i,
-                    )
-                };
-                let p1 = unsafe {
-                    _mm_loadu_si128(
-                        tmp.as_ptr()
-                            .add(((row + x) as isize - luma_offset) as usize)
-                            as *const __m128i,
-                    )
-                };
+                let base = row + (x << ss_hor);
+                let c = load_u16x8_subsampled(tmp, base, ss_hor);
+                let p0 = load_u16x8_subsampled(tmp, (base as isize + luma_offset) as usize, ss_hor);
+                let p1 = load_u16x8_subsampled(tmp, (base as isize - luma_offset) as usize, ss_hor);
                 let out16 = ccso_make_idx_8x16(c, p0, p1, shiftv, q, nq, edge_clf);
                 let out8 = _mm_packus_epi16(out16, out16);
                 unsafe {
                     _mm_storel_epi64(dst.as_mut_ptr().add(dst_base + x) as *mut __m128i, out8)
                 };
                 x += 8;
+            }
+            if x + 4 <= w {
+                let base = row + (x << ss_hor);
+                let c = load_u16x4_subsampled(tmp, base, ss_hor);
+                let p0 = load_u16x4_subsampled(tmp, (base as isize + luma_offset) as usize, ss_hor);
+                let p1 = load_u16x4_subsampled(tmp, (base as isize - luma_offset) as usize, ss_hor);
+                let out16 = ccso_make_idx_8x16(c, p0, p1, shiftv, q, nq, edge_clf);
+                store_idx4(dst, dst_base + x, out16);
+                x += 4;
             }
         }
         ccso_tail_hbd(
@@ -210,6 +264,14 @@ fn fill_offsets_8(out: &mut [i16; 8], idx: &[u8], offset_idxs: &[u8], offset_lut
 }
 
 #[inline(always)]
+fn fill_offsets_4_i16(out: &mut [i16; 8], idx: &[u8], offset_idxs: &[u8], offset_lut: &[i8]) {
+    for i in 0..4 {
+        out[i] = crate::ccso::ccso_offset(idx[i], offset_idxs, offset_lut) as i16;
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn ccso_add_4x4_hbd(
     dst: &mut [u16],
     dst_stride: usize,
@@ -221,13 +283,17 @@ fn ccso_add_4x4_hbd(
     yy: usize,
     bitdepth_max: i32,
 ) {
+    let zero = _mm_setzero_si128();
+    let maxv = _mm_set1_epi16(bitdepth_max as i16);
+    let mut off_tmp = [0i16; 8];
     for y in yy..yy + 4 {
-        for x in xx..xx + 4 {
-            let off =
-                crate::ccso::ccso_offset(idx_buf[y * idx_stride + x], offset_idxs, offset_lut);
-            let cur = dst[y * dst_stride + x] as i32;
-            dst[y * dst_stride + x] = (cur + off as i32).clamp(0, bitdepth_max) as u16;
-        }
+        let ip = y * idx_stride + xx;
+        fill_offsets_4_i16(&mut off_tmp, &idx_buf[ip..ip + 4], offset_idxs, offset_lut);
+        let off = unsafe { _mm_loadu_si128(off_tmp.as_ptr() as *const __m128i) };
+        let dp = y * dst_stride + xx;
+        let cur = unsafe { _mm_loadl_epi64(dst.as_ptr().add(dp) as *const __m128i) };
+        let out = _mm_min_epi16(_mm_max_epi16(_mm_add_epi16(cur, off), zero), maxv);
+        unsafe { _mm_storel_epi64(dst.as_mut_ptr().add(dp) as *mut __m128i, out) };
     }
 }
 

@@ -54,11 +54,6 @@ fn load_u8x8_i32(a: &[u8; 8]) -> __m256i {
     unsafe { _mm256_cvtepu8_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
 }
 
-#[inline(always)]
-fn load_i8x8_i32(a: &[i8; 8]) -> __m256i {
-    unsafe { _mm256_cvtepi8_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
-}
-
 #[inline]
 #[target_feature(enable = "avx2")]
 fn load_i16x8_i32(a: &[i16; 8]) -> __m256i {

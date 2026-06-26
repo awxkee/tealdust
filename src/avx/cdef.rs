@@ -156,8 +156,6 @@ fn load_i16xw_2rows<const W: usize>(tmp: &[i16], p0: isize, p1: isize, off: isiz
 #[inline]
 #[target_feature(enable = "avx2")]
 fn cdef_min_i16(a: __m256i, b: __m256i) -> __m256i {
-    // CDEF padding uses i16::MIN as a sentinel. As unsigned this is very large,
-    // so unsigned min ignores off-frame samples exactly like dav2d.
     _mm256_min_epu16(a, b)
 }
 

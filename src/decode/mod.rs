@@ -2128,12 +2128,6 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                     .map(|_| std::sync::atomic::AtomicUsize::new(cols as usize))
                     .collect();
                 let dec_remaining = &dec_remaining[..];
-                // Dav2d-style fine-grained decode progress for filter pipelining.
-                // `dec_remaining` above is still kept for the conservative IntraBC
-                // path, where an entire tile-row must remain unfiltered until all
-                // possible intra-block-copy users in that tile-row have decoded.
-                // When IntraBC is off, a filter sb64 band only needs the current
-                // band and its top neighbour decoded across every tile column.
                 let sb64_dec_remaining: Vec<std::sync::atomic::AtomicUsize> = (0..n_filter_units)
                     .map(|_| std::sync::atomic::AtomicUsize::new(cols_us))
                     .collect();
@@ -3556,12 +3550,6 @@ pub(crate) fn apply_grain_to_picture_mt(
         Some(f) => f,
         None => return clone_picture_mt(src, n_threads, pool, allocator.clone()),
     };
-    if src.p.bpc != 8 {
-        // Only 8bpc grain kernels are ported; higher bit depths fall back to a
-        // plain copy (no clip corpus exercises >8bpc grain yet).
-        return clone_picture_mt(src, n_threads, pool, allocator.clone());
-    }
-
     let mut dst = clone_picture_mt(src, n_threads, pool, allocator.clone());
     let seed = src
         .frame_hdr
@@ -3576,38 +3564,77 @@ pub(crate) fn apply_grain_to_picture_mt(
     );
     let has_chroma = src.p.layout != crate::headers::PixelLayout::I400;
 
-    let y_stride = src.stride[0];
-    let uv_stride = src.stride[1];
     let aligned_h = (src.p.h as usize + 127) & !127;
     let uv_rows = aligned_h >> ss_ver as usize;
-    let src_y = src.plane_bytes_rows(0, aligned_h).unwrap_or(&[]);
-    let (src_u, src_v): (&[u8], &[u8]) = if has_chroma {
-        (
-            src.plane_bytes_rows(1, uv_rows).unwrap_or(&[]),
-            src.plane_bytes_rows(2, uv_rows).unwrap_or(&[]),
-        )
-    } else {
-        (&[], &[])
-    };
-    let (dst_y, dst_u, dst_v) = dst.plane_bytes_rows3_mut(aligned_h, uv_rows, has_chroma);
 
-    crate::filmgrain::apply_grain_8bpc_mt(
-        dst_y,
-        dst_u,
-        dst_v,
-        src_y,
-        src_u,
-        src_v,
-        y_stride,
-        uv_stride,
-        &fgd,
-        src.p.w as usize,
-        src.p.h as usize,
-        seed,
-        ss_hor,
-        ss_ver,
-        n_threads,
-    );
+    if src.p.bpc == 8 {
+        let y_stride = src.stride[0];
+        let uv_stride = src.stride[1];
+        let src_y = src.plane_bytes_rows(0, aligned_h).unwrap_or(&[]);
+        let (src_u, src_v): (&[u8], &[u8]) = if has_chroma {
+            (
+                src.plane_bytes_rows(1, uv_rows).unwrap_or(&[]),
+                src.plane_bytes_rows(2, uv_rows).unwrap_or(&[]),
+            )
+        } else {
+            (&[], &[])
+        };
+        let (dst_y, dst_u, dst_v) = dst.plane_bytes_rows3_mut(aligned_h, uv_rows, has_chroma);
+
+        crate::filmgrain::apply_grain_8bpc_mt(
+            dst_y,
+            dst_u,
+            dst_v,
+            src_y,
+            src_u,
+            src_v,
+            y_stride,
+            uv_stride,
+            &fgd,
+            src.p.w as usize,
+            src.p.h as usize,
+            seed,
+            ss_hor,
+            ss_ver,
+            n_threads,
+            pool,
+        );
+    } else {
+        debug_assert!(src.p.bpc > 8);
+        let y_stride = src.stride[0].unsigned_abs() / core::mem::size_of::<u16>();
+        let uv_stride = src.stride[1].unsigned_abs() / core::mem::size_of::<u16>();
+        let src_y = src.plane_slice::<u16>(0).unwrap_or(&[]);
+        let (src_u, src_v): (&[u16], &[u16]) = if has_chroma {
+            (
+                src.plane_slice::<u16>(1).unwrap_or(&[]),
+                src.plane_slice::<u16>(2).unwrap_or(&[]),
+            )
+        } else {
+            (&[], &[])
+        };
+        let (dst_y, dst_u, dst_v) =
+            dst.plane_slices_rows3_mut::<u16>(aligned_h, uv_rows, has_chroma);
+
+        crate::filmgrain::apply_grain_hbd_mt(
+            dst_y,
+            dst_u,
+            dst_v,
+            src_y,
+            src_u,
+            src_v,
+            y_stride,
+            uv_stride,
+            &fgd,
+            src.p.w as usize,
+            src.p.h as usize,
+            seed,
+            ss_hor,
+            ss_ver,
+            src.p.bpc as usize,
+            n_threads,
+            pool,
+        );
+    }
 
     dst
 }

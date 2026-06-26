@@ -210,9 +210,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         let v = (((r >> 8) * p) >> 7) << 3;
         let vw = (v as u64) << 48;
 
-        // dav2d keeps this branchless with SUB/CMOV.  Express the same state
-        // transition in Rust so LLVM can lower it without a hard branch in the
-        // coefficient hot path.  The returned AV1 bit is one when dif < vw.
         let ge = u32::from(dif >= vw);
         let ge_u64 = ge as u64;
         let ge_mask64 = 0u64.wrapping_sub(ge_u64);

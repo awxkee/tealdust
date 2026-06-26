@@ -222,10 +222,6 @@ macro_rules! cfl8_apply_wide {
 
 macro_rules! cfl8_apply_rdm {
     ($ac:expr, $alpha:expr, $_alpha_v:expr, $dc:expr, $_dc_v:expr, $_round_v:expr, $_zero_v:expr) => {{
-        // Equivalent to dav2d's abs(ac) << 4 + pmulhrsw(abs(alpha)) path:
-        //   sign(alpha * ac) * ((abs(alpha * ac) + 1024) >> 11)
-        // Keep this inside the rdm-specialized module so the RDM intrinsic
-        // never crosses a mixed target-feature helper boundary.
         let zero = vdupq_n_s16(0);
         let alpha8 = vdupq_n_s16($alpha);
         let ac_abs = vabsq_s16($ac);

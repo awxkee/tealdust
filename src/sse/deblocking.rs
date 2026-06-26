@@ -36,12 +36,11 @@ use std::arch::x86_64::*;
 #[target_feature(enable = "sse4.1")]
 fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
     if stride_line == 1 {
-        // Load four adjacent 8bpc samples and zero-extend them to four i32 lanes.
-        // Keeping the four bytes packed in one i32 lane breaks the deblock math
-        // and makes the vertical SIMD path unlike dav2d's lane-wise arithmetic.
-        let word =
-            unsafe { std::ptr::read_unaligned(dst.as_ptr().add(base as usize).cast::<i32>()) };
-        _mm_cvtepu8_epi32(_mm_cvtsi32_si128(word))
+        unsafe {
+            _mm_cvtepu8_epi32(_mm_castps_si128(_mm_load_ss(
+                dst.as_ptr().add(base as usize).cast(),
+            )))
+        }
     } else {
         // Four rows of the same horizontal edge.  This is still a gather, but it
         // stays register-only instead of using a temporary stack array.
@@ -66,9 +65,6 @@ fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: __m128i) {
             )
         }
     } else {
-        // Register scatter of four clipped i32 lanes.  Dav2d's horizontal AVX2
-        // path is a full transpose kernel; this keeps the current Rust apply
-        // structure SIMD without the old store-to-stack penalty.
         dst[base as usize] = _mm_cvtsi128_si32(v) as u8;
         dst[(base + stride_line) as usize] = _mm_extract_epi32::<1>(v) as u8;
         dst[(base + 2 * stride_line) as usize] = _mm_extract_epi32::<2>(v) as u8;

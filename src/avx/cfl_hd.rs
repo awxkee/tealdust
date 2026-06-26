@@ -116,6 +116,23 @@ fn store_i32x2_u16_clip(a: &mut [u16], v: __m256i, max_v: __m256i) {
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn store_i32x1_u16_clip(a: &mut u16, v: __m256i, max_v: __m256i) {
+    let v = _mm256_min_epi32(_mm256_max_epi32(v, _mm256_setzero_si256()), max_v);
+    let p = _mm_packus_epi32(_mm256_castsi256_si128(v), _mm_setzero_si128());
+    *a = _mm_cvtsi128_si32(p) as u16;
+}
+
+#[inline(always)]
+fn load_u16x2_422_tail(src: &[u16]) -> __m256i {
+    debug_assert!(src.len() >= 2);
+    let mut tmp = [0u16; 16];
+    tmp[0] = src[0];
+    tmp[1] = src[1];
+    unsafe { load_u16x16(&tmp) }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn ac8_420_i32(top: __m256i, bot: __m256i, ones: __m256i, dc0v: __m256i) -> __m256i {
     let top = _mm256_madd_epi16(top, ones);
     let bot = _mm256_madd_epi16(bot, ones);
@@ -137,8 +154,6 @@ fn left_u16x8_to_i32(src: __m256i, prev_sample: u16, left_mask: __m128i) -> __m2
     let hi = _mm256_extracti128_si256::<1>(src);
     let prev = _mm_set1_epi16(prev_sample as i16);
 
-    // Shift by one u16 while preserving the 128-bit lane boundary.  The upper
-    // lane receives the low lane's last sample, matching dav2d's palignr shape.
     let shifted_lo = _mm_alignr_epi8::<14>(lo, prev);
     let shifted_hi = _mm_alignr_epi8::<14>(hi, lo);
     let left_lo = _mm_shuffle_epi8(shifted_lo, left_mask);
@@ -917,13 +932,26 @@ fn cfl_apply_422_hbd_avx2_impl<const FILTER: u32>(args: CflApplyHbd<'_>) {
             xtail += 2;
         }
 
-        for x in xtail..xlim {
-            let ac = crate::cfl_dispatch::cfl_ac_422_hbd_scalar(y, yrow, x, dc0, FILTER);
+        if xtail < xlim {
+            let xl = xtail << 1;
+            let src = load_u16x2_422_tail(&y[yrow + xl..]);
+            let ac = if FILTER == CFL_FLT_TYPE_VSTRIP {
+                let prev = if (xl & 63) == 0 {
+                    y[yrow + xl]
+                } else {
+                    y[yrow + xl - 1]
+                };
+                ac8_422_vstrip_i32(src, prev, vstrip_center_right_w, vstrip_left_mask, dc0v)
+            } else if FILTER == CFL_FLT_TYPE_GAUSS {
+                ac8_422_gauss_i32(src, dc0v)
+            } else {
+                ac8_422_uniform_i32(src, ones, dc0v)
+            };
             if do_u {
-                u[urow + x] = crate::cfl_dispatch::predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+                store_i32x1_u16_clip(&mut u[urow + xtail], apply8_i32_ac(ac, alpha0, dc1v), max_v);
             }
             if do_v {
-                v[vrow + x] = crate::cfl_dispatch::predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+                store_i32x1_u16_clip(&mut v[vrow + xtail], apply8_i32_ac(ac, alpha1, dc2v), max_v);
             }
         }
         if do_u {

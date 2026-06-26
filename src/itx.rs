@@ -503,10 +503,6 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
         }
     }
 
-    // Hot square 8bpc DCT16/DCT32 fused paths must run before the broad
-    // AVX2 fused dispatcher.  The broad route is intentionally generic and
-    // can otherwise shadow these shape-specific dav2d-style writers.  SSE has
-    // no broad fused dispatcher today, but this keeps the priority explicit.
     if BD::BPC == 8
         && tx_type_low8(txtp) == txtp_kind::DCT_DCT as u32
         && tx_type_has_no_extension(txtp)

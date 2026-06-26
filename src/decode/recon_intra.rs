@@ -1803,43 +1803,30 @@ where
             let set = (stx >> 2) & 15;
             if tw >= 8 && th >= 8 {
                 let koff = (set as usize * 3 + stype as usize) * 1536;
-                let mut sums = [0i32; 48];
-                crate::stx::stxfm(
-                    &mut sums,
-                    recon.cf,
-                    &crate::stx_tables::STX_8X8_KERNEL[koff..],
-                    48,
-                    eob as usize,
-                    recon.frame.bitdepth_max,
-                );
-                recon.cf[..32].fill(<BD::Coef as crate::pixel::Coeff>::ZERO);
                 let idx = (imin(t_dim.lh as i32, 3) - 1) as usize;
                 let scan_out = &crate::stx_tables::STX_SCAN_ORDERS_8X8[idx][transpose as usize];
                 let mapping =
                     &crate::stx_tables::COEFF8X8_MAPPING[set as usize * 3 + stype as usize];
-                for x in 0..48 {
-                    recon.cf[scan_out[mapping[x] as usize] as usize] =
-                        <BD::Coef as crate::pixel::Coeff>::from_i32(sums[x]);
-                }
+                crate::stx::stxfm8_dispatch(
+                    recon.cf,
+                    &crate::stx_tables::STX_8X8_KERNEL[koff..],
+                    eob as usize,
+                    recon.frame.bitdepth_max,
+                    scan_out,
+                    mapping,
+                );
                 eob = [63, 119, 231][idx];
             } else {
                 let koff = (set as usize * 3 + stype as usize) * 128;
-                let mut sums = [0i32; 16];
-                crate::stx::stxfm(
-                    &mut sums,
-                    recon.cf,
-                    &crate::stx_tables::STX_4X4_KERNEL[koff..],
-                    16,
-                    eob as usize,
-                    recon.frame.bitdepth_max,
-                );
                 let idx = imin(t_dim.lh as i32, 3) as usize;
                 let scan_out = &crate::stx_tables::STX_SCAN_ORDERS_4X4[idx][transpose as usize];
-                recon.cf[4..8].fill(<BD::Coef as crate::pixel::Coeff>::ZERO);
-                for x in 0..16 {
-                    recon.cf[scan_out[x] as usize] =
-                        <BD::Coef as crate::pixel::Coeff>::from_i32(sums[x]);
-                }
+                crate::stx::stxfm4_dispatch(
+                    recon.cf,
+                    &crate::stx_tables::STX_4X4_KERNEL[koff..],
+                    eob as usize,
+                    recon.frame.bitdepth_max,
+                    scan_out,
+                );
                 eob = [15, 15, 51, 99][idx];
             }
         }

@@ -102,6 +102,38 @@ fn ccso_make_idx_u16(
     )
 }
 
+#[inline]
+#[target_feature(enable = "neon")]
+fn load_u16x8_subsampled(tmp: &[u16], base: usize, ss_hor: usize) -> uint16x8_t {
+    if ss_hor == 0 {
+        unsafe { vld1q_u16(tmp.as_ptr().add(base)) }
+    } else {
+        let a = unsafe { vld1q_u16(tmp.as_ptr().add(base)) };
+        let b = unsafe { vld1q_u16(tmp.as_ptr().add(base + 8)) };
+        vuzp1q_u16(a, b)
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load_u16x4_subsampled(tmp: &[u16], base: usize, ss_hor: usize) -> uint16x4_t {
+    if ss_hor == 0 {
+        unsafe { vld1_u16(tmp.as_ptr().add(base)) }
+    } else {
+        let a = unsafe { vld1q_u16(tmp.as_ptr().add(base)) };
+        vget_low_u16(vuzp1q_u16(a, a))
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn store_idx4(dst: &mut [u8], base: usize, out16: uint16x8_t) {
+    let out = vqmovn_u16(out16);
+    unsafe {
+        vst1_lane_u32::<0>(dst.as_mut_ptr().add(base).cast(), vreinterpret_u32_u8(out));
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
@@ -121,7 +153,7 @@ pub(crate) fn ccso_prep_lut_hbd_neon(
     edge_clf: u32,
     bo_only: bool,
 ) {
-    if ss_hor != 0 {
+    if ss_hor > 1 {
         crate::ccso::ccso_prep_lut_hbd_scalar(
             dst,
             dst_stride,
@@ -151,31 +183,47 @@ pub(crate) fn ccso_prep_lut_hbd_neon(
         let mut x = 0usize;
         if bo_only {
             while x + 8 <= w {
-                let c = unsafe { vld1q_u16(tmp.as_ptr().add(row + x)) };
+                let base = row + (x << ss_hor);
+                let c = load_u16x8_subsampled(tmp, base, ss_hor);
                 let out16 = vshlq_u16(c, sh);
                 let out = vqmovn_u16(out16);
                 unsafe { vst1_u8(dst.as_mut_ptr().add(dst_base + x), out) };
                 x += 8;
             }
+            if x + 4 <= w {
+                let base = row + (x << ss_hor);
+                let c = load_u16x4_subsampled(tmp, base, ss_hor);
+                let out16 = vcombine_u16(c, vdup_n_u16(0));
+                store_idx4(dst, dst_base + x, vshlq_u16(out16, sh));
+                x += 4;
+            }
         } else {
             while x + 8 <= w {
-                let c = unsafe { vld1q_u16(tmp.as_ptr().add(row + x)) };
-                let p0 = unsafe {
-                    vld1q_u16(
-                        tmp.as_ptr()
-                            .add(((row + x) as isize + luma_offset) as usize),
-                    )
-                };
-                let p1 = unsafe {
-                    vld1q_u16(
-                        tmp.as_ptr()
-                            .add(((row + x) as isize - luma_offset) as usize),
-                    )
-                };
+                let base = row + (x << ss_hor);
+                let c = load_u16x8_subsampled(tmp, base, ss_hor);
+                let p0 = load_u16x8_subsampled(tmp, (base as isize + luma_offset) as usize, ss_hor);
+                let p1 = load_u16x8_subsampled(tmp, (base as isize - luma_offset) as usize, ss_hor);
                 let out16 = ccso_make_idx_u16(c, p0, p1, sh, q, nq, edge_clf);
                 let out = vqmovn_u16(out16);
                 unsafe { vst1_u8(dst.as_mut_ptr().add(dst_base + x), out) };
                 x += 8;
+            }
+            if x + 4 <= w {
+                let base = row + (x << ss_hor);
+                let c = load_u16x4_subsampled(tmp, base, ss_hor);
+                let p0 = load_u16x4_subsampled(tmp, (base as isize + luma_offset) as usize, ss_hor);
+                let p1 = load_u16x4_subsampled(tmp, (base as isize - luma_offset) as usize, ss_hor);
+                let out16 = ccso_make_idx_u16(
+                    vcombine_u16(c, vdup_n_u16(0)),
+                    vcombine_u16(p0, vdup_n_u16(0)),
+                    vcombine_u16(p1, vdup_n_u16(0)),
+                    sh,
+                    q,
+                    nq,
+                    edge_clf,
+                );
+                store_idx4(dst, dst_base + x, out16);
+                x += 4;
             }
         }
         ccso_tail_hbd(
@@ -202,6 +250,14 @@ fn fill_offsets_8(out: &mut [i16; 8], idx: &[u8], offset_idxs: &[u8], offset_lut
 }
 
 #[inline(always)]
+fn fill_offsets_4_i16(out: &mut [i16; 4], idx: &[u8], offset_idxs: &[u8], offset_lut: &[i8]) {
+    for i in 0..4 {
+        out[i] = crate::ccso::ccso_offset(idx[i], offset_idxs, offset_lut) as i16;
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
 fn ccso_add_4x4_hbd(
     dst: &mut [u16],
     dst_stride: usize,
@@ -213,13 +269,17 @@ fn ccso_add_4x4_hbd(
     yy: usize,
     bitdepth_max: i32,
 ) {
+    let zero = vdup_n_s16(0);
+    let maxv = vdup_n_s16(bitdepth_max as i16);
+    let mut off_tmp = [0i16; 4];
     for y in yy..yy + 4 {
-        for x in xx..xx + 4 {
-            let off =
-                crate::ccso::ccso_offset(idx_buf[y * idx_stride + x], offset_idxs, offset_lut);
-            let cur = dst[y * dst_stride + x] as i32;
-            dst[y * dst_stride + x] = (cur + off as i32).clamp(0, bitdepth_max) as u16;
-        }
+        let ip = y * idx_stride + xx;
+        fill_offsets_4_i16(&mut off_tmp, &idx_buf[ip..ip + 4], offset_idxs, offset_lut);
+        let off = unsafe { vld1_s16(off_tmp.as_ptr()) };
+        let dp = y * dst_stride + xx;
+        let cur = unsafe { vreinterpret_s16_u16(vld1_u16(dst.as_ptr().add(dp))) };
+        let out = vmin_s16(vmax_s16(vadd_s16(cur, off), zero), maxv);
+        unsafe { vst1_u16(dst.as_mut_ptr().add(dp), vreinterpret_u16_s16(out)) };
     }
 }
 

@@ -1899,7 +1899,7 @@ fn dip_vertical_interp_8bpc_avx2(
             let z1 = (z + 1) as i16;
             let w0 = _mm256_set1_epi16((step_y as i16) - z1);
             let w1 = _mm256_set1_epi16(z1);
-            let sh = unsafe { _mm_cvtsi32_si128(uhl2) };
+            let sh = _mm_cvtsi32_si128(uhl2);
             let row_off = (base_y + z) * stride;
             let row = &mut dst[row_off..row_off + w];
             let mut x = 0usize;
