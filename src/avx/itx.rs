@@ -1168,13 +1168,11 @@ fn avx2_residual_add_u8x4(dst: &mut [u8], off: usize, v: __m128i, rnd: __m128i, 
         debug_assert!(off + 4 <= dst.len());
         let r = _mm_sra_epi32(_mm_add_epi32(v, rnd), sh);
         let r16 = _mm_packs_epi32(r, _mm_setzero_si128());
-        let p32 = std::ptr::read_unaligned(dst.as_ptr().add(off) as *const i32);
-        let p8 = _mm_cvtsi32_si128(p32);
-        let p16 = _mm_cvtepu8_epi16(p8);
+        let p8 = _mm_castps_si128(_mm_load_ss(dst.as_ptr().add(off).cast()));
+        let p16 = _mm_unpacklo_epi8(p8, _mm_setzero_si128());
         let sum = _mm_adds_epi16(p16, r16);
         let out = _mm_packus_epi16(sum, _mm_setzero_si128());
-        let lane = _mm_cvtsi128_si32(out) as u32;
-        std::ptr::write_unaligned(dst.as_mut_ptr().add(off) as *mut u32, lane);
+        _mm_store_ss(dst.as_mut_ptr().add(off).cast(), _mm_castsi128_ps(out));
     }
 }
 
@@ -1197,7 +1195,7 @@ fn avx2_residual_add_u8x4_expand_x2(
         let r16x2 = _mm_unpacklo_epi16(r16, r16);
         let p = dst.as_mut_ptr().add(off);
         let d8 = _mm_loadl_epi64(p as *const __m128i);
-        let d16 = _mm_cvtepu8_epi16(d8);
+        let d16 = _mm_unpacklo_epi8(d8, _mm_setzero_si128());
         let sum = _mm_adds_epi16(d16, r16x2);
         let out = _mm_packus_epi16(sum, _mm_setzero_si128());
         _mm_storel_epi64(p as *mut __m128i, out);

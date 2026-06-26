@@ -202,8 +202,12 @@ fn finish4(dst: &mut [u8], x: usize, s: int32x4_t) {
     );
     let u16x4 = vmovn_u32(vreinterpretq_u32_s32(v));
     let u8x8 = vmovn_u16(vcombine_u16(u16x4, u16x4));
-    let lane = vget_lane_u32::<0>(vreinterpret_u32_u8(u8x8));
-    dst[x..x + 4].copy_from_slice(&lane.to_le_bytes());
+    unsafe {
+        vst1_lane_u32::<0>(
+            dst.get_unchecked_mut(x..).as_mut_ptr().cast(),
+            vreinterpret_u32_u8(u8x8),
+        );
+    }
 }
 
 /// NEON chroma NS-Wiener FIR. Mirror of `ns_wiener_uv_fir_run_sse41`.

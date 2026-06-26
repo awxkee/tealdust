@@ -169,14 +169,13 @@ use crate::filter::UvLumaTap;
 
 /// 4 consecutive `u8` -> i32x4.
 #[inline(always)]
-unsafe fn load4u8(row: &[u8], idx: usize) -> __m128i {
-    let arr: [u8; 4] = row[idx..idx + 4].try_into().unwrap();
-    unsafe { _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(arr))) }
+fn load4u8(row: &[u8], idx: usize) -> __m128i {
+    unsafe { _mm_cvtepu8_epi32(_mm_castps_si128(_mm_load_ss(row.as_ptr().add(idx).cast()))) }
 }
 
 /// Gather 4 `u8` at `idx, idx+step, ..` -> i32x4 (contiguous fast path for step 1).
 #[inline(always)]
-unsafe fn gather4u8(row: &[u8], idx: usize, step: usize) -> __m128i {
+fn gather4u8(row: &[u8], idx: usize, step: usize) -> __m128i {
     let arr: [u8; 4] = if step == 1 {
         row[idx..idx + 4].try_into().unwrap()
     } else {
@@ -187,23 +186,26 @@ unsafe fn gather4u8(row: &[u8], idx: usize, step: usize) -> __m128i {
             row[idx + 3 * step],
         ]
     };
-    unsafe { _mm_cvtepu8_epi32(_mm_cvtsi32_si128(i32::from_le_bytes(arr))) }
+    unsafe { _mm_cvtepu8_epi32(_mm_castps_si128(_mm_load_ss(arr.as_ptr().cast()))) }
 }
 
 /// `(s + 64) >> 7` clamped to `[0,255]`, narrowed to 4 `u8`, stored at `dst[x..x+4]`.
-#[inline(always)]
-unsafe fn finish4(dst: &mut [u8], x: usize, s: __m128i) {
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn finish4(dst: &mut [u8], x: usize, s: __m128i) {
+    let v = _mm_min_epi32(
+        _mm_max_epi32(
+            _mm_srai_epi32(_mm_add_epi32(s, _mm_set1_epi32(64)), 7),
+            _mm_setzero_si128(),
+        ),
+        _mm_set1_epi32(255),
+    );
+    let p8 = _mm_packus_epi16(_mm_packus_epi32(v, v), _mm_packus_epi32(v, v));
     unsafe {
-        let v = _mm_min_epi32(
-            _mm_max_epi32(
-                _mm_srai_epi32(_mm_add_epi32(s, _mm_set1_epi32(64)), 7),
-                _mm_setzero_si128(),
-            ),
-            _mm_set1_epi32(255),
+        _mm_store_ss(
+            dst.get_unchecked_mut(x..).as_mut_ptr().cast(),
+            _mm_castsi128_ps(p8),
         );
-        let p8 = _mm_packus_epi16(_mm_packus_epi32(v, v), _mm_packus_epi32(v, v));
-        let bytes = (_mm_cvtsi128_si32(p8) as u32).to_le_bytes();
-        dst[x..x + 4].copy_from_slice(&bytes);
     }
 }
 
@@ -219,50 +221,48 @@ pub(crate) fn ns_wiener_uv_fir_run_sse41(
     lstep: usize,
     n: usize,
 ) {
-    unsafe {
-        let mut x = 0;
-        while x + 4 <= n {
-            let cb = co + x;
-            let m = load4u8(c_center, cb);
-            let two_m = _mm_add_epi32(m, m);
-            let mut s = _mm_slli_epi32(m, 7);
-            for t in ctaps {
-                let a = load4u8(t.row_p, (cb as i32 + t.dx) as usize);
-                let b = load4u8(t.row_m, (cb as i32 - t.dx) as usize);
-                let coef = _mm_set1_epi32(t.coef);
-                s = _mm_add_epi32(
-                    s,
-                    _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(a, b), two_m), coef),
-                );
-            }
-            let lb = lo + x * lstep;
-            let lc = gather4u8(l_center, lb, lstep);
-            for t in ltaps {
-                let lv = gather4u8(t.row, (lb as i32 + t.ldx) as usize, lstep);
-                let coef = _mm_set1_epi32(t.coef);
-                s = _mm_add_epi32(s, _mm_mullo_epi32(_mm_sub_epi32(lv, lc), coef));
-            }
-            finish4(dst, x, s);
-            x += 4;
+    let mut x = 0;
+    while x + 4 <= n {
+        let cb = co + x;
+        let m = load4u8(c_center, cb);
+        let two_m = _mm_add_epi32(m, m);
+        let mut s = _mm_slli_epi32(m, 7);
+        for t in ctaps {
+            let a = load4u8(t.row_p, (cb as i32 + t.dx) as usize);
+            let b = load4u8(t.row_m, (cb as i32 - t.dx) as usize);
+            let coef = _mm_set1_epi32(t.coef);
+            s = _mm_add_epi32(
+                s,
+                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(a, b), two_m), coef),
+            );
         }
-        while x < n {
-            let cc = co + x;
-            let m = c_center[cc] as i32;
-            let mut s = m << 7;
-            for t in ctaps {
-                let a = t.row_p[(cc as i32 + t.dx) as usize] as i32;
-                let b = t.row_m[(cc as i32 - t.dx) as usize] as i32;
-                s += (a + b - 2 * m) * t.coef;
-            }
-            let lcx = lo + x * lstep;
-            let lc = l_center[lcx] as i32;
-            for t in ltaps {
-                let lv = t.row[(lcx as i32 + t.ldx) as usize] as i32;
-                s += (lv - lc) * t.coef;
-            }
-            dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
-            x += 1;
+        let lb = lo + x * lstep;
+        let lc = gather4u8(l_center, lb, lstep);
+        for t in ltaps {
+            let lv = gather4u8(t.row, (lb as i32 + t.ldx) as usize, lstep);
+            let coef = _mm_set1_epi32(t.coef);
+            s = _mm_add_epi32(s, _mm_mullo_epi32(_mm_sub_epi32(lv, lc), coef));
         }
+        finish4(dst, x, s);
+        x += 4;
+    }
+    while x < n {
+        let cc = co + x;
+        let m = c_center[cc] as i32;
+        let mut s = m << 7;
+        for t in ctaps {
+            let a = t.row_p[(cc as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(cc as i32 - t.dx) as usize] as i32;
+            s += (a + b - 2 * m) * t.coef;
+        }
+        let lcx = lo + x * lstep;
+        let lc = l_center[lcx] as i32;
+        for t in ltaps {
+            let lv = t.row[(lcx as i32 + t.ldx) as usize] as i32;
+            s += (lv - lc) * t.coef;
+        }
+        dst[x] = ((s + 64) >> 7).clamp(0, 255) as u8;
+        x += 1;
     }
 }
 

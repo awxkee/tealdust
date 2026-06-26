@@ -991,11 +991,11 @@ fn sse41_residual_add_u8x4(dst: *mut u8, v: __m128i, rnd: __m128i, sh: __m128i) 
     unsafe {
         let r = _mm_sra_epi32(_mm_add_epi32(v, rnd), sh);
         let r16 = _mm_packs_epi32(r, _mm_setzero_si128());
-        let p4 = _mm_cvtsi32_si128(std::ptr::read_unaligned(dst as *const i32));
+        let p4 = _mm_castps_si128(_mm_load_ss(dst.cast()));
         let p16 = _mm_cvtepu8_epi16(p4);
         let sum = _mm_adds_epi16(p16, r16);
         let out = _mm_packus_epi16(sum, _mm_setzero_si128());
-        std::ptr::write_unaligned(dst as *mut i32, _mm_cvtsi128_si32(out));
+        _mm_store_ss(dst.cast(), _mm_castsi128_ps(out));
     }
 }
 
