@@ -272,104 +272,104 @@ static CCSO_ADD_HBD: OnceLock<CcsoAddHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_ccso_prep_8bpc() -> CcsoPrep8bpcFn {
     *CCSO_PREP_8BPC.get_or_init(|| {
-        let mut f = ccso_prep_lut_8bpc_scalar as CcsoPrep8bpcFn;
+        let mut _f = ccso_prep_lut_8bpc_scalar as CcsoPrep8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ccso_prep_lut_8bpc_neon as CcsoPrep8bpcFn;
+                _f = crate::neon::ccso_prep_lut_8bpc_neon as CcsoPrep8bpcFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ccso_prep_lut_8bpc_sse41 as CcsoPrep8bpcFn;
+                _f = crate::sse::ccso_prep_lut_8bpc_sse41 as CcsoPrep8bpcFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ccso_prep_lut_8bpc_avx2 as CcsoPrep8bpcFn;
+                _f = crate::avx::ccso_prep_lut_8bpc_avx2 as CcsoPrep8bpcFn;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ccso_prep_hbd() -> CcsoPrepHbdFn {
     *CCSO_PREP_HBD.get_or_init(|| {
-        let mut f = ccso_prep_lut_hbd_scalar as CcsoPrepHbdFn;
+        let mut _f = ccso_prep_lut_hbd_scalar as CcsoPrepHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ccso_prep_lut_hbd_neon as CcsoPrepHbdFn;
+                _f = crate::neon::ccso_prep_lut_hbd_neon as CcsoPrepHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ccso_prep_lut_hbd_sse41 as CcsoPrepHbdFn;
+                _f = crate::sse::ccso_prep_lut_hbd_sse41 as CcsoPrepHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ccso_prep_lut_hbd_avx2 as CcsoPrepHbdFn;
+                _f = crate::avx::ccso_prep_lut_hbd_avx2 as CcsoPrepHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ccso_add_8bpc() -> CcsoAdd8bpcFn {
     *CCSO_ADD_8BPC.get_or_init(|| {
-        let mut f = ccso_add_8bpc_scalar as CcsoAdd8bpcFn;
+        let mut _f = ccso_add_8bpc_scalar as CcsoAdd8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ccso_add_8bpc_neon as CcsoAdd8bpcFn;
+                _f = crate::neon::ccso_add_8bpc_neon as CcsoAdd8bpcFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ccso_add_8bpc_sse41 as CcsoAdd8bpcFn;
+                _f = crate::sse::ccso_add_8bpc_sse41 as CcsoAdd8bpcFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ccso_add_8bpc_avx2 as CcsoAdd8bpcFn;
+                _f = crate::avx::ccso_add_8bpc_avx2 as CcsoAdd8bpcFn;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ccso_add_hbd() -> CcsoAddHbdFn {
     *CCSO_ADD_HBD.get_or_init(|| {
-        let mut f = ccso_add_hbd_scalar as CcsoAddHbdFn;
+        let mut _f = ccso_add_hbd_scalar as CcsoAddHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ccso_add_hbd_neon as CcsoAddHbdFn;
+                _f = crate::neon::ccso_add_hbd_neon as CcsoAddHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ccso_add_hbd_sse41 as CcsoAddHbdFn;
+                _f = crate::sse::ccso_add_hbd_sse41 as CcsoAddHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ccso_add_hbd_avx2 as CcsoAddHbdFn;
+                _f = crate::avx::ccso_add_hbd_avx2 as CcsoAddHbdFn;
             }
         }
-        f
+        _f
     })
 }
 

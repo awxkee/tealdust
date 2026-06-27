@@ -61,26 +61,26 @@ static PREP_HBD: OnceLock<PrepHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_prep_hbd() -> PrepHbdFn {
     *PREP_HBD.get_or_init(|| {
-        let mut f = prep_hbd_scalar as PrepHbdFn;
+        let mut _f = prep_hbd_scalar as PrepHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::prep_hbd_neon as PrepHbdFn;
+                _f = crate::neon::prep_hbd_neon as PrepHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::prep_hbd_sse41 as PrepHbdFn;
+                _f = crate::sse::prep_hbd_sse41 as PrepHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::prep_hbd_avx2 as PrepHbdFn;
+                _f = crate::avx::prep_hbd_avx2 as PrepHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -131,26 +131,26 @@ static PUT_BILIN_HBD: OnceLock<PutBilinHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_put_bilin_hbd() -> PutBilinHbdFn {
     *PUT_BILIN_HBD.get_or_init(|| {
-        let mut f = put_bilin_hbd_scalar as PutBilinHbdFn;
+        let mut _f = put_bilin_hbd_scalar as PutBilinHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::put_bilin_hbd_neon as PutBilinHbdFn;
+                _f = crate::neon::put_bilin_hbd_neon as PutBilinHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::put_bilin_hbd_sse41 as PutBilinHbdFn;
+                _f = crate::sse::put_bilin_hbd_sse41 as PutBilinHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::put_bilin_hbd_avx2 as PutBilinHbdFn;
+                _f = crate::avx::put_bilin_hbd_avx2 as PutBilinHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -203,26 +203,26 @@ static PREP_BILIN_HBD: OnceLock<PrepBilinHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_prep_bilin_hbd() -> PrepBilinHbdFn {
     *PREP_BILIN_HBD.get_or_init(|| {
-        let mut f = prep_bilin_hbd_scalar as PrepBilinHbdFn;
+        let mut _f = prep_bilin_hbd_scalar as PrepBilinHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::prep_bilin_hbd_neon as PrepBilinHbdFn;
+                _f = crate::neon::prep_bilin_hbd_neon as PrepBilinHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::prep_bilin_hbd_sse41 as PrepBilinHbdFn;
+                _f = crate::sse::prep_bilin_hbd_sse41 as PrepBilinHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::prep_bilin_hbd_avx2 as PrepBilinHbdFn;
+                _f = crate::avx::prep_bilin_hbd_avx2 as PrepBilinHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -279,26 +279,26 @@ static PUT_8TAP_HBD: OnceLock<Put8tapHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_put_8tap_hbd() -> Put8tapHbdFn {
     *PUT_8TAP_HBD.get_or_init(|| {
-        let mut f = put_8tap_hbd_scalar as Put8tapHbdFn;
+        let mut _f = put_8tap_hbd_scalar as Put8tapHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::put_8tap_hbd_neon as Put8tapHbdFn;
+                _f = crate::neon::put_8tap_hbd_neon as Put8tapHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::put_8tap_hbd_sse41 as Put8tapHbdFn;
+                _f = crate::sse::put_8tap_hbd_sse41 as Put8tapHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::put_8tap_hbd_avx2 as Put8tapHbdFn;
+                _f = crate::avx::put_8tap_hbd_avx2 as Put8tapHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -371,26 +371,26 @@ static PREP_8TAP_HBD: OnceLock<Prep8tapHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_prep_8tap_hbd() -> Prep8tapHbdFn {
     *PREP_8TAP_HBD.get_or_init(|| {
-        let mut f = prep_8tap_hbd_scalar as Prep8tapHbdFn;
+        let mut _f = prep_8tap_hbd_scalar as Prep8tapHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::prep_8tap_hbd_neon as Prep8tapHbdFn;
+                _f = crate::neon::prep_8tap_hbd_neon as Prep8tapHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::prep_8tap_hbd_sse41 as Prep8tapHbdFn;
+                _f = crate::sse::prep_8tap_hbd_sse41 as Prep8tapHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::prep_8tap_hbd_avx2 as Prep8tapHbdFn;
+                _f = crate::avx::prep_8tap_hbd_avx2 as Prep8tapHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -464,52 +464,52 @@ static PREP_BILIN_8BPC: OnceLock<PrepBilin8bpcFn> = OnceLock::new();
 #[inline]
 fn resolve_put_bilin_8bpc() -> PutBilin8bpcFn {
     *PUT_BILIN_8BPC.get_or_init(|| {
-        let mut f = put_bilin_8bpc_scalar_dispatch as PutBilin8bpcFn;
+        let mut _f = put_bilin_8bpc_scalar_dispatch as PutBilin8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::put_bilin_8bpc_neon as PutBilin8bpcFn;
+                _f = crate::neon::put_bilin_8bpc_neon as PutBilin8bpcFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = put_bilin_8bpc_scalar_dispatch as PutBilin8bpcFn;
+                _f = put_bilin_8bpc_scalar_dispatch as PutBilin8bpcFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::put_bilin_8bpc_avx2 as PutBilin8bpcFn;
+                _f = crate::avx::put_bilin_8bpc_avx2 as PutBilin8bpcFn;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_prep_bilin_8bpc() -> PrepBilin8bpcFn {
     *PREP_BILIN_8BPC.get_or_init(|| {
-        let mut f = prep_bilin_8bpc_scalar_dispatch as PrepBilin8bpcFn;
+        let mut _f = prep_bilin_8bpc_scalar_dispatch as PrepBilin8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::prep_bilin_8bpc_neon as PrepBilin8bpcFn;
+                _f = crate::neon::prep_bilin_8bpc_neon as PrepBilin8bpcFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = prep_bilin_8bpc_scalar_dispatch as PrepBilin8bpcFn;
+                _f = prep_bilin_8bpc_scalar_dispatch as PrepBilin8bpcFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::prep_bilin_8bpc_avx2 as PrepBilin8bpcFn;
+                _f = crate::avx::prep_bilin_8bpc_avx2 as PrepBilin8bpcFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -578,52 +578,52 @@ static PREP_8TAP_8BPC: OnceLock<Prep8tap8bpcFn> = OnceLock::new();
 #[inline]
 fn resolve_put_8tap_8bpc() -> Put8tap8bpcFn {
     *PUT_8TAP_8BPC.get_or_init(|| {
-        let mut f = put_8tap_8bpc_scalar_dispatch as Put8tap8bpcFn;
+        let mut _f = put_8tap_8bpc_scalar_dispatch as Put8tap8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::put_8tap_8bpc_neon as Put8tap8bpcFn;
+                _f = crate::neon::put_8tap_8bpc_neon as Put8tap8bpcFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = put_8tap_8bpc_scalar_dispatch as Put8tap8bpcFn;
+                _f = put_8tap_8bpc_scalar_dispatch as Put8tap8bpcFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::put_8tap_8bpc_avx2 as Put8tap8bpcFn;
+                _f = crate::avx::put_8tap_8bpc_avx2 as Put8tap8bpcFn;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_prep_8tap_8bpc() -> Prep8tap8bpcFn {
     *PREP_8TAP_8BPC.get_or_init(|| {
-        let mut f = prep_8tap_8bpc_scalar_dispatch as Prep8tap8bpcFn;
+        let mut _f = prep_8tap_8bpc_scalar_dispatch as Prep8tap8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::prep_8tap_8bpc_neon as Prep8tap8bpcFn;
+                _f = crate::neon::prep_8tap_8bpc_neon as Prep8tap8bpcFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = prep_8tap_8bpc_scalar_dispatch as Prep8tap8bpcFn;
+                _f = prep_8tap_8bpc_scalar_dispatch as Prep8tap8bpcFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::prep_8tap_8bpc_avx2 as Prep8tap8bpcFn;
+                _f = crate::avx::prep_8tap_8bpc_avx2 as Prep8tap8bpcFn;
             }
         }
-        f
+        _f
     })
 }
 

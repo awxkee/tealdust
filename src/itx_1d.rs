@@ -143,6 +143,7 @@ static FLIPADST16_KERNEL: [i8; 256] = [
     84, -89, 81, -62, 33, 8, -25, 41, -55, 67, -77, 84, -88, 89, -87, 81, -73, 62, -48, 33, -17,
 ];
 
+#[allow(unused)]
 pub(crate) static ADST4_KERNEL_ROWS: [[i8; 4]; 4] = [
     [18, 50, 75, 89],
     [50, 89, 18, -75],
@@ -150,6 +151,7 @@ pub(crate) static ADST4_KERNEL_ROWS: [[i8; 4]; 4] = [
     [89, -75, 50, -18],
 ];
 
+#[allow(unused)]
 pub(crate) static ADST8_KERNEL_ROWS: [[i8; 8]; 8] = [
     [11, 34, 54, 71, 84, 88, 79, 50],
     [28, 74, 89, 68, 17, -44, -83, -69],
@@ -161,6 +163,7 @@ pub(crate) static ADST8_KERNEL_ROWS: [[i8; 8]; 8] = [
     [89, -86, 79, -70, 58, -44, 29, -14],
 ];
 
+#[allow(unused)]
 pub(crate) static ADST16_KERNEL_ROWS: [[i8; 16]; 16] = [
     [
         8, 25, 41, 55, 67, 77, 84, 88, 89, 87, 81, 73, 62, 48, 33, 17,
@@ -212,6 +215,7 @@ pub(crate) static ADST16_KERNEL_ROWS: [[i8; 16]; 16] = [
     ],
 ];
 
+#[allow(unused)]
 pub(crate) static FLIPADST4_KERNEL_ROWS: [[i8; 4]; 4] = [
     [89, 75, 50, 18],
     [75, -18, -89, -50],
@@ -219,6 +223,7 @@ pub(crate) static FLIPADST4_KERNEL_ROWS: [[i8; 4]; 4] = [
     [18, -50, 75, -89],
 ];
 
+#[allow(unused)]
 pub(crate) static FLIPADST16_KERNEL_ROWS: [[i8; 16]; 16] = [
     [
         89, 88, 87, 84, 81, 77, 73, 67, 62, 55, 48, 41, 33, 25, 17, 8,

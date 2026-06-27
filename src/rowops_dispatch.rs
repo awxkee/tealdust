@@ -26,7 +26,6 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
 use std::sync::OnceLock;
 
 pub(crate) type ResidualAddFn = unsafe fn(&mut [u8], &[i32], usize, i32, i32);
@@ -49,27 +48,27 @@ static RESIDUAL_ADD: OnceLock<ResidualAddFn> = OnceLock::new();
 #[inline]
 fn resolve_residual_add() -> ResidualAddFn {
     *RESIDUAL_ADD.get_or_init(|| {
-        let mut f = residual_add_row_8bpc_scalar as ResidualAddFn;
+        let mut _f = residual_add_row_8bpc_scalar as ResidualAddFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::residual_add_row_8bpc_neon as ResidualAddFn;
+                _f = crate::neon::residual_add_row_8bpc_neon as ResidualAddFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::residual_add_row_8bpc_sse41 as ResidualAddFn;
+                _f = crate::sse::residual_add_row_8bpc_sse41 as ResidualAddFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::residual_add_row_8bpc_avx2 as ResidualAddFn;
+                _f = crate::avx::residual_add_row_8bpc_avx2 as ResidualAddFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -93,27 +92,27 @@ static DC_ADD: OnceLock<DcAddFn> = OnceLock::new();
 #[inline]
 fn resolve_dc_add() -> DcAddFn {
     *DC_ADD.get_or_init(|| {
-        let mut f = dc_add_row_8bpc_scalar as DcAddFn;
+        let mut _f = dc_add_row_8bpc_scalar as DcAddFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::dc_add_row_8bpc_neon as DcAddFn;
+                _f = crate::neon::dc_add_row_8bpc_neon as DcAddFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::dc_add_row_8bpc_sse41 as DcAddFn;
+                _f = crate::sse::dc_add_row_8bpc_sse41 as DcAddFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::dc_add_row_8bpc_avx2 as DcAddFn;
+                _f = crate::avx::dc_add_row_8bpc_avx2 as DcAddFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -136,27 +135,27 @@ static ROW_CLIP: OnceLock<RowClipFn> = OnceLock::new();
 #[inline]
 fn resolve_row_clip() -> RowClipFn {
     *ROW_CLIP.get_or_init(|| {
-        let mut f = row_clip_scalar as RowClipFn;
+        let mut _f = row_clip_scalar as RowClipFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::row_clip_neon as RowClipFn;
+                _f = crate::neon::row_clip_neon as RowClipFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::row_clip_sse41 as RowClipFn;
+                _f = crate::sse::row_clip_sse41 as RowClipFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::row_clip_avx2 as RowClipFn;
+                _f = crate::avx::row_clip_avx2 as RowClipFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -192,27 +191,27 @@ static CCTX: OnceLock<CctxFn> = OnceLock::new();
 #[inline]
 fn resolve_cctx() -> CctxFn {
     *CCTX.get_or_init(|| {
-        let mut f = cctx_row_scalar as CctxFn;
+        let mut _f = cctx_row_scalar as CctxFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cctx_row_neon as CctxFn;
+                _f = crate::neon::cctx_row_neon as CctxFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cctx_row_sse41 as CctxFn;
+                _f = crate::sse::cctx_row_sse41 as CctxFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cctx_row_avx2 as CctxFn;
+                _f = crate::avx::cctx_row_avx2 as CctxFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -251,27 +250,27 @@ static AVG: OnceLock<AvgFn> = OnceLock::new();
 #[inline]
 fn resolve_avg() -> AvgFn {
     *AVG.get_or_init(|| {
-        let mut f = avg_row_8bpc_scalar as AvgFn;
+        let mut _f = avg_row_8bpc_scalar as AvgFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::avg_row_8bpc_neon as AvgFn;
+                _f = crate::neon::avg_row_8bpc_neon as AvgFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::avg_row_8bpc_sse41 as AvgFn;
+                _f = crate::sse::avg_row_8bpc_sse41 as AvgFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::avg_row_8bpc_avx2 as AvgFn;
+                _f = crate::avx::avg_row_8bpc_avx2 as AvgFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -303,27 +302,27 @@ static W_AVG: OnceLock<WAvgFn> = OnceLock::new();
 #[inline]
 fn resolve_w_avg() -> WAvgFn {
     *W_AVG.get_or_init(|| {
-        let mut f = w_avg_row_8bpc_scalar as WAvgFn;
+        let mut _f = w_avg_row_8bpc_scalar as WAvgFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::w_avg_row_8bpc_neon as WAvgFn;
+                _f = crate::neon::w_avg_row_8bpc_neon as WAvgFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::w_avg_row_8bpc_sse41 as WAvgFn;
+                _f = crate::sse::w_avg_row_8bpc_sse41 as WAvgFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::w_avg_row_8bpc_avx2 as WAvgFn;
+                _f = crate::avx::w_avg_row_8bpc_avx2 as WAvgFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -370,27 +369,27 @@ static MASK: OnceLock<MaskFn> = OnceLock::new();
 #[inline]
 fn resolve_mask() -> MaskFn {
     *MASK.get_or_init(|| {
-        let mut f = mask_row_8bpc_scalar as MaskFn;
+        let mut _f = mask_row_8bpc_scalar as MaskFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::mask_row_8bpc_neon as MaskFn;
+                _f = crate::neon::mask_row_8bpc_neon as MaskFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::mask_row_8bpc_sse41 as MaskFn;
+                _f = crate::sse::mask_row_8bpc_sse41 as MaskFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::mask_row_8bpc_avx2 as MaskFn;
+                _f = crate::avx::mask_row_8bpc_avx2 as MaskFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -425,27 +424,27 @@ static BLEND: OnceLock<BlendFn> = OnceLock::new();
 #[inline]
 fn resolve_blend() -> BlendFn {
     *BLEND.get_or_init(|| {
-        let mut f = blend_row_8bpc_scalar as BlendFn;
+        let mut _f = blend_row_8bpc_scalar as BlendFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::blend_row_8bpc_neon as BlendFn;
+                _f = crate::neon::blend_row_8bpc_neon as BlendFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::blend_row_8bpc_sse41 as BlendFn;
+                _f = crate::sse::blend_row_8bpc_sse41 as BlendFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::blend_row_8bpc_avx2 as BlendFn;
+                _f = crate::avx::blend_row_8bpc_avx2 as BlendFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -468,27 +467,27 @@ static MORPH: OnceLock<MorphFn> = OnceLock::new();
 #[inline]
 fn resolve_morph() -> MorphFn {
     *MORPH.get_or_init(|| {
-        let mut f = morph_row_8bpc_scalar as MorphFn;
+        let mut _f = morph_row_8bpc_scalar as MorphFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::morph_row_8bpc_neon as MorphFn;
+                _f = crate::neon::morph_row_8bpc_neon as MorphFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::morph_row_8bpc_sse41 as MorphFn;
+                _f = crate::sse::morph_row_8bpc_sse41 as MorphFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::morph_row_8bpc_avx2 as MorphFn;
+                _f = crate::avx::morph_row_8bpc_avx2 as MorphFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -525,26 +524,26 @@ static RESIDUAL_ADD_HBD: OnceLock<ResidualAddHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_residual_add_hbd() -> ResidualAddHbdFn {
     *RESIDUAL_ADD_HBD.get_or_init(|| {
-        let mut f = residual_add_row_hbd_scalar as ResidualAddHbdFn;
+        let mut _f = residual_add_row_hbd_scalar as ResidualAddHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::residual_add_row_hbd_neon as ResidualAddHbdFn;
+                _f = crate::neon::residual_add_row_hbd_neon as ResidualAddHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::residual_add_row_hbd_sse41 as ResidualAddHbdFn;
+                _f = crate::sse::residual_add_row_hbd_sse41 as ResidualAddHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::residual_add_row_hbd_avx2 as ResidualAddHbdFn;
+                _f = crate::avx::residual_add_row_hbd_avx2 as ResidualAddHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -573,26 +572,26 @@ static DC_ADD_HBD: OnceLock<DcAddHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_dc_add_hbd() -> DcAddHbdFn {
     *DC_ADD_HBD.get_or_init(|| {
-        let mut f = dc_add_row_hbd_scalar as DcAddHbdFn;
+        let mut _f = dc_add_row_hbd_scalar as DcAddHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::dc_add_row_hbd_neon as DcAddHbdFn;
+                _f = crate::neon::dc_add_row_hbd_neon as DcAddHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::dc_add_row_hbd_sse41 as DcAddHbdFn;
+                _f = crate::sse::dc_add_row_hbd_sse41 as DcAddHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::dc_add_row_hbd_avx2 as DcAddHbdFn;
+                _f = crate::avx::dc_add_row_hbd_avx2 as DcAddHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -622,26 +621,26 @@ static AVG_HBD: OnceLock<AvgHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_avg_hbd() -> AvgHbdFn {
     *AVG_HBD.get_or_init(|| {
-        let mut f = avg_row_hbd_scalar as AvgHbdFn;
+        let mut _f = avg_row_hbd_scalar as AvgHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::avg_row_hbd_neon as AvgHbdFn;
+                _f = crate::neon::avg_row_hbd_neon as AvgHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::avg_row_hbd_sse41 as AvgHbdFn;
+                _f = crate::sse::avg_row_hbd_sse41 as AvgHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::avg_row_hbd_avx2 as AvgHbdFn;
+                _f = crate::avx::avg_row_hbd_avx2 as AvgHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -682,26 +681,26 @@ static W_AVG_HBD: OnceLock<WAvgHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_w_avg_hbd() -> WAvgHbdFn {
     *W_AVG_HBD.get_or_init(|| {
-        let mut f = w_avg_row_hbd_scalar as WAvgHbdFn;
+        let mut _f = w_avg_row_hbd_scalar as WAvgHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::w_avg_row_hbd_neon as WAvgHbdFn;
+                _f = crate::neon::w_avg_row_hbd_neon as WAvgHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::w_avg_row_hbd_sse41 as WAvgHbdFn;
+                _f = crate::sse::w_avg_row_hbd_sse41 as WAvgHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::w_avg_row_hbd_avx2 as WAvgHbdFn;
+                _f = crate::avx::w_avg_row_hbd_avx2 as WAvgHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -749,26 +748,26 @@ static MASK_HBD: OnceLock<MaskHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_mask_hbd() -> MaskHbdFn {
     *MASK_HBD.get_or_init(|| {
-        let mut f = mask_row_hbd_scalar as MaskHbdFn;
+        let mut _f = mask_row_hbd_scalar as MaskHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::mask_row_hbd_neon as MaskHbdFn;
+                _f = crate::neon::mask_row_hbd_neon as MaskHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::mask_row_hbd_sse41 as MaskHbdFn;
+                _f = crate::sse::mask_row_hbd_sse41 as MaskHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::mask_row_hbd_avx2 as MaskHbdFn;
+                _f = crate::avx::mask_row_hbd_avx2 as MaskHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -801,26 +800,26 @@ static BLEND_HBD: OnceLock<BlendHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_blend_hbd() -> BlendHbdFn {
     *BLEND_HBD.get_or_init(|| {
-        let mut f = blend_row_hbd_scalar as BlendHbdFn;
+        let mut _f = blend_row_hbd_scalar as BlendHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::blend_row_hbd_neon as BlendHbdFn;
+                _f = crate::neon::blend_row_hbd_neon as BlendHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::blend_row_hbd_sse41 as BlendHbdFn;
+                _f = crate::sse::blend_row_hbd_sse41 as BlendHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::blend_row_hbd_avx2 as BlendHbdFn;
+                _f = crate::avx::blend_row_hbd_avx2 as BlendHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -848,26 +847,26 @@ static MORPH_HBD: OnceLock<MorphHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_morph_hbd() -> MorphHbdFn {
     *MORPH_HBD.get_or_init(|| {
-        let mut f = morph_row_hbd_scalar as MorphHbdFn;
+        let mut _f = morph_row_hbd_scalar as MorphHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::morph_row_hbd_neon as MorphHbdFn;
+                _f = crate::neon::morph_row_hbd_neon as MorphHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::morph_row_hbd_sse41 as MorphHbdFn;
+                _f = crate::sse::morph_row_hbd_sse41 as MorphHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::morph_row_hbd_avx2 as MorphHbdFn;
+                _f = crate::avx::morph_row_hbd_avx2 as MorphHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -899,27 +898,27 @@ static GDF_ADD: OnceLock<GdfAddFn> = OnceLock::new();
 #[inline]
 fn resolve_gdf_add() -> GdfAddFn {
     *GDF_ADD.get_or_init(|| {
-        let mut f = gdf_add_run_8bpc_scalar as GdfAddFn;
+        let mut _f = gdf_add_run_8bpc_scalar as GdfAddFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::gdf_add_run_8bpc_neon as GdfAddFn;
+                _f = crate::neon::gdf_add_run_8bpc_neon as GdfAddFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::gdf_add_run_8bpc_sse41 as GdfAddFn;
+                _f = crate::sse::gdf_add_run_8bpc_sse41 as GdfAddFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::gdf_add_run_8bpc_avx2 as GdfAddFn;
+                _f = crate::avx::gdf_add_run_8bpc_avx2 as GdfAddFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -986,27 +985,27 @@ static GDF_GRAD: OnceLock<GdfGradFn> = OnceLock::new();
 #[inline]
 fn resolve_gdf_grad() -> GdfGradFn {
     *GDF_GRAD.get_or_init(|| {
-        let mut f = gdf_gradient_group_scalar as GdfGradFn;
+        let mut _f = gdf_gradient_group_scalar as GdfGradFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::gdf_gradient_group_neon as GdfGradFn;
+                _f = crate::neon::gdf_gradient_group_neon as GdfGradFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::gdf_gradient_group_sse41 as GdfGradFn;
+                _f = crate::sse::gdf_gradient_group_sse41 as GdfGradFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::gdf_gradient_group_avx2 as GdfGradFn;
+                _f = crate::avx::gdf_gradient_group_avx2 as GdfGradFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -1067,26 +1066,26 @@ static CCTX_I16: OnceLock<CctxI16Fn> = OnceLock::new();
 #[inline]
 fn resolve_cctx_i16() -> CctxI16Fn {
     *CCTX_I16.get_or_init(|| {
-        let mut f = cctx_row_i16_scalar as CctxI16Fn;
+        let mut _f = cctx_row_i16_scalar as CctxI16Fn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cctx_row_i16_neon as CctxI16Fn;
+                _f = crate::neon::cctx_row_i16_neon as CctxI16Fn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cctx_row_i16_sse41 as CctxI16Fn;
+                _f = crate::sse::cctx_row_i16_sse41 as CctxI16Fn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cctx_row_i16_avx2 as CctxI16Fn;
+                _f = crate::avx::cctx_row_i16_avx2 as CctxI16Fn;
             }
         }
-        f
+        _f
     })
 }
 

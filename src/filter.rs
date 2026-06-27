@@ -329,54 +329,54 @@ static PC_WIENER_FIR: std::sync::OnceLock<PcWienerFirFn> = std::sync::OnceLock::
 #[inline]
 pub(crate) fn ns_wiener_fir_run() -> NsWienerFirFn {
     *NS_WIENER_FIR.get_or_init(|| {
-        let mut f: NsWienerFirFn = ns_wiener_fir_run_scalar;
+        let mut _f: NsWienerFirFn = ns_wiener_fir_run_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ns_wiener_fir_run_neon;
+                _f = crate::neon::ns_wiener_fir_run_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ns_wiener_fir_run_sse41;
+                _f = crate::sse::ns_wiener_fir_run_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ns_wiener_fir_run_avx2;
+                _f = crate::avx::ns_wiener_fir_run_avx2;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 pub(crate) fn pc_wiener_fir_run() -> PcWienerFirFn {
     *PC_WIENER_FIR.get_or_init(|| {
-        let mut f: PcWienerFirFn = pc_wiener_fir_run_scalar;
+        let mut _f: PcWienerFirFn = pc_wiener_fir_run_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::pc_wiener_fir_run_neon;
+                _f = crate::neon::pc_wiener_fir_run_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::pc_wiener_fir_run_sse41;
+                _f = crate::sse::pc_wiener_fir_run_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::pc_wiener_fir_run_avx2;
+                _f = crate::avx::pc_wiener_fir_run_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -425,27 +425,27 @@ static NS_WIENER_UV_FIR: std::sync::OnceLock<NsWienerUvFirFn> = std::sync::OnceL
 #[inline]
 pub(crate) fn ns_wiener_uv_fir_run() -> NsWienerUvFirFn {
     *NS_WIENER_UV_FIR.get_or_init(|| {
-        let mut f: NsWienerUvFirFn = ns_wiener_uv_fir_run_scalar;
+        let mut _f: NsWienerUvFirFn = ns_wiener_uv_fir_run_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ns_wiener_uv_fir_run_neon;
+                _f = crate::neon::ns_wiener_uv_fir_run_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ns_wiener_uv_fir_run_sse41;
+                _f = crate::sse::ns_wiener_uv_fir_run_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ns_wiener_uv_fir_run_avx2;
+                _f = crate::avx::ns_wiener_uv_fir_run_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -524,52 +524,52 @@ static PC_WIENER_FIR_HBD: std::sync::OnceLock<PcWienerFirHbdFn> = std::sync::Onc
 #[inline]
 pub(crate) fn ns_wiener_fir_run_hbd() -> NsWienerFirHbdFn {
     *NS_WIENER_FIR_HBD.get_or_init(|| {
-        let mut f: NsWienerFirHbdFn = ns_wiener_fir_run_hbd_scalar;
+        let mut _f: NsWienerFirHbdFn = ns_wiener_fir_run_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ns_wiener_fir_run_hbd_neon;
+                _f = crate::neon::ns_wiener_fir_run_hbd_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ns_wiener_fir_run_hbd_sse41;
+                _f = crate::sse::ns_wiener_fir_run_hbd_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ns_wiener_fir_run_hbd_avx2;
+                _f = crate::avx::ns_wiener_fir_run_hbd_avx2;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 pub(crate) fn pc_wiener_fir_run_hbd() -> PcWienerFirHbdFn {
     *PC_WIENER_FIR_HBD.get_or_init(|| {
-        let mut f: PcWienerFirHbdFn = pc_wiener_fir_run_hbd_scalar;
+        let mut _f: PcWienerFirHbdFn = pc_wiener_fir_run_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::pc_wiener_fir_run_hbd_neon;
+                _f = crate::neon::pc_wiener_fir_run_hbd_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::pc_wiener_fir_run_hbd_sse41;
+                _f = crate::sse::pc_wiener_fir_run_hbd_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::pc_wiener_fir_run_hbd_avx2;
+                _f = crate::avx::pc_wiener_fir_run_hbd_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -640,26 +640,26 @@ static NS_WIENER_UV_FIR_HBD: std::sync::OnceLock<NsWienerUvFirHbdFn> = std::sync
 #[inline]
 pub(crate) fn ns_wiener_uv_fir_run_hbd() -> NsWienerUvFirHbdFn {
     *NS_WIENER_UV_FIR_HBD.get_or_init(|| {
-        let mut f: NsWienerUvFirHbdFn = ns_wiener_uv_fir_run_hbd_scalar;
+        let mut _f: NsWienerUvFirHbdFn = ns_wiener_uv_fir_run_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ns_wiener_uv_fir_run_hbd_neon;
+                _f = crate::neon::ns_wiener_uv_fir_run_hbd_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ns_wiener_uv_fir_run_hbd_sse41;
+                _f = crate::sse::ns_wiener_uv_fir_run_hbd_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ns_wiener_uv_fir_run_hbd_avx2;
+                _f = crate::avx::ns_wiener_uv_fir_run_hbd_avx2;
             }
         }
-        f
+        _f
     })
 }
 

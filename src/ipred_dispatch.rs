@@ -26,7 +26,6 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#![allow(unused_assignments, unused_mut)]
 use std::sync::OnceLock;
 
 use crate::pixel::BitDepth;
@@ -238,135 +237,135 @@ static IPRED_SMOOTH_H_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_v() -> IntraPred8Fn {
     *IPRED_V_8BPC.get_or_init(|| {
-        let mut f: IntraPred8Fn = ipred_v_scalar;
+        let mut _f: IntraPred8Fn = ipred_v_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_v_8bpc_neon;
+                _f = crate::neon::ipred_v_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_v_8bpc_sse41;
+                _f = crate::sse::ipred_v_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_v_8bpc_avx2;
+                _f = crate::avx::ipred_v_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ipred_h() -> IntraPred8Fn {
     *IPRED_H_8BPC.get_or_init(|| {
-        let mut f: IntraPred8Fn = ipred_h_scalar;
+        let mut _f: IntraPred8Fn = ipred_h_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_h_8bpc_neon;
+                _f = crate::neon::ipred_h_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_h_8bpc_sse41;
+                _f = crate::sse::ipred_h_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_h_8bpc_avx2;
+                _f = crate::avx::ipred_h_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ipred_smooth() -> SmoothPred8Fn {
     *IPRED_SMOOTH_8BPC.get_or_init(|| {
-        let mut f: SmoothPred8Fn = ipred_smooth_scalar;
+        let mut _f: SmoothPred8Fn = ipred_smooth_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_smooth_8bpc_neon;
+                _f = crate::neon::ipred_smooth_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_smooth_8bpc_sse41;
+                _f = crate::sse::ipred_smooth_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_smooth_8bpc_avx2;
+                _f = crate::avx::ipred_smooth_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ipred_smooth_v() -> SmoothPred8Fn {
     *IPRED_SMOOTH_V_8BPC.get_or_init(|| {
-        let mut f: SmoothPred8Fn = ipred_smooth_v_scalar;
+        let mut _f: SmoothPred8Fn = ipred_smooth_v_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_smooth_v_8bpc_neon;
+                _f = crate::neon::ipred_smooth_v_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_smooth_v_8bpc_sse41;
+                _f = crate::sse::ipred_smooth_v_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_smooth_v_8bpc_avx2;
+                _f = crate::avx::ipred_smooth_v_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ipred_smooth_h() -> SmoothPred8Fn {
     *IPRED_SMOOTH_H_8BPC.get_or_init(|| {
-        let mut f: SmoothPred8Fn = ipred_smooth_h_scalar;
+        let mut _f: SmoothPred8Fn = ipred_smooth_h_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_smooth_h_8bpc_neon;
+                _f = crate::neon::ipred_smooth_h_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_smooth_h_8bpc_sse41;
+                _f = crate::sse::ipred_smooth_h_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_smooth_h_8bpc_avx2;
+                _f = crate::avx::ipred_smooth_h_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -476,108 +475,108 @@ static IPRED_DC_128_8BPC: OnceLock<DcPred128Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_dc() -> IntraPred8Fn {
     *IPRED_DC_8BPC.get_or_init(|| {
-        let mut f: IntraPred8Fn = ipred_dc_scalar;
+        let mut _f: IntraPred8Fn = ipred_dc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dc_8bpc_neon;
+                _f = crate::neon::ipred_dc_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_dc_8bpc_sse41;
+                _f = crate::sse::ipred_dc_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dc_8bpc_avx2;
+                _f = crate::avx::ipred_dc_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ipred_dc_top() -> IntraPred8Fn {
     *IPRED_DC_TOP_8BPC.get_or_init(|| {
-        let mut f: IntraPred8Fn = ipred_dc_top_scalar;
+        let mut _f: IntraPred8Fn = ipred_dc_top_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dc_top_8bpc_neon;
+                _f = crate::neon::ipred_dc_top_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_dc_top_8bpc_sse41;
+                _f = crate::sse::ipred_dc_top_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dc_top_8bpc_avx2;
+                _f = crate::avx::ipred_dc_top_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ipred_dc_left() -> IntraPred8Fn {
     *IPRED_DC_LEFT_8BPC.get_or_init(|| {
-        let mut f: IntraPred8Fn = ipred_dc_left_scalar;
+        let mut _f: IntraPred8Fn = ipred_dc_left_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dc_left_8bpc_neon;
+                _f = crate::neon::ipred_dc_left_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_dc_left_8bpc_sse41;
+                _f = crate::sse::ipred_dc_left_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dc_left_8bpc_avx2;
+                _f = crate::avx::ipred_dc_left_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
 #[inline]
 fn resolve_ipred_dc_128() -> DcPred128Fn {
     *IPRED_DC_128_8BPC.get_or_init(|| {
-        let mut f: DcPred128Fn = ipred_dc_128_scalar;
+        let mut _f: DcPred128Fn = ipred_dc_128_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dc_128_8bpc_neon;
+                _f = crate::neon::ipred_dc_128_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_dc_128_8bpc_sse41;
+                _f = crate::sse::ipred_dc_128_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dc_128_8bpc_avx2;
+                _f = crate::avx::ipred_dc_128_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -659,27 +658,27 @@ static IPRED_PAETH_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_paeth() -> SmoothPred8Fn {
     *IPRED_PAETH_8BPC.get_or_init(|| {
-        let mut f: SmoothPred8Fn = ipred_paeth_scalar;
+        let mut _f: SmoothPred8Fn = ipred_paeth_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_paeth_8bpc_neon;
+                _f = crate::neon::ipred_paeth_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_paeth_8bpc_sse41;
+                _f = crate::sse::ipred_paeth_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_paeth_8bpc_avx2;
+                _f = crate::avx::ipred_paeth_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -733,28 +732,27 @@ static IPRED_Z1_8BPC: OnceLock<Z1Pred8Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_z1() -> Z1Pred8Fn {
     *IPRED_Z1_8BPC.get_or_init(|| {
-        #[allow(unused_mut)]
-        let mut f: Z1Pred8Fn = ipred_z1_scalar;
+        let mut _f: Z1Pred8Fn = ipred_z1_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_z1_8bpc_neon;
+                _f = crate::neon::ipred_z1_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_z1_8bpc_sse41;
+                _f = crate::sse::ipred_z1_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_z1_8bpc_avx2;
+                _f = crate::avx::ipred_z1_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -819,28 +817,27 @@ static IPRED_Z3_8BPC: OnceLock<Z1Pred8Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_z3() -> Z1Pred8Fn {
     *IPRED_Z3_8BPC.get_or_init(|| {
-        #[allow(unused_mut)]
-        let mut f: Z1Pred8Fn = ipred_z3_scalar;
+        let mut _f: Z1Pred8Fn = ipred_z3_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_z3_8bpc_neon;
+                _f = crate::neon::ipred_z3_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_z3_8bpc_sse41;
+                _f = crate::sse::ipred_z3_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_z3_8bpc_avx2;
+                _f = crate::avx::ipred_z3_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -905,28 +902,27 @@ static IPRED_Z2_8BPC: OnceLock<Z2Pred8Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_z2() -> Z2Pred8Fn {
     *IPRED_Z2_8BPC.get_or_init(|| {
-        #[allow(unused_mut)]
-        let mut f: Z2Pred8Fn = ipred_z2_scalar;
+        let mut _f: Z2Pred8Fn = ipred_z2_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_z2_8bpc_neon;
+                _f = crate::neon::ipred_z2_8bpc_neon;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::ipred_z2_8bpc_sse41;
+                _f = crate::sse::ipred_z2_8bpc_sse41;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_z2_8bpc_avx2;
+                _f = crate::avx::ipred_z2_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -984,20 +980,20 @@ static IPRED_DIP_8BPC: OnceLock<DipPred8Fn> = OnceLock::new();
 #[inline]
 fn resolve_ipred_dip_8bpc() -> DipPred8Fn {
     *IPRED_DIP_8BPC.get_or_init(|| {
-        let mut f: DipPred8Fn = ipred_dip_8bpc_scalar;
+        let mut _f: DipPred8Fn = ipred_dip_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dip_8bpc_neon;
+                _f = crate::neon::ipred_dip_8bpc_neon;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dip_8bpc_avx2;
+                _f = crate::avx::ipred_dip_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -1042,20 +1038,20 @@ static PAL_PRED_8BPC: OnceLock<PalPred8Fn> = OnceLock::new();
 #[inline]
 fn resolve_pal_pred_8bpc() -> PalPred8Fn {
     *PAL_PRED_8BPC.get_or_init(|| {
-        let mut f: PalPred8Fn = pal_pred_8bpc_scalar;
+        let mut _f: PalPred8Fn = pal_pred_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::pal_pred_8bpc_neon;
+                _f = crate::neon::pal_pred_8bpc_neon;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::pal_pred_8bpc_avx2;
+                _f = crate::avx::pal_pred_8bpc_avx2;
             }
         }
-        f
+        _f
     })
 }
 
@@ -1476,26 +1472,26 @@ static IPRED_DIP_HBD: OnceLock<DipPredHbdFn> = OnceLock::new();
 macro_rules! resolve_hbd_ipred {
     ($lock:ident, $scalar:path, $sse:path, $avx:path, $neon:path, $ty:ty) => {{
         *$lock.get_or_init(|| {
-            let mut f: $ty = $scalar;
+            let mut _f: $ty = $scalar;
             #[cfg(target_arch = "aarch64")]
             {
                 if std::arch::is_aarch64_feature_detected!("neon") {
-                    f = $neon;
+                    _f = $neon;
                 }
             }
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             {
                 if std::is_x86_feature_detected!("sse4.1") {
-                    f = $sse;
+                    _f = $sse;
                 }
             }
             #[cfg(all(target_arch = "x86_64", feature = "avx"))]
             {
                 if std::is_x86_feature_detected!("avx2") {
-                    f = $avx;
+                    _f = $avx;
                 }
             }
-            f
+            _f
         })
     }};
 }
@@ -1659,20 +1655,20 @@ fn resolve_ipred_z3_hbd() -> Z1PredHbdFn {
 #[inline]
 fn resolve_ipred_dip_hbd() -> DipPredHbdFn {
     *IPRED_DIP_HBD.get_or_init(|| {
-        let mut f: DipPredHbdFn = ipred_dip_hbd_scalar;
+        let mut _f: DipPredHbdFn = ipred_dip_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::ipred_dip_hbd_neon;
+                _f = crate::neon::ipred_dip_hbd_neon;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::ipred_dip_hbd_avx2;
+                _f = crate::avx::ipred_dip_hbd_avx2;
             }
         }
-        f
+        _f
     })
 }
 

@@ -393,26 +393,26 @@ static CDEF_DIR_8BPC: OnceLock<CdefDir8Fn> = OnceLock::new();
 #[inline]
 fn resolve_cdef_dir_8bpc() -> CdefDir8Fn {
     *CDEF_DIR_8BPC.get_or_init(|| {
-        let mut f = cdef_find_dir_8bpc_scalar as CdefDir8Fn;
+        let mut _f = cdef_find_dir_8bpc_scalar as CdefDir8Fn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cdef_find_dir_8bpc_neon as CdefDir8Fn;
+                _f = crate::neon::cdef_find_dir_8bpc_neon as CdefDir8Fn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cdef_find_dir_8bpc_sse41 as CdefDir8Fn;
+                _f = crate::sse::cdef_find_dir_8bpc_sse41 as CdefDir8Fn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cdef_find_dir_8bpc_avx2 as CdefDir8Fn;
+                _f = crate::avx::cdef_find_dir_8bpc_avx2 as CdefDir8Fn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -421,26 +421,26 @@ static CDEF_DIR_HBD: OnceLock<CdefDirHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_cdef_dir_hbd() -> CdefDirHbdFn {
     *CDEF_DIR_HBD.get_or_init(|| {
-        let mut f = cdef_find_dir_hbd_scalar as CdefDirHbdFn;
+        let mut _f = cdef_find_dir_hbd_scalar as CdefDirHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cdef_find_dir_hbd_neon as CdefDirHbdFn;
+                _f = crate::neon::cdef_find_dir_hbd_neon as CdefDirHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cdef_find_dir_hbd_sse41 as CdefDirHbdFn;
+                _f = crate::sse::cdef_find_dir_hbd_sse41 as CdefDirHbdFn;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cdef_find_dir_hbd_avx2 as CdefDirHbdFn;
+                _f = crate::avx::cdef_find_dir_hbd_avx2 as CdefDirHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -468,27 +468,27 @@ static CDEF_FILTER: OnceLock<CdefFilterFn> = OnceLock::new();
 #[inline]
 fn resolve_cdef_filter() -> CdefFilterFn {
     *CDEF_FILTER.get_or_init(|| {
-        let mut f = cdef_filter_block_8bpc_scalar as CdefFilterFn;
+        let mut _f = cdef_filter_block_8bpc_scalar as CdefFilterFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cdef_filter_block_8bpc_neon as CdefFilterFn;
+                _f = crate::neon::cdef_filter_block_8bpc_neon as CdefFilterFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cdef_filter_block_8bpc_sse41 as CdefFilterFn;
+                _f = crate::sse::cdef_filter_block_8bpc_sse41 as CdefFilterFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cdef_filter_block_8bpc_avx2 as CdefFilterFn;
+                _f = crate::avx::cdef_filter_block_8bpc_avx2 as CdefFilterFn;
             }
         }
-        f
+        _f
     })
 }
 
@@ -497,27 +497,27 @@ static CDEF_FILTER_HBD: OnceLock<CdefFilterHbdFn> = OnceLock::new();
 #[inline]
 fn resolve_cdef_filter_hbd() -> CdefFilterHbdFn {
     *CDEF_FILTER_HBD.get_or_init(|| {
-        let mut f = cdef_filter_block_hbd_scalar as CdefFilterHbdFn;
+        let mut _f = cdef_filter_block_hbd_scalar as CdefFilterHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
             if std::arch::is_aarch64_feature_detected!("neon") {
-                f = crate::neon::cdef_filter_block_hbd_neon as CdefFilterHbdFn;
+                _f = crate::neon::cdef_filter_block_hbd_neon as CdefFilterHbdFn;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
-                f = crate::sse::cdef_filter_block_hbd_sse41 as CdefFilterHbdFn;
+                _f = crate::sse::cdef_filter_block_hbd_sse41 as CdefFilterHbdFn;
             }
         }
 
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
-                f = crate::avx::cdef_filter_block_hbd_avx2 as CdefFilterHbdFn;
+                _f = crate::avx::cdef_filter_block_hbd_avx2 as CdefFilterHbdFn;
             }
         }
-        f
+        _f
     })
 }
 
