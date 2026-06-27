@@ -1171,7 +1171,7 @@ where
 
 /// Handles CFL_EXPLICIT / CFL_IMPLICIT (cfl_type < 2) and CFL_MHCCP (cfl_type==2).
 #[allow(clippy::too_many_arguments)]
-fn cfl_predict_8bpc<BD: crate::pixel::BitDepth>(
+fn cfl_predict_8bpc<BD: BitDepth>(
     recon: &mut ReconCtx<BD>,
     b: &Av2Block,
     bs: BlockSize,
@@ -1347,7 +1347,7 @@ fn cfl_predict_8bpc<BD: crate::pixel::BitDepth>(
             0
         };
 
-    let mut luma = vec![BD::Pixel::default(); crate::ipred::CFL_MHCCP_MAX_LUMA_SIZE];
+    let mut luma = [BD::Pixel::default(); crate::ipred::CFL_MHCCP_MAX_LUMA_SIZE];
     // SAFETY: luma plane is a disjoint allocation from chroma planes.
     let ysrc: &[BD::Pixel] = &*recon.dst_y;
     // and `prefilter_data_full_frame` is set, so `ytop_sb_edge` resolves to the

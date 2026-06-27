@@ -132,14 +132,25 @@ impl PlaneStorage {
     }
 
     #[inline]
-    fn with_len_for_bpc(byte_len: usize, hbd: bool) -> Self {
+    fn with_len_for_bpc(byte_len: usize, hbd: bool) -> Option<Self> {
         if byte_len == 0 {
-            PlaneStorage::Empty
-        } else if hbd {
-            debug_assert_eq!(byte_len % core::mem::size_of::<u16>(), 0);
-            PlaneStorage::U16(Arc::new(vec![0u16; byte_len / core::mem::size_of::<u16>()]))
+            return Some(PlaneStorage::Empty);
+        }
+
+        if hbd {
+            if byte_len % core::mem::size_of::<u16>() != 0 {
+                return None;
+            }
+            let len = byte_len / core::mem::size_of::<u16>();
+            let mut v = Vec::new();
+            v.try_reserve_exact(len).ok()?;
+            v.resize(len, 0u16);
+            Some(PlaneStorage::U16(Arc::new(v)))
         } else {
-            PlaneStorage::U8(Arc::new(vec![0u8; byte_len]))
+            let mut v = Vec::new();
+            v.try_reserve_exact(byte_len).ok()?;
+            v.resize(byte_len, 0u8);
+            Some(PlaneStorage::U8(Arc::new(v)))
         }
     }
 }
@@ -184,15 +195,22 @@ struct PlaneByteLayout {
     has_chroma: bool,
 }
 
-fn plane_byte_layout(p: &PictureParameters) -> PlaneByteLayout {
+fn plane_byte_layout(p: &PictureParameters) -> Option<PlaneByteLayout> {
+    if p.w <= 0 || p.h <= 0 || !(1..=16).contains(&p.bpc) {
+        return None;
+    }
+
     let hbd = p.bpc > 8;
-    let aligned_w = (p.w as usize + 127) & !127;
-    let aligned_h = (p.h as usize + 127) & !127;
+    let w = p.w as usize;
+    let h = p.h as usize;
+    let aligned_w = w.checked_add(127)? & !127;
+    let aligned_h = h.checked_add(127)? & !127;
     let has_chroma = p.layout != PixelLayout::I400;
     let ss_ver = p.layout == PixelLayout::I420;
     let ss_hor = p.layout != PixelLayout::I444;
 
-    let mut y_stride = (aligned_w << (hbd as usize)) as isize;
+    let bytes_per_sample = if hbd { 2usize } else { 1usize };
+    let mut y_stride = aligned_w.checked_mul(bytes_per_sample)?;
     let mut uv_stride = if has_chroma {
         y_stride >> (ss_hor as usize)
     } else {
@@ -200,40 +218,31 @@ fn plane_byte_layout(p: &PictureParameters) -> PlaneByteLayout {
     };
 
     if y_stride & 1023 == 0 {
-        y_stride += PICTURE_ALIGNMENT as isize;
+        y_stride = y_stride.checked_add(PICTURE_ALIGNMENT)?;
     }
     if uv_stride & 1023 == 0 && has_chroma {
-        uv_stride += PICTURE_ALIGNMENT as isize;
+        uv_stride = uv_stride.checked_add(PICTURE_ALIGNMENT)?;
     }
 
-    let y_sz = y_stride as usize * aligned_h;
-    let uv_sz = uv_stride as usize * (aligned_h >> (ss_ver as usize));
+    let y_sz = y_stride.checked_mul(aligned_h)?;
+    let uv_sz = uv_stride.checked_mul(aligned_h >> (ss_ver as usize))?;
+    if y_stride > isize::MAX as usize || uv_stride > isize::MAX as usize {
+        return None;
+    }
+    let y_stride_i = y_stride as isize;
+    let uv_stride_i = uv_stride as isize;
 
-    PlaneByteLayout {
-        stride: [y_stride, uv_stride],
+    Some(PlaneByteLayout {
+        stride: [y_stride_i, uv_stride_i],
         y_sz,
         uv_sz,
         hbd,
         has_chroma,
-    }
+    })
 }
 
-/// A `PicAllocator` that recycles plane buffers across frames instead of freeing
-/// and re-allocating them. For a constant-resolution stream (every AVIF frame,
-/// and almost every video) the freed planes from one frame exactly fit the next,
-/// so steady-state decoding performs no picture heap traffic at all — removing
-/// both the multi-megabyte `alloc_zeroed` and the matching free/`drop` per frame.
-///
-/// A recycled buffer is zeroed before it is handed back out, so it is
-/// indistinguishable from a fresh `vec![0; n]`: the decoder observes identical
-/// bytes whether a plane is pooled or freshly allocated, which is what keeps the
-/// output bit-exact regardless of pool state.
 pub struct PoolPicAllocator {
-    /// Freed plane buffers awaiting reuse. Behind a `Mutex` because pictures may
-    /// be released from worker threads (e.g. the parallel display copy).
     free: std::sync::Mutex<Vec<PlaneStorage>>,
-    /// Cap on retained buffers, a safety valve against pathological growth; the
-    /// live set is naturally bounded by the DPB + reference slots.
     cap: usize,
 }
 
@@ -253,9 +262,9 @@ impl PoolPicAllocator {
 
     /// A pooled buffer of exactly `byte_len` bytes (and matching element width),
     /// zeroed for reuse; or a fresh zeroed allocation when the pool can't match.
-    fn take_or_make(&self, byte_len: usize, hbd: bool) -> PlaneStorage {
+    fn take_or_make(&self, byte_len: usize, hbd: bool) -> Option<PlaneStorage> {
         if byte_len == 0 {
-            return PlaneStorage::Empty;
+            return Some(PlaneStorage::Empty);
         }
         if let Ok(mut free) = self.free.lock() {
             if let Some(idx) = free
@@ -264,7 +273,7 @@ impl PoolPicAllocator {
             {
                 let mut s = free.swap_remove(idx);
                 s.zero_fill();
-                return s;
+                return Some(s);
             }
         }
         PlaneStorage::with_len_for_bpc(byte_len, hbd)
@@ -273,12 +282,12 @@ impl PoolPicAllocator {
 
 impl PicAllocator for PoolPicAllocator {
     fn alloc_picture(&self, p: &PictureParameters) -> Option<PictureAllocation> {
-        let l = plane_byte_layout(p);
-        let y = self.take_or_make(l.y_sz, l.hbd);
+        let l = plane_byte_layout(p)?;
+        let y = self.take_or_make(l.y_sz, l.hbd)?;
         let (u, v) = if l.has_chroma {
             (
-                self.take_or_make(l.uv_sz, l.hbd),
-                self.take_or_make(l.uv_sz, l.hbd),
+                self.take_or_make(l.uv_sz, l.hbd)?,
+                self.take_or_make(l.uv_sz, l.hbd)?,
             )
         } else {
             (PlaneStorage::Empty, PlaneStorage::Empty)

@@ -39,7 +39,6 @@ pub(crate) struct GetBits<'a> {
 
 impl<'a> GetBits<'a> {
     pub(crate) fn new(data: &'a [u8]) -> Self {
-        assert!(!data.is_empty());
         Self {
             state: 0,
             bits_left: 0,
@@ -97,6 +96,10 @@ impl<'a> GetBits<'a> {
 
     pub(crate) fn get_bits(&mut self, n: i32) -> u32 {
         debug_assert!((0..=32).contains(&n));
+        if !(0..=32).contains(&n) {
+            self.error = true;
+            return 0;
+        }
         // A zero-width field carries no bits and reads as 0. The C reference
         // asserts n > 0 and relies on the field never being zero in practice;
         // for AV2, ref_frames_log2 is legitimately 0 when ref_frames == 1, so a
@@ -104,8 +107,14 @@ impl<'a> GetBits<'a> {
         if n == 0 {
             return 0;
         }
-        if n as u32 > self.bits_left as u32 {
+        if n > self.bits_left {
             self.refill(n);
+            if n > self.bits_left {
+                self.error = true;
+                self.bits_left = 0;
+                self.state = 0;
+                return 0;
+            }
         }
         let state = self.state;
         self.bits_left -= n;
@@ -115,11 +124,21 @@ impl<'a> GetBits<'a> {
 
     pub(crate) fn get_sbits(&mut self, n: i32) -> i32 {
         debug_assert!((0..=32).contains(&n));
+        if !(0..=32).contains(&n) {
+            self.error = true;
+            return 0;
+        }
         if n == 0 {
             return 0;
         }
-        if n as u32 > self.bits_left as u32 {
+        if n > self.bits_left {
             self.refill(n);
+            if n > self.bits_left {
+                self.error = true;
+                self.bits_left = 0;
+                self.state = 0;
+                return 0;
+            }
         }
         let state = self.state;
         self.bits_left -= n;
@@ -151,6 +170,10 @@ impl<'a> GetBits<'a> {
 
     pub(crate) fn get_golomb(&mut self, k: u32) -> u32 {
         debug_assert!(k < 32);
+        if k >= 32 {
+            self.error = true;
+            return 0;
+        }
         let mut bits: u32 = 0;
         while bits < 32 - k {
             if self.get_bit() == 0 {
@@ -203,41 +226,81 @@ impl<'a> GetBits<'a> {
     }
 
     pub(crate) fn get_bits_subexp_u(&mut self, ref_val: u32, n: u32, k: i32) -> u32 {
+        if n == 0 || ref_val >= n || k < 0 || k >= 32 {
+            self.error = true;
+            return 0;
+        }
+
         let mut v: u32 = 0;
 
         let mut i = 0;
         loop {
             let b = if i != 0 { k + i - 1 } else { k };
+            if b < 0 || b >= 32 {
+                self.error = true;
+                return 0;
+            }
             let a = 1u32 << b;
 
-            if n <= v + 3 * a {
-                v += self.get_uniform(n - v);
+            if n <= v.saturating_add(3u32.saturating_mul(a)) {
+                v = v.saturating_add(self.get_uniform(n.saturating_sub(v)));
                 break;
             }
 
             if self.get_bit() == 0 {
-                v += self.get_bits(b);
+                v = v.saturating_add(self.get_bits(b));
                 break;
             }
 
-            v += a;
+            v = v.saturating_add(a);
             i += 1;
         }
 
-        if ref_val * 2 <= n {
-            inv_recenter(ref_val, v)
+        if ref_val.saturating_mul(2) <= n {
+            let rec = inv_recenter(ref_val, v);
+            if rec >= n {
+                self.error = true;
+                return 0;
+            }
+            rec
         } else {
-            n - 1 - inv_recenter(n - 1 - ref_val, v)
+            let rec = inv_recenter(n - 1 - ref_val, v);
+            if rec >= n {
+                self.error = true;
+                return 0;
+            }
+            n - 1 - rec
         }
     }
 
     pub(crate) fn get_bits_subexp(&mut self, ref_val: i32, n: u32) -> i32 {
+        if n == 0 || n > (i32::MAX as u32) {
+            self.error = true;
+            return 0;
+        }
         let off = n as i32 - 1;
-        let n2 = n + off as u32;
-        self.get_bits_subexp_u((ref_val + off) as u32, n2, 3) as i32 - off
+        let ref_u = match ref_val.checked_add(off) {
+            Some(v) if v >= 0 => v as u32,
+            _ => {
+                self.error = true;
+                return 0;
+            }
+        };
+        let n2 = match n.checked_add(off as u32) {
+            Some(v) => v,
+            None => {
+                self.error = true;
+                return 0;
+            }
+        };
+        self.get_bits_subexp_u(ref_u, n2, 3) as i32 - off
     }
 
     pub(crate) fn get_ref_uniform(&mut self, max: u32, def: u32) -> u32 {
+        if max <= 1 {
+            return 0;
+        }
+        let def = def.min(max - 1);
         if self.get_bit() == 0 {
             return def;
         }

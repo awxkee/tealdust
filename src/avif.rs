@@ -692,10 +692,6 @@ impl AvifItem {
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Decoded image metadata
-// ────────────────────────────────────────────────────────────────────────────
-
 /// Metadata about a decoded AVIF image, available before or alongside pixel data.
 #[derive(Debug, Clone)]
 pub struct AvifImageInfo {
@@ -755,11 +751,6 @@ impl AvifContainer {
         self.alpha_item_id.and_then(|id| self.items.get(&id))
     }
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Low-level byte reader helpers
-// ────────────────────────────────────────────────────────────────────────────
-
 #[derive(Debug)]
 struct Reader<'a> {
     data: &'a [u8],
@@ -843,10 +834,6 @@ impl<'a> Reader<'a> {
         Ok(Reader { data: sl, pos: 0 })
     }
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// ISOBMFF box header
-// ────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy)]
 struct BoxHeader {
@@ -1057,8 +1044,6 @@ impl AvifParser {
         })
     }
 
-    // ── meta box ─────────────────────────────────────────────────────────────
-
     fn parse_meta(
         r: &mut Reader<'_>,
         primary_item_id: &mut u16,
@@ -1134,7 +1119,7 @@ impl AvifParser {
                         let item_type_bytes = if iv >= 1 {
                             ie_payload.read_bytes::<4>()?
                         } else {
-                            *b"    "
+                            *b"\0\0\0\0"
                         };
                         let item_type = ItemType::from_fourcc(item_type_bytes);
                         // FUZZ: or_insert_with avoids clobbering an existing
@@ -1222,8 +1207,6 @@ impl AvifParser {
         Ok(())
     }
 
-    // ── iloc ─────────────────────────────────────────────────────────────────
-
     fn apply_iloc(
         iloc_bytes: &[u8],
         items: &mut HashMap<u16, AvifItem>,
@@ -1279,10 +1262,13 @@ impl AvifParser {
                     let _ = r.read_u16_be()?; // data_reference_index
                     let _ = read_sized_int(&mut r, base_offset_size)?; // base_offset
                     let ec = r.read_u16_be()?;
-                    // FUZZ: cap extent count even for skipped items to prevent
-                    // attacker from using the skip path to burn arbitrary CPU.
-                    let ec_capped = ec.min(MAX_EXTENTS_PER_ITEM);
-                    for _ in 0..ec_capped {
+                    // FUZZ: reject over-large skipped entries too. Capping here
+                    // would leave unread extent records in this iloc entry and
+                    // desynchronize the parser for the next item.
+                    if ec > MAX_EXTENTS_PER_ITEM {
+                        return Err(AvifError::LimitExceeded);
+                    }
+                    for _ in 0..ec {
                         if index_size > 0 {
                             let _ = read_sized_int(&mut r, index_size)?;
                         }
@@ -1338,8 +1324,6 @@ impl AvifParser {
         }
         Ok(())
     }
-
-    // ── ipma ─────────────────────────────────────────────────────────────────
 
     fn apply_ipma(
         ipma_bytes: &[u8],
@@ -1745,10 +1729,6 @@ impl AvifParser {
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Helper: read an unsigned integer of exactly `size` bytes (0, 1, 2, 4, 8).
-// ────────────────────────────────────────────────────────────────────────────
-
 /// Read an unsigned integer of `size` bytes from `r`.
 ///
 /// Only sizes 0, 1, 2, 4, and 8 are accepted; other values are rejected.
@@ -1788,10 +1768,6 @@ pub struct AlphaPlane {
     /// Bits per alpha sample (8, 10, or 12).
     pub bits_per_component: u8,
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// Decoded AVIF image output
-// ────────────────────────────────────────────────────────────────────────────
 
 /// A fully decoded AVIF image: metadata + raw plane data.
 pub struct AvifImage {
@@ -1942,7 +1918,6 @@ impl<'a> AvifDecoder<'a> {
             .and_then(|id| self.container.items.get(&id))
             .is_some_and(|a| a.premultiplied_alpha);
 
-        // ── Assemble primary OBU stream ──────────────────────────────────────
         let primary_obu = self.assemble_obu(item)?;
         if primary_obu.is_empty() {
             return Err(AvifError::MissingBox("mdat"));
@@ -1991,7 +1966,6 @@ impl<'a> AvifDecoder<'a> {
         let content_light_level = picture.content_light_level;
         let picture_arc = Arc::new(picture);
 
-        // ── Decode alpha auxiliary item (if present) ──────────────────────────
         let alpha: Option<AlphaPlane> = if let Some(aid) = alpha_item_id {
             let alpha_item = self
                 .container

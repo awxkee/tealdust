@@ -111,7 +111,7 @@ fn parse_tile_info(
     h: i32,
     level: u8,
     tier: u8,
-) {
+) -> Result<()> {
     thdr.uniform = gb.get_bit() != 0;
 
     let sbsz_log2 = 6 + sb128 as i32;
@@ -153,6 +153,9 @@ fn parse_tile_info(
             thdr.cols += 1;
             extra -= 1;
         }
+        if sbx < fsbw {
+            return Err(TealdustError::InvalidData);
+        }
 
         thdr.min_log2_rows = imax(min_log2_tiles - thdr.log2_cols as i32, 0) as u8;
         thdr.log2_rows = thdr.min_log2_rows;
@@ -170,6 +173,9 @@ fn parse_tile_info(
             thdr.rows += 1;
             extra -= 1;
         }
+        if sby < fsbh {
+            return Err(TealdustError::InvalidData);
+        }
     } else {
         let mut widest_tile = 0;
         thdr.cols = 0;
@@ -186,6 +192,9 @@ fn parse_tile_info(
             widest_tile = imax(widest_tile, w_tile);
             sbx += w_tile;
             thdr.cols += 1;
+        }
+        if sbx < sbw {
+            return Err(TealdustError::InvalidData);
         }
         thdr.log2_cols = tile_log2(1, thdr.cols as i32) as u8;
 
@@ -209,13 +218,24 @@ fn parse_tile_info(
             sby += h_tile;
             thdr.rows += 1;
         }
+        if sby < sbh {
+            return Err(TealdustError::InvalidData);
+        }
         thdr.log2_rows = tile_log2(1, thdr.rows as i32) as u8;
+    }
+    if thdr.cols == 0 || thdr.rows == 0 {
+        return Err(TealdustError::InvalidData);
     }
     thdr.col_start_sb[thdr.cols as usize] = sbw as u16;
     thdr.row_start_sb[thdr.rows as usize] = sbh as u16;
+    Ok(())
 }
 
-pub fn parse_tile_info_frmhdr(hdr: &mut FrameHeader, seqhdr: &SequenceHeader, gb: &mut GetBits) {
+pub fn parse_tile_info_frmhdr(
+    hdr: &mut FrameHeader,
+    seqhdr: &SequenceHeader,
+    gb: &mut GetBits,
+) -> Result<()> {
     hdr.sb128 = if hdr.is_inter_or_switch() {
         seqhdr.sb128
     } else {
@@ -276,13 +296,14 @@ pub fn parse_tile_info_frmhdr(hdr: &mut FrameHeader, seqhdr: &SequenceHeader, gb
             hdr.height,
             seqhdr.level,
             seqhdr.tier,
-        );
+        )?;
     }
 
     if sbmul == 2 {
         hdr.tiling.t.row_start_sb[hdr.tiling.t.rows as usize] = ((hdr.height + 127) >> 7) as u16;
         hdr.tiling.t.col_start_sb[hdr.tiling.t.cols as usize] = ((hdr.width + 127) >> 7) as u16;
     }
+    Ok(())
 }
 
 pub fn parse_film_grain_data(gb: &mut GetBits, layout: PixelLayout) -> Result<FilmGrainData> {
@@ -350,6 +371,10 @@ pub fn parse_film_grain_data(gb: &mut GetBits, layout: PixelLayout) -> Result<Fi
         fgd.mc_identity = gb.get_bit() != 0;
     }
     fgd.block_size = gb.get_bit() as i32;
+
+    if gb.has_error() {
+        return Err(TealdustError::InvalidData);
+    }
 
     Ok(fgd)
 }
@@ -757,7 +782,7 @@ pub fn parse_seq_hdr(gb: &mut GetBits, strict: bool) -> Result<SequenceHeader> {
             hdr.max_height,
             hdr.level,
             hdr.tier,
-        );
+        )?;
     }
 
     hdr.film_grain_present = gb.get_bit() != 0;
@@ -845,6 +870,9 @@ pub fn parse_frame_hdr(
             && seqhdr.number_of_bits_for_lt_frame_id > 0
         {
             hdr.n_ref_frames = gb.get_bits(3) as u8;
+            if hdr.n_ref_frames == 0 || hdr.n_ref_frames as usize > REFS_PER_FRAME {
+                return Err(TealdustError::InvalidData);
+            }
             for n in 0..hdr.n_ref_frames as usize {
                 hdr.refidx[n] = gb.get_bits(seqhdr.number_of_bits_for_lt_frame_id as i32) as i8;
             }
@@ -908,6 +936,9 @@ pub fn parse_frame_hdr(
             if hdr.n_ref_frames as i32 > imin(7, seqhdr.ref_frames as i32) {
                 return Err(TealdustError::InvalidData);
             }
+            if hdr.n_ref_frames == 0 || hdr.n_ref_frames as usize > REFS_PER_FRAME {
+                return Err(TealdustError::InvalidData);
+            }
             for n in 0..hdr.n_ref_frames as usize {
                 hdr.refidx[n] = gb.get_bits(seqhdr.ref_frames_log2 as i32) as i8;
                 if hdr.refidx[n] as u8 >= seqhdr.ref_frames {
@@ -916,8 +947,15 @@ pub fn parse_frame_hdr(
             }
         } else {
             hdr.n_ref_frames = get_ref_frames(&mut hdr, seqhdr, refs, false) as u8;
+            if hdr.n_ref_frames == 0 {
+                return Err(TealdustError::InvalidData);
+            }
         }
         let poc = hdr.frame_offset as i32;
+        if hdr.primary_ref_frame != PRIMARY_REF_NONE && hdr.primary_ref_frame >= hdr.n_ref_frames {
+            return Err(TealdustError::InvalidData);
+        }
+
         for n in 0..hdr.n_ref_frames as usize {
             let refhdr = ref_slot(refs, hdr.refidx[n] as i32)?
                 .p
@@ -940,6 +978,9 @@ pub fn parse_frame_hdr(
     if hdr.is_inter_or_switch() {
         if hdr.frame_type == FrameType::Inter && !seqhdr.explicit_ref_frame_map {
             hdr.n_ref_frames = get_ref_frames(&mut hdr, seqhdr, refs, true) as u8;
+            if hdr.n_ref_frames == 0 {
+                return Err(TealdustError::InvalidData);
+            }
         }
 
         // base_resolution_update (AV2 §5.9.6): not parsed by the reference decoder
@@ -1049,7 +1090,7 @@ pub fn parse_frame_hdr(
             }
 
             if hdr.tip.apply_filter != 0 {
-                parse_tile_info_frmhdr(&mut hdr, seqhdr, gb);
+                parse_tile_info_frmhdr(&mut hdr, seqhdr, gb)?;
             } else {
                 hdr.sb128 = if hdr.is_inter_or_switch() {
                     seqhdr.sb128
@@ -1146,7 +1187,7 @@ pub fn parse_frame_hdr(
 
         hdr.disable_cdf_update = gb.get_bit() as u8;
 
-        parse_tile_info_frmhdr(&mut hdr, seqhdr, gb);
+        parse_tile_info_frmhdr(&mut hdr, seqhdr, gb)?;
         if hdr.tiling.t.log2_cols != 0 || hdr.tiling.t.log2_rows != 0 {
             if seqhdr.avg_cdf_type == 0 {
                 hdr.tiling.update = gb
@@ -1856,11 +1897,22 @@ pub fn parse_frame_hdr(
         }
     }
 
+    if gb.has_error() {
+        return Err(TealdustError::InvalidData);
+    }
+
     Ok(hdr)
 }
 
-pub fn parse_tile_hdr(hdr: &FrameHeader, tile: &mut crate::internal::TileGroup, gb: &mut GetBits) {
+pub(crate) fn parse_tile_hdr(
+    hdr: &FrameHeader,
+    tile: &mut TileGroup,
+    gb: &mut GetBits,
+) -> Result<()> {
     let n_tiles = hdr.tiling.t.cols as i32 * hdr.tiling.t.rows as i32;
+    if n_tiles <= 0 {
+        return Err(TealdustError::InvalidData);
+    }
     let have_tile_pos = if n_tiles > 1 {
         gb.get_bit() != 0
     } else {
@@ -1874,6 +1926,12 @@ pub fn parse_tile_hdr(hdr: &FrameHeader, tile: &mut crate::internal::TileGroup, 
         tile.start = 0;
         tile.end = n_tiles - 1;
     }
+
+    if tile.start < 0 || tile.end < tile.start || tile.end >= n_tiles {
+        return Err(TealdustError::InvalidData);
+    }
+
+    Ok(())
 }
 
 pub fn parse_fgm_hdr(
@@ -1898,17 +1956,21 @@ pub fn parse_fgm_hdr(
         result[idx] = Some(parse_film_grain_data(gb, layout)?);
     }
 
+    if gb.has_error() {
+        return Err(TealdustError::InvalidData);
+    }
+
     Ok(result)
 }
 
-pub fn parse_cll(gb: &mut GetBits) -> ContentLightLevel {
+pub(crate) fn parse_cll(gb: &mut GetBits) -> ContentLightLevel {
     ContentLightLevel {
         max_content_light_level: gb.get_bits(16) as u16,
         max_frame_average_light_level: gb.get_bits(16) as u16,
     }
 }
 
-pub fn parse_mdcv(gb: &mut GetBits) -> MasteringDisplay {
+pub(crate) fn parse_mdcv(gb: &mut GetBits) -> MasteringDisplay {
     let mut md = MasteringDisplay::default();
     for i in 0..3 {
         md.primaries[i][0] = gb.get_bits(16) as u16;
@@ -2116,6 +2178,10 @@ pub fn parse_ci_hdr(ci: &mut ContentInterpretation, gb: &mut GetBits) -> Result<
             }
             ci.timing.num_ticks_per_elemental_duration = t + 1;
         }
+    }
+
+    if gb.has_error() {
+        return Err(TealdustError::InvalidData);
     }
 
     Ok(())
@@ -2678,7 +2744,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                     start: 0,
                     end: 0,
                 };
-                parse_tile_hdr(&fh, &mut tg, &mut gb);
+                parse_tile_hdr(&fh, &mut tg, &mut gb)?;
                 gb.bytealign();
                 if gb.has_error() {
                     return Err(TealdustError::InvalidData);
