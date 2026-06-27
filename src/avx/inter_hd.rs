@@ -82,8 +82,6 @@ fn load_i16x8(p: &[i16]) -> __m128i {
 #[inline(always)]
 fn mul_i16x8_n_s32(x: __m128i, k: i32) -> __m256i {
     unsafe {
-        // PMADDWD gives an element-wise i16*i16 -> i32 multiply when each
-        // source lane is interleaved with a zero lane: [x0,0,x1,0,...].
         let zero = _mm_setzero_si128();
         let lo = _mm_unpacklo_epi16(x, zero);
         let hi = _mm_unpackhi_epi16(x, zero);
@@ -214,7 +212,7 @@ pub(crate) fn prep_hbd_avx2(
 
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn put_bilin_hbd_avx2(
+pub(crate) fn put_bilin_hbd_avx2(
     dst: &mut [u16],
     dst_stride: usize,
     src: &[u16],
@@ -330,7 +328,7 @@ pub(crate) unsafe fn put_bilin_hbd_avx2(
 
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn prep_bilin_hbd_avx2(
+pub(crate) fn prep_bilin_hbd_avx2(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u16],
@@ -441,7 +439,7 @@ pub(crate) unsafe fn prep_bilin_hbd_avx2(
 
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn put_8tap_hbd_avx2(
+pub(crate) fn put_8tap_hbd_avx2(
     dst: &mut [u16],
     dst_stride: usize,
     src: &[u16],
@@ -578,7 +576,7 @@ pub(crate) unsafe fn put_8tap_hbd_avx2(
 
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn prep_8tap_hbd_avx2(
+pub(crate) fn prep_8tap_hbd_avx2(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u16],

@@ -96,7 +96,7 @@ fn shr(v: int32x4_t, sh: i32) -> int32x4_t {
 }
 
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn residual_add_row_hbd_neon(
+pub(crate) fn residual_add_row_hbd_neon(
     dst: &mut [u16],
     c: &[i32],
     n: usize,
@@ -128,7 +128,7 @@ pub(crate) unsafe fn residual_add_row_hbd_neon(
 }
 
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn dc_add_row_hbd_neon(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
+pub(crate) fn dc_add_row_hbd_neon(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
     if dc == 0 {
         return;
     }
@@ -184,7 +184,7 @@ pub(crate) unsafe fn avg_row_hbd_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn w_avg_row_hbd_neon(
+pub(crate) fn w_avg_row_hbd_neon(
     dst: &mut [u16],
     t1: &[i16],
     t2: &[i16],

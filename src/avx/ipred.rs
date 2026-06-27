@@ -27,15 +27,15 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#[cfg(target_arch = "x86")]
-use std::arch::x86::*;
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
-
 use crate::dip_tables::DIP_WEIGHTS;
 use crate::intops::ulog2;
 use crate::levels::ANGLE_MULTI_MRL_FLAG;
 use crate::tables::SM_WEIGHTS;
+#[cfg(target_arch = "x86")]
+use std::arch::x86::*;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+use std::cell::RefCell;
 
 #[target_feature(enable = "avx2")]
 pub(crate) fn pal_pred_8bpc_avx2(
@@ -945,6 +945,10 @@ fn store_i32x8x2_u8_fixed(a: &mut [u8; 16], lo8: __m256i, hi8: __m256i) {
     }
 }
 
+thread_local! {
+    static IPRED_Z_SCRATCH: RefCell<[u8; 64 * 64]> = const { RefCell::new([0u8; 64 * 64]) };
+}
+
 /// One row of the Z1 luma 4-tap interpolation. Pixels with `base <= max_base_x`
 /// are filtered; the rest of the row is set to `fill`.
 #[inline]
@@ -1109,65 +1113,75 @@ pub(crate) fn ipred_z1_8bpc_avx2(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = vec![0u8; 64 * 64];
-        let base_angle = a | ANGLE_IS_LUMA;
-        let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
-        ipred_z1_8bpc_avx2(
-            &mut tmp,
-            64,
-            tl,
-            o,
-            w,
-            h,
-            first_angle,
-            max_width,
-            max_height,
-            ibp_weights,
-        );
-        ipred_z1_8bpc_avx2(
-            dst,
-            stride,
-            tl,
-            o + e_stride,
-            w,
-            h,
-            base_angle,
-            max_width,
-            max_height,
-            ibp_weights,
-        );
-        avg_pred_8bpc_avx2(dst, stride, &tmp, w, h);
+        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
+            let base_angle = a | ANGLE_IS_LUMA;
+            let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
+            ipred_z1_8bpc_avx2(
+                tmp.as_mut_slice(),
+                64,
+                tl,
+                o,
+                w,
+                h,
+                first_angle,
+                max_width,
+                max_height,
+                ibp_weights,
+            );
+            ipred_z1_8bpc_avx2(
+                dst,
+                stride,
+                tl,
+                o + e_stride,
+                w,
+                h,
+                base_angle,
+                max_width,
+                max_height,
+                ibp_weights,
+            );
+            avg_pred_8bpc_avx2(dst, stride, tmp.as_slice(), w, h);
+        });
         return;
     }
     if enable_ibp {
         let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
         let mode_idx = (10 - (a >> 3)).min(6) as usize;
-        let mut tmp = vec![0u8; 64 * 64];
-        ipred_z1_8bpc_avx2(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle & !ANGLE_IBP_FLAG,
-            max_width,
-            max_height,
-            ibp_weights,
-        );
-        ipred_z3_8bpc_avx2(
-            &mut tmp,
-            64,
-            tl,
-            o,
-            w,
-            h,
-            (180 + a) | angle_flags,
-            max_width,
-            max_height,
-            ibp_weights,
-        );
-        ibp_blend_8bpc_avx2(dst, stride, &tmp, w, h, false, &ibp_weights[mode_idx]);
+        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
+            ipred_z1_8bpc_avx2(
+                dst,
+                stride,
+                tl,
+                o,
+                w,
+                h,
+                angle & !ANGLE_IBP_FLAG,
+                max_width,
+                max_height,
+                ibp_weights,
+            );
+            ipred_z3_8bpc_avx2(
+                tmp.as_mut_slice(),
+                64,
+                tl,
+                o,
+                w,
+                h,
+                (180 + a) | angle_flags,
+                max_width,
+                max_height,
+                ibp_weights,
+            );
+            ibp_blend_8bpc_avx2(
+                dst,
+                stride,
+                tmp.as_slice(),
+                w,
+                h,
+                false,
+                &ibp_weights[mode_idx],
+            );
+        });
         return;
     }
     let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
@@ -1393,34 +1407,35 @@ pub(crate) fn ipred_z3_8bpc_avx2(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = vec![0u8; 64 * 64];
-        let base_angle = a | ANGLE_IS_LUMA;
-        let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
-        ipred_z3_8bpc_avx2(
-            &mut tmp,
-            64,
-            tl,
-            o,
-            w,
-            h,
-            first_angle,
-            max_width,
-            max_height,
-            ibp_weights,
-        );
-        ipred_z3_8bpc_avx2(
-            dst,
-            stride,
-            tl,
-            o + e_stride,
-            w,
-            h,
-            base_angle,
-            max_width,
-            max_height,
-            ibp_weights,
-        );
-        avg_pred_8bpc_avx2(dst, stride, &tmp, w, h);
+        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
+            let base_angle = a | ANGLE_IS_LUMA;
+            let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
+            ipred_z3_8bpc_avx2(
+                tmp.as_mut_slice(),
+                64,
+                tl,
+                o,
+                w,
+                h,
+                first_angle,
+                max_width,
+                max_height,
+                ibp_weights,
+            );
+            ipred_z3_8bpc_avx2(
+                dst,
+                stride,
+                tl,
+                o + e_stride,
+                w,
+                h,
+                base_angle,
+                max_width,
+                max_height,
+                ibp_weights,
+            );
+            avg_pred_8bpc_avx2(dst, stride, tmp.as_slice(), w, h);
+        });
         return;
     }
     if enable_ibp {
@@ -1440,32 +1455,41 @@ pub(crate) fn ipred_z3_8bpc_avx2(
         }
         let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
         let mode_idx = ((a - 183) >> 3).min(6) as usize;
-        let mut tmp = vec![0u8; 64 * 64];
-        ipred_z3_8bpc_avx2(
-            dst,
-            stride,
-            tl,
-            o,
-            w,
-            h,
-            angle & !ANGLE_IBP_FLAG,
-            max_width,
-            max_height,
-            ibp_weights,
-        );
-        ipred_z1_8bpc_avx2(
-            &mut tmp,
-            64,
-            tl,
-            o,
-            w,
-            h,
-            (a - 180) | angle_flags,
-            max_width,
-            max_height,
-            ibp_weights,
-        );
-        ibp_blend_8bpc_avx2(dst, stride, &tmp, w, h, true, &ibp_weights[mode_idx]);
+        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
+            ipred_z3_8bpc_avx2(
+                dst,
+                stride,
+                tl,
+                o,
+                w,
+                h,
+                angle & !ANGLE_IBP_FLAG,
+                max_width,
+                max_height,
+                ibp_weights,
+            );
+            ipred_z1_8bpc_avx2(
+                tmp.as_mut_slice(),
+                64,
+                tl,
+                o,
+                w,
+                h,
+                (a - 180) | angle_flags,
+                max_width,
+                max_height,
+                ibp_weights,
+            );
+            ibp_blend_8bpc_avx2(
+                dst,
+                stride,
+                tmp.as_slice(),
+                w,
+                h,
+                true,
+                &ibp_weights[mode_idx],
+            );
+        });
         return;
     }
     if h > 64 {
@@ -1713,32 +1737,33 @@ pub(crate) fn ipred_z2_8bpc_avx2(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = vec![0u8; 64 * 64];
-        let base_angle = a | ANGLE_IS_LUMA;
-        let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
-        ipred_z2_8bpc_avx2(
-            &mut tmp,
-            64,
-            tl,
-            o,
-            w,
-            h,
-            first_angle,
-            max_width,
-            max_height,
-        );
-        ipred_z2_8bpc_avx2(
-            dst,
-            stride,
-            tl,
-            o + e_stride,
-            w,
-            h,
-            base_angle,
-            max_width,
-            max_height,
-        );
-        avg_pred_8bpc_avx2(dst, stride, &tmp, w, h);
+        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
+            let base_angle = a | ANGLE_IS_LUMA;
+            let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
+            ipred_z2_8bpc_avx2(
+                tmp.as_mut_slice(),
+                64,
+                tl,
+                o,
+                w,
+                h,
+                first_angle,
+                max_width,
+                max_height,
+            );
+            ipred_z2_8bpc_avx2(
+                dst,
+                stride,
+                tl,
+                o + e_stride,
+                w,
+                h,
+                base_angle,
+                max_width,
+                max_height,
+            );
+            avg_pred_8bpc_avx2(dst, stride, tmp.as_slice(), w, h);
+        });
         return;
     }
     let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;
