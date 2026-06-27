@@ -32,7 +32,6 @@ use crate::intops::ulog2;
 use crate::levels::{ANGLE_IBP_FLAG, ANGLE_MULTI_MRL_FLAG};
 use crate::tables::SM_WEIGHTS;
 use std::arch::x86_64::*;
-use std::cell::RefCell;
 
 #[inline(always)]
 fn load_u16x16(a: &[u16; 16]) -> __m256i {
@@ -774,10 +773,6 @@ fn z1_chroma_row_hbd_avx2(
     dst_row[n_filter..w].fill(fill);
 }
 
-thread_local! {
-    static IPRED_Z_SCRATCH: RefCell<[u16; 64 * 64]> = const { RefCell::new([0u16; 64 * 64]) };
-}
-
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
 pub(crate) fn ipred_z1_hbd_avx2(
@@ -801,80 +796,78 @@ pub(crate) fn ipred_z1_hbd_avx2(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
-            let base_angle = a | ANGLE_IS_LUMA;
-            let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
-            ipred_z1_hbd_avx2(
-                tmp.as_mut_slice(),
-                64,
-                tl,
-                o,
-                w,
-                h,
-                first_angle,
-                max_width,
-                max_height,
-                ibp_weights,
-                bitdepth_max,
-            );
-            ipred_z1_hbd_avx2(
-                dst,
-                stride,
-                tl,
-                o + e_stride,
-                w,
-                h,
-                base_angle,
-                max_width,
-                max_height,
-                ibp_weights,
-                bitdepth_max,
-            );
-            avg_pred_hbd_avx2(dst, stride, tmp.as_slice(), w, h);
-        });
+        let mut tmp = [0u16; 64 * 64];
+        let base_angle = a | ANGLE_IS_LUMA;
+        let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
+        ipred_z1_hbd_avx2(
+            tmp.as_mut_slice(),
+            64,
+            tl,
+            o,
+            w,
+            h,
+            first_angle,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ipred_z1_hbd_avx2(
+            dst,
+            stride,
+            tl,
+            o + e_stride,
+            w,
+            h,
+            base_angle,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        avg_pred_hbd_avx2(dst, stride, tmp.as_slice(), w, h);
         return;
     }
     if enable_ibp {
         let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
         let mode_idx = (10 - (a >> 3)).min(6) as usize;
-        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
-            ipred_z1_hbd_avx2(
-                dst,
-                stride,
-                tl,
-                o,
-                w,
-                h,
-                angle & !ANGLE_IBP_FLAG,
-                max_width,
-                max_height,
-                ibp_weights,
-                bitdepth_max,
-            );
-            ipred_z3_hbd_avx2(
-                tmp.as_mut_slice(),
-                64,
-                tl,
-                o,
-                w,
-                h,
-                (180 + a) | angle_flags,
-                max_width,
-                max_height,
-                ibp_weights,
-                bitdepth_max,
-            );
-            ibp_blend_hbd_avx2(
-                dst,
-                stride,
-                tmp.as_slice(),
-                w,
-                h,
-                false,
-                &ibp_weights[mode_idx],
-                bitdepth_max,
-            );
-        });
+        let mut tmp = [0u16; 64 * 64];
+        ipred_z1_hbd_avx2(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle & !ANGLE_IBP_FLAG,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ipred_z3_hbd_avx2(
+            tmp.as_mut_slice(),
+            64,
+            tl,
+            o,
+            w,
+            h,
+            (180 + a) | angle_flags,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ibp_blend_hbd_avx2(
+            dst,
+            stride,
+            tmp.as_slice(),
+            w,
+            h,
+            false,
+            &ibp_weights[mode_idx],
+            bitdepth_max,
+        );
         return;
     }
     let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
@@ -1112,37 +1105,36 @@ pub(crate) fn ipred_z3_hbd_avx2(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
-            let base_angle = a | ANGLE_IS_LUMA;
-            let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
-            ipred_z3_hbd_avx2(
-                tmp.as_mut_slice(),
-                64,
-                tl,
-                o,
-                w,
-                h,
-                first_angle,
-                max_width,
-                max_height,
-                ibp_weights,
-                bitdepth_max,
-            );
-            ipred_z3_hbd_avx2(
-                dst,
-                stride,
-                tl,
-                o + e_stride,
-                w,
-                h,
-                base_angle,
-                max_width,
-                max_height,
-                ibp_weights,
-                bitdepth_max,
-            );
-            avg_pred_hbd_avx2(dst, stride, tmp.as_slice(), w, h);
-        });
+        let mut tmp = [0u16; 64 * 64];
+        let base_angle = a | ANGLE_IS_LUMA;
+        let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
+        ipred_z3_hbd_avx2(
+            tmp.as_mut_slice(),
+            64,
+            tl,
+            o,
+            w,
+            h,
+            first_angle,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ipred_z3_hbd_avx2(
+            dst,
+            stride,
+            tl,
+            o + e_stride,
+            w,
+            h,
+            base_angle,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        avg_pred_hbd_avx2(dst, stride, tmp.as_slice(), w, h);
         return;
     }
     if enable_ibp {
@@ -1163,44 +1155,43 @@ pub(crate) fn ipred_z3_hbd_avx2(
         }
         let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
         let mode_idx = ((a - 183) >> 3).min(6) as usize;
-        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
-            ipred_z3_hbd_avx2(
-                dst,
-                stride,
-                tl,
-                o,
-                w,
-                h,
-                angle & !ANGLE_IBP_FLAG,
-                max_width,
-                max_height,
-                ibp_weights,
-                bitdepth_max,
-            );
-            ipred_z1_hbd_avx2(
-                tmp.as_mut_slice(),
-                64,
-                tl,
-                o,
-                w,
-                h,
-                (a - 180) | angle_flags,
-                max_width,
-                max_height,
-                ibp_weights,
-                bitdepth_max,
-            );
-            ibp_blend_hbd_avx2(
-                dst,
-                stride,
-                tmp.as_slice(),
-                w,
-                h,
-                true,
-                &ibp_weights[mode_idx],
-                bitdepth_max,
-            );
-        });
+        let mut tmp = [0u16; 64 * 64];
+        ipred_z3_hbd_avx2(
+            dst,
+            stride,
+            tl,
+            o,
+            w,
+            h,
+            angle & !ANGLE_IBP_FLAG,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ipred_z1_hbd_avx2(
+            tmp.as_mut_slice(),
+            64,
+            tl,
+            o,
+            w,
+            h,
+            (a - 180) | angle_flags,
+            max_width,
+            max_height,
+            ibp_weights,
+            bitdepth_max,
+        );
+        ibp_blend_hbd_avx2(
+            dst,
+            stride,
+            tmp.as_slice(),
+            w,
+            h,
+            true,
+            &ibp_weights[mode_idx],
+            bitdepth_max,
+        );
         return;
     }
     if h > 64 {
@@ -1399,35 +1390,34 @@ pub(crate) fn ipred_z2_hbd_avx2(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        IPRED_Z_SCRATCH.with_borrow_mut(|tmp| {
-            let base_angle = a | ANGLE_IS_LUMA;
-            let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
-            ipred_z2_hbd_avx2(
-                tmp.as_mut_slice(),
-                64,
-                tl,
-                o,
-                w,
-                h,
-                first_angle,
-                max_width,
-                max_height,
-                bitdepth_max,
-            );
-            ipred_z2_hbd_avx2(
-                dst,
-                stride,
-                tl,
-                o + e_stride,
-                w,
-                h,
-                base_angle,
-                max_width,
-                max_height,
-                bitdepth_max,
-            );
-            avg_pred_hbd_avx2(dst, stride, tmp.as_slice(), w, h);
-        });
+        let mut tmp = [0u16; 64 * 64];
+        let base_angle = a | ANGLE_IS_LUMA;
+        let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
+        ipred_z2_hbd_avx2(
+            tmp.as_mut_slice(),
+            64,
+            tl,
+            o,
+            w,
+            h,
+            first_angle,
+            max_width,
+            max_height,
+            bitdepth_max,
+        );
+        ipred_z2_hbd_avx2(
+            dst,
+            stride,
+            tl,
+            o + e_stride,
+            w,
+            h,
+            base_angle,
+            max_width,
+            max_height,
+            bitdepth_max,
+        );
+        avg_pred_hbd_avx2(dst, stride, tmp.as_slice(), w, h);
         return;
     }
     let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;

@@ -2486,3 +2486,406 @@ mod tests {
         }
     }
 }
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_lut_u8x16_avx2(lut: &[u32; 16]) -> __m128i {
+    let mut tbl = [0u8; 16];
+    for i in 0..16 {
+        tbl[i] = lut[i] as u8;
+    }
+    unsafe { _mm_loadu_si128(tbl.as_ptr().cast()) }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_load_seg_u8x16_avx2(seg: &[u8], off: usize, w: usize) -> __m128i {
+    let mut tmp = [0u8; 16];
+    tmp[..w].copy_from_slice(&seg[off..off + w]);
+    unsafe { _mm_loadu_si128(tmp.as_ptr().cast()) }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_mask_bits_u8x16_avx2(bits: u16) -> __m128i {
+    _mm_setr_epi8(
+        if bits & (1 << 0) != 0 { -1 } else { 0 },
+        if bits & (1 << 1) != 0 { -1 } else { 0 },
+        if bits & (1 << 2) != 0 { -1 } else { 0 },
+        if bits & (1 << 3) != 0 { -1 } else { 0 },
+        if bits & (1 << 4) != 0 { -1 } else { 0 },
+        if bits & (1 << 5) != 0 { -1 } else { 0 },
+        if bits & (1 << 6) != 0 { -1 } else { 0 },
+        if bits & (1 << 7) != 0 { -1 } else { 0 },
+        if bits & (1 << 8) != 0 { -1 } else { 0 },
+        if bits & (1 << 9) != 0 { -1 } else { 0 },
+        if bits & (1 << 10) != 0 { -1 } else { 0 },
+        if bits & (1 << 11) != 0 { -1 } else { 0 },
+        if bits & (1 << 12) != 0 { -1 } else { 0 },
+        if bits & (1 << 13) != 0 { -1 } else { 0 },
+        if bits & (1 << 14) != 0 { -1 } else { 0 },
+        if bits & (1 << 15) != 0 { -1 } else { 0 },
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_shr3_u8x16_avx2(v: __m128i) -> __m128i {
+    let z = _mm_setzero_si128();
+    let lo = _mm_unpacklo_epi8(v, z);
+    let hi = _mm_unpackhi_epi8(v, z);
+    _mm_packus_epi16(_mm_srli_epi16::<3>(lo), _mm_srli_epi16::<3>(hi))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_apply_subpu_u8x16_avx2(v: __m128i, bits: u16) -> __m128i {
+    let m = setup_mask_bits_u8x16_avx2(bits);
+    _mm_blendv_epi8(v, setup_shr3_u8x16_avx2(v), m)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_edge_u8x16_avx2(cur: __m128i, prev: __m128i) -> __m128i {
+    let z = _mm_setzero_si128();
+    let all = _mm_cmpeq_epi8(z, z);
+    let cur_z = _mm_cmpeq_epi8(cur, z);
+    let prev_z = _mm_cmpeq_epi8(prev, z);
+    let both = _mm_andnot_si128(_mm_or_si128(cur_z, prev_z), all);
+    let avg = _mm_avg_epu8(cur, prev);
+    let ored = _mm_or_si128(cur, prev);
+    _mm_blendv_epi8(ored, avg, both)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_store_u8x16_avx2(dst: &mut [u8; 256], off: usize, v: __m128i) {
+    unsafe { _mm_storeu_si128(dst.as_mut_ptr().add(off).cast(), v) };
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_store_tmp_u8x16_avx2(v: __m128i) -> [u8; 16] {
+    let mut tmp = [0u8; 16];
+    unsafe { _mm_storeu_si128(tmp.as_mut_ptr().cast(), v) };
+    tmp
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn setup_thr_rows_simple_8bpc_avx2(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    thr_lut: &[[u32; 16]; 2],
+    sb64x: i32,
+    ss_hor: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let h = h4 as usize;
+    let mask_idx = (sb64x >> ss_hor) as usize;
+    assert!(mask_idx < 4);
+    assert!(starty4 + h <= 64);
+    let mask_shift: u32 = if (sb64x & ss_hor) != 0 { 8 } else { 0 };
+    let qv = _mm_set1_epi8(thr_lut[0][0] as u8 as i8);
+    let sv = _mm_set1_epi8(thr_lut[1][0] as u8 as i8);
+    for y in 0..h {
+        let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
+        setup_store_u8x16_avx2(q_thr_dst, y * 16, setup_apply_subpu_u8x16_avx2(qv, bits));
+        setup_store_u8x16_avx2(side_thr_dst, y * 16, setup_apply_subpu_u8x16_avx2(sv, bits));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn setup_thr_cols_simple_8bpc_avx2(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    thr_lut: &[[u32; 16]; 2],
+    y64: i32,
+    ss_ver: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let mask_idx = (y64 >> ss_ver) as usize;
+    assert!(mask_idx < 4);
+    assert!(bx4_base + w <= 64);
+    let mask_shift: u32 = if (y64 & ss_ver) != 0 { 8 } else { 0 };
+    let qv = _mm_set1_epi8(thr_lut[0][0] as u8 as i8);
+    let sv = _mm_set1_epi8(thr_lut[1][0] as u8 as i8);
+    for x in 0..w {
+        let bits = (mask[bx4_base + x][4][mask_idx] >> mask_shift) as u16;
+        setup_store_u8x16_avx2(q_thr_dst, x * 16, setup_apply_subpu_u8x16_avx2(qv, bits));
+        setup_store_u8x16_avx2(side_thr_dst, x * 16, setup_apply_subpu_u8x16_avx2(sv, bits));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn setup_thr_rows_dq_8bpc_avx2(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    thr_lut: &[[u32; 16]; 2],
+    above_thr_lut: Option<&[[u32; 16]; 2]>,
+    above_seg: Option<(&[u8], isize)>,
+    sb64x: i32,
+    ss_hor: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let h = h4 as usize;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let mask_idx = (sb64x >> ss_hor) as usize;
+    assert!(mask_idx < 4);
+    assert!(starty4 + h <= 64);
+    let mask_shift: u32 = if (sb64x & ss_hor) != 0 { 8 } else { 0 };
+    let qv = _mm_set1_epi8(thr_lut[0][0] as u8 as i8);
+    let sv = _mm_set1_epi8(thr_lut[1][0] as u8 as i8);
+    let (above_q, above_s) = if let Some(alut) = above_thr_lut {
+        if let Some((aseg, aoff)) = above_seg {
+            let off = usize::try_from(aoff).expect("negative above segment offset");
+            assert!(off + w <= aseg.len());
+            let segv = setup_load_seg_u8x16_avx2(aseg, off, w);
+            (
+                _mm_shuffle_epi8(setup_lut_u8x16_avx2(&alut[0]), segv),
+                _mm_shuffle_epi8(setup_lut_u8x16_avx2(&alut[1]), segv),
+            )
+        } else {
+            (
+                _mm_set1_epi8(alut[0][0] as u8 as i8),
+                _mm_set1_epi8(alut[1][0] as u8 as i8),
+            )
+        }
+    } else {
+        (_mm_setzero_si128(), _mm_setzero_si128())
+    };
+    let bits0 = (mask[starty4][4][mask_idx] >> mask_shift) as u16;
+    setup_store_u8x16_avx2(
+        q_thr_dst,
+        0,
+        setup_apply_subpu_u8x16_avx2(setup_edge_u8x16_avx2(qv, above_q), bits0),
+    );
+    setup_store_u8x16_avx2(
+        side_thr_dst,
+        0,
+        setup_apply_subpu_u8x16_avx2(setup_edge_u8x16_avx2(sv, above_s), bits0),
+    );
+    for y in 1..h {
+        let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
+        setup_store_u8x16_avx2(q_thr_dst, y * 16, setup_apply_subpu_u8x16_avx2(qv, bits));
+        setup_store_u8x16_avx2(side_thr_dst, y * 16, setup_apply_subpu_u8x16_avx2(sv, bits));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn setup_thr_cols_dq_8bpc_avx2(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    thr_lut: &[[u32; 16]; 2],
+    left_q_thr: &mut [u8; 16],
+    left_side_thr: &mut [u8; 16],
+    y64: i32,
+    ss_ver: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let h = h4 as usize;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let mask_idx = (y64 >> ss_ver) as usize;
+    assert!(mask_idx < 4);
+    assert!(bx4_base + w <= 64);
+    let mask_shift: u32 = if (y64 & ss_ver) != 0 { 8 } else { 0 };
+    let qv = _mm_set1_epi8(thr_lut[0][0] as u8 as i8);
+    let sv = _mm_set1_epi8(thr_lut[1][0] as u8 as i8);
+    let left_q = unsafe { _mm_loadu_si128(left_q_thr.as_ptr().cast()) };
+    let left_s = unsafe { _mm_loadu_si128(left_side_thr.as_ptr().cast()) };
+    for x in 0..w {
+        let bits = (mask[bx4_base + x][4][mask_idx] >> mask_shift) as u16;
+        let qbase = if x == 0 {
+            setup_edge_u8x16_avx2(qv, left_q)
+        } else {
+            qv
+        };
+        let sbase = if x == 0 {
+            setup_edge_u8x16_avx2(sv, left_s)
+        } else {
+            sv
+        };
+        setup_store_u8x16_avx2(q_thr_dst, x * 16, setup_apply_subpu_u8x16_avx2(qbase, bits));
+        setup_store_u8x16_avx2(
+            side_thr_dst,
+            x * 16,
+            setup_apply_subpu_u8x16_avx2(sbase, bits),
+        );
+    }
+    left_q_thr[..h].fill(thr_lut[0][0] as u8);
+    left_side_thr[..h].fill(thr_lut[1][0] as u8);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn setup_thr_rows_seg_8bpc_avx2(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    segmap: &[u8],
+    seg_off: isize,
+    seg_stride: isize,
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    thr_lut: &[[u32; 16]; 2],
+    above_thr_lut: Option<&[[u32; 16]; 2]>,
+    above_seg: Option<(&[u8], isize)>,
+    sb64x: i32,
+    ss_hor: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let h = h4 as usize;
+    let mask_idx = (sb64x >> ss_hor) as usize;
+    assert!(mask_idx < 4);
+    assert!(starty4 + h <= 64);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let seg_off = usize::try_from(seg_off).expect("negative segment offset");
+    let seg_stride = usize::try_from(seg_stride).expect("negative segment stride");
+    assert!(seg_off + (h - 1) * seg_stride + w <= segmap.len());
+    let mask_shift: u32 = if (sb64x & ss_hor) != 0 { 8 } else { 0 };
+    let qlut = setup_lut_u8x16_avx2(&thr_lut[0]);
+    let slut = setup_lut_u8x16_avx2(&thr_lut[1]);
+    let (mut prev_q, mut prev_s) =
+        if let (Some(alut), Some((aseg, aoff))) = (above_thr_lut, above_seg) {
+            let off = usize::try_from(aoff).expect("negative above segment offset");
+            assert!(off + w <= aseg.len());
+            let segv = setup_load_seg_u8x16_avx2(aseg, off, w);
+            (
+                _mm_shuffle_epi8(setup_lut_u8x16_avx2(&alut[0]), segv),
+                _mm_shuffle_epi8(setup_lut_u8x16_avx2(&alut[1]), segv),
+            )
+        } else {
+            (_mm_setzero_si128(), _mm_setzero_si128())
+        };
+    for y in 0..h {
+        let row = seg_off + y * seg_stride;
+        let segv = setup_load_seg_u8x16_avx2(segmap, row, w);
+        let cur_q = _mm_shuffle_epi8(qlut, segv);
+        let cur_s = _mm_shuffle_epi8(slut, segv);
+        let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
+        setup_store_u8x16_avx2(
+            q_thr_dst,
+            y * 16,
+            setup_apply_subpu_u8x16_avx2(setup_edge_u8x16_avx2(cur_q, prev_q), bits),
+        );
+        setup_store_u8x16_avx2(
+            side_thr_dst,
+            y * 16,
+            setup_apply_subpu_u8x16_avx2(setup_edge_u8x16_avx2(cur_s, prev_s), bits),
+        );
+        prev_q = cur_q;
+        prev_s = cur_s;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn setup_thr_cols_seg_8bpc_avx2(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    segmap: &[u8],
+    seg_off: isize,
+    seg_stride: isize,
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    thr_lut: &[[u32; 16]; 2],
+    left_q_thr: &mut [u8; 16],
+    left_side_thr: &mut [u8; 16],
+    y64: i32,
+    ss_ver: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let h = h4 as usize;
+    let mask_idx = (y64 >> ss_ver) as usize;
+    assert!(mask_idx < 4);
+    assert!(bx4_base + w <= 64);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let seg_off = usize::try_from(seg_off).expect("negative segment offset");
+    let seg_stride = usize::try_from(seg_stride).expect("negative segment stride");
+    assert!(seg_off + (h - 1) * seg_stride + w <= segmap.len());
+    let mask_shift: u32 = if (y64 & ss_ver) != 0 { 8 } else { 0 };
+    let qlut = setup_lut_u8x16_avx2(&thr_lut[0]);
+    let slut = setup_lut_u8x16_avx2(&thr_lut[1]);
+    for y in 0..h {
+        let row = seg_off + y * seg_stride;
+        let segv = setup_load_seg_u8x16_avx2(segmap, row, w);
+        let cur_q = _mm_shuffle_epi8(qlut, segv);
+        let cur_s = _mm_shuffle_epi8(slut, segv);
+        let cur_q_arr = setup_store_tmp_u8x16_avx2(cur_q);
+        let cur_s_arr = setup_store_tmp_u8x16_avx2(cur_s);
+        let mut prev_q_arr = [0u8; 16];
+        let mut prev_s_arr = [0u8; 16];
+        prev_q_arr[0] = left_q_thr[y];
+        prev_s_arr[0] = left_side_thr[y];
+        prev_q_arr[1..].copy_from_slice(&cur_q_arr[..15]);
+        prev_s_arr[1..].copy_from_slice(&cur_s_arr[..15]);
+        let prev_q = unsafe { _mm_loadu_si128(prev_q_arr.as_ptr().cast()) };
+        let prev_s = unsafe { _mm_loadu_si128(prev_s_arr.as_ptr().cast()) };
+        let mut bits = 0u16;
+        let shift = mask_shift + y as u32;
+        for x in 0..w {
+            bits |= ((mask[bx4_base + x][4][mask_idx] >> shift) & 1) << x;
+        }
+        let q_arr = setup_store_tmp_u8x16_avx2(setup_apply_subpu_u8x16_avx2(
+            setup_edge_u8x16_avx2(cur_q, prev_q),
+            bits,
+        ));
+        let s_arr = setup_store_tmp_u8x16_avx2(setup_apply_subpu_u8x16_avx2(
+            setup_edge_u8x16_avx2(cur_s, prev_s),
+            bits,
+        ));
+        for x in 0..w {
+            q_thr_dst[x * 16 + y] = q_arr[x];
+            side_thr_dst[x * 16 + y] = s_arr[x];
+        }
+        left_q_thr[y] = cur_q_arr[w - 1];
+        left_side_thr[y] = cur_s_arr[w - 1];
+    }
+}

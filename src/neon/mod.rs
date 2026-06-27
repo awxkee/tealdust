@@ -57,6 +57,8 @@ pub(crate) use cfl_hd::{cfl_apply_420_hbd_neon, cfl_apply_422_hbd_neon, cfl_appl
 pub(crate) use deblocking::{
     deblock_apply_8bpc_neon, deblock_apply_hbd_neon, deblock_h_sb64uv_8bpc_neon,
     deblock_h_sb64y_8bpc_neon, deblock_v_sb64uv_8bpc_neon, deblock_v_sb64y_8bpc_neon,
+    setup_thr_cols_dq_8bpc_neon, setup_thr_cols_seg_8bpc_neon, setup_thr_cols_simple_8bpc_neon,
+    setup_thr_rows_dq_8bpc_neon, setup_thr_rows_seg_8bpc_neon, setup_thr_rows_simple_8bpc_neon,
 };
 pub(crate) use filmgrain::{
     blend_top_grain_row_neon, fguv_row_8bpc_neon, fguv_row_hbd_neon, fgy_row_8bpc_neon,

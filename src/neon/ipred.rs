@@ -27,12 +27,11 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-use std::arch::aarch64::*;
-
 use crate::dip_tables::DIP_WEIGHTS;
 use crate::intops::ulog2;
 use crate::levels::ANGLE_MULTI_MRL_FLAG;
 use crate::tables::SM_WEIGHTS;
+use std::arch::aarch64::*;
 
 #[target_feature(enable = "neon")]
 pub(crate) fn pal_pred_8bpc_neon(
@@ -1118,11 +1117,11 @@ fn ipred_z1_8bpc_neon_impl(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = vec![0u8; 64 * 64];
+        let mut tmp = [0u8; 64 * 64];
         let base_angle = a | ANGLE_IS_LUMA;
         let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
         ipred_z1_8bpc_neon_impl(
-            &mut tmp,
+            tmp.as_mut_slice(),
             64,
             tl,
             o,
@@ -1145,13 +1144,13 @@ fn ipred_z1_8bpc_neon_impl(
             max_height,
             ibp_weights,
         );
-        avg_pred_8bpc_neon(dst, stride, &tmp, w, h);
+        avg_pred_8bpc_neon(dst, stride, tmp.as_slice(), w, h);
         return;
     }
     if enable_ibp {
         let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
         let mode_idx = (10 - (a >> 3)).min(6) as usize;
-        let mut tmp = vec![0u8; 64 * 64];
+        let mut tmp = [0u8; 64 * 64];
         ipred_z1_8bpc_neon_impl(
             dst,
             stride,
@@ -1165,7 +1164,7 @@ fn ipred_z1_8bpc_neon_impl(
             ibp_weights,
         );
         ipred_z3_8bpc_neon_impl(
-            &mut tmp,
+            tmp.as_mut_slice(),
             64,
             tl,
             o,
@@ -1176,7 +1175,15 @@ fn ipred_z1_8bpc_neon_impl(
             max_height,
             ibp_weights,
         );
-        ibp_blend_8bpc_neon(dst, stride, &tmp, w, h, false, &ibp_weights[mode_idx]);
+        ibp_blend_8bpc_neon(
+            dst,
+            stride,
+            tmp.as_slice(),
+            w,
+            h,
+            false,
+            &ibp_weights[mode_idx],
+        );
         return;
     }
     let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
@@ -1421,11 +1428,11 @@ fn ipred_z3_8bpc_neon_impl(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = vec![0u8; 64 * 64];
+        let mut tmp = [0u8; 64 * 64];
         let base_angle = a | ANGLE_IS_LUMA;
         let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
         ipred_z3_8bpc_neon_impl(
-            &mut tmp,
+            tmp.as_mut_slice(),
             64,
             tl,
             o,
@@ -1448,7 +1455,7 @@ fn ipred_z3_8bpc_neon_impl(
             max_height,
             ibp_weights,
         );
-        avg_pred_8bpc_neon(dst, stride, &tmp, w, h);
+        avg_pred_8bpc_neon(dst, stride, tmp.as_slice(), w, h);
         return;
     }
     if enable_ibp {
@@ -1468,7 +1475,7 @@ fn ipred_z3_8bpc_neon_impl(
         }
         let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
         let mode_idx = ((a - 183) >> 3).min(6) as usize;
-        let mut tmp = vec![0u8; 64 * 64];
+        let mut tmp = [0u8; 64 * 64];
         ipred_z3_8bpc_neon_impl(
             dst,
             stride,
@@ -1482,7 +1489,7 @@ fn ipred_z3_8bpc_neon_impl(
             ibp_weights,
         );
         ipred_z1_8bpc_neon_impl(
-            &mut tmp,
+            tmp.as_mut_slice(),
             64,
             tl,
             o,
@@ -1493,7 +1500,15 @@ fn ipred_z3_8bpc_neon_impl(
             max_height,
             ibp_weights,
         );
-        ibp_blend_8bpc_neon(dst, stride, &tmp, w, h, true, &ibp_weights[mode_idx]);
+        ibp_blend_8bpc_neon(
+            dst,
+            stride,
+            tmp.as_slice(),
+            w,
+            h,
+            true,
+            &ibp_weights[mode_idx],
+        );
         return;
     }
     if h > 64 {
@@ -1739,11 +1754,11 @@ fn ipred_z2_8bpc_neon_impl(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = vec![0u8; 64 * 64];
+        let mut tmp = [0u8; 64 * 64];
         let base_angle = a | ANGLE_IS_LUMA;
         let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
         ipred_z2_8bpc_neon_impl(
-            &mut tmp,
+            tmp.as_mut_slice(),
             64,
             tl,
             o,
@@ -1764,7 +1779,7 @@ fn ipred_z2_8bpc_neon_impl(
             max_width,
             max_height,
         );
-        avg_pred_8bpc_neon(dst, stride, &tmp, w, h);
+        avg_pred_8bpc_neon(dst, stride, tmp.as_slice(), w, h);
         return;
     }
     let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;

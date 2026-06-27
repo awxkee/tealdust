@@ -45,7 +45,7 @@ use crate::tables::{BLOCK_DIMENSIONS, TXFM_DIMENSIONS};
 /// Unlike the square TIP variant, this writes `dimw x dimh` luma pixels at 3-bit
 /// subpel precision with explicit edge limits.
 #[allow(clippy::too_many_arguments)]
-fn prep_opfl_prefetch_rect_8bpc<BD: crate::pixel::BitDepth>(
+fn prep_opfl_prefetch_rect_8bpc<BD: BitDepth>(
     bd: BD,
     p: &mut [BD::Pixel],
     p_stride: usize,
@@ -141,7 +141,7 @@ fn prep_opfl_prefetch_rect_8bpc<BD: crate::pixel::BitDepth>(
 /// `recon.scratch.rmv` grid for chroma, and (for BACP) accumulates the
 /// out-of-bounds blend mask. Returns the BACP predicate (mask vs average).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn opfl_pred_luma<BD: crate::pixel::BitDepth>(
+pub(crate) fn opfl_pred_luma<BD: BitDepth>(
     recon: &mut ReconCtx<BD>,
     tmp: &mut [Vec<i16>; 2],
     seg_mask: &mut [u8],

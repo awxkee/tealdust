@@ -769,6 +769,24 @@ fn setup_thr_cols(
     w4: i32,
     h4: i32,
 ) {
+    if crate::deblock_dispatch::try_setup_thr_cols_seg_8bpc(
+        q_thr_dst,
+        side_thr_dst,
+        segmap,
+        seg_off,
+        seg_stride,
+        mask,
+        bx4_base,
+        thr_lut,
+        left_q_thr,
+        left_side_thr,
+        y64,
+        ss_ver,
+        w4,
+        h4,
+    ) {
+        return;
+    }
     // Use real asserts, not debug_asserts, because they give LLVM facts in release.
     assert!((0..=16).contains(&w4));
     assert!((0..=16).contains(&h4));
@@ -851,6 +869,19 @@ fn setup_thr_cols_simple(
     w4: i32,
     h4: i32,
 ) {
+    if crate::deblock_dispatch::try_setup_thr_cols_simple_8bpc(
+        q_thr_dst,
+        side_thr_dst,
+        mask,
+        bx4_base,
+        thr_lut,
+        y64,
+        ss_ver,
+        w4,
+        h4,
+    ) {
+        return;
+    }
     assert!((0..=16).contains(&w4));
     assert!((0..=16).contains(&h4));
 
@@ -892,6 +923,21 @@ fn setup_thr_cols_dq(
     w4: i32,
     h4: i32,
 ) {
+    if crate::deblock_dispatch::try_setup_thr_cols_dq_8bpc(
+        q_thr_dst,
+        side_thr_dst,
+        mask,
+        bx4_base,
+        thr_lut,
+        left_q_thr,
+        left_side_thr,
+        y64,
+        ss_ver,
+        w4,
+        h4,
+    ) {
+        return;
+    }
     assert!((0..=16).contains(&w4));
     assert!((0..=16).contains(&h4));
 
@@ -949,6 +995,19 @@ fn setup_thr_rows_simple(
     w4: i32,
     h4: i32,
 ) {
+    if crate::deblock_dispatch::try_setup_thr_rows_simple_8bpc(
+        q_thr_dst,
+        side_thr_dst,
+        mask,
+        starty4,
+        thr_lut,
+        sb64x,
+        ss_hor,
+        w4,
+        h4,
+    ) {
+        return;
+    }
     assert!((0..=16).contains(&w4));
     assert!((0..=16).contains(&h4));
 
@@ -994,6 +1053,21 @@ fn setup_thr_rows_dq(
     w4: i32,
     h4: i32,
 ) {
+    if crate::deblock_dispatch::try_setup_thr_rows_dq_8bpc(
+        q_thr_dst,
+        side_thr_dst,
+        mask,
+        starty4,
+        thr_lut,
+        above_thr_lut,
+        above_seg,
+        sb64x,
+        ss_hor,
+        w4,
+        h4,
+    ) {
+        return;
+    }
     assert!((0..=16).contains(&w4));
     assert!((0..=16).contains(&h4));
 
@@ -1071,6 +1145,24 @@ fn setup_thr_rows(
     w4: i32,
     h4: i32,
 ) {
+    if crate::deblock_dispatch::try_setup_thr_rows_seg_8bpc(
+        q_thr_dst,
+        side_thr_dst,
+        segmap,
+        seg_off,
+        seg_stride,
+        mask,
+        starty4,
+        thr_lut,
+        above_thr_lut,
+        above_seg,
+        sb64x,
+        ss_hor,
+        w4,
+        h4,
+    ) {
+        return;
+    }
     assert!((0..=16).contains(&w4));
     assert!((0..=16).contains(&h4));
 

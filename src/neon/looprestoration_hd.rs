@@ -59,6 +59,26 @@ fn load16_u16_i32x4(p: &[u16]) -> (int32x4_t, int32x4_t, int32x4_t, int32x4_t) {
 
 #[inline]
 #[target_feature(enable = "neon")]
+#[allow(clippy::type_complexity)]
+fn load32_u16_i32x8(
+    p: &[u16],
+) -> (
+    int32x4_t,
+    int32x4_t,
+    int32x4_t,
+    int32x4_t,
+    int32x4_t,
+    int32x4_t,
+    int32x4_t,
+    int32x4_t,
+) {
+    let (a0, a1, a2, a3) = load16_u16_i32x4(p);
+    let (a4, a5, a6, a7) = load16_u16_i32x4(&p[16..]);
+    (a0, a1, a2, a3, a4, a5, a6, a7)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
 fn finish8_u16(dst: &mut [u16], slo: int32x4_t, shi: int32x4_t, bitdepth_max: i32) {
     let rnd = vdupq_n_s32(64);
     let zero = vdupq_n_s32(0);
@@ -103,6 +123,25 @@ fn finish16_u16(
             ),
         );
     }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+#[allow(clippy::too_many_arguments)]
+fn finish32_u16(
+    dst: &mut [u16],
+    s0: int32x4_t,
+    s1: int32x4_t,
+    s2: int32x4_t,
+    s3: int32x4_t,
+    s4: int32x4_t,
+    s5: int32x4_t,
+    s6: int32x4_t,
+    s7: int32x4_t,
+    bitdepth_max: i32,
+) {
+    finish16_u16(dst, s0, s1, s2, s3, bitdepth_max);
+    finish16_u16(&mut dst[16..], s4, s5, s6, s7, bitdepth_max);
 }
 
 #[inline]
@@ -157,6 +196,45 @@ fn ns_wiener_fir_run_hbd_neon_impl(
     bitdepth_max: i32,
 ) {
     let mut x = 0usize;
+    while x + 32 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 32 <= center.len());
+        let (m0, m1, m2, m3, m4, m5, m6, m7) = load32_u16_i32x8(&center[c..]);
+        let mut s0 = vshlq_n_s32::<7>(m0);
+        let mut s1 = vshlq_n_s32::<7>(m1);
+        let mut s2 = vshlq_n_s32::<7>(m2);
+        let mut s3 = vshlq_n_s32::<7>(m3);
+        let mut s4 = vshlq_n_s32::<7>(m4);
+        let mut s5 = vshlq_n_s32::<7>(m5);
+        let mut s6 = vshlq_n_s32::<7>(m6);
+        let mut s7 = vshlq_n_s32::<7>(m7);
+        let two_m0 = vaddq_s32(m0, m0);
+        let two_m1 = vaddq_s32(m1, m1);
+        let two_m2 = vaddq_s32(m2, m2);
+        let two_m3 = vaddq_s32(m3, m3);
+        let two_m4 = vaddq_s32(m4, m4);
+        let two_m5 = vaddq_s32(m5, m5);
+        let two_m6 = vaddq_s32(m6, m6);
+        let two_m7 = vaddq_s32(m7, m7);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 32 <= t.row_p.len() && cm + 32 <= t.row_m.len());
+            let (a0, a1, a2, a3, a4, a5, a6, a7) = load32_u16_i32x8(&t.row_p[cp..]);
+            let (b0, b1, b2, b3, b4, b5, b6, b7) = load32_u16_i32x8(&t.row_m[cm..]);
+            let coef = vdupq_n_s32(t.coef);
+            s0 = vaddq_s32(s0, vmulq_s32(vsubq_s32(vaddq_s32(a0, b0), two_m0), coef));
+            s1 = vaddq_s32(s1, vmulq_s32(vsubq_s32(vaddq_s32(a1, b1), two_m1), coef));
+            s2 = vaddq_s32(s2, vmulq_s32(vsubq_s32(vaddq_s32(a2, b2), two_m2), coef));
+            s3 = vaddq_s32(s3, vmulq_s32(vsubq_s32(vaddq_s32(a3, b3), two_m3), coef));
+            s4 = vaddq_s32(s4, vmulq_s32(vsubq_s32(vaddq_s32(a4, b4), two_m4), coef));
+            s5 = vaddq_s32(s5, vmulq_s32(vsubq_s32(vaddq_s32(a5, b5), two_m5), coef));
+            s6 = vaddq_s32(s6, vmulq_s32(vsubq_s32(vaddq_s32(a6, b6), two_m6), coef));
+            s7 = vaddq_s32(s7, vmulq_s32(vsubq_s32(vaddq_s32(a7, b7), two_m7), coef));
+        }
+        finish32_u16(&mut dst[x..], s0, s1, s2, s3, s4, s5, s6, s7, bitdepth_max);
+        x += 32;
+    }
     while x + 16 <= n {
         let c = col0 + x;
         debug_assert!(c + 16 <= center.len());
@@ -236,6 +314,38 @@ fn pc_wiener_fir_run_hbd_neon_impl(
     bitdepth_max: i32,
 ) {
     let mut x = 0usize;
+    while x + 32 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 32 <= center.len());
+        let (m0, m1, m2, m3, m4, m5, m6, m7) = load32_u16_i32x8(&center[c..]);
+        let cc = vdupq_n_s32(center_coef);
+        let mut s0 = vmulq_s32(m0, cc);
+        let mut s1 = vmulq_s32(m1, cc);
+        let mut s2 = vmulq_s32(m2, cc);
+        let mut s3 = vmulq_s32(m3, cc);
+        let mut s4 = vmulq_s32(m4, cc);
+        let mut s5 = vmulq_s32(m5, cc);
+        let mut s6 = vmulq_s32(m6, cc);
+        let mut s7 = vmulq_s32(m7, cc);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 32 <= t.row_p.len() && cm + 32 <= t.row_m.len());
+            let (a0, a1, a2, a3, a4, a5, a6, a7) = load32_u16_i32x8(&t.row_p[cp..]);
+            let (b0, b1, b2, b3, b4, b5, b6, b7) = load32_u16_i32x8(&t.row_m[cm..]);
+            let coef = vdupq_n_s32(t.coef);
+            s0 = vaddq_s32(s0, vmulq_s32(vaddq_s32(a0, b0), coef));
+            s1 = vaddq_s32(s1, vmulq_s32(vaddq_s32(a1, b1), coef));
+            s2 = vaddq_s32(s2, vmulq_s32(vaddq_s32(a2, b2), coef));
+            s3 = vaddq_s32(s3, vmulq_s32(vaddq_s32(a3, b3), coef));
+            s4 = vaddq_s32(s4, vmulq_s32(vaddq_s32(a4, b4), coef));
+            s5 = vaddq_s32(s5, vmulq_s32(vaddq_s32(a5, b5), coef));
+            s6 = vaddq_s32(s6, vmulq_s32(vaddq_s32(a6, b6), coef));
+            s7 = vaddq_s32(s7, vmulq_s32(vaddq_s32(a7, b7), coef));
+        }
+        finish32_u16(&mut dst[x..], s0, s1, s2, s3, s4, s5, s6, s7, bitdepth_max);
+        x += 32;
+    }
     while x + 16 <= n {
         let c = col0 + x;
         debug_assert!(c + 16 <= center.len());

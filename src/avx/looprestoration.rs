@@ -103,6 +103,14 @@ fn gather16_u8_i32x2(row: &[u8], idx: usize, step: usize) -> (__m256i, __m256i) 
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn gather32_u8_i32x4(row: &[u8], idx: usize, step: usize) -> (__m256i, __m256i, __m256i, __m256i) {
+    let (a0, a1) = gather16_u8_i32x2(row, idx, step);
+    let (a2, a3) = gather16_u8_i32x2(row, idx + 16 * step, step);
+    (a0, a1, a2, a3)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn clip8_i32(v: __m256i) -> __m256i {
     _mm256_min_epi32(
         _mm256_max_epi32(
@@ -357,6 +365,58 @@ pub(crate) fn ns_wiener_uv_fir_run_avx2(
     n: usize,
 ) {
     let mut x = 0usize;
+    while x + 32 <= n {
+        let cb = co + x;
+        let (m0, m1) = load16_u8_i32x2(&c_center[cb..]);
+        let (m2, m3) = load16_u8_i32x2(&c_center[cb + 16..]);
+        let two_m0 = _mm256_add_epi32(m0, m0);
+        let two_m1 = _mm256_add_epi32(m1, m1);
+        let two_m2 = _mm256_add_epi32(m2, m2);
+        let two_m3 = _mm256_add_epi32(m3, m3);
+        let mut s0 = _mm256_slli_epi32::<7>(m0);
+        let mut s1 = _mm256_slli_epi32::<7>(m1);
+        let mut s2 = _mm256_slli_epi32::<7>(m2);
+        let mut s3 = _mm256_slli_epi32::<7>(m3);
+        for t in ctaps {
+            let cp = (cb as i32 + t.dx) as usize;
+            let cm = (cb as i32 - t.dx) as usize;
+            let (a0, a1) = load16_u8_i32x2(&t.row_p[cp..]);
+            let (b0, b1) = load16_u8_i32x2(&t.row_m[cm..]);
+            let (a2, a3) = load16_u8_i32x2(&t.row_p[cp + 16..]);
+            let (b2, b3) = load16_u8_i32x2(&t.row_m[cm + 16..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            s0 = _mm256_add_epi32(
+                s0,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(a0, b0), two_m0), coef),
+            );
+            s1 = _mm256_add_epi32(
+                s1,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(a1, b1), two_m1), coef),
+            );
+            s2 = _mm256_add_epi32(
+                s2,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(a2, b2), two_m2), coef),
+            );
+            s3 = _mm256_add_epi32(
+                s3,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(a3, b3), two_m3), coef),
+            );
+        }
+        let lb = lo + x * lstep;
+        let (lc0, lc1, lc2, lc3) = gather32_u8_i32x4(l_center, lb, lstep);
+        for t in ltaps {
+            let li = (lb as i32 + t.ldx) as usize;
+            let (lv0, lv1, lv2, lv3) = gather32_u8_i32x4(t.row, li, lstep);
+            let coef = _mm256_set1_epi32(t.coef);
+            s0 = _mm256_add_epi32(s0, _mm256_mullo_epi32(_mm256_sub_epi32(lv0, lc0), coef));
+            s1 = _mm256_add_epi32(s1, _mm256_mullo_epi32(_mm256_sub_epi32(lv1, lc1), coef));
+            s2 = _mm256_add_epi32(s2, _mm256_mullo_epi32(_mm256_sub_epi32(lv2, lc2), coef));
+            s3 = _mm256_add_epi32(s3, _mm256_mullo_epi32(_mm256_sub_epi32(lv3, lc3), coef));
+        }
+        finish16(&mut dst[x..], s0, s1);
+        finish16(&mut dst[x + 16..], s2, s3);
+        x += 32;
+    }
     while x + 16 <= n {
         let cb = co + x;
         let (mlo, mhi) = load16_u8_i32x2(&c_center[cb..]);
@@ -436,7 +496,7 @@ pub(crate) fn ns_wiener_uv_fir_run_avx2(
 }
 
 #[cfg(test)]
-mod uv_fir_sse_tests {
+mod uv_fir_avx2_tests {
     use crate::filter::{UvLumaTap, WienerTap, ns_wiener_uv_fir_run_scalar};
 
     struct R(u64);
@@ -455,7 +515,7 @@ mod uv_fir_sse_tests {
     }
 
     #[test]
-    fn ns_wiener_uv_fir_sse_matches_scalar() {
+    fn ns_wiener_uv_fir_avx2_matches_scalar() {
         if !std::is_x86_feature_detected!("avx2") {
             return;
         }
@@ -489,7 +549,7 @@ mod uv_fir_sse_tests {
 
             let co = 8usize;
             let lo = 8usize;
-            let n = rng.range(1, 16) as usize;
+            let n = rng.range(1, 48) as usize;
 
             let mut a = vec![0u8; n];
             let mut b = vec![0u8; n];

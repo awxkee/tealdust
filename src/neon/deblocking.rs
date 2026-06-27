@@ -2443,3 +2443,390 @@ pub(crate) fn deblock_v_sb64uv_8bpc_neon(
         }
     }
 }
+
+#[inline]
+fn setup_lut_u8x16_neon(lut: &[u32; 16]) -> uint8x16_t {
+    let mut tbl = [0u8; 16];
+    for i in 0..16 {
+        tbl[i] = lut[i] as u8;
+    }
+    unsafe { vld1q_u8(tbl.as_ptr()) }
+}
+
+#[inline]
+fn setup_load_seg_u8x16_neon(seg: &[u8], off: usize, w: usize) -> uint8x16_t {
+    let mut tmp = [0u8; 16];
+    tmp[..w].copy_from_slice(&seg[off..off + w]);
+    unsafe { vld1q_u8(tmp.as_ptr()) }
+}
+
+#[inline]
+fn setup_mask_bits_u8x16_neon(bits: u16) -> uint8x16_t {
+    let tmp = [
+        if bits & (1 << 0) != 0 { 0xff } else { 0 },
+        if bits & (1 << 1) != 0 { 0xff } else { 0 },
+        if bits & (1 << 2) != 0 { 0xff } else { 0 },
+        if bits & (1 << 3) != 0 { 0xff } else { 0 },
+        if bits & (1 << 4) != 0 { 0xff } else { 0 },
+        if bits & (1 << 5) != 0 { 0xff } else { 0 },
+        if bits & (1 << 6) != 0 { 0xff } else { 0 },
+        if bits & (1 << 7) != 0 { 0xff } else { 0 },
+        if bits & (1 << 8) != 0 { 0xff } else { 0 },
+        if bits & (1 << 9) != 0 { 0xff } else { 0 },
+        if bits & (1 << 10) != 0 { 0xff } else { 0 },
+        if bits & (1 << 11) != 0 { 0xff } else { 0 },
+        if bits & (1 << 12) != 0 { 0xff } else { 0 },
+        if bits & (1 << 13) != 0 { 0xff } else { 0 },
+        if bits & (1 << 14) != 0 { 0xff } else { 0 },
+        if bits & (1 << 15) != 0 { 0xff } else { 0 },
+    ];
+    unsafe { vld1q_u8(tmp.as_ptr()) }
+}
+
+#[inline]
+fn setup_apply_subpu_u8x16_neon(v: uint8x16_t, bits: u16) -> uint8x16_t {
+    unsafe { vbslq_u8(setup_mask_bits_u8x16_neon(bits), vshrq_n_u8::<3>(v), v) }
+}
+
+#[inline]
+fn setup_edge_u8x16_neon(cur: uint8x16_t, prev: uint8x16_t) -> uint8x16_t {
+    unsafe {
+        let z = vdupq_n_u8(0);
+        let both = vmvnq_u8(vorrq_u8(vceqq_u8(cur, z), vceqq_u8(prev, z)));
+        vbslq_u8(both, vrhaddq_u8(cur, prev), vorrq_u8(cur, prev))
+    }
+}
+
+#[inline]
+fn setup_store_u8x16_neon(dst: &mut [u8; 256], off: usize, v: uint8x16_t) {
+    unsafe { vst1q_u8(dst.as_mut_ptr().add(off), v) };
+}
+
+#[inline]
+fn setup_store_tmp_u8x16_neon(v: uint8x16_t) -> [u8; 16] {
+    let mut tmp = [0u8; 16];
+    unsafe { vst1q_u8(tmp.as_mut_ptr(), v) };
+    tmp
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn setup_thr_rows_simple_8bpc_neon(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    thr_lut: &[[u32; 16]; 2],
+    sb64x: i32,
+    ss_hor: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let h = h4 as usize;
+    let mask_idx = (sb64x >> ss_hor) as usize;
+    assert!(mask_idx < 4);
+    assert!(starty4 + h <= 64);
+    let mask_shift: u32 = if (sb64x & ss_hor) != 0 { 8 } else { 0 };
+    unsafe {
+        let qv = vdupq_n_u8(thr_lut[0][0] as u8);
+        let sv = vdupq_n_u8(thr_lut[1][0] as u8);
+        for y in 0..h {
+            let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
+            setup_store_u8x16_neon(q_thr_dst, y * 16, setup_apply_subpu_u8x16_neon(qv, bits));
+            setup_store_u8x16_neon(side_thr_dst, y * 16, setup_apply_subpu_u8x16_neon(sv, bits));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn setup_thr_cols_simple_8bpc_neon(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    thr_lut: &[[u32; 16]; 2],
+    y64: i32,
+    ss_ver: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let mask_idx = (y64 >> ss_ver) as usize;
+    assert!(mask_idx < 4);
+    assert!(bx4_base + w <= 64);
+    let mask_shift: u32 = if (y64 & ss_ver) != 0 { 8 } else { 0 };
+    unsafe {
+        let qv = vdupq_n_u8(thr_lut[0][0] as u8);
+        let sv = vdupq_n_u8(thr_lut[1][0] as u8);
+        for x in 0..w {
+            let bits = (mask[bx4_base + x][4][mask_idx] >> mask_shift) as u16;
+            setup_store_u8x16_neon(q_thr_dst, x * 16, setup_apply_subpu_u8x16_neon(qv, bits));
+            setup_store_u8x16_neon(side_thr_dst, x * 16, setup_apply_subpu_u8x16_neon(sv, bits));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn setup_thr_rows_dq_8bpc_neon(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    thr_lut: &[[u32; 16]; 2],
+    above_thr_lut: Option<&[[u32; 16]; 2]>,
+    above_seg: Option<(&[u8], isize)>,
+    sb64x: i32,
+    ss_hor: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let h = h4 as usize;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let mask_idx = (sb64x >> ss_hor) as usize;
+    assert!(mask_idx < 4);
+    assert!(starty4 + h <= 64);
+    let mask_shift: u32 = if (sb64x & ss_hor) != 0 { 8 } else { 0 };
+    unsafe {
+        let qv = vdupq_n_u8(thr_lut[0][0] as u8);
+        let sv = vdupq_n_u8(thr_lut[1][0] as u8);
+        let (above_q, above_s) = if let Some(alut) = above_thr_lut {
+            if let Some((aseg, aoff)) = above_seg {
+                let off = usize::try_from(aoff).expect("negative above segment offset");
+                assert!(off + w <= aseg.len());
+                let segv = setup_load_seg_u8x16_neon(aseg, off, w);
+                (
+                    vqtbl1q_u8(setup_lut_u8x16_neon(&alut[0]), segv),
+                    vqtbl1q_u8(setup_lut_u8x16_neon(&alut[1]), segv),
+                )
+            } else {
+                (vdupq_n_u8(alut[0][0] as u8), vdupq_n_u8(alut[1][0] as u8))
+            }
+        } else {
+            (vdupq_n_u8(0), vdupq_n_u8(0))
+        };
+        let bits0 = (mask[starty4][4][mask_idx] >> mask_shift) as u16;
+        setup_store_u8x16_neon(
+            q_thr_dst,
+            0,
+            setup_apply_subpu_u8x16_neon(setup_edge_u8x16_neon(qv, above_q), bits0),
+        );
+        setup_store_u8x16_neon(
+            side_thr_dst,
+            0,
+            setup_apply_subpu_u8x16_neon(setup_edge_u8x16_neon(sv, above_s), bits0),
+        );
+        for y in 1..h {
+            let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
+            setup_store_u8x16_neon(q_thr_dst, y * 16, setup_apply_subpu_u8x16_neon(qv, bits));
+            setup_store_u8x16_neon(side_thr_dst, y * 16, setup_apply_subpu_u8x16_neon(sv, bits));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn setup_thr_cols_dq_8bpc_neon(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    thr_lut: &[[u32; 16]; 2],
+    left_q_thr: &mut [u8; 16],
+    left_side_thr: &mut [u8; 16],
+    y64: i32,
+    ss_ver: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let h = h4 as usize;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let mask_idx = (y64 >> ss_ver) as usize;
+    assert!(mask_idx < 4);
+    assert!(bx4_base + w <= 64);
+    let mask_shift: u32 = if (y64 & ss_ver) != 0 { 8 } else { 0 };
+    unsafe {
+        let qv = vdupq_n_u8(thr_lut[0][0] as u8);
+        let sv = vdupq_n_u8(thr_lut[1][0] as u8);
+        let left_q = vld1q_u8(left_q_thr.as_ptr());
+        let left_s = vld1q_u8(left_side_thr.as_ptr());
+        for x in 0..w {
+            let bits = (mask[bx4_base + x][4][mask_idx] >> mask_shift) as u16;
+            let qbase = if x == 0 {
+                setup_edge_u8x16_neon(qv, left_q)
+            } else {
+                qv
+            };
+            let sbase = if x == 0 {
+                setup_edge_u8x16_neon(sv, left_s)
+            } else {
+                sv
+            };
+            setup_store_u8x16_neon(q_thr_dst, x * 16, setup_apply_subpu_u8x16_neon(qbase, bits));
+            setup_store_u8x16_neon(
+                side_thr_dst,
+                x * 16,
+                setup_apply_subpu_u8x16_neon(sbase, bits),
+            );
+        }
+    }
+    left_q_thr[..h].fill(thr_lut[0][0] as u8);
+    left_side_thr[..h].fill(thr_lut[1][0] as u8);
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn setup_thr_rows_seg_8bpc_neon(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    segmap: &[u8],
+    seg_off: isize,
+    seg_stride: isize,
+    mask: &[[[u16; 4]; 5]; 64],
+    starty4: usize,
+    thr_lut: &[[u32; 16]; 2],
+    above_thr_lut: Option<&[[u32; 16]; 2]>,
+    above_seg: Option<(&[u8], isize)>,
+    sb64x: i32,
+    ss_hor: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let h = h4 as usize;
+    let mask_idx = (sb64x >> ss_hor) as usize;
+    assert!(mask_idx < 4);
+    assert!(starty4 + h <= 64);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let seg_off = usize::try_from(seg_off).expect("negative segment offset");
+    let seg_stride = usize::try_from(seg_stride).expect("negative segment stride");
+    assert!(seg_off + (h - 1) * seg_stride + w <= segmap.len());
+    let mask_shift: u32 = if (sb64x & ss_hor) != 0 { 8 } else { 0 };
+    unsafe {
+        let qlut = setup_lut_u8x16_neon(&thr_lut[0]);
+        let slut = setup_lut_u8x16_neon(&thr_lut[1]);
+        let (mut prev_q, mut prev_s) =
+            if let (Some(alut), Some((aseg, aoff))) = (above_thr_lut, above_seg) {
+                let off = usize::try_from(aoff).expect("negative above segment offset");
+                assert!(off + w <= aseg.len());
+                let segv = setup_load_seg_u8x16_neon(aseg, off, w);
+                (
+                    vqtbl1q_u8(setup_lut_u8x16_neon(&alut[0]), segv),
+                    vqtbl1q_u8(setup_lut_u8x16_neon(&alut[1]), segv),
+                )
+            } else {
+                (vdupq_n_u8(0), vdupq_n_u8(0))
+            };
+        for y in 0..h {
+            let row = seg_off + y * seg_stride;
+            let segv = setup_load_seg_u8x16_neon(segmap, row, w);
+            let cur_q = vqtbl1q_u8(qlut, segv);
+            let cur_s = vqtbl1q_u8(slut, segv);
+            let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
+            setup_store_u8x16_neon(
+                q_thr_dst,
+                y * 16,
+                setup_apply_subpu_u8x16_neon(setup_edge_u8x16_neon(cur_q, prev_q), bits),
+            );
+            setup_store_u8x16_neon(
+                side_thr_dst,
+                y * 16,
+                setup_apply_subpu_u8x16_neon(setup_edge_u8x16_neon(cur_s, prev_s), bits),
+            );
+            prev_q = cur_q;
+            prev_s = cur_s;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn setup_thr_cols_seg_8bpc_neon(
+    q_thr_dst: &mut [u8; 256],
+    side_thr_dst: &mut [u8; 256],
+    segmap: &[u8],
+    seg_off: isize,
+    seg_stride: isize,
+    mask: &[[[u16; 4]; 5]; 64],
+    bx4_base: usize,
+    thr_lut: &[[u32; 16]; 2],
+    left_q_thr: &mut [u8; 16],
+    left_side_thr: &mut [u8; 16],
+    y64: i32,
+    ss_ver: i32,
+    w4: i32,
+    h4: i32,
+) {
+    assert!((0..=16).contains(&w4));
+    assert!((0..=16).contains(&h4));
+    let w = w4 as usize;
+    let h = h4 as usize;
+    let mask_idx = (y64 >> ss_ver) as usize;
+    assert!(mask_idx < 4);
+    assert!(bx4_base + w <= 64);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let seg_off = usize::try_from(seg_off).expect("negative segment offset");
+    let seg_stride = usize::try_from(seg_stride).expect("negative segment stride");
+    assert!(seg_off + (h - 1) * seg_stride + w <= segmap.len());
+    let mask_shift: u32 = if (y64 & ss_ver) != 0 { 8 } else { 0 };
+    unsafe {
+        let qlut = setup_lut_u8x16_neon(&thr_lut[0]);
+        let slut = setup_lut_u8x16_neon(&thr_lut[1]);
+        for y in 0..h {
+            let row = seg_off + y * seg_stride;
+            let segv = setup_load_seg_u8x16_neon(segmap, row, w);
+            let cur_q = vqtbl1q_u8(qlut, segv);
+            let cur_s = vqtbl1q_u8(slut, segv);
+            let cur_q_arr = setup_store_tmp_u8x16_neon(cur_q);
+            let cur_s_arr = setup_store_tmp_u8x16_neon(cur_s);
+            let mut prev_q_arr = [0u8; 16];
+            let mut prev_s_arr = [0u8; 16];
+            prev_q_arr[0] = left_q_thr[y];
+            prev_s_arr[0] = left_side_thr[y];
+            prev_q_arr[1..].copy_from_slice(&cur_q_arr[..15]);
+            prev_s_arr[1..].copy_from_slice(&cur_s_arr[..15]);
+            let prev_q = vld1q_u8(prev_q_arr.as_ptr());
+            let prev_s = vld1q_u8(prev_s_arr.as_ptr());
+            let mut bits = 0u16;
+            let shift = mask_shift + y as u32;
+            for x in 0..w {
+                bits |= ((mask[bx4_base + x][4][mask_idx] >> shift) & 1) << x;
+            }
+            let q_arr = setup_store_tmp_u8x16_neon(setup_apply_subpu_u8x16_neon(
+                setup_edge_u8x16_neon(cur_q, prev_q),
+                bits,
+            ));
+            let s_arr = setup_store_tmp_u8x16_neon(setup_apply_subpu_u8x16_neon(
+                setup_edge_u8x16_neon(cur_s, prev_s),
+                bits,
+            ));
+            for x in 0..w {
+                q_thr_dst[x * 16 + y] = q_arr[x];
+                side_thr_dst[x * 16 + y] = s_arr[x];
+            }
+            left_q_thr[y] = cur_q_arr[w - 1];
+            left_side_thr[y] = cur_s_arr[w - 1];
+        }
+    }
+}

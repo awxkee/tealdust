@@ -77,8 +77,12 @@ fn stx4_sums(kernel: &[i8], cf: &[i16], eob: usize) -> __m256i {
     let mut acc_hi = acc_lo;
     let mut y = 0usize;
     while y <= eob {
-        let c0 = cf[y];
-        let c1 = if y < eob { cf[y + 1] } else { 0 };
+        let c0 = unsafe { *cf.as_ptr().add(y) };
+        let c1 = if y < eob {
+            unsafe { *cf.as_ptr().add(y + 1) }
+        } else {
+            0
+        };
         let coeffs = coeff_pair(c0, c1);
         let k0 = load_i8x16_i16(unsafe { kernel.as_ptr().add(y * 16) });
         let k1 = load_i8x16_i16(unsafe { kernel.as_ptr().add((y + 1) * 16) });
@@ -100,8 +104,12 @@ fn stx8_sums(kernel: &[i8], cf: &[i16], eob: usize) -> (__m256i, __m256i, __m256
 
     let mut y = 0usize;
     while y <= eob {
-        let c0 = cf[y];
-        let c1 = if y < eob { cf[y + 1] } else { 0 };
+        let c0 = unsafe { *cf.as_ptr().add(y) };
+        let c1 = if y < eob {
+            unsafe { *cf.as_ptr().add(y + 1) }
+        } else {
+            0
+        };
         let coeffs = coeff_pair(c0, c1);
         let row0 = unsafe { kernel.as_ptr().add(y * 48) };
         let row1 = unsafe { kernel.as_ptr().add((y + 1) * 48) };
@@ -134,6 +142,111 @@ fn store_i16x16(dst: &mut [i16], v: __m256i) {
     unsafe { _mm256_storeu_si256(dst.as_mut_ptr() as *mut __m256i, v) };
 }
 
+#[inline(always)]
+unsafe fn scatter_stx4_i16(cf: &mut [i16], sums: &[i16; 16], scan_out: &[u8; 16]) {
+    let dst = cf.as_mut_ptr();
+    let src = sums.as_ptr();
+    let map = scan_out.as_ptr();
+    macro_rules! st {
+        ($n:expr) => {
+            unsafe { *dst.add(*map.add($n) as usize) = *src.add($n) };
+        };
+    }
+    st!(0);
+    st!(1);
+    st!(2);
+    st!(3);
+    st!(4);
+    st!(5);
+    st!(6);
+    st!(7);
+    st!(8);
+    st!(9);
+    st!(10);
+    st!(11);
+    st!(12);
+    st!(13);
+    st!(14);
+    st!(15);
+}
+
+#[inline(always)]
+unsafe fn scatter_stx8_i16(
+    cf: &mut [i16],
+    sums: &[i16; 48],
+    scan_out: &[u8; 64],
+    mapping: &[u8; 48],
+) {
+    let dst = cf.as_mut_ptr();
+    let src = sums.as_ptr();
+    let scan = scan_out.as_ptr();
+    let map = mapping.as_ptr();
+    macro_rules! st {
+        ($n:expr) => {
+            unsafe { *dst.add(*scan.add(*map.add($n) as usize) as usize) = *src.add($n) };
+        };
+    }
+    st!(0);
+    st!(1);
+    st!(2);
+    st!(3);
+    st!(4);
+    st!(5);
+    st!(6);
+    st!(7);
+    st!(8);
+    st!(9);
+    st!(10);
+    st!(11);
+    st!(12);
+    st!(13);
+    st!(14);
+    st!(15);
+    st!(16);
+    st!(17);
+    st!(18);
+    st!(19);
+    st!(20);
+    st!(21);
+    st!(22);
+    st!(23);
+    st!(24);
+    st!(25);
+    st!(26);
+    st!(27);
+    st!(28);
+    st!(29);
+    st!(30);
+    st!(31);
+    st!(32);
+    st!(33);
+    st!(34);
+    st!(35);
+    st!(36);
+    st!(37);
+    st!(38);
+    st!(39);
+    st!(40);
+    st!(41);
+    st!(42);
+    st!(43);
+    st!(44);
+    st!(45);
+    st!(46);
+    st!(47);
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+unsafe fn zero_stx8_i16_avx2(cf: &mut [i16]) {
+    let zero = _mm256_setzero_si256();
+    let dst = cf.as_mut_ptr() as *mut __m256i;
+    unsafe {
+        _mm256_storeu_si256(dst, zero);
+        _mm256_storeu_si256(dst.add(1), zero);
+    }
+}
+
 #[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn stxfm4_8bpc_avx2(cf: &mut [i16], kernel: &[i8], eob: usize, scan_out: &[u8; 16]) {
@@ -145,9 +258,7 @@ pub(crate) fn stxfm4_8bpc_avx2(cf: &mut [i16], kernel: &[i8], eob: usize, scan_o
     store_i16x16(&mut sums, sums_v);
 
     cf[4..8].fill(0);
-    for n in 0..16 {
-        cf[scan_out[n] as usize] = sums[n];
-    }
+    unsafe { scatter_stx4_i16(cf, &sums, scan_out) };
 }
 
 #[inline]
@@ -168,9 +279,9 @@ pub(crate) fn stxfm8_8bpc_avx2(
     store_i16x16(&mut sums[16..32], s1);
     store_i16x16(&mut sums[32..48], s2);
 
-    cf[..32].fill(0);
-    for n in 0..48 {
-        cf[scan_out[mapping[n] as usize] as usize] = sums[n];
+    unsafe {
+        zero_stx8_i16_avx2(cf);
+        scatter_stx8_i16(cf, &sums, scan_out, mapping);
     }
 }
 
@@ -206,7 +317,7 @@ fn stx4_sums_hbd(kernel: &[i8], cf: &[i32], eob: usize, bitdepth_max: i32) -> (_
 
     let mut y = 0usize;
     while y <= eob {
-        let c = cf[y];
+        let c = unsafe { *cf.as_ptr().add(y) };
         let row = unsafe { kernel.as_ptr().add(y * 16) };
         acc0 = mac_hbd_8(acc0, c, row);
         acc1 = mac_hbd_8(acc1, c, unsafe { row.add(8) });
@@ -238,7 +349,7 @@ fn stx8_sums_hbd(
 
     let mut y = 0usize;
     while y <= eob {
-        let c = cf[y];
+        let c = unsafe { *cf.as_ptr().add(y) };
         let row = unsafe { kernel.as_ptr().add(y * 48) };
         acc0 = mac_hbd_8(acc0, c, row);
         acc1 = mac_hbd_8(acc1, c, unsafe { row.add(8) });
@@ -265,6 +376,113 @@ fn store_i32x8(dst: &mut [i32], v: __m256i) {
     unsafe { _mm256_storeu_si256(dst.as_mut_ptr() as *mut __m256i, v) };
 }
 
+#[inline(always)]
+unsafe fn scatter_stx4_i32(cf: &mut [i32], sums: &[i32; 16], scan_out: &[u8; 16]) {
+    let dst = cf.as_mut_ptr();
+    let src = sums.as_ptr();
+    let map = scan_out.as_ptr();
+    macro_rules! st {
+        ($n:expr) => {
+            unsafe { *dst.add(*map.add($n) as usize) = *src.add($n) };
+        };
+    }
+    st!(0);
+    st!(1);
+    st!(2);
+    st!(3);
+    st!(4);
+    st!(5);
+    st!(6);
+    st!(7);
+    st!(8);
+    st!(9);
+    st!(10);
+    st!(11);
+    st!(12);
+    st!(13);
+    st!(14);
+    st!(15);
+}
+
+#[inline(always)]
+unsafe fn scatter_stx8_i32(
+    cf: &mut [i32],
+    sums: &[i32; 48],
+    scan_out: &[u8; 64],
+    mapping: &[u8; 48],
+) {
+    let dst = cf.as_mut_ptr();
+    let src = sums.as_ptr();
+    let scan = scan_out.as_ptr();
+    let map = mapping.as_ptr();
+    macro_rules! st {
+        ($n:expr) => {
+            unsafe { *dst.add(*scan.add(*map.add($n) as usize) as usize) = *src.add($n) };
+        };
+    }
+    st!(0);
+    st!(1);
+    st!(2);
+    st!(3);
+    st!(4);
+    st!(5);
+    st!(6);
+    st!(7);
+    st!(8);
+    st!(9);
+    st!(10);
+    st!(11);
+    st!(12);
+    st!(13);
+    st!(14);
+    st!(15);
+    st!(16);
+    st!(17);
+    st!(18);
+    st!(19);
+    st!(20);
+    st!(21);
+    st!(22);
+    st!(23);
+    st!(24);
+    st!(25);
+    st!(26);
+    st!(27);
+    st!(28);
+    st!(29);
+    st!(30);
+    st!(31);
+    st!(32);
+    st!(33);
+    st!(34);
+    st!(35);
+    st!(36);
+    st!(37);
+    st!(38);
+    st!(39);
+    st!(40);
+    st!(41);
+    st!(42);
+    st!(43);
+    st!(44);
+    st!(45);
+    st!(46);
+    st!(47);
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn zero_stx8_i32_avx2(cf: &mut [i32]) {
+    let zero = _mm256_setzero_si256();
+    let dst = cf.as_mut_ptr() as *mut __m256i;
+    unsafe {
+        _mm256_storeu_si256(dst, zero);
+        _mm256_storeu_si256(dst.add(1), zero);
+        _mm256_storeu_si256(dst.add(2), zero);
+        _mm256_storeu_si256(dst.add(3), zero);
+    }
+}
+
 #[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn stxfm4_hbd_avx2(
@@ -283,9 +501,7 @@ pub(crate) fn stxfm4_hbd_avx2(
     store_i32x8(&mut sums[8..16], s1);
 
     cf[4..8].fill(0);
-    for n in 0..16 {
-        cf[scan_out[n] as usize] = sums[n];
-    }
+    unsafe { scatter_stx4_i32(cf, &sums, scan_out) };
 }
 
 #[inline]
@@ -310,8 +526,8 @@ pub(crate) fn stxfm8_hbd_avx2(
     store_i32x8(&mut sums[32..40], s4);
     store_i32x8(&mut sums[40..48], s5);
 
-    cf[..32].fill(0);
-    for n in 0..48 {
-        cf[scan_out[mapping[n] as usize] as usize] = sums[n];
+    unsafe {
+        zero_stx8_i32_avx2(cf);
+        scatter_stx8_i32(cf, &sums, scan_out, mapping);
     }
 }
