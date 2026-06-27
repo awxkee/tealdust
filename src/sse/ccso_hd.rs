@@ -40,6 +40,7 @@ fn ccso_tail_hbd(
     row: usize,
     x0: usize,
     x1: usize,
+    ss_hor: usize,
     shift: u32,
     luma_offset: isize,
     quant_step: i32,
@@ -47,7 +48,7 @@ fn ccso_tail_hbd(
     bo_only: bool,
 ) {
     for x in x0..x1 {
-        let ti = row + x;
+        let ti = row + (x << ss_hor);
         let c = tmp[ti] as i32;
         let band = (c as u32 >> shift) as u8;
         if bo_only {
@@ -193,6 +194,7 @@ pub(crate) fn ccso_prep_lut_hbd_sse41(
             row,
             x,
             w,
+            ss_hor,
             shift,
             luma_offset,
             quant_step,
@@ -203,30 +205,32 @@ pub(crate) fn ccso_prep_lut_hbd_sse41(
 }
 
 #[inline(always)]
-fn fill_offsets_8(out: &mut [i16; 8], idx: &[u8], offset_idxs: &[u8], offset_lut: &[i8]) {
-    for i in 0..8 {
-        out[i] = crate::ccso::ccso_offset(idx[i], offset_idxs, offset_lut) as i16;
+fn fill_offsets_8(out: &mut [i16; 8], idx: &[u8; 8], offset_map: &[i8; 256]) {
+    for (out, &idx) in out.iter_mut().zip(idx.iter()) {
+        *out = offset_map[idx as usize] as i16;
     }
 }
 
 #[inline(always)]
 fn ccso_add_4x4_hbd(
-    dst: &mut [u16],
+    dst_rows: &mut [u16],
     dst_stride: usize,
-    idx_buf: &[u8],
+    idx_rows: &[u8],
     idx_stride: usize,
-    offset_idxs: &[u8],
-    offset_lut: &[i8],
+    offset_map: &[i8; 256],
     xx: usize,
-    yy: usize,
     bitdepth_max: i32,
 ) {
-    for y in yy..yy + 4 {
-        for x in xx..xx + 4 {
-            let off =
-                crate::ccso::ccso_offset(idx_buf[y * idx_stride + x], offset_idxs, offset_lut);
-            let cur = dst[y * dst_stride + x] as i32;
-            dst[y * dst_stride + x] = (cur + off as i32).clamp(0, bitdepth_max) as u16;
+    for (dst_row, idx_row) in dst_rows
+        .chunks_exact_mut(dst_stride)
+        .zip(idx_rows.chunks_exact(idx_stride))
+    {
+        let dst4 = &mut dst_row[xx..xx + 4].as_chunks_mut::<4>().0[0];
+        let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
+        for (dst, &idx) in dst4.iter_mut().zip(idx4.iter()) {
+            let off = offset_map[idx as usize];
+            let cur = *dst as i32;
+            *dst = (cur + off as i32).clamp(0, bitdepth_max) as u16;
         }
     }
 }
@@ -248,22 +252,32 @@ pub(crate) fn ccso_add_hbd_sse41(
 ) {
     let zero = _mm_setzero_si128();
     let maxv = _mm_set1_epi16(bitdepth_max as i16);
+    let offset_map = crate::ccso::ccso_build_offset_map(offset_idxs, offset_lut);
     let mut off_tmp = [0i16; 8];
-    for yy in (0..h).step_by(4) {
-        let mi = yy >> 2;
-        let row_mask = ll_mask[mi][0];
+    let n_blocks = (h + 3) >> 2;
+    let dst_block_len = dst_stride * 4 * n_blocks;
+    let idx_block_len = idx_stride * 4 * n_blocks;
+    for ((dst_rows, idx_rows), mask) in dst[..dst_block_len]
+        .chunks_exact_mut(dst_stride * 4)
+        .zip(idx_buf[..idx_block_len].chunks_exact(idx_stride * 4))
+        .zip(ll_mask[..n_blocks].iter())
+    {
+        let row_mask = mask[0];
         let mut xx = 0usize;
         while xx + 8 <= w {
             let bx = xx >> 2;
             if ((row_mask >> bx) & 0x03) == 0 {
-                for y in yy..yy + 4 {
-                    let ip = y * idx_stride + xx;
-                    fill_offsets_8(&mut off_tmp, &idx_buf[ip..ip + 8], offset_idxs, offset_lut);
+                for (dst_row, idx_row) in dst_rows
+                    .chunks_exact_mut(dst_stride)
+                    .zip(idx_rows.chunks_exact(idx_stride))
+                {
+                    let idx8 = &idx_row[xx..xx + 8].as_chunks::<8>().0[0];
+                    fill_offsets_8(&mut off_tmp, idx8, &offset_map);
                     let off = unsafe { _mm_loadu_si128(off_tmp.as_ptr() as *const __m128i) };
-                    let dp = y * dst_stride + xx;
-                    let cur = unsafe { _mm_loadu_si128(dst.as_ptr().add(dp) as *const __m128i) };
+                    let cur =
+                        unsafe { _mm_loadu_si128(dst_row.as_ptr().add(xx) as *const __m128i) };
                     let out = _mm_min_epi16(_mm_max_epi16(_mm_add_epi16(cur, off), zero), maxv);
-                    unsafe { _mm_storeu_si128(dst.as_mut_ptr().add(dp) as *mut __m128i, out) };
+                    unsafe { _mm_storeu_si128(dst_row.as_mut_ptr().add(xx) as *mut __m128i, out) };
                 }
                 xx += 8;
             } else {
@@ -271,14 +285,12 @@ pub(crate) fn ccso_add_hbd_sse41(
                     let bx = xx >> 2;
                     if row_mask & (1 << bx) == 0 {
                         ccso_add_4x4_hbd(
-                            dst,
+                            dst_rows,
                             dst_stride,
-                            idx_buf,
+                            idx_rows,
                             idx_stride,
-                            offset_idxs,
-                            offset_lut,
+                            &offset_map,
                             xx,
-                            yy,
                             bitdepth_max,
                         );
                     }
@@ -290,14 +302,12 @@ pub(crate) fn ccso_add_hbd_sse41(
             let bx = xx >> 2;
             if row_mask & (1 << bx) == 0 {
                 ccso_add_4x4_hbd(
-                    dst,
+                    dst_rows,
                     dst_stride,
-                    idx_buf,
+                    idx_rows,
                     idx_stride,
-                    offset_idxs,
-                    offset_lut,
+                    &offset_map,
                     xx,
-                    yy,
                     bitdepth_max,
                 );
             }

@@ -233,6 +233,111 @@ pub(crate) fn cdef_find_dir_8bpc_sse41(img: &[u8], stride: usize, var: &mut u32)
     crate::cdef_dispatch::cdef_find_dir_from_i16_rows(&rows, var)
 }
 
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn cdef_filter_block_8x8_8bpc_sse41(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_8bpc_sse41(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+        8,
+        8,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn cdef_filter_block_4x8_8bpc_sse41(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_8bpc_sse41(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+        4,
+        8,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn cdef_filter_block_4x4_8bpc_sse41(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_8bpc_sse41(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+        4,
+        4,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use crate::cdef_dispatch::cdef_filter_block_8bpc_scalar;

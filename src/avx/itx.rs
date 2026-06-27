@@ -2710,6 +2710,185 @@ fn avx2_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STR
     avx2_dct32_i16x4_all_body!()
 }
 
+#[target_feature(enable = "avx2")]
+fn avx2_dct16_i16x4_coeff_rows_to_scratch<const IS_RECT2: bool, const COEFF_STRIDE: usize>(
+    coeff: &[i16],
+    scratch: &mut [i16],
+    mut y: usize,
+    nrows: usize,
+    rnd: __m128i,
+    sh: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+) -> usize {
+    while y + 16 <= nrows {
+        let q0 = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
+        let q1 =
+            avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 4);
+        let q2 =
+            avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 8);
+        let q3 =
+            avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 12);
+        avx2_store16x16_i16_clip::<16>(scratch, y * 16, &q0, &q1, &q2, &q3, 0, rnd, sh, minv, maxv);
+        y += 16;
+    }
+    while y + 8 <= nrows {
+        let lo = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
+        let hi =
+            avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 4);
+        let row_base = y * 16;
+        let mut m = 0usize;
+        while m < 16 {
+            avx2_store8x8_i16_clip::<16>(
+                scratch,
+                row_base + m,
+                lo[m],
+                hi[m],
+                lo[m + 1],
+                hi[m + 1],
+                lo[m + 2],
+                hi[m + 2],
+                lo[m + 3],
+                hi[m + 3],
+                lo[m + 4],
+                hi[m + 4],
+                lo[m + 5],
+                hi[m + 5],
+                lo[m + 6],
+                hi[m + 6],
+                lo[m + 7],
+                hi[m + 7],
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+            m += 8;
+        }
+        y += 8;
+    }
+    if y + 4 <= nrows {
+        let out = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
+        let row_base = y * 16;
+        let mut m = 0usize;
+        while m < 16 {
+            avx2_store4x4_i16_clip::<16>(
+                scratch,
+                row_base + m,
+                out[m],
+                out[m + 1],
+                out[m + 2],
+                out[m + 3],
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+            m += 4;
+        }
+        y += 4;
+    }
+    y
+}
+
+#[target_feature(enable = "avx2")]
+fn avx2_dct32_i16x4_coeff_rows_to_scratch<const IS_RECT2: bool, const COEFF_STRIDE: usize>(
+    coeff: &[i16],
+    scratch: &mut [i16],
+    mut y: usize,
+    nrows: usize,
+    rnd: __m128i,
+    sh: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+) -> usize {
+    while y + 16 <= nrows {
+        let q0 = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
+        let q1 =
+            avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 4);
+        let q2 =
+            avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 8);
+        let q3 =
+            avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 12);
+        let row_base = y * 32;
+        let mut m = 0usize;
+        while m < 32 {
+            avx2_store16x16_i16_clip::<32>(
+                scratch,
+                row_base + m,
+                &q0,
+                &q1,
+                &q2,
+                &q3,
+                m,
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+            m += 16;
+        }
+        y += 16;
+    }
+    while y + 8 <= nrows {
+        let lo = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
+        let hi =
+            avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 4);
+        let row_base = y * 32;
+        let mut m = 0usize;
+        while m < 32 {
+            avx2_store8x8_i16_clip::<32>(
+                scratch,
+                row_base + m,
+                lo[m],
+                hi[m],
+                lo[m + 1],
+                hi[m + 1],
+                lo[m + 2],
+                hi[m + 2],
+                lo[m + 3],
+                hi[m + 3],
+                lo[m + 4],
+                hi[m + 4],
+                lo[m + 5],
+                hi[m + 5],
+                lo[m + 6],
+                hi[m + 6],
+                lo[m + 7],
+                hi[m + 7],
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+            m += 8;
+        }
+        y += 8;
+    }
+    if y + 4 <= nrows {
+        let out = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
+        let row_base = y * 32;
+        let mut m = 0usize;
+        while m < 32 {
+            avx2_store4x4_i16_clip::<32>(
+                scratch,
+                row_base + m,
+                out[m],
+                out[m + 1],
+                out[m + 2],
+                out[m + 3],
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+            m += 4;
+        }
+        y += 4;
+    }
+    y
+}
+
 #[inline]
 #[target_feature(enable = "avx2")]
 fn idct_dequant_dct_i16_avx2_impl<const N: usize>(
@@ -2776,164 +2955,16 @@ fn idct_dequant_dct_i16_avx2_impl_const<const N: usize, const IS_RECT2: bool>(
     with_avx2_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
         scratch.fill(0);
         let mut y = 0usize;
-        while y + 16 <= ncols {
-            if N == 16 {
-                let q0 = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                let q1 =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 4);
-                let q2 =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 8);
-                let q3 =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 12);
-                avx2_store16x16_i16_clip::<16>(
-                    scratch,
-                    y * 16,
-                    &q0,
-                    &q1,
-                    &q2,
-                    &q3,
-                    0,
-                    rnd,
-                    sh,
-                    minv,
-                    maxv,
-                );
-            } else {
-                let q0 = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                let q1 =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 4);
-                let q2 =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 8);
-                let q3 =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 12);
-                let mut x = 0usize;
-                while x < 32 {
-                    avx2_store16x16_i16_clip::<32>(
-                        scratch,
-                        y * 32 + x,
-                        &q0,
-                        &q1,
-                        &q2,
-                        &q3,
-                        x,
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 16;
-                }
-            }
-            y += 16;
+        if N == 16 {
+            y = avx2_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, 16>(
+                coeff, scratch, y, ncols, rnd, sh, minv, maxv,
+            );
+        } else {
+            y = avx2_dct32_i16x4_coeff_rows_to_scratch::<IS_RECT2, 32>(
+                coeff, scratch, y, ncols, rnd, sh, minv, maxv,
+            );
         }
-        while y + 8 <= ncols {
-            if N == 16 {
-                let lo = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                let hi =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 4);
-                let mut x = 0usize;
-                while x < 16 {
-                    avx2_store8x8_i16_clip::<16>(
-                        scratch,
-                        y * 16 + x,
-                        lo[x],
-                        hi[x],
-                        lo[x + 1],
-                        hi[x + 1],
-                        lo[x + 2],
-                        hi[x + 2],
-                        lo[x + 3],
-                        hi[x + 3],
-                        lo[x + 4],
-                        hi[x + 4],
-                        lo[x + 5],
-                        hi[x + 5],
-                        lo[x + 6],
-                        hi[x + 6],
-                        lo[x + 7],
-                        hi[x + 7],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 8;
-                }
-            } else {
-                let lo = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                let hi =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 4);
-                let mut x = 0usize;
-                while x < 32 {
-                    avx2_store8x8_i16_clip::<32>(
-                        scratch,
-                        y * 32 + x,
-                        lo[x],
-                        hi[x],
-                        lo[x + 1],
-                        hi[x + 1],
-                        lo[x + 2],
-                        hi[x + 2],
-                        lo[x + 3],
-                        hi[x + 3],
-                        lo[x + 4],
-                        hi[x + 4],
-                        lo[x + 5],
-                        hi[x + 5],
-                        lo[x + 6],
-                        hi[x + 6],
-                        lo[x + 7],
-                        hi[x + 7],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 8;
-                }
-            }
-            y += 8;
-        }
-        while y + 4 <= ncols {
-            if N == 16 {
-                let out = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                let mut x = 0usize;
-                while x < 16 {
-                    avx2_store4x4_i16_clip::<16>(
-                        scratch,
-                        y * 16 + x,
-                        out[x],
-                        out[x + 1],
-                        out[x + 2],
-                        out[x + 3],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 4;
-                }
-            } else {
-                let out = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                let mut x = 0usize;
-                while x < 32 {
-                    avx2_store4x4_i16_clip::<32>(
-                        scratch,
-                        y * 32 + x,
-                        out[x],
-                        out[x + 1],
-                        out[x + 2],
-                        out[x + 3],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 4;
-                }
-            }
-            y += 4;
-        }
+        debug_assert_eq!(y, ncols);
         coeff[..N * N].fill(0);
 
         let mut x = 0usize;
@@ -2990,164 +3021,16 @@ fn idct_dequant_dct_i16_avx2_fused_8bpc_impl_const<const N: usize, const IS_RECT
     with_avx2_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
         scratch.fill(0);
         let mut y = 0usize;
-        while y + 16 <= ncols {
-            if N == 16 {
-                let q0 = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                let q1 =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 4);
-                let q2 =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 8);
-                let q3 =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 12);
-                avx2_store16x16_i16_clip::<16>(
-                    scratch,
-                    y * 16,
-                    &q0,
-                    &q1,
-                    &q2,
-                    &q3,
-                    0,
-                    rnd,
-                    sh,
-                    minv,
-                    maxv,
-                );
-            } else {
-                let q0 = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                let q1 =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 4);
-                let q2 =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 8);
-                let q3 =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 12);
-                let mut x = 0usize;
-                while x < 32 {
-                    avx2_store16x16_i16_clip::<32>(
-                        scratch,
-                        y * 32 + x,
-                        &q0,
-                        &q1,
-                        &q2,
-                        &q3,
-                        x,
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 16;
-                }
-            }
-            y += 16;
+        if N == 16 {
+            y = avx2_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, 16>(
+                coeff, scratch, y, ncols, rnd, sh, minv, maxv,
+            );
+        } else {
+            y = avx2_dct32_i16x4_coeff_rows_to_scratch::<IS_RECT2, 32>(
+                coeff, scratch, y, ncols, rnd, sh, minv, maxv,
+            );
         }
-        while y + 8 <= ncols {
-            if N == 16 {
-                let lo = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                let hi =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y + 4);
-                let mut x = 0usize;
-                while x < 16 {
-                    avx2_store8x8_i16_clip::<16>(
-                        scratch,
-                        y * 16 + x,
-                        lo[x],
-                        hi[x],
-                        lo[x + 1],
-                        hi[x + 1],
-                        lo[x + 2],
-                        hi[x + 2],
-                        lo[x + 3],
-                        hi[x + 3],
-                        lo[x + 4],
-                        hi[x + 4],
-                        lo[x + 5],
-                        hi[x + 5],
-                        lo[x + 6],
-                        hi[x + 6],
-                        lo[x + 7],
-                        hi[x + 7],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 8;
-                }
-            } else {
-                let lo = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                let hi =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y + 4);
-                let mut x = 0usize;
-                while x < 32 {
-                    avx2_store8x8_i16_clip::<32>(
-                        scratch,
-                        y * 32 + x,
-                        lo[x],
-                        hi[x],
-                        lo[x + 1],
-                        hi[x + 1],
-                        lo[x + 2],
-                        hi[x + 2],
-                        lo[x + 3],
-                        hi[x + 3],
-                        lo[x + 4],
-                        hi[x + 4],
-                        lo[x + 5],
-                        hi[x + 5],
-                        lo[x + 6],
-                        hi[x + 6],
-                        lo[x + 7],
-                        hi[x + 7],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 8;
-                }
-            }
-            y += 8;
-        }
-        while y + 4 <= ncols {
-            if N == 16 {
-                let out = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 16>(coeff, y);
-                let mut x = 0usize;
-                while x < 16 {
-                    avx2_store4x4_i16_clip::<16>(
-                        scratch,
-                        y * 16 + x,
-                        out[x],
-                        out[x + 1],
-                        out[x + 2],
-                        out[x + 3],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 4;
-                }
-            } else {
-                let out = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, 32>(coeff, y);
-                let mut x = 0usize;
-                while x < 32 {
-                    avx2_store4x4_i16_clip::<32>(
-                        scratch,
-                        y * 32 + x,
-                        out[x],
-                        out[x + 1],
-                        out[x + 2],
-                        out[x + 3],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    x += 4;
-                }
-            }
-            y += 4;
-        }
+        debug_assert_eq!(y, ncols);
         coeff[..N * N].fill(0);
 
         let rnd1 = _mm256_set1_epi32((1 << shift1) >> 1);
@@ -3613,200 +3496,58 @@ fn tx_dequant_dense_avx2_i16_impl_const<
     with_avx2_itx_i16_scratch(N, |scratch| unsafe {
         scratch.fill(0);
         let mut y = 0usize;
-        while y + 16 <= nrows && first_kind == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
-            if W == 16 {
-                let q0 = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let q1 = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                let q2 = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 8);
-                let q3 =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 12);
-                avx2_store16x16_i16_clip::<W>(
+        if first_kind == crate::itx_2d::TX_KIND_DCT && W == 16 {
+            y = avx2_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, H>(
+                coeff, scratch, y, nrows, rnd, sh, minv, maxv,
+            );
+        } else if first_kind == crate::itx_2d::TX_KIND_DCT && W == 32 {
+            y = avx2_dct32_i16x4_coeff_rows_to_scratch::<IS_RECT2, H>(
+                coeff, scratch, y, nrows, rnd, sh, minv, maxv,
+            );
+        }
+        while y + 4 <= nrows {
+            let mut m = 0usize;
+            while m < W {
+                let mut a0 = z;
+                let mut a1 = z;
+                let mut a2 = z;
+                let mut a3 = z;
+                let mut j = 0usize;
+                while j < W {
+                    let x0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
+                    let x1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                    let x01 = _mm_unpacklo_epi16(x0, x1);
+                    a0 = _mm_add_epi32(
+                        a0,
+                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m, j)),
+                    );
+                    a1 = _mm_add_epi32(
+                        a1,
+                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 1, j)),
+                    );
+                    a2 = _mm_add_epi32(
+                        a2,
+                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 2, j)),
+                    );
+                    a3 = _mm_add_epi32(
+                        a3,
+                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 3, j)),
+                    );
+                    j += 2;
+                }
+                avx2_store4x4_i16_clip::<W>(
                     scratch,
-                    y * W,
-                    &q0,
-                    &q1,
-                    &q2,
-                    &q3,
-                    0,
+                    y * W + m,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
                     rnd,
                     sh,
                     minv,
                     maxv,
                 );
-            } else {
-                let q0 = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let q1 = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                let q2 = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 8);
-                let q3 =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 12);
-                let mut m = 0usize;
-                while m < 32 {
-                    avx2_store16x16_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        &q0,
-                        &q1,
-                        &q2,
-                        &q3,
-                        m,
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 16;
-                }
-            }
-            y += 16;
-        }
-        while y + 8 <= nrows && first_kind == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
-            if W == 16 {
-                let lo = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let hi = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                let mut m = 0usize;
-                while m < 16 {
-                    avx2_store8x8_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        lo[m],
-                        hi[m],
-                        lo[m + 1],
-                        hi[m + 1],
-                        lo[m + 2],
-                        hi[m + 2],
-                        lo[m + 3],
-                        hi[m + 3],
-                        lo[m + 4],
-                        hi[m + 4],
-                        lo[m + 5],
-                        hi[m + 5],
-                        lo[m + 6],
-                        hi[m + 6],
-                        lo[m + 7],
-                        hi[m + 7],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 8;
-                }
-            } else {
-                let lo = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let hi = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                let mut m = 0usize;
-                while m < 32 {
-                    avx2_store8x8_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        lo[m],
-                        hi[m],
-                        lo[m + 1],
-                        hi[m + 1],
-                        lo[m + 2],
-                        hi[m + 2],
-                        lo[m + 3],
-                        hi[m + 3],
-                        lo[m + 4],
-                        hi[m + 4],
-                        lo[m + 5],
-                        hi[m + 5],
-                        lo[m + 6],
-                        hi[m + 6],
-                        lo[m + 7],
-                        hi[m + 7],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 8;
-                }
-            }
-            y += 8;
-        }
-        while y + 4 <= nrows {
-            if first_kind == crate::itx_2d::TX_KIND_DCT && W == 16 {
-                let out = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let mut m = 0usize;
-                while m < 16 {
-                    avx2_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        out[m],
-                        out[m + 1],
-                        out[m + 2],
-                        out[m + 3],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-            } else if first_kind == crate::itx_2d::TX_KIND_DCT && W == 32 {
-                let out = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let mut m = 0usize;
-                while m < 32 {
-                    avx2_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        out[m],
-                        out[m + 1],
-                        out[m + 2],
-                        out[m + 3],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-            } else {
-                let mut m = 0usize;
-                while m < W {
-                    let mut a0 = z;
-                    let mut a1 = z;
-                    let mut a2 = z;
-                    let mut a3 = z;
-                    let mut j = 0usize;
-                    while j < W {
-                        let x0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
-                        let x1 =
-                            avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
-                        let x01 = _mm_unpacklo_epi16(x0, x1);
-                        a0 = _mm_add_epi32(
-                            a0,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m, j)),
-                        );
-                        a1 = _mm_add_epi32(
-                            a1,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 1, j)),
-                        );
-                        a2 = _mm_add_epi32(
-                            a2,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 2, j)),
-                        );
-                        a3 = _mm_add_epi32(
-                            a3,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 3, j)),
-                        );
-                        j += 2;
-                    }
-                    avx2_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        a0,
-                        a1,
-                        a2,
-                        a3,
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
+                m += 4;
             }
             y += 4;
         }
@@ -3919,200 +3660,58 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
             );
         }
 
-        while y + 16 <= nrows && FIRST_KIND == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
-            if W == 16 {
-                let q0 = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let q1 = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                let q2 = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 8);
-                let q3 =
-                    avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 12);
-                avx2_store16x16_i16_clip::<W>(
+        if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 16 {
+            y = avx2_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, H>(
+                coeff, scratch, y, nrows, rnd, sh, minv, maxv,
+            );
+        } else if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 32 {
+            y = avx2_dct32_i16x4_coeff_rows_to_scratch::<IS_RECT2, H>(
+                coeff, scratch, y, nrows, rnd, sh, minv, maxv,
+            );
+        }
+        while y + 4 <= nrows {
+            let mut m = 0usize;
+            while m < W {
+                let mut a0 = z;
+                let mut a1 = z;
+                let mut a2 = z;
+                let mut a3 = z;
+                let mut j = 0usize;
+                while j < W {
+                    let x0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
+                    let x1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                    let x01 = _mm_unpacklo_epi16(x0, x1);
+                    a0 = _mm_add_epi32(
+                        a0,
+                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m, j)),
+                    );
+                    a1 = _mm_add_epi32(
+                        a1,
+                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 1, j)),
+                    );
+                    a2 = _mm_add_epi32(
+                        a2,
+                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 2, j)),
+                    );
+                    a3 = _mm_add_epi32(
+                        a3,
+                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 3, j)),
+                    );
+                    j += 2;
+                }
+                avx2_store4x4_i16_clip::<W>(
                     scratch,
-                    y * W,
-                    &q0,
-                    &q1,
-                    &q2,
-                    &q3,
-                    0,
+                    y * W + m,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
                     rnd,
                     sh,
                     minv,
                     maxv,
                 );
-            } else {
-                let q0 = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let q1 = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                let q2 = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 8);
-                let q3 =
-                    avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 12);
-                let mut m = 0usize;
-                while m < 32 {
-                    avx2_store16x16_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        &q0,
-                        &q1,
-                        &q2,
-                        &q3,
-                        m,
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 16;
-                }
-            }
-            y += 16;
-        }
-        while y + 8 <= nrows && FIRST_KIND == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
-            if W == 16 {
-                let lo = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let hi = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                let mut m = 0usize;
-                while m < 16 {
-                    avx2_store8x8_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        lo[m],
-                        hi[m],
-                        lo[m + 1],
-                        hi[m + 1],
-                        lo[m + 2],
-                        hi[m + 2],
-                        lo[m + 3],
-                        hi[m + 3],
-                        lo[m + 4],
-                        hi[m + 4],
-                        lo[m + 5],
-                        hi[m + 5],
-                        lo[m + 6],
-                        hi[m + 6],
-                        lo[m + 7],
-                        hi[m + 7],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 8;
-                }
-            } else {
-                let lo = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let hi = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y + 4);
-                let mut m = 0usize;
-                while m < 32 {
-                    avx2_store8x8_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        lo[m],
-                        hi[m],
-                        lo[m + 1],
-                        hi[m + 1],
-                        lo[m + 2],
-                        hi[m + 2],
-                        lo[m + 3],
-                        hi[m + 3],
-                        lo[m + 4],
-                        hi[m + 4],
-                        lo[m + 5],
-                        hi[m + 5],
-                        lo[m + 6],
-                        hi[m + 6],
-                        lo[m + 7],
-                        hi[m + 7],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 8;
-                }
-            }
-            y += 8;
-        }
-        while y + 4 <= nrows {
-            if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 16 {
-                let out = avx2_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let mut m = 0usize;
-                while m < 16 {
-                    avx2_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        out[m],
-                        out[m + 1],
-                        out[m + 2],
-                        out[m + 3],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-            } else if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 32 {
-                let out = avx2_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, H>(coeff, y);
-                let mut m = 0usize;
-                while m < 32 {
-                    avx2_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        out[m],
-                        out[m + 1],
-                        out[m + 2],
-                        out[m + 3],
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-            } else {
-                let mut m = 0usize;
-                while m < W {
-                    let mut a0 = z;
-                    let mut a1 = z;
-                    let mut a2 = z;
-                    let mut a3 = z;
-                    let mut j = 0usize;
-                    while j < W {
-                        let x0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
-                        let x1 =
-                            avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
-                        let x01 = _mm_unpacklo_epi16(x0, x1);
-                        a0 = _mm_add_epi32(
-                            a0,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m, j)),
-                        );
-                        a1 = _mm_add_epi32(
-                            a1,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 1, j)),
-                        );
-                        a2 = _mm_add_epi32(
-                            a2,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 2, j)),
-                        );
-                        a3 = _mm_add_epi32(
-                            a3,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 3, j)),
-                        );
-                        j += 2;
-                    }
-                    avx2_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        a0,
-                        a1,
-                        a2,
-                        a3,
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
+                m += 4;
             }
             y += 4;
         }
@@ -4304,6 +3903,249 @@ fn fused_identity_second_pass<const W: usize, const H: usize>(
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn tx_dequant_dense_avx2_i16_fused_4x4_impl(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    macro_rules! call_kind {
+        ($first:expr, $second:expr) => {
+            if is_rect2 {
+                tx_dequant_dense_avx2_i16_fused_4x4_const::<true, { $first }, { $second }>(
+                    coeff,
+                    dst,
+                    dst_off,
+                    dst_stride,
+                    out_w,
+                    out_h,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    shift1,
+                )
+            } else {
+                tx_dequant_dense_avx2_i16_fused_4x4_const::<false, { $first }, { $second }>(
+                    coeff,
+                    dst,
+                    dst_off,
+                    dst_stride,
+                    out_w,
+                    out_h,
+                    shift0,
+                    row_clip_min,
+                    row_clip_max,
+                    shift1,
+                )
+            }
+        };
+    }
+    match (first_kind, second_kind) {
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_IDENTITY) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_IDENTITY)
+        }
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_FLIPADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_DCT, crate::itx_2d::TX_KIND_FLIPADST)
+        }
+        (crate::itx_2d::TX_KIND_IDENTITY, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_IDENTITY, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_IDENTITY, crate::itx_2d::TX_KIND_IDENTITY) => {
+            call_kind!(
+                crate::itx_2d::TX_KIND_IDENTITY,
+                crate::itx_2d::TX_KIND_IDENTITY
+            )
+        }
+        (crate::itx_2d::TX_KIND_IDENTITY, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_IDENTITY, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_IDENTITY, crate::itx_2d::TX_KIND_FLIPADST) => {
+            call_kind!(
+                crate::itx_2d::TX_KIND_IDENTITY,
+                crate::itx_2d::TX_KIND_FLIPADST
+            )
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_IDENTITY) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_IDENTITY)
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_FLIPADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_ADST, crate::itx_2d::TX_KIND_FLIPADST)
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_DCT) => {
+            call_kind!(crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_DCT)
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_IDENTITY) => {
+            call_kind!(
+                crate::itx_2d::TX_KIND_FLIPADST,
+                crate::itx_2d::TX_KIND_IDENTITY
+            )
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_ADST) => {
+            call_kind!(crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_ADST)
+        }
+        (crate::itx_2d::TX_KIND_FLIPADST, crate::itx_2d::TX_KIND_FLIPADST) => {
+            call_kind!(
+                crate::itx_2d::TX_KIND_FLIPADST,
+                crate::itx_2d::TX_KIND_FLIPADST
+            )
+        }
+        _ => (),
+    }
+}
+
+#[inline(never)]
+#[target_feature(enable = "avx2")]
+fn tx_dequant_dense_avx2_i16_fused_4x4_const<
+    const IS_RECT2: bool,
+    const FIRST_KIND: usize,
+    const SECOND_KIND: usize,
+>(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+) {
+    unsafe {
+        debug_assert!(coeff.len() >= 16);
+        let z = _mm_setzero_si128();
+        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+        let sh = _mm_cvtsi32_si128(shift0);
+        let minv = _mm_set1_epi32(row_clip_min);
+        let maxv = _mm_set1_epi32(row_clip_max);
+
+        let c0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 0);
+        let c1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 4);
+        let c2 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 8);
+        let c3 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 12);
+        let c01 = _mm_unpacklo_epi16(c0, c1);
+        let c23 = _mm_unpacklo_epi16(c2, c3);
+
+        macro_rules! row_pass {
+            ($m:expr) => {{
+                _mm_add_epi32(
+                    _mm_madd_epi16(c01, avx2_tx_dense_coeff_pair(FIRST_KIND, 4, $m, 0)),
+                    _mm_madd_epi16(c23, avx2_tx_dense_coeff_pair(FIRST_KIND, 4, $m, 2)),
+                )
+            }};
+        }
+        macro_rules! clip {
+            ($x:expr) => {{
+                _mm_min_epi32(
+                    _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32($x, rnd), sh), minv),
+                    maxv,
+                )
+            }};
+        }
+        let r0 = clip!(row_pass!(0));
+        let r1 = clip!(row_pass!(1));
+        let r2 = clip!(row_pass!(2));
+        let r3 = clip!(row_pass!(3));
+
+        // Transpose exactly like avx2_store4x4_i16_clip::<4>, but keep the
+        // four packed rows in registers for the column pass.
+        let t0 = _mm_unpacklo_epi32(r0, r1);
+        let t1 = _mm_unpackhi_epi32(r0, r1);
+        let t2 = _mm_unpacklo_epi32(r2, r3);
+        let t3 = _mm_unpackhi_epi32(r2, r3);
+        let s0 = _mm_packs_epi32(_mm_unpacklo_epi64(t0, t2), z);
+        let s1 = _mm_packs_epi32(_mm_unpackhi_epi64(t0, t2), z);
+        let s2 = _mm_packs_epi32(_mm_unpacklo_epi64(t1, t3), z);
+        let s3 = _mm_packs_epi32(_mm_unpackhi_epi64(t1, t3), z);
+
+        let s01 = _mm_unpacklo_epi16(s0, s1);
+        let s23 = _mm_unpacklo_epi16(s2, s3);
+        macro_rules! col_pass {
+            ($m:expr) => {{
+                _mm_add_epi32(
+                    _mm_madd_epi16(s01, avx2_tx_dense_coeff_pair(SECOND_KIND, 4, $m, 0)),
+                    _mm_madd_epi16(s23, avx2_tx_dense_coeff_pair(SECOND_KIND, 4, $m, 2)),
+                )
+            }};
+        }
+
+        let rnd1 = _mm_set1_epi32((1 << shift1) >> 1);
+        let sh1 = _mm_cvtsi32_si128(shift1);
+        avx2_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            0,
+            col_pass!(0),
+            rnd1,
+            sh1,
+        );
+        avx2_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            1,
+            col_pass!(1),
+            rnd1,
+            sh1,
+        );
+        avx2_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            2,
+            col_pass!(2),
+            rnd1,
+            sh1,
+        );
+        avx2_writeback4_i32_u8::<4, 4>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            0,
+            3,
+            col_pass!(3),
+            rnd1,
+            sh1,
+        );
+        coeff[..16].fill(0);
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -4438,23 +4280,6 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const N: usize, const W: usize, con
 macro_rules! avx2_fused_match_body {
     ($call:ident, $coeff:ident, $dst:ident, $dst_off:ident, $dst_stride:ident, $out_w:ident, $out_h:ident, $eob:ident, $tx:ident, $is_rect2:ident, $shift0:ident, $row_clip_min:ident, $row_clip_max:ident, $shift1:ident, $first_kind:ident, $second_kind:ident) => {{
         match $tx {
-            crate::levels::txsz::TX_4X4 => $call::<16, 4, 4>(
-                $coeff,
-                $dst,
-                $dst_off,
-                $dst_stride,
-                $out_w,
-                $out_h,
-                $eob,
-                $tx,
-                $is_rect2,
-                $shift0,
-                $row_clip_min,
-                $row_clip_max,
-                $shift1,
-                $first_kind,
-                $second_kind,
-            ),
             crate::levels::txsz::TX_8X8 => $call::<64, 8, 8>(
                 $coeff,
                 $dst,
@@ -4888,6 +4713,25 @@ pub(crate) fn itx_dequant_i16_avx2_fused_8bpc(
     first_kind: usize,
     second_kind: usize,
 ) -> bool {
+    if tx == crate::levels::txsz::TX_4X4 {
+        tx_dequant_dense_avx2_i16_fused_4x4_impl(
+            coeff,
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            shift1,
+            first_kind,
+            second_kind,
+        );
+        return true;
+    }
+
     avx2_fused_match_body!(
         tx_dequant_dense_avx2_i16_fused_8bpc_impl,
         coeff,
@@ -5207,7 +5051,6 @@ fn idct_dequant_16x16_avx2_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn idct_dequant_32x32_avx2_i32_impl(
     coeff: &mut [i32],
@@ -5242,7 +5085,6 @@ fn idct_dequant_32x32_avx2_i32_impl(
     }
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn idct_dequant_32x32_avx2_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
@@ -5385,7 +5227,6 @@ pub(crate) fn idct_dequant_16x16_avx2(
         row_clip_max,
     )
 }
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x32_avx2(
     coeff: &mut [i32],
@@ -6175,6 +6016,63 @@ fn idct_dequant_dct_i16_avx2_fused_8bpc_impl<const N: usize>(
     }
 }
 
+// Keep the very large 32-point i16 DCT bodies in fixed, non-generic call
+// targets. The public dispatch wrappers stay tiny, while this isolates the
+// expensive monomorphized transform body behind one call. That call is far
+// cheaper than the 32x32 transform itself and avoids cloning the 32-point graph
+// into every wrapper that reaches it.
+#[target_feature(enable = "avx2")]
+fn idct_dequant_32x32_i16_avx2_fixed_fused_8bpc_impl(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+) {
+    idct_dequant_dct_i16_avx2_fused_8bpc_impl::<32>(
+        coeff,
+        dst,
+        dst_off,
+        dst_stride,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        shift1,
+    )
+}
+
+#[target_feature(enable = "avx2")]
+fn idct_dequant_32x32_i16_avx2_fixed_impl(
+    coeff: &mut [i16],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    idct_dequant_dct_i16_avx2_impl::<32>(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+    )
+}
+
 #[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x16_i16_avx2_fused_8bpc(
@@ -6205,7 +6103,6 @@ pub(crate) fn idct_dequant_16x16_i16_avx2_fused_8bpc(
     )
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x32_i16_avx2_fused_8bpc(
     coeff: &mut [i16],
@@ -6220,7 +6117,7 @@ pub(crate) fn idct_dequant_32x32_i16_avx2_fused_8bpc(
     row_clip_max: i32,
     shift1: i32,
 ) {
-    idct_dequant_dct_i16_avx2_fused_8bpc_impl::<32>(
+    idct_dequant_32x32_i16_avx2_fixed_fused_8bpc_impl(
         coeff,
         dst,
         dst_off,
@@ -6259,7 +6156,6 @@ pub(crate) fn idct_dequant_16x16_i16_avx2(
     )
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x32_i16_avx2(
     coeff: &mut [i16],
@@ -6271,7 +6167,7 @@ pub(crate) fn idct_dequant_32x32_i16_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    idct_dequant_dct_i16_avx2_impl::<32>(
+    idct_dequant_32x32_i16_avx2_fixed_impl(
         coeff,
         tmp,
         eob,

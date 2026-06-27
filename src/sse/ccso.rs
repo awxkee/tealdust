@@ -40,6 +40,7 @@ fn ccso_tail_8bpc(
     row: usize,
     x0: usize,
     x1: usize,
+    ss_hor: usize,
     shift: u32,
     luma_offset: isize,
     quant_step: i32,
@@ -47,7 +48,7 @@ fn ccso_tail_8bpc(
     bo_only: bool,
 ) {
     for x in x0..x1 {
-        let ti = row + x;
+        let ti = row + (x << ss_hor);
         let c = tmp[ti] as i32;
         let band = (c as u32 >> shift) as u8;
         if bo_only {
@@ -100,7 +101,7 @@ fn ccso_make_idx_8x16(
     let cls1 = ccso_classify_epi16(_mm_sub_epi16(p1, c), q, nq, edge_clf);
     _mm_or_si128(
         band,
-        _mm_or_si128(_mm_slli_epi16(cls0, 5), _mm_slli_epi16(cls1, 3)),
+        _mm_or_si128(_mm_slli_epi16::<5>(cls0), _mm_slli_epi16::<3>(cls1)),
     )
 }
 
@@ -202,6 +203,7 @@ pub(crate) fn ccso_prep_lut_8bpc_sse41(
             row,
             x,
             w,
+            ss_hor,
             shift,
             luma_offset,
             quant_step,
@@ -212,29 +214,31 @@ pub(crate) fn ccso_prep_lut_8bpc_sse41(
 }
 
 #[inline(always)]
-fn fill_offsets_16(out: &mut [i8; 16], idx: &[u8], offset_idxs: &[u8], offset_lut: &[i8]) {
-    for i in 0..16 {
-        out[i] = crate::ccso::ccso_offset(idx[i], offset_idxs, offset_lut);
+fn fill_offsets_16(out: &mut [i8; 16], idx: &[u8; 16], offset_map: &[i8; 256]) {
+    for (out, &idx) in out.iter_mut().zip(idx.iter()) {
+        *out = offset_map[idx as usize];
     }
 }
 
 #[inline(always)]
 fn ccso_add_4x4_8bpc(
-    dst: &mut [u8],
+    dst_rows: &mut [u8],
     dst_stride: usize,
-    idx_buf: &[u8],
+    idx_rows: &[u8],
     idx_stride: usize,
-    offset_idxs: &[u8],
-    offset_lut: &[i8],
+    offset_map: &[i8; 256],
     xx: usize,
-    yy: usize,
 ) {
-    for y in yy..yy + 4 {
-        for x in xx..xx + 4 {
-            let off =
-                crate::ccso::ccso_offset(idx_buf[y * idx_stride + x], offset_idxs, offset_lut);
-            let cur = dst[y * dst_stride + x] as i32;
-            dst[y * dst_stride + x] = (cur + off as i32).clamp(0, 255) as u8;
+    for (dst_row, idx_row) in dst_rows
+        .chunks_exact_mut(dst_stride)
+        .zip(idx_rows.chunks_exact(idx_stride))
+    {
+        let dst4 = &mut dst_row[xx..xx + 4].as_chunks_mut::<4>().0[0];
+        let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
+        for (dst, &idx) in dst4.iter_mut().zip(idx4.iter()) {
+            let off = offset_map[idx as usize];
+            let cur = *dst as i32;
+            *dst = (cur + off as i32).clamp(0, 255) as u8;
         }
     }
 }
@@ -254,29 +258,39 @@ pub(crate) fn ccso_add_8bpc_sse41(
     ll_mask: &[[u16; 4]],
 ) {
     let zero = _mm_setzero_si128();
+    let offset_map = crate::ccso::ccso_build_offset_map(offset_idxs, offset_lut);
     let mut off_tmp = [0i8; 16];
-    for yy in (0..h).step_by(4) {
-        let mi = yy >> 2;
-        let row_mask = ll_mask[mi][0];
+    let n_blocks = (h + 3) >> 2;
+    let dst_block_len = dst_stride * 4 * n_blocks;
+    let idx_block_len = idx_stride * 4 * n_blocks;
+    for ((dst_rows, idx_rows), mask) in dst[..dst_block_len]
+        .chunks_exact_mut(dst_stride * 4)
+        .zip(idx_buf[..idx_block_len].chunks_exact(idx_stride * 4))
+        .zip(ll_mask[..n_blocks].iter())
+    {
+        let row_mask = mask[0];
         let mut xx = 0usize;
         while xx + 16 <= w {
             let bx = xx >> 2;
             if ((row_mask >> bx) & 0x0f) == 0 {
-                for y in yy..yy + 4 {
-                    let ip = y * idx_stride + xx;
-                    fill_offsets_16(&mut off_tmp, &idx_buf[ip..ip + 16], offset_idxs, offset_lut);
+                for (dst_row, idx_row) in dst_rows
+                    .chunks_exact_mut(dst_stride)
+                    .zip(idx_rows.chunks_exact(idx_stride))
+                {
+                    let idx16 = &idx_row[xx..xx + 16].as_chunks::<16>().0[0];
+                    fill_offsets_16(&mut off_tmp, idx16, &offset_map);
                     let off = unsafe { _mm_loadu_si128(off_tmp.as_ptr() as *const __m128i) };
                     let off_lo = _mm_cvtepi8_epi16(off);
                     let off_hi = _mm_cvtepi8_epi16(_mm_srli_si128(off, 8));
-                    let dp = y * dst_stride + xx;
-                    let cur = unsafe { _mm_loadu_si128(dst.as_ptr().add(dp) as *const __m128i) };
+                    let cur =
+                        unsafe { _mm_loadu_si128(dst_row.as_ptr().add(xx) as *const __m128i) };
                     let cur_lo = _mm_unpacklo_epi8(cur, zero);
                     let cur_hi = _mm_unpackhi_epi8(cur, zero);
                     let out = _mm_packus_epi16(
                         _mm_add_epi16(cur_lo, off_lo),
                         _mm_add_epi16(cur_hi, off_hi),
                     );
-                    unsafe { _mm_storeu_si128(dst.as_mut_ptr().add(dp) as *mut __m128i, out) };
+                    unsafe { _mm_storeu_si128(dst_row.as_mut_ptr().add(xx) as *mut __m128i, out) };
                 }
                 xx += 16;
             } else {
@@ -284,14 +298,12 @@ pub(crate) fn ccso_add_8bpc_sse41(
                     let bx = xx >> 2;
                     if row_mask & (1 << bx) == 0 {
                         ccso_add_4x4_8bpc(
-                            dst,
+                            dst_rows,
                             dst_stride,
-                            idx_buf,
+                            idx_rows,
                             idx_stride,
-                            offset_idxs,
-                            offset_lut,
+                            &offset_map,
                             xx,
-                            yy,
                         );
                     }
                     xx += 4;
@@ -301,16 +313,7 @@ pub(crate) fn ccso_add_8bpc_sse41(
         while xx < w {
             let bx = xx >> 2;
             if row_mask & (1 << bx) == 0 {
-                ccso_add_4x4_8bpc(
-                    dst,
-                    dst_stride,
-                    idx_buf,
-                    idx_stride,
-                    offset_idxs,
-                    offset_lut,
-                    xx,
-                    yy,
-                );
+                ccso_add_4x4_8bpc(dst_rows, dst_stride, idx_rows, idx_stride, &offset_map, xx);
             }
             xx += 4;
         }

@@ -65,6 +65,12 @@ pub(crate) type CdefFilterHbdFn = unsafe fn(
     usize,
 );
 
+pub(crate) type CdefFilterShapeFn =
+    unsafe fn(&mut [u8], usize, usize, &[i16], usize, usize, i32, i32, i32, i32, i32, usize);
+
+pub(crate) type CdefFilterHbdShapeFn =
+    unsafe fn(&mut [u16], usize, usize, &[i16], usize, usize, i32, i32, i32, i32, i32, usize);
+
 pub(crate) type CdefDir8Fn = unsafe fn(&[u8], usize, &mut u32) -> i32;
 pub(crate) type CdefDirHbdFn = unsafe fn(&[u16], usize, i32, &mut u32) -> i32;
 
@@ -388,6 +394,210 @@ pub(crate) fn cdef_filter_block_8bpc_scalar(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn cdef_filter_block_8x8_8bpc_scalar(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_8bpc_scalar(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+        8,
+        8,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cdef_filter_block_4x8_8bpc_scalar(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_8bpc_scalar(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+        4,
+        8,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cdef_filter_block_4x4_8bpc_scalar(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_8bpc_scalar(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+        4,
+        4,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn cdef_filter_block_8x8_hbd_scalar(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_hbd_scalar(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+        8,
+        8,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cdef_filter_block_4x8_hbd_scalar(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_hbd_scalar(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+        4,
+        8,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn cdef_filter_block_4x4_hbd_scalar(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_hbd_scalar(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+        4,
+        4,
+    );
+}
+
 static CDEF_DIR_8BPC: OnceLock<CdefDir8Fn> = OnceLock::new();
 
 #[inline]
@@ -521,6 +731,104 @@ fn resolve_cdef_filter_hbd() -> CdefFilterHbdFn {
     })
 }
 
+static CDEF_FILTER_SHAPES: OnceLock<[CdefFilterShapeFn; 3]> = OnceLock::new();
+
+#[inline]
+fn resolve_cdef_filter_shapes() -> &'static [CdefFilterShapeFn; 3] {
+    CDEF_FILTER_SHAPES.get_or_init(|| {
+        let mut _f = [
+            cdef_filter_block_8x8_8bpc_scalar as CdefFilterShapeFn,
+            cdef_filter_block_4x8_8bpc_scalar as CdefFilterShapeFn,
+            cdef_filter_block_4x4_8bpc_scalar as CdefFilterShapeFn,
+        ];
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                _f = [
+                    crate::neon::cdef_filter_block_8x8_8bpc_neon as CdefFilterShapeFn,
+                    crate::neon::cdef_filter_block_4x8_8bpc_neon as CdefFilterShapeFn,
+                    crate::neon::cdef_filter_block_4x4_8bpc_neon as CdefFilterShapeFn,
+                ];
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = [
+                    crate::sse::cdef_filter_block_8x8_8bpc_sse41 as CdefFilterShapeFn,
+                    crate::sse::cdef_filter_block_4x8_8bpc_sse41 as CdefFilterShapeFn,
+                    crate::sse::cdef_filter_block_4x4_8bpc_sse41 as CdefFilterShapeFn,
+                ];
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = [
+                    crate::avx::cdef_filter_block_8x8_8bpc_avx2 as CdefFilterShapeFn,
+                    crate::avx::cdef_filter_block_4x8_8bpc_avx2 as CdefFilterShapeFn,
+                    crate::avx::cdef_filter_block_4x4_8bpc_avx2 as CdefFilterShapeFn,
+                ];
+            }
+        }
+        _f
+    })
+}
+
+static CDEF_FILTER_HBD_SHAPES: OnceLock<[CdefFilterHbdShapeFn; 3]> = OnceLock::new();
+
+#[inline]
+fn resolve_cdef_filter_hbd_shapes() -> &'static [CdefFilterHbdShapeFn; 3] {
+    CDEF_FILTER_HBD_SHAPES.get_or_init(|| {
+        let mut _f = [
+            cdef_filter_block_8x8_hbd_scalar as CdefFilterHbdShapeFn,
+            cdef_filter_block_4x8_hbd_scalar as CdefFilterHbdShapeFn,
+            cdef_filter_block_4x4_hbd_scalar as CdefFilterHbdShapeFn,
+        ];
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                _f = [
+                    crate::neon::cdef_filter_block_8x8_hbd_neon as CdefFilterHbdShapeFn,
+                    crate::neon::cdef_filter_block_4x8_hbd_neon as CdefFilterHbdShapeFn,
+                    crate::neon::cdef_filter_block_4x4_hbd_neon as CdefFilterHbdShapeFn,
+                ];
+            }
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = [
+                    crate::sse::cdef_filter_block_8x8_hbd_sse41 as CdefFilterHbdShapeFn,
+                    crate::sse::cdef_filter_block_4x8_hbd_sse41 as CdefFilterHbdShapeFn,
+                    crate::sse::cdef_filter_block_4x4_hbd_sse41 as CdefFilterHbdShapeFn,
+                ];
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = [
+                    crate::avx::cdef_filter_block_8x8_hbd_avx2 as CdefFilterHbdShapeFn,
+                    crate::avx::cdef_filter_block_4x8_hbd_avx2 as CdefFilterHbdShapeFn,
+                    crate::avx::cdef_filter_block_4x4_hbd_avx2 as CdefFilterHbdShapeFn,
+                ];
+            }
+        }
+        _f
+    })
+}
+
+#[inline(always)]
+fn cdef_shape_index(w: usize, h: usize) -> Option<usize> {
+    match (w, h) {
+        (8, 8) => Some(0),
+        (4, 8) => Some(1),
+        (4, 4) => Some(2),
+        _ => None,
+    }
+}
+
 /// Dispatched 8-bit CDEF filter apply. See `CdefFilterFn` for the argument layout.
 #[allow(clippy::too_many_arguments)]
 #[inline]
@@ -540,6 +848,31 @@ pub(crate) fn cdef_filter_block_8bpc(
     w: usize,
     h: usize,
 ) {
+    // Match dav1d's fb[shape] model: 8x8 luma/444 chroma, 4x8 422
+    // chroma, and 4x4 420 chroma are dispatched to fixed-shape kernels.
+    // The generic `(w, h)` entry remains only as a safety fallback.
+    if let Some(shape) = cdef_shape_index(w, h) {
+        // SAFETY: architecture-specific entries are installed only after
+        // runtime feature detection; scalar defaults are always sound.
+        unsafe {
+            resolve_cdef_filter_shapes()[shape](
+                dst,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            )
+        };
+        return;
+    }
+
     // SAFETY: resolve only returns the SSE/NEON kernel when the feature was
     // detected; the scalar default is always sound.
     unsafe {
@@ -582,6 +915,29 @@ pub(crate) fn cdef_filter_block_hbd(
     w: usize,
     h: usize,
 ) {
+    // Match dav1d's fb[shape] model for HBD as well.
+    if let Some(shape) = cdef_shape_index(w, h) {
+        // SAFETY: architecture-specific entries are installed only after
+        // runtime feature detection; scalar defaults are always sound.
+        unsafe {
+            resolve_cdef_filter_hbd_shapes()[shape](
+                dst,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            )
+        };
+        return;
+    }
+
     // SAFETY: resolve only returns architecture-specific kernels after runtime
     // feature detection; the scalar default is always sound.
     unsafe {

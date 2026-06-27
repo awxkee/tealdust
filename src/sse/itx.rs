@@ -3052,7 +3052,6 @@ fn idct_dequant_16x16_sse41_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 fn idct_dequant_32x32_sse41_i32_impl(
     coeff: &mut [i32],
@@ -3087,7 +3086,6 @@ fn idct_dequant_32x32_sse41_i32_impl(
     }
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 fn idct_dequant_32x32_sse41_i32_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i32],
@@ -3229,7 +3227,6 @@ pub(crate) fn idct_dequant_16x16_sse41(
         row_clip_max,
     )
 }
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_32x32_sse41(
     coeff: &mut [i32],
@@ -4019,6 +4016,63 @@ fn idct_dequant_dct_i16_sse41_fused_8bpc_impl<const N: usize>(
     }
 }
 
+// Keep the very large 32-point i16 DCT bodies in fixed, non-generic call
+// targets. The public dispatch wrappers stay tiny, while this isolates the
+// expensive monomorphized transform body behind one call. That call is far
+// cheaper than the 32x32 transform itself and avoids cloning the 32-point graph
+// into every wrapper that reaches it.
+#[target_feature(enable = "sse4.1")]
+fn idct_dequant_32x32_i16_sse41_fixed_fused_8bpc_impl(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    shift1: i32,
+) {
+    idct_dequant_dct_i16_sse41_fused_8bpc_impl::<32>(
+        coeff,
+        dst,
+        dst_off,
+        dst_stride,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        shift1,
+    )
+}
+
+#[target_feature(enable = "sse4.1")]
+fn idct_dequant_32x32_i16_sse41_fixed_impl(
+    coeff: &mut [i16],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    idct_dequant_dct_i16_sse41_impl::<32>(
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+    )
+}
+
 #[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_16x16_i16_sse41_fused_8bpc(
@@ -4049,7 +4103,6 @@ pub(crate) fn idct_dequant_16x16_i16_sse41_fused_8bpc(
     )
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_32x32_i16_sse41_fused_8bpc(
     coeff: &mut [i16],
@@ -4064,7 +4117,7 @@ pub(crate) fn idct_dequant_32x32_i16_sse41_fused_8bpc(
     row_clip_max: i32,
     shift1: i32,
 ) {
-    idct_dequant_dct_i16_sse41_fused_8bpc_impl::<32>(
+    idct_dequant_32x32_i16_sse41_fixed_fused_8bpc_impl(
         coeff,
         dst,
         dst_off,
@@ -4103,7 +4156,6 @@ pub(crate) fn idct_dequant_16x16_i16_sse41(
     )
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_32x32_i16_sse41(
     coeff: &mut [i16],
@@ -4115,7 +4167,7 @@ pub(crate) fn idct_dequant_32x32_i16_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    idct_dequant_dct_i16_sse41_impl::<32>(
+    idct_dequant_32x32_i16_sse41_fixed_impl(
         coeff,
         tmp,
         eob,

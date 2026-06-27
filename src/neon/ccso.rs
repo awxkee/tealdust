@@ -30,7 +30,7 @@
 use std::arch::aarch64::*;
 
 #[inline(always)]
-fn ccso_tail_8bpc(
+fn ccso_tail_8bpc<const SS_HOR: usize, const BO_ONLY: bool>(
     dst: &mut [u8],
     dst_base: usize,
     tmp: &[u8],
@@ -41,13 +41,12 @@ fn ccso_tail_8bpc(
     luma_offset: isize,
     quant_step: i32,
     edge_clf: u32,
-    bo_only: bool,
 ) {
     for x in x0..x1 {
-        let ti = row + x;
+        let ti = row + (x << SS_HOR);
         let c = tmp[ti] as i32;
         let band = (c as u32 >> shift) as u8;
-        if bo_only {
+        if BO_ONLY {
             dst[dst_base + x] = band;
         } else {
             let cls0 = crate::ccso::ccso_score(
@@ -104,8 +103,8 @@ fn ccso_make_idx_u16(
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn load_u8x16_subsampled(tmp: &[u8], base: usize, ss_hor: usize) -> uint8x16_t {
-    if ss_hor == 0 {
+fn load_u8x16_subsampled<const SS_HOR: usize>(tmp: &[u8], base: usize) -> uint8x16_t {
+    if SS_HOR == 0 {
         unsafe { vld1q_u8(tmp.as_ptr().add(base)) }
     } else {
         let a = unsafe { vld1q_u8(tmp.as_ptr().add(base)) };
@@ -116,8 +115,8 @@ fn load_u8x16_subsampled(tmp: &[u8], base: usize, ss_hor: usize) -> uint8x16_t {
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn load_u8x8_subsampled(tmp: &[u8], base: usize, ss_hor: usize) -> uint8x8_t {
-    if ss_hor == 0 {
+fn load_u8x8_subsampled<const SS_HOR: usize>(tmp: &[u8], base: usize) -> uint8x8_t {
+    if SS_HOR == 0 {
         unsafe { vld1_u8(tmp.as_ptr().add(base)) }
     } else {
         let a = unsafe { vld1q_u8(tmp.as_ptr().add(base)) };
@@ -134,7 +133,7 @@ fn store_idx8(dst: &mut [u8], base: usize, out16: uint16x8_t) {
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
-pub(crate) fn ccso_prep_lut_8bpc_neon(
+fn ccso_prep_lut_8bpc_neon_impl<const SS_HOR: usize, const SS_VER: usize, const BO_ONLY: bool>(
     dst: &mut [u8],
     dst_stride: usize,
     tmp: &[u8],
@@ -142,46 +141,23 @@ pub(crate) fn ccso_prep_lut_8bpc_neon(
     o: usize,
     w: usize,
     h: usize,
-    ss_hor: usize,
-    ss_ver: usize,
     shift: u32,
     luma_offset: isize,
     quant_step: i32,
     edge_clf: u32,
-    bo_only: bool,
 ) {
-    if ss_hor > 1 {
-        crate::ccso::ccso_prep_lut_8bpc_scalar(
-            dst,
-            dst_stride,
-            tmp,
-            tmp_stride,
-            o,
-            w,
-            h,
-            ss_hor,
-            ss_ver,
-            shift,
-            luma_offset,
-            quant_step,
-            edge_clf,
-            bo_only,
-        );
-        return;
-    }
-
     let q = vdupq_n_s16(quant_step as i16);
     let nq = vdupq_n_s16((-quant_step) as i16);
     let sh = vdupq_n_s16(-(shift as i16));
 
     for y in 0..h {
-        let row = o + (y << ss_ver) * tmp_stride;
+        let row = o + (y << SS_VER) * tmp_stride;
         let dst_base = y * dst_stride;
         let mut x = 0usize;
-        if bo_only {
+        if BO_ONLY {
             while x + 16 <= w {
-                let base = row + (x << ss_hor);
-                let c = load_u8x16_subsampled(tmp, base, ss_hor);
+                let base = row + (x << SS_HOR);
+                let c = load_u8x16_subsampled::<SS_HOR>(tmp, base);
                 let lo = vshlq_u16(vmovl_u8(vget_low_u8(c)), sh);
                 let hi = vshlq_u16(vmovl_u8(vget_high_u8(c)), sh);
                 let out = vcombine_u8(vqmovn_u16(lo), vqmovn_u16(hi));
@@ -189,17 +165,19 @@ pub(crate) fn ccso_prep_lut_8bpc_neon(
                 x += 16;
             }
             if x + 8 <= w {
-                let base = row + (x << ss_hor);
-                let c = load_u8x8_subsampled(tmp, base, ss_hor);
+                let base = row + (x << SS_HOR);
+                let c = load_u8x8_subsampled::<SS_HOR>(tmp, base);
                 store_idx8(dst, dst_base + x, vshlq_u16(vmovl_u8(c), sh));
                 x += 8;
             }
         } else {
             while x + 16 <= w {
-                let base = row + (x << ss_hor);
-                let c = load_u8x16_subsampled(tmp, base, ss_hor);
-                let p0 = load_u8x16_subsampled(tmp, (base as isize + luma_offset) as usize, ss_hor);
-                let p1 = load_u8x16_subsampled(tmp, (base as isize - luma_offset) as usize, ss_hor);
+                let base = row + (x << SS_HOR);
+                let c = load_u8x16_subsampled::<SS_HOR>(tmp, base);
+                let p0 =
+                    load_u8x16_subsampled::<SS_HOR>(tmp, (base as isize + luma_offset) as usize);
+                let p1 =
+                    load_u8x16_subsampled::<SS_HOR>(tmp, (base as isize - luma_offset) as usize);
                 let lo = ccso_make_idx_u16(
                     vmovl_u8(vget_low_u8(c)),
                     vmovl_u8(vget_low_u8(p0)),
@@ -223,17 +201,19 @@ pub(crate) fn ccso_prep_lut_8bpc_neon(
                 x += 16;
             }
             if x + 8 <= w {
-                let base = row + (x << ss_hor);
-                let c = load_u8x8_subsampled(tmp, base, ss_hor);
-                let p0 = load_u8x8_subsampled(tmp, (base as isize + luma_offset) as usize, ss_hor);
-                let p1 = load_u8x8_subsampled(tmp, (base as isize - luma_offset) as usize, ss_hor);
+                let base = row + (x << SS_HOR);
+                let c = load_u8x8_subsampled::<SS_HOR>(tmp, base);
+                let p0 =
+                    load_u8x8_subsampled::<SS_HOR>(tmp, (base as isize + luma_offset) as usize);
+                let p1 =
+                    load_u8x8_subsampled::<SS_HOR>(tmp, (base as isize - luma_offset) as usize);
                 let out =
                     ccso_make_idx_u16(vmovl_u8(c), vmovl_u8(p0), vmovl_u8(p1), sh, q, nq, edge_clf);
                 store_idx8(dst, dst_base + x, out);
                 x += 8;
             }
         }
-        ccso_tail_8bpc(
+        ccso_tail_8bpc::<SS_HOR, BO_ONLY>(
             dst,
             dst_base,
             tmp,
@@ -244,54 +224,172 @@ pub(crate) fn ccso_prep_lut_8bpc_neon(
             luma_offset,
             quant_step,
             edge_clf,
-            bo_only,
         );
     }
 }
 
-#[inline(always)]
-fn fill_offsets_16(out: &mut [i8; 16], idx: &[u8], offset_idxs: &[u8], offset_lut: &[i8]) {
-    for i in 0..16 {
-        out[i] = crate::ccso::ccso_offset(idx[i], offset_idxs, offset_lut);
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "neon")]
+pub(crate) fn ccso_prep_lut_8bpc_neon(
+    dst: &mut [u8],
+    dst_stride: usize,
+    tmp: &[u8],
+    tmp_stride: usize,
+    o: usize,
+    w: usize,
+    h: usize,
+    ss_hor: usize,
+    ss_ver: usize,
+    shift: u32,
+    luma_offset: isize,
+    quant_step: i32,
+    edge_clf: u32,
+    bo_only: bool,
+) {
+    match (ss_hor, ss_ver, bo_only) {
+        (0, 0, true) => ccso_prep_lut_8bpc_neon_impl::<0, 0, true>(
+            dst,
+            dst_stride,
+            tmp,
+            tmp_stride,
+            o,
+            w,
+            h,
+            shift,
+            luma_offset,
+            quant_step,
+            edge_clf,
+        ),
+        (0, 0, false) => ccso_prep_lut_8bpc_neon_impl::<0, 0, false>(
+            dst,
+            dst_stride,
+            tmp,
+            tmp_stride,
+            o,
+            w,
+            h,
+            shift,
+            luma_offset,
+            quant_step,
+            edge_clf,
+        ),
+        (1, 0, true) => ccso_prep_lut_8bpc_neon_impl::<1, 0, true>(
+            dst,
+            dst_stride,
+            tmp,
+            tmp_stride,
+            o,
+            w,
+            h,
+            shift,
+            luma_offset,
+            quant_step,
+            edge_clf,
+        ),
+        (1, 0, false) => ccso_prep_lut_8bpc_neon_impl::<1, 0, false>(
+            dst,
+            dst_stride,
+            tmp,
+            tmp_stride,
+            o,
+            w,
+            h,
+            shift,
+            luma_offset,
+            quant_step,
+            edge_clf,
+        ),
+        (1, 1, true) => ccso_prep_lut_8bpc_neon_impl::<1, 1, true>(
+            dst,
+            dst_stride,
+            tmp,
+            tmp_stride,
+            o,
+            w,
+            h,
+            shift,
+            luma_offset,
+            quant_step,
+            edge_clf,
+        ),
+        (1, 1, false) => ccso_prep_lut_8bpc_neon_impl::<1, 1, false>(
+            dst,
+            dst_stride,
+            tmp,
+            tmp_stride,
+            o,
+            w,
+            h,
+            shift,
+            luma_offset,
+            quant_step,
+            edge_clf,
+        ),
+        _ => crate::ccso::ccso_prep_lut_8bpc_scalar(
+            dst,
+            dst_stride,
+            tmp,
+            tmp_stride,
+            o,
+            w,
+            h,
+            ss_hor,
+            ss_ver,
+            shift,
+            luma_offset,
+            quant_step,
+            edge_clf,
+            bo_only,
+        ),
     }
 }
 
 #[inline(always)]
-fn fill_offsets_4_i16(idx: &[u8], offset_idxs: &[u8], offset_lut: &[i8]) -> int16x4_t {
+fn fill_offsets_16(out: &mut [i8; 16], idx: &[u8; 16], offset_map: &[i8; 256]) {
+    for (out, &idx) in out.iter_mut().zip(idx.iter()) {
+        *out = offset_map[idx as usize];
+    }
+}
+
+#[inline(always)]
+fn fill_offsets_4_i16(idx: &[u8; 4], offset_map: &[i8; 256]) -> int16x4_t {
     let mut out = [0i16; 4];
-    out[0] = crate::ccso::ccso_offset(idx[0], offset_idxs, offset_lut) as i16;
-    out[1] = crate::ccso::ccso_offset(idx[1], offset_idxs, offset_lut) as i16;
-    out[2] = crate::ccso::ccso_offset(idx[2], offset_idxs, offset_lut) as i16;
-    out[3] = crate::ccso::ccso_offset(idx[3], offset_idxs, offset_lut) as i16;
-    unsafe { vld1_s16(out.as_mut_ptr().cast()) }
+    for (out, &idx) in out.iter_mut().zip(idx.iter()) {
+        *out = offset_map[idx as usize] as i16;
+    }
+    unsafe { vld1_s16(out.as_ptr()) }
 }
 
 #[inline]
 #[target_feature(enable = "neon")]
 fn ccso_add_4x4_8bpc(
-    dst: &mut [u8],
+    dst_rows: &mut [u8],
     dst_stride: usize,
-    idx_buf: &[u8],
+    idx_rows: &[u8],
     idx_stride: usize,
-    offset_idxs: &[u8],
-    offset_lut: &[i8],
+    offset_map: &[i8; 256],
     xx: usize,
-    yy: usize,
 ) {
-    for y in yy..yy + 4 {
-        let ip = y * idx_stride + xx;
-        let off = fill_offsets_4_i16(&idx_buf[ip..ip + 4], offset_idxs, offset_lut);
-        let dp = y * dst_stride + xx;
+    for (dst_row, idx_row) in dst_rows
+        .chunks_exact_mut(dst_stride)
+        .zip(idx_rows.chunks_exact(idx_stride))
+    {
+        let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
+        let off = fill_offsets_4_i16(idx4, offset_map);
         let src_q = unsafe {
             vreinterpret_u8_u32(vld1_lane_u32::<0>(
-                dst.as_ptr().add(dp).cast(),
+                dst_row.as_ptr().add(xx).cast(),
                 vdup_n_u32(0),
             ))
         };
         let cur = vreinterpretq_s16_u16(vmovl_u8(src_q));
         let out = vqmovun_s16(vaddq_s16(cur, vcombine_s16(off, vdup_n_s16(0))));
         unsafe {
-            vst1_lane_u32::<0>(dst.as_mut_ptr().add(dp).cast(), vreinterpret_u32_u8(out));
+            vst1_lane_u32::<0>(
+                dst_row.as_mut_ptr().add(xx).cast(),
+                vreinterpret_u32_u8(out),
+            );
         }
     }
 }
@@ -310,28 +408,37 @@ pub(crate) fn ccso_add_8bpc_neon(
     h: usize,
     ll_mask: &[[u16; 4]],
 ) {
+    let offset_map = crate::ccso::ccso_build_offset_map(offset_idxs, offset_lut);
     let mut off_tmp = [0i8; 16];
-    for yy in (0..h).step_by(4) {
-        let mi = yy >> 2;
-        let row_mask = ll_mask[mi][0];
+    let n_blocks = (h + 3) >> 2;
+    let dst_block_len = dst_stride * 4 * n_blocks;
+    let idx_block_len = idx_stride * 4 * n_blocks;
+    for ((dst_rows, idx_rows), mask) in dst[..dst_block_len]
+        .chunks_exact_mut(dst_stride * 4)
+        .zip(idx_buf[..idx_block_len].chunks_exact(idx_stride * 4))
+        .zip(ll_mask[..n_blocks].iter())
+    {
+        let row_mask = mask[0];
         let mut xx = 0usize;
         while xx + 16 <= w {
             let bx = xx >> 2;
             if ((row_mask >> bx) & 0x0f) == 0 {
-                for y in yy..yy + 4 {
-                    let ip = y * idx_stride + xx;
-                    fill_offsets_16(&mut off_tmp, &idx_buf[ip..ip + 16], offset_idxs, offset_lut);
+                for (dst_row, idx_row) in dst_rows
+                    .chunks_exact_mut(dst_stride)
+                    .zip(idx_rows.chunks_exact(idx_stride))
+                {
+                    let idx16 = &idx_row[xx..xx + 16].as_chunks::<16>().0[0];
+                    fill_offsets_16(&mut off_tmp, idx16, &offset_map);
                     let off = unsafe { vld1q_s8(off_tmp.as_ptr()) };
                     let off_lo = vmovl_s8(vget_low_s8(off));
                     let off_hi = vmovl_s8(vget_high_s8(off));
-                    let dp = y * dst_stride + xx;
-                    let cur = unsafe { vld1q_u8(dst.as_ptr().add(dp)) };
+                    let cur = unsafe { vld1q_u8(dst_row.as_ptr().add(xx)) };
                     let cur_lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(cur)));
                     let cur_hi = vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(cur)));
                     let out_lo = vqmovun_s16(vaddq_s16(cur_lo, off_lo));
                     let out_hi = vqmovun_s16(vaddq_s16(cur_hi, off_hi));
                     let out = vcombine_u8(out_lo, out_hi);
-                    unsafe { vst1q_u8(dst.as_mut_ptr().add(dp), out) };
+                    unsafe { vst1q_u8(dst_row.as_mut_ptr().add(xx), out) };
                 }
                 xx += 16;
             } else {
@@ -339,14 +446,12 @@ pub(crate) fn ccso_add_8bpc_neon(
                     let bx = xx >> 2;
                     if row_mask & (1 << bx) == 0 {
                         ccso_add_4x4_8bpc(
-                            dst,
+                            dst_rows,
                             dst_stride,
-                            idx_buf,
+                            idx_rows,
                             idx_stride,
-                            offset_idxs,
-                            offset_lut,
+                            &offset_map,
                             xx,
-                            yy,
                         );
                     }
                     xx += 4;
@@ -356,16 +461,7 @@ pub(crate) fn ccso_add_8bpc_neon(
         while xx < w {
             let bx = xx >> 2;
             if row_mask & (1 << bx) == 0 {
-                ccso_add_4x4_8bpc(
-                    dst,
-                    dst_stride,
-                    idx_buf,
-                    idx_stride,
-                    offset_idxs,
-                    offset_lut,
-                    xx,
-                    yy,
-                );
+                ccso_add_4x4_8bpc(dst_rows, dst_stride, idx_rows, idx_stride, &offset_map, xx);
             }
             xx += 4;
         }

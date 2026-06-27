@@ -84,36 +84,36 @@ pub(crate) fn cdef_padding<BD: BitDepth>(
     }
 
     let mut toff = top_off;
+    let copy_w = (x_end - x_start) as usize;
     for y in y_start..0 {
-        for x in x_start..x_end {
-            let ti = (o as i32 + x + y * tmp_stride as i32) as usize;
-            tmp[ti] = Into::<i32>::into(top[(toff as i32 + x) as usize]) as i16;
-        }
+        let ti = (o as i32 + x_start + y * tmp_stride as i32) as usize;
+        let si = (toff as i32 + x_start) as usize;
+        copy_pixels_to_i16(&mut tmp[ti..ti + copy_w], &top[si..si + copy_w]);
         toff += src_stride;
     }
 
     for y in 0..h as i32 {
+        let ti = (o as i32 + x_start + y * tmp_stride as i32) as usize;
         for x in x_start..0 {
-            let ti = (o as i32 + x + y * tmp_stride as i32) as usize;
-            tmp[ti] = Into::<i32>::into(left[y as usize][(2 + x) as usize]) as i16;
+            tmp[ti + (x - x_start) as usize] =
+                Into::<i32>::into(left[y as usize][(2 + x) as usize]) as i16;
         }
     }
 
     let mut soff = src_off;
+    let copy_w = x_end as usize;
     for y in 0..h as i32 {
-        for x in 0..x_end {
-            let ti = (o as i32 + x + y * tmp_stride as i32) as usize;
-            tmp[ti] = Into::<i32>::into(src[(soff as i32 + x) as usize]) as i16;
-        }
+        let ti = (o as i32 + y * tmp_stride as i32) as usize;
+        copy_pixels_to_i16(&mut tmp[ti..ti + copy_w], &src[soff..soff + copy_w]);
         soff += src_stride;
     }
 
     let mut boff = bottom_off;
+    let copy_w = (x_end - x_start) as usize;
     for y in h as i32..y_end {
-        for x in x_start..x_end {
-            let ti = (o as i32 + x + y * tmp_stride as i32) as usize;
-            tmp[ti] = Into::<i32>::into(bottom[(boff as i32 + x) as usize]) as i16;
-        }
+        let ti = (o as i32 + x_start + y * tmp_stride as i32) as usize;
+        let si = (boff as i32 + x_start) as usize;
+        copy_pixels_to_i16(&mut tmp[ti..ti + copy_w], &bottom[si..si + copy_w]);
         boff += bottom_stride;
     }
 }
@@ -125,10 +125,16 @@ pub(crate) fn constrain(diff: i32, threshold: i32, shift: i32) -> i32 {
 }
 
 pub(crate) fn fill(tmp: &mut [i16], stride: usize, w: usize, h: usize) {
-    for y in 0..h {
-        for x in 0..w {
-            tmp[y * stride + x] = i16::MIN;
-        }
+    for row in tmp.chunks_exact_mut(stride).take(h) {
+        row[..w].fill(i16::MIN);
+    }
+}
+
+#[inline(always)]
+fn copy_pixels_to_i16<P: Pixel>(dst: &mut [i16], src: &[P]) {
+    debug_assert_eq!(dst.len(), src.len());
+    for (d, &s) in dst.iter_mut().zip(src) {
+        *d = Into::<i32>::into(s) as i16;
     }
 }
 
@@ -545,39 +551,23 @@ fn cdef_backup2lines_top<P: Pixel>(
     }
 }
 
-/// Fill the compact CDEF bottom-reference buffer from a saved 2-row top line
-/// (`saved` holds 2 full-width rows). Mirrors `copy_cdef_bottom_ref` but reads
-/// the stable saved line at absolute column `block_col` rather than the plane.
-fn copy_cdef_bottom_ref_saved<P: Pixel>(
-    dst: &mut [P],
-    compact_stride: usize,
-    saved: &[P],
-    line_stride: usize,
+/// Select the saved pre-CDEF bottom reference for a block. Interior blocks can
+/// read the full-width saved line directly; no compact 12-byte scratch copy is
+/// needed. When HAVE_BOTTOM is clear, cdef_padding() will not inspect the slice.
+#[inline(always)]
+fn saved_bottom_ref<P: Pixel>(
+    cdef_top: &[[Vec<P>; 3]],
+    ru: usize,
+    plane: usize,
     block_col: usize,
-    w: usize,
+    stride: usize,
     edges: u8,
-) {
-    dst.fill(P::default());
-    if edges & CDEF_HAVE_BOTTOM == 0 {
-        return;
-    }
-    let mut x_start: i32 = -2;
-    let mut x_end: i32 = w as i32 + 2;
-    if edges & CDEF_HAVE_LEFT == 0 {
-        x_start = 0;
-    }
-    if edges & CDEF_HAVE_RIGHT == 0 {
-        x_end -= 2;
-    }
-    for row in 0..2usize {
-        let base = (row * line_stride + block_col) as i32;
-        let dst_base = (row * compact_stride + 2) as i32;
-        for x in x_start..x_end {
-            let si = base + x;
-            if si >= 0 && (si as usize) < saved.len() {
-                dst[(dst_base + x) as usize] = saved[si as usize];
-            }
-        }
+) -> (&[P], usize, usize) {
+    if edges & CDEF_HAVE_BOTTOM != 0 {
+        debug_assert!(ru + 1 < cdef_top.len());
+        (&cdef_top[ru + 1][plane], block_col, stride)
+    } else {
+        (&[], 0, 1)
     }
 }
 
@@ -775,8 +765,15 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
             let mut sb_y = row_y;
             let mut sb_uv = row_uv;
 
-            // CCSO LUT-index scratch (per-SB, recomputed each sbx). Sized for the
-            let mut ccso_lut_idx: [[u8; 64 * 8]; 3] = [[0u8; 64 * 8]; 3];
+            // CCSO LUT-index scratch (per-SB, recomputed each sbx).  Keep the
+            // zeroing out of the common no-CCSO path; most still-image CDEF
+            // benchmarks should not pay a 1536-byte memset per SB row when CCSO
+            // is disabled.
+            let mut ccso_lut_idx = if p.ccso.is_some() {
+                Some([[0u8; 64 * 8]; 3])
+            } else {
+                None
+            };
 
             for sbx in 0..sb64w {
                 let sb256x = (sbx >> 2) as usize;
@@ -785,6 +782,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                 let cdef_idx = p.cdef_idx(sb256x, sb64_idx);
 
                 if let Some(cc) = &p.ccso {
+                    let ccso_lut_idx = ccso_lut_idx
+                        .as_mut()
+                        .expect("CCSO scratch is allocated when CCSO is enabled");
                     let ccm = p.ccso_mask(sb256x, sbx, by);
                     let flag = ccm[0] | ccm[1] | ccm[2];
                     let do_left = flag & !prev_flag;
@@ -814,12 +814,13 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                             continue;
                         }
                         // top/bottom luma lines. Bottom must come from the SAVED
-                        // pre-CDEF edge (`cdef_top[ru+1]`), NOT the live plane: with
-                        // data-parallel CDEF filtering, the next band's seam writes the
-                        // rows just below this SB, so a live read there would race. When
-                        // there is no band below (frame bottom) HAVE_BOTTOM is clear and
-                        // ccso_padding never reads it.
+                        // pre-CDEF edge, NOT the live plane: with data-parallel CDEF
+                        // filtering, the next band's seam writes the rows just below
+                        // this SB, so a live read there would race. When HAVE_BOTTOM
+                        // is clear, ccso_padding never reads the bottom slice.
                         let top_off = sbx as usize * (sbsz as usize) * 4;
+                        let (bottom, bottom_off, _) =
+                            saved_bottom_ref(cdef_top, ru, 0, top_off, y_ls, sb_edges);
                         ccso_prep(
                             bd,
                             CcsoPrepCtx {
@@ -832,8 +833,8 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                     left: &lr_bak[bit][0],
                                     top: &cdef_line[ru_prev][0],
                                     top_off,
-                                    bottom: &cdef_top[ru + 1][0],
-                                    bottom_off: top_off,
+                                    bottom,
+                                    bottom_off,
                                 },
                                 tmp_buf: ccso_tmp_buf,
                                 cfg: CcsoPrepCfg {
@@ -963,32 +964,27 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                             }
                         }
 
+                        let y_filter_active = !y_lossless && (y_pri_lvl != 0 || y_sec_lvl != 0);
+                        let uv_filter_active = uv_lvl != 0 && have_chroma && !uv_lossless;
+                        let need_dir = (y_pri_lvl != 0 && y_filter_active)
+                            || (uv_pri_lvl != 0 && uv_filter_active);
+
                         let mut variance = 0u32;
-                        let dir = if y_pri_lvl != 0 || uv_pri_lvl != 0 {
+                        let dir = if need_dir {
                             cdef_find_dir_bd(bd, &y[b_y..], y_ls, &mut variance) as usize
                         } else {
                             0
                         };
 
-                        // Luma top/bottom: top from the toggled pre-CDEF line bank.
-                        // The bottom reference only needs the two rows around this
-                        // 8x8 block, so copy a compact stack buffer instead of
-                        // cloning the whole plane.
-                        const CDEF_REF_STRIDE: usize = 12;
+                        // Luma top/bottom: both are saved pre-CDEF seam rows.  Pass
+                        // the full-width bottom line directly, dav1d-style, instead of
+                        // copying a compact per-block scratch buffer.
                         let top_col = bx as usize * 4;
-                        let mut y_bottom = [BD::Pixel::default(); 2 * CDEF_REF_STRIDE];
-                        copy_cdef_bottom_ref_saved(
-                            &mut y_bottom,
-                            CDEF_REF_STRIDE,
-                            &cdef_top[ru + 1][0],
-                            y_ls,
-                            top_col,
-                            8,
-                            edges,
-                        );
                         if y_pri_lvl != 0 {
                             let adj = adjust_strength(y_pri_lvl, variance);
-                            if (adj != 0 || y_sec_lvl != 0) && !y_lossless {
+                            if y_filter_active && (adj != 0 || y_sec_lvl != 0) {
+                                let (y_bottom, y_bottom_off, y_bottom_stride) =
+                                    saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, edges);
                                 cdef_filter_block(
                                     bd,
                                     y,
@@ -997,9 +993,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                     &lr_bak[bit][0],
                                     &cdef_line[ru_prev][0],
                                     top_col,
-                                    &y_bottom,
-                                    2,
-                                    CDEF_REF_STRIDE,
+                                    y_bottom,
+                                    y_bottom_off,
+                                    y_bottom_stride,
                                     adj,
                                     y_sec_lvl,
                                     dir,
@@ -1009,7 +1005,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                     edges,
                                 );
                             }
-                        } else if y_sec_lvl != 0 && !y_lossless {
+                        } else if y_filter_active {
+                            let (y_bottom, y_bottom_off, y_bottom_stride) =
+                                saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, edges);
                             cdef_filter_block(
                                 bd,
                                 y,
@@ -1018,9 +1016,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                 &lr_bak[bit][0],
                                 &cdef_line[ru_prev][0],
                                 top_col,
-                                &y_bottom,
-                                2,
-                                CDEF_REF_STRIDE,
+                                y_bottom,
+                                y_bottom_off,
+                                y_bottom_stride,
                                 0,
                                 y_sec_lvl,
                                 0,
@@ -1031,7 +1029,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                             );
                         }
 
-                        if uv_lvl != 0 && have_chroma && !uv_lossless {
+                        if uv_filter_active {
                             let uvdir = if uv_pri_lvl != 0 {
                                 uv_dir[dir] as usize
                             } else {
@@ -1040,26 +1038,10 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                             let cw = 8 >> ss_hor;
                             let ch = 8 >> ss_ver;
                             let top_col_uv = (bx as usize * 4) >> ss_hor;
-                            let mut u_bottom = [BD::Pixel::default(); 2 * CDEF_REF_STRIDE];
-                            let mut v_bottom = [BD::Pixel::default(); 2 * CDEF_REF_STRIDE];
-                            copy_cdef_bottom_ref_saved(
-                                &mut u_bottom,
-                                CDEF_REF_STRIDE,
-                                &cdef_top[ru + 1][1],
-                                uv_ls,
-                                top_col_uv,
-                                cw,
-                                edges,
-                            );
-                            copy_cdef_bottom_ref_saved(
-                                &mut v_bottom,
-                                CDEF_REF_STRIDE,
-                                &cdef_top[ru + 1][2],
-                                uv_ls,
-                                top_col_uv,
-                                cw,
-                                edges,
-                            );
+                            let (u_bottom, u_bottom_off, u_bottom_stride) =
+                                saved_bottom_ref(cdef_top, ru, 1, top_col_uv, uv_ls, edges);
+                            let (v_bottom, v_bottom_off, v_bottom_stride) =
+                                saved_bottom_ref(cdef_top, ru, 2, top_col_uv, uv_ls, edges);
                             cdef_filter_block(
                                 bd,
                                 u,
@@ -1068,9 +1050,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                 &lr_bak[bit][1],
                                 &cdef_line[ru_prev][1],
                                 top_col_uv,
-                                &u_bottom,
-                                2,
-                                CDEF_REF_STRIDE,
+                                u_bottom,
+                                u_bottom_off,
+                                u_bottom_stride,
                                 uv_pri_lvl,
                                 uv_sec_lvl,
                                 uvdir,
@@ -1087,9 +1069,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                 &lr_bak[bit][2],
                                 &cdef_line[ru_prev][2],
                                 top_col_uv,
-                                &v_bottom,
-                                2,
-                                CDEF_REF_STRIDE,
+                                v_bottom,
+                                v_bottom_off,
+                                v_bottom_stride,
                                 uv_pri_lvl,
                                 uv_sec_lvl,
                                 uvdir,
@@ -1113,6 +1095,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                 }
 
                 if let Some(cc) = &p.ccso {
+                    let ccso_lut_idx = ccso_lut_idx
+                        .as_ref()
+                        .expect("CCSO scratch is allocated when CCSO is enabled");
                     let ccm = p.ccso_mask(sb256x, sbx, by);
                     let flag = ccm[0] | ((ccm[1] | ccm[2]) << 1);
                     let do_right = flag & !prev_flag;

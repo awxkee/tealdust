@@ -61,6 +61,21 @@ pub(crate) fn ccso_offset(i: u8, offset_idxs: &[u8], offset_lut: &[i8]) -> i8 {
     offset_lut[offset_idx]
 }
 
+#[inline(always)]
+pub(crate) fn ccso_build_offset_map(offset_idxs: &[u8], offset_lut: &[i8]) -> [i8; 256] {
+    let mut map = [0i8; 256];
+    let mut i = 0usize;
+    while i < 128 {
+        map[i] = ccso_offset(i as u8, offset_idxs, offset_lut);
+        i += 1;
+    }
+    while i < 256 {
+        map[i] = map[i - 128];
+        i += 1;
+    }
+    map
+}
+
 #[allow(clippy::too_many_arguments)]
 fn ccso_padding<P: Pixel>(
     tmp: &mut [P],
@@ -408,6 +423,28 @@ pub(crate) fn ccso_prep<BD: BitDepth>(bd: BD, ctx: CcsoPrepCtx<'_, BD::Pixel>) {
     } = area;
 
     let shift = bd.bitdepth() as u32 - max_band_log2;
+
+    if bo_only {
+        if let Some(src8) = <BD::Pixel as Pixel>::try_as_u8_slice(src) {
+            unsafe {
+                resolve_ccso_prep_8bpc()(
+                    dst, dst_stride, src8, src_stride, src_off, w, h, ss_hor, ss_ver, shift, 0,
+                    quant_step, edge_clf, true,
+                )
+            };
+            return;
+        }
+        if let Some(src16) = <BD::Pixel as Pixel>::try_as_u16_slice(src) {
+            unsafe {
+                resolve_ccso_prep_hbd()(
+                    dst, dst_stride, src16, src_stride, src_off, w, h, ss_hor, ss_ver, shift, 0,
+                    quant_step, edge_clf, true,
+                )
+            };
+            return;
+        }
+    }
+
     let dy = CCSO_POS[ext_filter][0] as isize;
     let dx = CCSO_POS[ext_filter][1] as isize;
     let tmp_stride: usize = 68;
@@ -497,18 +534,26 @@ pub(crate) fn ccso_add_8bpc_scalar(
     h: usize,
     ll_mask: &[[u16; 4]],
 ) {
-    for (mi, yy) in (0..h).step_by(4).enumerate() {
-        let dst_rows = &mut dst[yy * dst_stride..(yy + 4) * dst_stride];
-        let idx_rows = &idx_buf[yy * idx_stride..(yy + 4) * idx_stride];
+    let offset_map = ccso_build_offset_map(offset_idxs, offset_lut);
+    let n_blocks = (h + 3) >> 2;
+    let dst_block_len = dst_stride * 4 * n_blocks;
+    let idx_block_len = idx_stride * 4 * n_blocks;
+    for ((dst_rows, idx_rows), mask) in dst[..dst_block_len]
+        .chunks_exact_mut(dst_stride * 4)
+        .zip(idx_buf[..idx_block_len].chunks_exact(idx_stride * 4))
+        .zip(ll_mask[..n_blocks].iter())
+    {
+        let row_mask = mask[0];
         for (bx, xx) in (0..w).step_by(4).enumerate() {
-            if ll_mask[mi][0] & (1 << bx) == 0 {
+            if row_mask & (1 << bx) == 0 {
                 for (dst_row, idx_row) in dst_rows
                     .chunks_exact_mut(dst_stride)
                     .zip(idx_rows.chunks_exact(idx_stride))
-                    .take(4)
                 {
-                    for (dst, &idx) in dst_row[xx..xx + 4].iter_mut().zip(&idx_row[xx..xx + 4]) {
-                        let off = ccso_offset(idx, offset_idxs, offset_lut);
+                    let dst4 = &mut dst_row[xx..xx + 4].as_chunks_mut::<4>().0[0];
+                    let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
+                    for (dst, &idx) in dst4.iter_mut().zip(idx4.iter()) {
+                        let off = offset_map[idx as usize];
                         let cur = *dst as i32;
                         *dst = (cur + off as i32).clamp(0, 255) as u8;
                     }
@@ -531,18 +576,26 @@ pub(crate) fn ccso_add_hbd_scalar(
     ll_mask: &[[u16; 4]],
     bitdepth_max: i32,
 ) {
-    for (mi, yy) in (0..h).step_by(4).enumerate() {
-        let dst_rows = &mut dst[yy * dst_stride..(yy + 4) * dst_stride];
-        let idx_rows = &idx_buf[yy * idx_stride..(yy + 4) * idx_stride];
+    let offset_map = ccso_build_offset_map(offset_idxs, offset_lut);
+    let n_blocks = (h + 3) >> 2;
+    let dst_block_len = dst_stride * 4 * n_blocks;
+    let idx_block_len = idx_stride * 4 * n_blocks;
+    for ((dst_rows, idx_rows), mask) in dst[..dst_block_len]
+        .chunks_exact_mut(dst_stride * 4)
+        .zip(idx_buf[..idx_block_len].chunks_exact(idx_stride * 4))
+        .zip(ll_mask[..n_blocks].iter())
+    {
+        let row_mask = mask[0];
         for (bx, xx) in (0..w).step_by(4).enumerate() {
-            if ll_mask[mi][0] & (1 << bx) == 0 {
+            if row_mask & (1 << bx) == 0 {
                 for (dst_row, idx_row) in dst_rows
                     .chunks_exact_mut(dst_stride)
                     .zip(idx_rows.chunks_exact(idx_stride))
-                    .take(4)
                 {
-                    for (dst, &idx) in dst_row[xx..xx + 4].iter_mut().zip(&idx_row[xx..xx + 4]) {
-                        let off = ccso_offset(idx, offset_idxs, offset_lut);
+                    let dst4 = &mut dst_row[xx..xx + 4].as_chunks_mut::<4>().0[0];
+                    let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
+                    for (dst, &idx) in dst4.iter_mut().zip(idx4.iter()) {
+                        let off = offset_map[idx as usize];
                         let cur = *dst as i32;
                         *dst = (cur + off as i32).clamp(0, bitdepth_max) as u16;
                     }
