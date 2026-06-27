@@ -28,7 +28,218 @@
  */
 
 use crate::avx::{_mm_hsumv_epi32, _mm256_hsum_epi32};
+use crate::cdef::{CDEF_HAVE_BOTTOM, CDEF_HAVE_LEFT, CDEF_HAVE_RIGHT, CDEF_HAVE_TOP};
 use std::arch::x86_64::*;
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn cdef_fill_i16_avx2(tmp: &mut [i16], stride: usize, w: usize, h: usize) {
+    let sentinel = _mm_set1_epi16(i16::MIN);
+    for row in tmp.chunks_exact_mut(stride).take(h) {
+        if w >= 8 {
+            unsafe { _mm_storeu_si128(row.as_mut_ptr().cast(), sentinel) };
+            for v in &mut row[8..w] {
+                *v = i16::MIN;
+            }
+        } else {
+            row[..w].fill(i16::MIN);
+        }
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn copy_u8_to_i16_avx2(dst: &mut [i16], src: &[u8]) {
+    debug_assert_eq!(dst.len(), src.len());
+    let n = src.len();
+    if n >= 8 {
+        unsafe {
+            let v = _mm_loadl_epi64(src.as_ptr().cast());
+            _mm_storeu_si128(dst.as_mut_ptr().cast(), _mm_cvtepu8_epi16(v));
+            if n > 8 {
+                let s = src.as_ptr().add(n - 8);
+                let d = dst.as_mut_ptr().add(n - 8);
+                let v = _mm_loadl_epi64(s.cast());
+                _mm_storeu_si128(d.cast(), _mm_cvtepu8_epi16(v));
+            }
+        }
+    } else {
+        for (d, &s) in dst.iter_mut().zip(src) {
+            *d = s as i16;
+        }
+    }
+}
+
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+fn cdef_padding_8bpc_avx2_full<const W: usize, const H: usize>(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u8],
+    src_stride: usize,
+    src_off: usize,
+    left: &[[u8; 2]],
+    top: &[u8],
+    top_off: usize,
+    bottom: &[u8],
+    bottom_off: usize,
+    bottom_stride: usize,
+) {
+    debug_assert!(W == 4 || W == 8);
+    debug_assert!(H == 4 || H == 8);
+    debug_assert!(top_off >= 2);
+    debug_assert!(bottom_off >= 2);
+
+    let o = 2 * tmp_stride + 2;
+    let top_src = top_off - 2;
+    let top_dst = o - 2 - 2 * tmp_stride;
+    copy_u8_to_i16_avx2(
+        &mut tmp[top_dst..top_dst + W + 4],
+        &top[top_src..top_src + W + 4],
+    );
+    copy_u8_to_i16_avx2(
+        &mut tmp[top_dst + tmp_stride..top_dst + tmp_stride + W + 4],
+        &top[top_src + src_stride..top_src + src_stride + W + 4],
+    );
+
+    let mut soff = src_off;
+    for y in 0..H {
+        let ti = o + y * tmp_stride;
+        tmp[ti - 2] = left[y][0] as i16;
+        tmp[ti - 1] = left[y][1] as i16;
+        copy_u8_to_i16_avx2(&mut tmp[ti..ti + W + 2], &src[soff..soff + W + 2]);
+        soff += src_stride;
+    }
+
+    let bottom_src = bottom_off - 2;
+    let bottom_dst = o - 2 + H * tmp_stride;
+    copy_u8_to_i16_avx2(
+        &mut tmp[bottom_dst..bottom_dst + W + 4],
+        &bottom[bottom_src..bottom_src + W + 4],
+    );
+    copy_u8_to_i16_avx2(
+        &mut tmp[bottom_dst + tmp_stride..bottom_dst + tmp_stride + W + 4],
+        &bottom[bottom_src + bottom_stride..bottom_src + bottom_stride + W + 4],
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) unsafe fn cdef_padding_8bpc_avx2(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u8],
+    src_stride: usize,
+    src_off: usize,
+    left: &[[u8; 2]],
+    top: &[u8],
+    top_off: usize,
+    bottom: &[u8],
+    bottom_off: usize,
+    bottom_stride: usize,
+    w: usize,
+    h: usize,
+    edges: u8,
+) {
+    const CDEF_HAVE_ALL: u8 = CDEF_HAVE_LEFT | CDEF_HAVE_RIGHT | CDEF_HAVE_TOP | CDEF_HAVE_BOTTOM;
+    if edges == CDEF_HAVE_ALL {
+        match (w, h) {
+            (8, 8) => {
+                cdef_padding_8bpc_avx2_full::<8, 8>(
+                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
+                    bottom_off, bottom_stride,
+                );
+                return;
+            }
+            (8, 4) => {
+                cdef_padding_8bpc_avx2_full::<8, 4>(
+                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
+                    bottom_off, bottom_stride,
+                );
+                return;
+            }
+            (4, 8) => {
+                cdef_padding_8bpc_avx2_full::<4, 8>(
+                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
+                    bottom_off, bottom_stride,
+                );
+                return;
+            }
+            (4, 4) => {
+                cdef_padding_8bpc_avx2_full::<4, 4>(
+                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
+                    bottom_off, bottom_stride,
+                );
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    let o = 2 * tmp_stride + 2;
+
+    let mut x_start: i32 = -2;
+    let mut x_end: i32 = w as i32 + 2;
+    let mut y_start: i32 = -2;
+    let mut y_end: i32 = h as i32 + 2;
+
+    if edges & CDEF_HAVE_TOP == 0 {
+        let base = o.wrapping_sub(2).wrapping_sub(2 * tmp_stride);
+        cdef_fill_i16_avx2(&mut tmp[base..], tmp_stride, w + 4, 2);
+        y_start = 0;
+    }
+    if edges & CDEF_HAVE_BOTTOM == 0 {
+        let base = o + h * tmp_stride - 2;
+        cdef_fill_i16_avx2(&mut tmp[base..], tmp_stride, w + 4, 2);
+        y_end -= 2;
+    }
+    if edges & CDEF_HAVE_LEFT == 0 {
+        let base = (o as i32 + y_start * tmp_stride as i32 - 2) as usize;
+        cdef_fill_i16_avx2(&mut tmp[base..], tmp_stride, 2, (y_end - y_start) as usize);
+        x_start = 0;
+    }
+    if edges & CDEF_HAVE_RIGHT == 0 {
+        let base = (o as i32 + y_start * tmp_stride as i32 + w as i32) as usize;
+        cdef_fill_i16_avx2(&mut tmp[base..], tmp_stride, 2, (y_end - y_start) as usize);
+        x_end -= 2;
+    }
+
+    let copy_w = (x_end - x_start) as usize;
+    let mut toff = top_off;
+    for y in y_start..0 {
+        let ti = (o as i32 + x_start + y * tmp_stride as i32) as usize;
+        let si = (toff as i32 + x_start) as usize;
+        copy_u8_to_i16_avx2(&mut tmp[ti..ti + copy_w], &top[si..si + copy_w]);
+        toff += src_stride;
+    }
+
+    for y in 0..h as i32 {
+        let ti = (o as i32 + y * tmp_stride as i32 - 2) as usize;
+        for x in x_start..0 {
+            tmp[ti + (x + 2) as usize] = left[y as usize][(x + 2) as usize] as i16;
+        }
+    }
+
+    let copy_w = x_end as usize;
+    let mut soff = src_off;
+    for y in 0..h as i32 {
+        let ti = (o as i32 + y * tmp_stride as i32) as usize;
+        copy_u8_to_i16_avx2(&mut tmp[ti..ti + copy_w], &src[soff..soff + copy_w]);
+        soff += src_stride;
+    }
+
+    let copy_w = (x_end - x_start) as usize;
+    let mut boff = bottom_off;
+    for y in h as i32..y_end {
+        let ti = (o as i32 + x_start + y * tmp_stride as i32) as usize;
+        let si = (boff as i32 + x_start) as usize;
+        copy_u8_to_i16_avx2(&mut tmp[ti..ti + copy_w], &bottom[si..si + copy_w]);
+        boff += bottom_stride;
+    }
+}
 
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -91,18 +302,117 @@ fn hsum_i16x8(v: __m128i) -> i32 {
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn reverse_i16x8(v: __m128i) -> __m128i {
+    let shuf = _mm_setr_epi8(14, 15, 12, 13, 10, 11, 8, 9, 6, 7, 4, 5, 2, 3, 0, 1);
+    _mm_shuffle_epi8(v, shuf)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn reverse_i16x4_low(v: __m128i) -> __m128i {
+    let shuf = _mm_setr_epi8(6, 7, 4, 5, 2, 3, 0, 1, -1, -1, -1, -1, -1, -1, -1, -1);
+    _mm_shuffle_epi8(v, shuf)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn pair_sum_i16x8(v: __m128i) -> __m128i {
+    _mm_hadd_epi16(v, _mm_setzero_si128())
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn shl_words_i16x8(v: __m128i, n: usize) -> __m128i {
+    match n {
+        0 => v,
+        1 => _mm_slli_si128::<2>(v),
+        2 => _mm_slli_si128::<4>(v),
+        3 => _mm_slli_si128::<6>(v),
+        4 => _mm_slli_si128::<8>(v),
+        5 => _mm_slli_si128::<10>(v),
+        6 => _mm_slli_si128::<12>(v),
+        7 => _mm_slli_si128::<14>(v),
+        _ => _mm_setzero_si128(),
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn overflow_words_i16x8(v: __m128i, n: usize) -> __m128i {
+    match n {
+        0 => _mm_setzero_si128(),
+        1 => _mm_srli_si128::<14>(v),
+        2 => _mm_srli_si128::<12>(v),
+        3 => _mm_srli_si128::<10>(v),
+        4 => _mm_srli_si128::<8>(v),
+        5 => _mm_srli_si128::<6>(v),
+        6 => _mm_srli_si128::<4>(v),
+        7 => _mm_srli_si128::<2>(v),
+        _ => v,
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn add_shifted_i16x8(lo: &mut __m128i, hi: &mut __m128i, v: __m128i, n: usize) {
+    *lo = _mm_add_epi16(*lo, shl_words_i16x8(v, n));
+    *hi = _mm_add_epi16(*hi, overflow_words_i16x8(v, n));
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_i16x8_to_i32(dst: &mut [i32], v: __m128i, n: usize) {
+    let mut tmp = [0i16; 8];
+    unsafe { _mm_storeu_si128(tmp.as_mut_ptr().cast(), v) };
+    for i in 0..n {
+        dst[i] = tmp[i] as i32;
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 pub(super) fn cdef_find_dir_from_rows_avx2(rows: &[__m128i; 8], var: &mut u32) -> i32 {
     let mut partial_sum_hv = [[0i32; 8]; 2];
     let mut partial_sum_diag = [[0i32; 15]; 2];
     let mut partial_sum_alt = [[0i32; 11]; 4];
-    let mut row_pixels = [[0i16; 8]; 8];
-    let mut col_sum = _mm_setzero_si128();
+
+    let zero = _mm_setzero_si128();
+    let mut col_sum = zero;
+    let mut diag0_lo = zero;
+    let mut diag0_hi = zero;
+    let mut diag1_lo = zero;
+    let mut diag1_hi = zero;
+    let mut alt0_lo = zero;
+    let mut alt0_hi = zero;
+    let mut alt1_lo = zero;
+    let mut alt1_hi = zero;
+    let mut alt2_lo = zero;
+    let mut alt2_hi = zero;
+    let mut alt3_lo = zero;
+    let mut alt3_hi = zero;
 
     for y in 0..8usize {
         let row = rows[y];
+        let rev = reverse_i16x8(row);
+        let pair = pair_sum_i16x8(row);
+        let pair_rev = reverse_i16x4_low(pair);
+
         partial_sum_hv[0][y] = hsum_i16x8(row);
         col_sum = _mm_add_epi16(col_sum, row);
-        unsafe { _mm_storeu_si128(row_pixels[y].as_mut_ptr().cast(), row) };
+
+        add_shifted_i16x8(&mut diag0_lo, &mut diag0_hi, row, y);
+        add_shifted_i16x8(&mut diag1_lo, &mut diag1_hi, rev, y);
+        add_shifted_i16x8(&mut alt0_lo, &mut alt0_hi, pair, y);
+        add_shifted_i16x8(&mut alt1_lo, &mut alt1_hi, pair_rev, y);
+
+        let half_y = y >> 1;
+        add_shifted_i16x8(
+            &mut alt2_lo,
+            &mut alt2_hi,
+            row,
+            3usize.saturating_sub(half_y),
+        );
+        add_shifted_i16x8(&mut alt3_lo, &mut alt3_hi, row, half_y);
     }
 
     let mut cols = [0i16; 8];
@@ -111,17 +421,18 @@ pub(super) fn cdef_find_dir_from_rows_avx2(rows: &[__m128i; 8], var: &mut u32) -
         partial_sum_hv[1][x] = cols[x] as i32;
     }
 
-    for y in 0..8usize {
-        for x in 0..8usize {
-            let px = row_pixels[y][x] as i32;
-            partial_sum_diag[0][y + x] += px;
-            partial_sum_alt[0][y + (x >> 1)] += px;
-            partial_sum_alt[1][3 + y - (x >> 1)] += px;
-            partial_sum_diag[1][7 + y - x] += px;
-            partial_sum_alt[2][3 - (y >> 1) + x] += px;
-            partial_sum_alt[3][(y >> 1) + x] += px;
-        }
-    }
+    store_i16x8_to_i32(&mut partial_sum_diag[0][..8], diag0_lo, 8);
+    store_i16x8_to_i32(&mut partial_sum_diag[0][8..], diag0_hi, 7);
+    store_i16x8_to_i32(&mut partial_sum_diag[1][..8], diag1_lo, 8);
+    store_i16x8_to_i32(&mut partial_sum_diag[1][8..], diag1_hi, 7);
+    store_i16x8_to_i32(&mut partial_sum_alt[0][..8], alt0_lo, 8);
+    store_i16x8_to_i32(&mut partial_sum_alt[0][8..], alt0_hi, 3);
+    store_i16x8_to_i32(&mut partial_sum_alt[1][..8], alt1_lo, 8);
+    store_i16x8_to_i32(&mut partial_sum_alt[1][8..], alt1_hi, 3);
+    store_i16x8_to_i32(&mut partial_sum_alt[2][..8], alt2_lo, 8);
+    store_i16x8_to_i32(&mut partial_sum_alt[2][8..], alt2_hi, 3);
+    store_i16x8_to_i32(&mut partial_sum_alt[3][..8], alt3_lo, 8);
+    store_i16x8_to_i32(&mut partial_sum_alt[3][8..], alt3_hi, 3);
 
     finish_cdef_dir_avx2(&partial_sum_hv, &partial_sum_diag, &partial_sum_alt, var)
 }
@@ -174,8 +485,20 @@ fn constrain_i16(diff: __m256i, threshold: __m256i, shc: __m128i) -> __m256i {
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn add_tap_i16(v: __m256i, tap: i32) -> __m256i {
+    match tap {
+        1 => v,
+        2 => _mm256_add_epi16(v, v),
+        3 => _mm256_add_epi16(_mm256_add_epi16(v, v), v),
+        4 => _mm256_slli_epi16::<2>(v),
+        _ => _mm256_mullo_epi16(v, _mm256_set1_epi16(tap as i16)),
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn madd_i16(sum: __m256i, v: __m256i, tap: i32) -> __m256i {
-    _mm256_add_epi16(sum, _mm256_mullo_epi16(v, _mm256_set1_epi16(tap as i16)))
+    _mm256_add_epi16(sum, add_tap_i16(v, tap))
 }
 
 #[inline]
@@ -214,7 +537,12 @@ fn store_u8xw_2rows<const W: usize>(dst: &mut [u8], p0: usize, p1: usize, v: __m
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
-fn cdef_filter_block_8bpc_avx2_shape<const W: usize, const H: usize>(
+fn cdef_filter_block_8bpc_avx2_shape<
+    const W: usize,
+    const H: usize,
+    const HAS_PRI: bool,
+    const HAS_SEC: bool,
+>(
     dst: &mut [u8],
     dst_stride: usize,
     dst_off: usize,
@@ -230,9 +558,7 @@ fn cdef_filter_block_8bpc_avx2_shape<const W: usize, const H: usize>(
 ) {
     debug_assert!(W == 4 || W == 8);
     debug_assert!(H == 4 || H == 8);
-    let has_pri = pri_strength != 0;
-    let has_sec = sec_strength != 0;
-    let clip = has_pri && has_sec;
+    let clip = HAS_PRI && HAS_SEC;
     let pri_s = _mm256_set1_epi16(pri_strength as i16);
     let sec_s = _mm256_set1_epi16(sec_strength as i16);
     let pri_shc = _mm_cvtsi32_si128(pri_shift);
@@ -252,7 +578,7 @@ fn cdef_filter_block_8bpc_avx2_shape<const W: usize, const H: usize>(
         let mut min_v = px;
         let mut max_v = px;
 
-        if has_pri {
+        if HAS_PRI {
             let mut ptap = pri_tap;
             for k in 0..2 {
                 let off = dirs[dir + 2][k] as isize;
@@ -273,7 +599,7 @@ fn cdef_filter_block_8bpc_avx2_shape<const W: usize, const H: usize>(
                     min_v = cdef_min_i16(min_v, cdef_min_i16(p0, p1));
                     max_v = _mm256_max_epi16(max_v, _mm256_max_epi16(p0, p1));
                 }
-                if has_sec {
+                if HAS_SEC {
                     let off2 = dirs[dir + 4][k] as isize;
                     let off3 = dirs[dir][k] as isize;
                     let s0 = load(off2);
@@ -311,7 +637,7 @@ fn cdef_filter_block_8bpc_avx2_shape<const W: usize, const H: usize>(
                     );
                 }
             }
-        } else {
+        } else if HAS_SEC {
             for k in 0..2 {
                 let off1 = dirs[dir + 4][k] as isize;
                 let off2 = dirs[dir][k] as isize;
@@ -360,6 +686,70 @@ fn cdef_filter_block_8bpc_avx2_shape<const W: usize, const H: usize>(
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
+fn cdef_filter_block_8bpc_avx2_shape_dispatch<const W: usize, const H: usize>(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    match (pri_strength != 0, sec_strength != 0) {
+        (true, true) => cdef_filter_block_8bpc_avx2_shape::<W, H, true, true>(
+            dst,
+            dst_stride,
+            dst_off,
+            tmp,
+            tmp_stride,
+            o,
+            pri_strength,
+            sec_strength,
+            pri_shift,
+            sec_shift,
+            pri_tap,
+            dir,
+        ),
+        (true, false) => cdef_filter_block_8bpc_avx2_shape::<W, H, true, false>(
+            dst,
+            dst_stride,
+            dst_off,
+            tmp,
+            tmp_stride,
+            o,
+            pri_strength,
+            sec_strength,
+            pri_shift,
+            sec_shift,
+            pri_tap,
+            dir,
+        ),
+        (false, true) => cdef_filter_block_8bpc_avx2_shape::<W, H, false, true>(
+            dst,
+            dst_stride,
+            dst_off,
+            tmp,
+            tmp_stride,
+            o,
+            pri_strength,
+            sec_strength,
+            pri_shift,
+            sec_shift,
+            pri_tap,
+            dir,
+        ),
+        (false, false) => return,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
 pub(crate) fn cdef_filter_block_8x8_8bpc_avx2(
     dst: &mut [u8],
     dst_stride: usize,
@@ -374,7 +764,7 @@ pub(crate) fn cdef_filter_block_8x8_8bpc_avx2(
     pri_tap: i32,
     dir: usize,
 ) {
-    cdef_filter_block_8bpc_avx2_shape::<8, 8>(
+    cdef_filter_block_8bpc_avx2_shape_dispatch::<8, 8>(
         dst,
         dst_stride,
         dst_off,
@@ -407,7 +797,7 @@ pub(crate) fn cdef_filter_block_4x8_8bpc_avx2(
     pri_tap: i32,
     dir: usize,
 ) {
-    cdef_filter_block_8bpc_avx2_shape::<4, 8>(
+    cdef_filter_block_8bpc_avx2_shape_dispatch::<4, 8>(
         dst,
         dst_stride,
         dst_off,
@@ -440,7 +830,7 @@ pub(crate) fn cdef_filter_block_4x4_8bpc_avx2(
     pri_tap: i32,
     dir: usize,
 ) {
-    cdef_filter_block_8bpc_avx2_shape::<4, 4>(
+    cdef_filter_block_8bpc_avx2_shape_dispatch::<4, 4>(
         dst,
         dst_stride,
         dst_off,
@@ -475,9 +865,30 @@ pub(crate) fn cdef_filter_block_8bpc_avx2(
     w: usize,
     h: usize,
 ) {
+    if pri_strength == 0 && sec_strength == 0 {
+        return;
+    }
+
     match (w, h) {
         (8, 8) => {
             cdef_filter_block_8x8_8bpc_avx2(
+                dst,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            );
+            return;
+        }
+        (8, 4) => {
+            cdef_filter_block_8bpc_avx2_shape_dispatch::<8, 4>(
                 dst,
                 dst_stride,
                 dst_off,

@@ -1,0 +1,28 @@
+[package]
+name = "tealdust-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.tealdust]
+path = ".."
+
+[[bin]]
+name = "av2_decoder"
+path = "av2_decoder/av2_decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "avif_decoder"
+path = "avif_decoder/avif_decoder.rs"
+test = false
+doc = false
+bench = false

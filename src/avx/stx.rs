@@ -77,9 +77,9 @@ fn stx4_sums(kernel: &[i8], cf: &[i16], eob: usize) -> __m256i {
     let mut acc_hi = acc_lo;
     let mut y = 0usize;
     while y <= eob {
-        let c0 = unsafe { *cf.as_ptr().add(y) };
+        let c0 = unsafe { *cf.get_unchecked(y) };
         let c1 = if y < eob {
-            unsafe { *cf.as_ptr().add(y + 1) }
+            unsafe { *cf.get_unchecked(y + 1) }
         } else {
             0
         };
@@ -104,9 +104,9 @@ fn stx8_sums(kernel: &[i8], cf: &[i16], eob: usize) -> (__m256i, __m256i, __m256
 
     let mut y = 0usize;
     while y <= eob {
-        let c0 = unsafe { *cf.as_ptr().add(y) };
+        let c0 = unsafe { *cf.get_unchecked(y) };
         let c1 = if y < eob {
-            unsafe { *cf.as_ptr().add(y + 1) }
+            unsafe { *cf.get_unchecked(y + 1) }
         } else {
             0
         };
@@ -139,7 +139,7 @@ fn stx8_sums(kernel: &[i8], cf: &[i16], eob: usize) -> (__m256i, __m256i, __m256
 #[inline]
 #[target_feature(enable = "avx2")]
 fn store_i16x16(dst: &mut [i16], v: __m256i) {
-    unsafe { _mm256_storeu_si256(dst.as_mut_ptr() as *mut __m256i, v) };
+    unsafe { _mm256_storeu_si256(dst.as_mut_ptr().cast(), v) };
 }
 
 #[inline(always)]
@@ -309,7 +309,7 @@ fn stx4_sums_hbd(kernel: &[i8], cf: &[i32], eob: usize, bitdepth_max: i32) -> (_
 
     let mut y = 0usize;
     while y <= eob {
-        let c = unsafe { *cf.as_ptr().add(y) };
+        let c = unsafe { *cf.get_unchecked(y) };
         let row = unsafe { kernel.as_ptr().add(y * 16) };
         acc0 = mac_hbd_8(acc0, c, row);
         acc1 = mac_hbd_8(acc1, c, unsafe { row.add(8) });
@@ -341,7 +341,7 @@ fn stx8_sums_hbd(
 
     let mut y = 0usize;
     while y <= eob {
-        let c = unsafe { *cf.as_ptr().add(y) };
+        let c = unsafe { *cf.get_unchecked(y) };
         let row = unsafe { kernel.as_ptr().add(y * 48) };
         acc0 = mac_hbd_8(acc0, c, row);
         acc1 = mac_hbd_8(acc1, c, unsafe { row.add(8) });
@@ -360,12 +360,6 @@ fn stx8_sums_hbd(
         round_clip_hbd_8(acc4, min_v, max_v),
         round_clip_hbd_8(acc5, min_v, max_v),
     )
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn store_i32x8(dst: &mut [i32], v: __m256i) {
-    unsafe { _mm256_storeu_si256(dst.as_mut_ptr() as *mut __m256i, v) };
 }
 
 #[inline(always)]
@@ -484,8 +478,10 @@ pub(crate) fn stxfm4_hbd_avx2(
 
     let (s0, s1) = stx4_sums_hbd(kernel, cf, eob, bitdepth_max);
     let mut sums = [0i32; 16];
-    store_i32x8(&mut sums[..8], s0);
-    store_i32x8(&mut sums[8..16], s1);
+    unsafe {
+        _mm256_storeu_si256((&mut sums[..8]).as_mut_ptr().cast(), s0);
+        _mm256_storeu_si256((&mut sums[8..16]).as_mut_ptr().cast(), s1);
+    }
 
     cf[4..8].fill(0);
     scatter_stx4_i32(cf, &sums, scan_out);
@@ -506,12 +502,14 @@ pub(crate) fn stxfm8_hbd_avx2(
 
     let (s0, s1, s2, s3, s4, s5) = stx8_sums_hbd(kernel, cf, eob, bitdepth_max);
     let mut sums = [0i32; 48];
-    store_i32x8(&mut sums[..8], s0);
-    store_i32x8(&mut sums[8..16], s1);
-    store_i32x8(&mut sums[16..24], s2);
-    store_i32x8(&mut sums[24..32], s3);
-    store_i32x8(&mut sums[32..40], s4);
-    store_i32x8(&mut sums[40..48], s5);
+    unsafe {
+        _mm256_storeu_si256((&mut sums[..8]).as_mut_ptr().cast(), s0);
+        _mm256_storeu_si256((&mut sums[8..16]).as_mut_ptr().cast(), s1);
+        _mm256_storeu_si256((&mut sums[16..24]).as_mut_ptr().cast(), s2);
+        _mm256_storeu_si256((&mut sums[24..32]).as_mut_ptr().cast(), s3);
+        _mm256_storeu_si256((&mut sums[32..40]).as_mut_ptr().cast(), s4);
+        _mm256_storeu_si256((&mut sums[40..48]).as_mut_ptr().cast(), s5);
+    }
 
     zero_stx8_i32_avx2(cf);
     scatter_stx8_i32(cf, &sums, scan_out, mapping);

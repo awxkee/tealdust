@@ -1,5 +1,5 @@
 [workspace]
-members = ["fuzz"]
+members = ["fuzz", "tealdust-afl"]
 exclude = []
 
 [package]

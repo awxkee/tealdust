@@ -250,7 +250,7 @@ fn ac8_422_vstrip_i32(
     let prev = _mm_set1_epi16(prev_sample as i16);
 
     // Shift by one u16 while preserving the 128-bit lane boundary. The upper
-    // lane receives the low lane's last sample, which is the left neighbour of
+    // lane receives the low lane's last sample, which is the left neighbor of
     // its first pair.
     let shifted_lo = _mm_alignr_epi8::<14>(lo, prev);
     let shifted_hi = _mm_alignr_epi8::<14>(hi, lo);

@@ -27,7 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-use crate::cdef::constrain;
+use crate::cdef::{CDEF_HAVE_BOTTOM, CDEF_HAVE_LEFT, CDEF_HAVE_RIGHT, CDEF_HAVE_TOP, constrain};
 use crate::tables::CDEF_DIRECTIONS;
 use std::sync::OnceLock;
 
@@ -73,6 +73,223 @@ pub(crate) type CdefFilterHbdShapeFn =
 
 pub(crate) type CdefDir8Fn = unsafe fn(&[u8], usize, &mut u32) -> i32;
 pub(crate) type CdefDirHbdFn = unsafe fn(&[u16], usize, i32, &mut u32) -> i32;
+
+pub(crate) type CdefPadding8Fn = unsafe fn(
+    &mut [i16],
+    usize,
+    &[u8],
+    usize,
+    usize,
+    &[[u8; 2]],
+    &[u8],
+    usize,
+    &[u8],
+    usize,
+    usize,
+    usize,
+    usize,
+    u8,
+);
+
+pub(crate) type CdefPaddingHbdFn = unsafe fn(
+    &mut [i16],
+    usize,
+    &[u16],
+    usize,
+    usize,
+    &[[u16; 2]],
+    &[u16],
+    usize,
+    &[u16],
+    usize,
+    usize,
+    usize,
+    usize,
+    u8,
+);
+
+#[inline(always)]
+fn cdef_fill_i16(tmp: &mut [i16], stride: usize, w: usize, h: usize) {
+    for row in tmp.chunks_exact_mut(stride).take(h) {
+        row[..w].fill(i16::MIN);
+    }
+}
+
+#[inline(always)]
+fn copy_u8_to_i16_scalar(dst: &mut [i16], src: &[u8]) {
+    debug_assert_eq!(dst.len(), src.len());
+    for (d, &s) in dst.iter_mut().zip(src) {
+        *d = s as i16;
+    }
+}
+
+#[inline(always)]
+fn copy_u16_to_i16_scalar(dst: &mut [i16], src: &[u16]) {
+    debug_assert_eq!(dst.len(), src.len());
+    for (d, &s) in dst.iter_mut().zip(src) {
+        *d = s as i16;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn cdef_padding_8bpc_scalar(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u8],
+    src_stride: usize,
+    src_off: usize,
+    left: &[[u8; 2]],
+    top: &[u8],
+    top_off: usize,
+    bottom: &[u8],
+    bottom_off: usize,
+    bottom_stride: usize,
+    w: usize,
+    h: usize,
+    edges: u8,
+) {
+    let o = 2 * tmp_stride + 2;
+
+    let mut x_start: i32 = -2;
+    let mut x_end: i32 = w as i32 + 2;
+    let mut y_start: i32 = -2;
+    let mut y_end: i32 = h as i32 + 2;
+
+    if edges & CDEF_HAVE_TOP == 0 {
+        let base = o.wrapping_sub(2).wrapping_sub(2 * tmp_stride);
+        cdef_fill_i16(&mut tmp[base..], tmp_stride, w + 4, 2);
+        y_start = 0;
+    }
+    if edges & CDEF_HAVE_BOTTOM == 0 {
+        let base = o + h * tmp_stride - 2;
+        cdef_fill_i16(&mut tmp[base..], tmp_stride, w + 4, 2);
+        y_end -= 2;
+    }
+    if edges & CDEF_HAVE_LEFT == 0 {
+        let base = (o as i32 + y_start * tmp_stride as i32 - 2) as usize;
+        cdef_fill_i16(&mut tmp[base..], tmp_stride, 2, (y_end - y_start) as usize);
+        x_start = 0;
+    }
+    if edges & CDEF_HAVE_RIGHT == 0 {
+        let base = (o as i32 + y_start * tmp_stride as i32 + w as i32) as usize;
+        cdef_fill_i16(&mut tmp[base..], tmp_stride, 2, (y_end - y_start) as usize);
+        x_end -= 2;
+    }
+
+    let copy_w = (x_end - x_start) as usize;
+    let mut toff = top_off;
+    for y in y_start..0 {
+        let ti = (o as i32 + x_start + y * tmp_stride as i32) as usize;
+        let si = (toff as i32 + x_start) as usize;
+        copy_u8_to_i16_scalar(&mut tmp[ti..ti + copy_w], &top[si..si + copy_w]);
+        toff += src_stride;
+    }
+
+    for y in 0..h as i32 {
+        let ti = (o as i32 + y * tmp_stride as i32 - 2) as usize;
+        for x in x_start..0 {
+            tmp[ti + (x + 2) as usize] = left[y as usize][(x + 2) as usize] as i16;
+        }
+    }
+
+    let copy_w = x_end as usize;
+    let mut soff = src_off;
+    for y in 0..h as i32 {
+        let ti = (o as i32 + y * tmp_stride as i32) as usize;
+        copy_u8_to_i16_scalar(&mut tmp[ti..ti + copy_w], &src[soff..soff + copy_w]);
+        soff += src_stride;
+    }
+
+    let copy_w = (x_end - x_start) as usize;
+    let mut boff = bottom_off;
+    for y in h as i32..y_end {
+        let ti = (o as i32 + x_start + y * tmp_stride as i32) as usize;
+        let si = (boff as i32 + x_start) as usize;
+        copy_u8_to_i16_scalar(&mut tmp[ti..ti + copy_w], &bottom[si..si + copy_w]);
+        boff += bottom_stride;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) unsafe fn cdef_padding_hbd_scalar(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    src_off: usize,
+    left: &[[u16; 2]],
+    top: &[u16],
+    top_off: usize,
+    bottom: &[u16],
+    bottom_off: usize,
+    bottom_stride: usize,
+    w: usize,
+    h: usize,
+    edges: u8,
+) {
+    let o = 2 * tmp_stride + 2;
+
+    let mut x_start: i32 = -2;
+    let mut x_end: i32 = w as i32 + 2;
+    let mut y_start: i32 = -2;
+    let mut y_end: i32 = h as i32 + 2;
+
+    if edges & CDEF_HAVE_TOP == 0 {
+        let base = o.wrapping_sub(2).wrapping_sub(2 * tmp_stride);
+        cdef_fill_i16(&mut tmp[base..], tmp_stride, w + 4, 2);
+        y_start = 0;
+    }
+    if edges & CDEF_HAVE_BOTTOM == 0 {
+        let base = o + h * tmp_stride - 2;
+        cdef_fill_i16(&mut tmp[base..], tmp_stride, w + 4, 2);
+        y_end -= 2;
+    }
+    if edges & CDEF_HAVE_LEFT == 0 {
+        let base = (o as i32 + y_start * tmp_stride as i32 - 2) as usize;
+        cdef_fill_i16(&mut tmp[base..], tmp_stride, 2, (y_end - y_start) as usize);
+        x_start = 0;
+    }
+    if edges & CDEF_HAVE_RIGHT == 0 {
+        let base = (o as i32 + y_start * tmp_stride as i32 + w as i32) as usize;
+        cdef_fill_i16(&mut tmp[base..], tmp_stride, 2, (y_end - y_start) as usize);
+        x_end -= 2;
+    }
+
+    let copy_w = (x_end - x_start) as usize;
+    let mut toff = top_off;
+    for y in y_start..0 {
+        let ti = (o as i32 + x_start + y * tmp_stride as i32) as usize;
+        let si = (toff as i32 + x_start) as usize;
+        copy_u16_to_i16_scalar(&mut tmp[ti..ti + copy_w], &top[si..si + copy_w]);
+        toff += src_stride;
+    }
+
+    for y in 0..h as i32 {
+        let ti = (o as i32 + y * tmp_stride as i32 - 2) as usize;
+        for x in x_start..0 {
+            tmp[ti + (x + 2) as usize] = left[y as usize][(x + 2) as usize] as i16;
+        }
+    }
+
+    let copy_w = x_end as usize;
+    let mut soff = src_off;
+    for y in 0..h as i32 {
+        let ti = (o as i32 + y * tmp_stride as i32) as usize;
+        copy_u16_to_i16_scalar(&mut tmp[ti..ti + copy_w], &src[soff..soff + copy_w]);
+        soff += src_stride;
+    }
+
+    let copy_w = (x_end - x_start) as usize;
+    let mut boff = bottom_off;
+    for y in h as i32..y_end {
+        let ti = (o as i32 + x_start + y * tmp_stride as i32) as usize;
+        let si = (boff as i32 + x_start) as usize;
+        copy_u16_to_i16_scalar(&mut tmp[ti..ti + copy_w], &bottom[si..si + copy_w]);
+        boff += bottom_stride;
+    }
+}
 
 #[inline(always)]
 fn cdef_min(a: i32, b: i32) -> i32 {
@@ -671,6 +888,126 @@ pub(crate) fn cdef_find_dir_hbd(
     // SAFETY: architecture-specific entries are installed only after runtime
     // feature detection; the scalar default is always sound.
     unsafe { resolve_cdef_dir_hbd()(img, stride, bitdepth_min_8, var) }
+}
+
+static CDEF_PADDING_8BPC: OnceLock<CdefPadding8Fn> = OnceLock::new();
+
+#[inline]
+fn resolve_cdef_padding_8bpc() -> CdefPadding8Fn {
+    *CDEF_PADDING_8BPC.get_or_init(|| {
+        let mut _f = cdef_padding_8bpc_scalar as CdefPadding8Fn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                _f = crate::neon::cdef_padding_8bpc_neon as CdefPadding8Fn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cdef_padding_8bpc_avx2 as CdefPadding8Fn;
+            }
+        }
+        _f
+    })
+}
+
+static CDEF_PADDING_HBD: OnceLock<CdefPaddingHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_cdef_padding_hbd() -> CdefPaddingHbdFn {
+    *CDEF_PADDING_HBD.get_or_init(|| {
+        let mut _f = cdef_padding_hbd_scalar as CdefPaddingHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("neon") {
+                _f = crate::neon::cdef_padding_hbd_neon as CdefPaddingHbdFn;
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cdef_padding_hbd_avx2 as CdefPaddingHbdFn;
+            }
+        }
+        _f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cdef_padding_8bpc(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u8],
+    src_stride: usize,
+    src_off: usize,
+    left: &[[u8; 2]],
+    top: &[u8],
+    top_off: usize,
+    bottom: &[u8],
+    bottom_off: usize,
+    bottom_stride: usize,
+    w: usize,
+    h: usize,
+    edges: u8,
+) {
+    unsafe {
+        resolve_cdef_padding_8bpc()(
+            tmp,
+            tmp_stride,
+            src,
+            src_stride,
+            src_off,
+            left,
+            top,
+            top_off,
+            bottom,
+            bottom_off,
+            bottom_stride,
+            w,
+            h,
+            edges,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn cdef_padding_hbd(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    src_off: usize,
+    left: &[[u16; 2]],
+    top: &[u16],
+    top_off: usize,
+    bottom: &[u16],
+    bottom_off: usize,
+    bottom_stride: usize,
+    w: usize,
+    h: usize,
+    edges: u8,
+) {
+    unsafe {
+        resolve_cdef_padding_hbd()(
+            tmp,
+            tmp_stride,
+            src,
+            src_stride,
+            src_off,
+            left,
+            top,
+            top_off,
+            bottom,
+            bottom_off,
+            bottom_stride,
+            w,
+            h,
+            edges,
+        )
+    }
 }
 
 static CDEF_FILTER: OnceLock<CdefFilterFn> = OnceLock::new();

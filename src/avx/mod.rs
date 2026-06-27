@@ -55,11 +55,11 @@ pub(crate) use ccso::{ccso_add_8bpc_avx2, ccso_prep_lut_8bpc_avx2};
 pub(crate) use ccso_hd::{ccso_add_hbd_avx2, ccso_prep_lut_hbd_avx2};
 pub(crate) use cdef::{
     cdef_filter_block_4x4_8bpc_avx2, cdef_filter_block_4x8_8bpc_avx2, cdef_filter_block_8bpc_avx2,
-    cdef_filter_block_8x8_8bpc_avx2, cdef_find_dir_8bpc_avx2,
+    cdef_filter_block_8x8_8bpc_avx2, cdef_find_dir_8bpc_avx2, cdef_padding_8bpc_avx2,
 };
 pub(crate) use cdef_hd::{
     cdef_filter_block_4x4_hbd_avx2, cdef_filter_block_4x8_hbd_avx2, cdef_filter_block_8x8_hbd_avx2,
-    cdef_filter_block_hbd_avx2, cdef_find_dir_hbd_avx2,
+    cdef_filter_block_hbd_avx2, cdef_find_dir_hbd_avx2, cdef_padding_hbd_avx2,
 };
 pub(crate) use cfl::{cfl_apply_420_8bpc_avx2, cfl_apply_422_8bpc_avx2, cfl_apply_444_8bpc_avx2};
 pub(crate) use cfl_hd::{cfl_apply_420_hbd_avx2, cfl_apply_422_hbd_avx2, cfl_apply_444_hbd_avx2};

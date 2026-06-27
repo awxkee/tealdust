@@ -27,6 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use crate::avx::_mm256_hsum_epi32;
 use crate::dip_tables::DIP_WEIGHTS;
 use crate::intops::ulog2;
 use crate::levels::ANGLE_MULTI_MRL_FLAG;
@@ -1861,20 +1862,9 @@ pub(crate) fn ipred_z2_8bpc_avx2(
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn hsum_i32x8_avx2(v: __m256i) -> i32 {
-    let lo = _mm256_castsi256_si128(v);
-    let hi = _mm256_extracti128_si256::<1>(v);
-    let sum = _mm_add_epi32(lo, hi);
-    let sum = _mm_hadd_epi32(sum, sum);
-    let sum = _mm_hadd_epi32(sum, sum);
-    _mm_cvtsi128_si32(sum)
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
 fn dip_dot_8bpc_avx2(inp8: __m256i, inp: &[i32; 11], weights: &[u16; 11]) -> i32 {
     let w8 = _mm256_cvtepu16_epi32(unsafe { _mm_loadu_si128(weights.as_ptr() as *const __m128i) });
-    let mut s = hsum_i32x8_avx2(_mm256_mullo_epi32(inp8, w8));
+    let mut s = _mm256_hsum_epi32(_mm256_mullo_epi32(inp8, w8)) as i32;
     s += weights[8] as i32 * inp[8];
     s += weights[9] as i32 * inp[9];
     s += weights[10] as i32 * inp[10];

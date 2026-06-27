@@ -189,11 +189,10 @@ pub(crate) fn msac_refill_eob(buf: &[u8], start: usize, c: u32, mut dif: u64) ->
     }
 
     let n = ((c as usize >> 3) + 1).min(len - start);
-    let mut c_shift = c;
 
-    for &byte in &buf[start..start + n] {
-        dif ^= (byte as u64) << c_shift;
-        c_shift -= 8;
+    for (i, &buf) in buf[start..start + n].iter().enumerate() {
+        let shift = c - ((i as u32) << 3);
+        dif ^= (buf as u64) << shift;
     }
 
     (dif, start + n, (n as i32) * 8)

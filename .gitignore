@@ -3,3 +3,4 @@ fully_working_state.zip
 .idea
 *.zip
 Cargo.lock
+findings

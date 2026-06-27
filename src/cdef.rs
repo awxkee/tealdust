@@ -138,6 +138,22 @@ fn copy_pixels_to_i16<P: Pixel>(dst: &mut [i16], src: &[P]) {
     }
 }
 
+#[inline(always)]
+fn cast_left_u8<P: Pixel>(left: &[[P; 2]]) -> &[[u8; 2]] {
+    debug_assert_eq!(P::BITDEPTH, 8);
+    // SAFETY: the only 8-bit Pixel implementation is `u8`; the returned slice
+    // has the same allocation, element count and lifetime as `left`.
+    unsafe { core::slice::from_raw_parts(left.as_ptr().cast::<[u8; 2]>(), left.len()) }
+}
+
+#[inline(always)]
+fn cast_left_u16<P: Pixel>(left: &[[P; 2]]) -> &[[u16; 2]] {
+    debug_assert_eq!(P::BITDEPTH, 16);
+    // SAFETY: the only 16-bit Pixel implementation is `u16`; the returned slice
+    // has the same allocation, element count and lifetime as `left`.
+    unsafe { core::slice::from_raw_parts(left.as_ptr().cast::<[u16; 2]>(), left.len()) }
+}
+
 pub(crate) fn cdef_find_dir_bd<BD: BitDepth>(
     bd: BD,
     img: &[BD::Pixel],
@@ -193,28 +209,32 @@ pub(crate) fn cdef_filter_block<BD: BitDepth>(
     let mut tmp_buf = [0i16; 144];
     let o = 2 * tmp_stride + 2;
 
-    cdef_padding(
-        bd,
-        &mut tmp_buf,
-        tmp_stride,
-        &*dst,
-        dst_stride,
-        dst_off,
-        left,
-        top,
-        top_off,
-        bottom,
-        bottom_off,
-        bottom_stride,
-        w,
-        h,
-        edges,
-    );
-
     let bitdepth_min_8 = bd.bitdepth_min_8();
 
     if BD::BPC == 8 {
-        if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
+        if let (Some(src8), Some(top8), Some(bottom8)) = (
+            <BD::Pixel as Pixel>::try_as_u8_slice(&*dst),
+            <BD::Pixel as Pixel>::try_as_u8_slice(top),
+            <BD::Pixel as Pixel>::try_as_u8_slice(bottom),
+        ) {
+            crate::cdef_dispatch::cdef_padding_8bpc(
+                &mut tmp_buf,
+                tmp_stride,
+                src8,
+                dst_stride,
+                dst_off,
+                cast_left_u8(left),
+                top8,
+                top_off,
+                bottom8,
+                bottom_off,
+                bottom_stride,
+                w,
+                h,
+                edges,
+            );
+            let d8 = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst)
+                .expect("8-bit CDEF storage changed between padding and filter");
             let pri_tap = if pri_strength != 0 {
                 4 - ((pri_strength >> bitdepth_min_8) & 1)
             } else {
@@ -251,7 +271,29 @@ pub(crate) fn cdef_filter_block<BD: BitDepth>(
     }
 
     if BD::BPC == 16 {
-        if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+        if let (Some(src16), Some(top16), Some(bottom16)) = (
+            <BD::Pixel as Pixel>::try_as_u16_slice(&*dst),
+            <BD::Pixel as Pixel>::try_as_u16_slice(top),
+            <BD::Pixel as Pixel>::try_as_u16_slice(bottom),
+        ) {
+            crate::cdef_dispatch::cdef_padding_hbd(
+                &mut tmp_buf,
+                tmp_stride,
+                src16,
+                dst_stride,
+                dst_off,
+                cast_left_u16(left),
+                top16,
+                top_off,
+                bottom16,
+                bottom_off,
+                bottom_stride,
+                w,
+                h,
+                edges,
+            );
+            let d16 = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst)
+                .expect("HBD CDEF storage changed between padding and filter");
             let pri_tap = if pri_strength != 0 {
                 4 - ((pri_strength >> bitdepth_min_8) & 1)
             } else {
@@ -286,6 +328,24 @@ pub(crate) fn cdef_filter_block<BD: BitDepth>(
             return;
         }
     }
+
+    cdef_padding(
+        bd,
+        &mut tmp_buf,
+        tmp_stride,
+        &*dst,
+        dst_stride,
+        dst_off,
+        left,
+        top,
+        top_off,
+        bottom,
+        bottom_off,
+        bottom_stride,
+        w,
+        h,
+        edges,
+    );
 
     let mut dp = dst_off;
     let mut tp = o;

@@ -4032,116 +4032,114 @@ fn tx_dequant_dense_avx2_i16_fused_4x4_const<
     row_clip_max: i32,
     shift1: i32,
 ) {
-    unsafe {
-        debug_assert!(coeff.len() >= 16);
-        let z = _mm_setzero_si128();
-        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
-        let sh = _mm_cvtsi32_si128(shift0);
-        let minv = _mm_set1_epi32(row_clip_min);
-        let maxv = _mm_set1_epi32(row_clip_max);
+    debug_assert!(coeff.len() >= 16);
+    let z = _mm_setzero_si128();
+    let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+    let sh = _mm_cvtsi32_si128(shift0);
+    let minv = _mm_set1_epi32(row_clip_min);
+    let maxv = _mm_set1_epi32(row_clip_max);
 
-        let c0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 0);
-        let c1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 4);
-        let c2 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 8);
-        let c3 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 12);
-        let c01 = _mm_unpacklo_epi16(c0, c1);
-        let c23 = _mm_unpacklo_epi16(c2, c3);
+    let c0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 0);
+    let c1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 4);
+    let c2 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 8);
+    let c3 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 12);
+    let c01 = _mm_unpacklo_epi16(c0, c1);
+    let c23 = _mm_unpacklo_epi16(c2, c3);
 
-        macro_rules! row_pass {
-            ($m:expr) => {{
-                _mm_add_epi32(
-                    _mm_madd_epi16(c01, avx2_tx_dense_coeff_pair(FIRST_KIND, 4, $m, 0)),
-                    _mm_madd_epi16(c23, avx2_tx_dense_coeff_pair(FIRST_KIND, 4, $m, 2)),
-                )
-            }};
-        }
-        macro_rules! clip {
-            ($x:expr) => {{
-                _mm_min_epi32(
-                    _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32($x, rnd), sh), minv),
-                    maxv,
-                )
-            }};
-        }
-        let r0 = clip!(row_pass!(0));
-        let r1 = clip!(row_pass!(1));
-        let r2 = clip!(row_pass!(2));
-        let r3 = clip!(row_pass!(3));
-
-        // Transpose exactly like avx2_store4x4_i16_clip::<4>, but keep the
-        // four packed rows in registers for the column pass.
-        let t0 = _mm_unpacklo_epi32(r0, r1);
-        let t1 = _mm_unpackhi_epi32(r0, r1);
-        let t2 = _mm_unpacklo_epi32(r2, r3);
-        let t3 = _mm_unpackhi_epi32(r2, r3);
-        let s0 = _mm_packs_epi32(_mm_unpacklo_epi64(t0, t2), z);
-        let s1 = _mm_packs_epi32(_mm_unpackhi_epi64(t0, t2), z);
-        let s2 = _mm_packs_epi32(_mm_unpacklo_epi64(t1, t3), z);
-        let s3 = _mm_packs_epi32(_mm_unpackhi_epi64(t1, t3), z);
-
-        let s01 = _mm_unpacklo_epi16(s0, s1);
-        let s23 = _mm_unpacklo_epi16(s2, s3);
-        macro_rules! col_pass {
-            ($m:expr) => {{
-                _mm_add_epi32(
-                    _mm_madd_epi16(s01, avx2_tx_dense_coeff_pair(SECOND_KIND, 4, $m, 0)),
-                    _mm_madd_epi16(s23, avx2_tx_dense_coeff_pair(SECOND_KIND, 4, $m, 2)),
-                )
-            }};
-        }
-
-        let rnd1 = _mm_set1_epi32((1 << shift1) >> 1);
-        let sh1 = _mm_cvtsi32_si128(shift1);
-        avx2_writeback4_i32_u8::<4, 4>(
-            dst,
-            dst_off,
-            dst_stride,
-            out_w,
-            out_h,
-            0,
-            0,
-            col_pass!(0),
-            rnd1,
-            sh1,
-        );
-        avx2_writeback4_i32_u8::<4, 4>(
-            dst,
-            dst_off,
-            dst_stride,
-            out_w,
-            out_h,
-            0,
-            1,
-            col_pass!(1),
-            rnd1,
-            sh1,
-        );
-        avx2_writeback4_i32_u8::<4, 4>(
-            dst,
-            dst_off,
-            dst_stride,
-            out_w,
-            out_h,
-            0,
-            2,
-            col_pass!(2),
-            rnd1,
-            sh1,
-        );
-        avx2_writeback4_i32_u8::<4, 4>(
-            dst,
-            dst_off,
-            dst_stride,
-            out_w,
-            out_h,
-            0,
-            3,
-            col_pass!(3),
-            rnd1,
-            sh1,
-        );
-        coeff[..16].fill(0);
+    macro_rules! row_pass {
+        ($m:expr) => {{
+            _mm_add_epi32(
+                _mm_madd_epi16(c01, avx2_tx_dense_coeff_pair(FIRST_KIND, 4, $m, 0)),
+                _mm_madd_epi16(c23, avx2_tx_dense_coeff_pair(FIRST_KIND, 4, $m, 2)),
+            )
+        }};
     }
+    macro_rules! clip {
+        ($x:expr) => {{
+            _mm_min_epi32(
+                _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32($x, rnd), sh), minv),
+                maxv,
+            )
+        }};
+    }
+    let r0 = clip!(row_pass!(0));
+    let r1 = clip!(row_pass!(1));
+    let r2 = clip!(row_pass!(2));
+    let r3 = clip!(row_pass!(3));
+
+    // Transpose exactly like avx2_store4x4_i16_clip::<4>, but keep the
+    // four packed rows in registers for the column pass.
+    let t0 = _mm_unpacklo_epi32(r0, r1);
+    let t1 = _mm_unpackhi_epi32(r0, r1);
+    let t2 = _mm_unpacklo_epi32(r2, r3);
+    let t3 = _mm_unpackhi_epi32(r2, r3);
+    let s0 = _mm_packs_epi32(_mm_unpacklo_epi64(t0, t2), z);
+    let s1 = _mm_packs_epi32(_mm_unpackhi_epi64(t0, t2), z);
+    let s2 = _mm_packs_epi32(_mm_unpacklo_epi64(t1, t3), z);
+    let s3 = _mm_packs_epi32(_mm_unpackhi_epi64(t1, t3), z);
+
+    let s01 = _mm_unpacklo_epi16(s0, s1);
+    let s23 = _mm_unpacklo_epi16(s2, s3);
+    macro_rules! col_pass {
+        ($m:expr) => {{
+            _mm_add_epi32(
+                _mm_madd_epi16(s01, avx2_tx_dense_coeff_pair(SECOND_KIND, 4, $m, 0)),
+                _mm_madd_epi16(s23, avx2_tx_dense_coeff_pair(SECOND_KIND, 4, $m, 2)),
+            )
+        }};
+    }
+
+    let rnd1 = _mm_set1_epi32((1 << shift1) >> 1);
+    let sh1 = _mm_cvtsi32_si128(shift1);
+    avx2_writeback4_i32_u8::<4, 4>(
+        dst,
+        dst_off,
+        dst_stride,
+        out_w,
+        out_h,
+        0,
+        0,
+        col_pass!(0),
+        rnd1,
+        sh1,
+    );
+    avx2_writeback4_i32_u8::<4, 4>(
+        dst,
+        dst_off,
+        dst_stride,
+        out_w,
+        out_h,
+        0,
+        1,
+        col_pass!(1),
+        rnd1,
+        sh1,
+    );
+    avx2_writeback4_i32_u8::<4, 4>(
+        dst,
+        dst_off,
+        dst_stride,
+        out_w,
+        out_h,
+        0,
+        2,
+        col_pass!(2),
+        rnd1,
+        sh1,
+    );
+    avx2_writeback4_i32_u8::<4, 4>(
+        dst,
+        dst_off,
+        dst_stride,
+        out_w,
+        out_h,
+        0,
+        3,
+        col_pass!(3),
+        rnd1,
+        sh1,
+    );
+    coeff[..16].fill(0);
 }
 
 #[inline]
