@@ -143,7 +143,7 @@ fn store_i16x16(dst: &mut [i16], v: __m256i) {
 }
 
 #[inline(always)]
-unsafe fn scatter_stx4_i16(cf: &mut [i16], sums: &[i16; 16], scan_out: &[u8; 16]) {
+fn scatter_stx4_i16(cf: &mut [i16], sums: &[i16; 16], scan_out: &[u8; 16]) {
     let dst = cf.as_mut_ptr();
     let src = sums.as_ptr();
     let map = scan_out.as_ptr();
@@ -171,12 +171,7 @@ unsafe fn scatter_stx4_i16(cf: &mut [i16], sums: &[i16; 16], scan_out: &[u8; 16]
 }
 
 #[inline(always)]
-unsafe fn scatter_stx8_i16(
-    cf: &mut [i16],
-    sums: &[i16; 48],
-    scan_out: &[u8; 64],
-    mapping: &[u8; 48],
-) {
+fn scatter_stx8_i16(cf: &mut [i16], sums: &[i16; 48], scan_out: &[u8; 64], mapping: &[u8; 48]) {
     let dst = cf.as_mut_ptr();
     let src = sums.as_ptr();
     let scan = scan_out.as_ptr();
@@ -238,7 +233,7 @@ unsafe fn scatter_stx8_i16(
 
 #[inline]
 #[target_feature(enable = "avx2")]
-unsafe fn zero_stx8_i16_avx2(cf: &mut [i16]) {
+fn zero_stx8_i16_avx2(cf: &mut [i16]) {
     let zero = _mm256_setzero_si256();
     let dst = cf.as_mut_ptr() as *mut __m256i;
     unsafe {
@@ -377,7 +372,7 @@ fn store_i32x8(dst: &mut [i32], v: __m256i) {
 }
 
 #[inline(always)]
-unsafe fn scatter_stx4_i32(cf: &mut [i32], sums: &[i32; 16], scan_out: &[u8; 16]) {
+fn scatter_stx4_i32(cf: &mut [i32], sums: &[i32; 16], scan_out: &[u8; 16]) {
     let dst = cf.as_mut_ptr();
     let src = sums.as_ptr();
     let map = scan_out.as_ptr();
@@ -405,12 +400,7 @@ unsafe fn scatter_stx4_i32(cf: &mut [i32], sums: &[i32; 16], scan_out: &[u8; 16]
 }
 
 #[inline(always)]
-unsafe fn scatter_stx8_i32(
-    cf: &mut [i32],
-    sums: &[i32; 48],
-    scan_out: &[u8; 64],
-    mapping: &[u8; 48],
-) {
+fn scatter_stx8_i32(cf: &mut [i32], sums: &[i32; 48], scan_out: &[u8; 64], mapping: &[u8; 48]) {
     let dst = cf.as_mut_ptr();
     let src = sums.as_ptr();
     let scan = scan_out.as_ptr();

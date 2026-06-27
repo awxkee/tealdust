@@ -108,7 +108,7 @@ fn bilin_scalar(a: i32, b: i32, mxy: i32) -> i32 {
 
 #[target_feature(enable = "neon")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn put_bilin_8bpc_neon(
+pub(crate) fn put_bilin_8bpc_neon(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -217,7 +217,7 @@ pub(crate) unsafe fn put_bilin_8bpc_neon(
 
 #[target_feature(enable = "neon")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn prep_bilin_8bpc_neon(
+pub(crate) fn prep_bilin_8bpc_neon(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -444,7 +444,7 @@ fn store_i16x8_shift(dst: &mut [i16], lo: int32x4_t, hi: int32x4_t, rnd: i32, sh
 
 #[target_feature(enable = "neon")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn put_8tap_8bpc_neon(
+pub(crate) fn put_8tap_8bpc_neon(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -578,7 +578,7 @@ pub(crate) unsafe fn put_8tap_8bpc_neon(
 
 #[target_feature(enable = "neon")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn prep_8tap_8bpc_neon(
+pub(crate) fn prep_8tap_8bpc_neon(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],

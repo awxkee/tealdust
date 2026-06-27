@@ -1954,7 +1954,7 @@ pub(crate) fn decode_coefs_avx2<C: Coeff, const UPDATE_CDF: bool>(
 
 #[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx512f,avx512dq")]
-pub(crate) unsafe fn decode_coefs_avx512<C: Coeff, const UPDATE_CDF: bool>(
+pub(crate) fn decode_coefs_avx512<C: Coeff, const UPDATE_CDF: bool>(
     msac: &mut crate::avx::MsacContextAvx512<'_, UPDATE_CDF>,
     coef: &mut CdfCoefContext,
     mode: &mut CdfModeContext,

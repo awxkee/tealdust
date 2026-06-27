@@ -650,7 +650,7 @@ fn sse41_identity_scale(n: usize) -> i32 {
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-unsafe fn sse41_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
+fn sse41_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
     coeff: &[i16],
     off: usize,
     scale: __m128i,

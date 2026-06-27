@@ -157,169 +157,6 @@ pub struct ColorInfo {
     pub full_range: bool,
 }
 
-/// Device-class signature from ICC profile header (bytes 12–15).
-///
-/// Values defined in ICC.1:2010 Table 19.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IccDeviceClass {
-    /// Input device (scanner, camera) — `scnr`.
-    Input,
-    /// Display device (monitor) — `mntr`.
-    Display,
-    /// Output device (printer) — `prtr`.
-    Output,
-    /// Device-link profile — `link`.
-    DeviceLink,
-    /// Colour-space conversion profile — `spac`.
-    ColorSpace,
-    /// Abstract profile — `abst`.
-    Abstract,
-    /// Named-colour profile — `nmcl`.
-    NamedColor,
-    /// Unknown or reserved device class.
-    Other([u8; 4]),
-}
-
-/// Color-space signature from ICC profile header (bytes 16–19).
-///
-/// Values defined in ICC.1:2010 Table 20 (input color space).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IccColorSpace {
-    /// `XYZ ` — CIE XYZ.
-    XYZ,
-    /// `Lab ` — CIE L*a*b*.
-    Lab,
-    /// `RGB ` — RGB.
-    Rgb,
-    /// `GRAY` — Gray.
-    Gray,
-    /// `CMYK` — CMYK.
-    Cmyk,
-    /// `YCbr` — YCbCr.
-    YCbCr,
-    /// Unknown or specialised color space.
-    Other([u8; 4]),
-}
-
-/// Rendering intent from ICC profile header (bytes 64–67), low 2 bytes.
-///
-/// Values defined in ICC.1:2010 §7.2.15.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IccRenderingIntent {
-    /// 0 — Perceptual.
-    Perceptual,
-    /// 1 — Relative colorimetric.
-    RelativeColorimetric,
-    /// 2 — Saturation.
-    Saturation,
-    /// 3 — Absolute colorimetric.
-    AbsoluteColorimetric,
-    /// Reserved or unrecognised value.
-    Other(u16),
-}
-
-/// Parsed key fields from an ICC profile header (ICC.1:2010 §7.2).
-///
-/// The header is 128 bytes long.  Only the fields relevant to color management
-/// of AVIF images are exposed here; the full raw profile is always available
-/// via [`IccProfile::data`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IccHeader {
-    /// Total byte length of the profile (from header bytes 0–3).
-    pub profile_size: u32,
-    /// Major.minor version (header bytes 8–9; bytes 10–11 are reserved).
-    pub version_major: u8,
-    pub version_minor: u8,
-    /// Device class of the profile (bytes 12–15).
-    pub device_class: IccDeviceClass,
-    /// Color space of the data the profile describes (bytes 16–19).
-    pub color_space: IccColorSpace,
-    /// Rendering intent (bytes 64–67, low 16 bits).
-    pub rendering_intent: IccRenderingIntent,
-    /// `true` if this was a `rICC` (restricted) box, `false` for `prof`.
-    pub restricted: bool,
-}
-
-/// A raw ICC profile extracted from a `colr` box of type `rICC` or `prof`.
-///
-/// The `data` field contains the complete binary profile as defined by
-/// ICC.1:2010.  Pass it directly to a color-management system (e.g. Little
-/// CMS, QCMS).  The `header` field exposes parsed values from the 128-byte
-/// ICC header for callers that only need the basics.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IccProfile {
-    /// Complete binary ICC profile data.
-    pub data: Vec<u8>,
-    /// Parsed fields from the 128-byte ICC profile header.
-    /// `None` if the profile was shorter than 128 bytes (malformed but tolerated).
-    pub header: Option<IccHeader>,
-}
-
-impl IccProfile {
-    /// Parse an `IccProfile` from the raw bytes after the 4-byte `colr` type
-    /// code (i.e. `raw` starts at byte 4 of the `colr` box payload).
-    ///
-    /// Always succeeds — malformed headers produce `header: None` rather than
-    /// an error, so callers still receive the raw bytes.
-    fn parse(data: Vec<u8>, restricted: bool) -> Self {
-        let header = Self::parse_header(&data, restricted);
-        Self { data, header }
-    }
-
-    fn parse_header(data: &[u8], restricted: bool) -> Option<IccHeader> {
-        // ICC profile header is exactly 128 bytes.
-        if data.len() < 128 {
-            return None;
-        }
-
-        let profile_size = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let version_major = data[8];
-        let version_minor = data[9] >> 4; // upper nibble = minor, lower = reserved
-
-        let device_class = match &data[12..16] {
-            b"scnr" => IccDeviceClass::Input,
-            b"mntr" => IccDeviceClass::Display,
-            b"prtr" => IccDeviceClass::Output,
-            b"link" => IccDeviceClass::DeviceLink,
-            b"spac" => IccDeviceClass::ColorSpace,
-            b"abst" => IccDeviceClass::Abstract,
-            b"nmcl" => IccDeviceClass::NamedColor,
-            other => IccDeviceClass::Other([other[0], other[1], other[2], other[3]]),
-        };
-
-        let color_space = match &data[16..20] {
-            b"XYZ " => IccColorSpace::XYZ,
-            b"Lab " => IccColorSpace::Lab,
-            b"RGB " => IccColorSpace::Rgb,
-            b"GRAY" => IccColorSpace::Gray,
-            b"CMYK" => IccColorSpace::Cmyk,
-            b"YCbr" => IccColorSpace::YCbCr,
-            other => IccColorSpace::Other([other[0], other[1], other[2], other[3]]),
-        };
-
-        // Bytes 64–67 hold the rendering intent; only the low 16 bits are
-        // defined by ICC.1:2010 §7.2.15.
-        let ri_val = u16::from_be_bytes([data[66], data[67]]);
-        let rendering_intent = match ri_val {
-            0 => IccRenderingIntent::Perceptual,
-            1 => IccRenderingIntent::RelativeColorimetric,
-            2 => IccRenderingIntent::Saturation,
-            3 => IccRenderingIntent::AbsoluteColorimetric,
-            n => IccRenderingIntent::Other(n),
-        };
-
-        Some(IccHeader {
-            profile_size,
-            version_major,
-            version_minor,
-            device_class,
-            color_space,
-            rendering_intent,
-            restricted,
-        })
-    }
-}
-
 /// The standard URN identifying an alpha auxiliary image item.
 ///
 /// Defined in HEIF (ISO 23008-12) §6.10.3 and referenced by the AVIF spec.
@@ -668,9 +505,7 @@ pub struct AvifItem {
     /// `None` if the property is absent (the full coded image is displayed).
     pub clean_aperture: Option<CleanAperture>,
     /// ICC profile from a `colr` box of type `rICC` or `prof`.
-    /// `None` if no ICC profile was found; mutually exclusive with `color_info`
-    /// (a `colr` box carries exactly one of `nclx`, `rICC`, or `prof`).
-    pub icc_profile: Option<IccProfile>,
+    pub icc_profile: Option<Vec<u8>>,
 }
 
 impl AvifItem {
@@ -721,7 +556,7 @@ pub struct AvifImageInfo {
     /// Visible crop rectangle from the `clap` property; `None` = full frame.
     pub clean_aperture: Option<CleanAperture>,
     /// ICC profile, if the `colr` box carried `rICC` or `prof` data.
-    pub icc_profile: Option<IccProfile>,
+    pub icc_profile: Option<Vec<u8>>,
 }
 
 /// A fully parsed AVIF container, ready for decoding.
@@ -1487,9 +1322,8 @@ impl AvifParser {
                         // rICC / prof: color_type(4) + raw ICC profile bytes.
                         // We need at least the 4-byte type code; an empty profile
                         // is technically invalid but we tolerate it gracefully.
-                        let restricted = &raw[..4] == b"rICC";
                         let profile_bytes = raw[4..].to_vec();
-                        item.icc_profile = Some(IccProfile::parse(profile_bytes, restricted));
+                        item.icc_profile = Some(profile_bytes);
                     }
                     _ => {
                         // Unknown color type — ignore silently per spec §12.
@@ -1805,7 +1639,7 @@ pub struct AvifImage {
     /// `None` means the property was absent and the full coded frame is visible.
     pub clean_aperture: Option<CleanAperture>,
     /// ICC profile, if the `colr` box carried `rICC` or `prof` data.
-    pub icc_profile: Option<IccProfile>,
+    pub icc_profile: Option<Vec<u8>>,
     /// The raw underlying [`Picture`] from the AV2 decoder.
     pub picture: Arc<Picture>,
 }

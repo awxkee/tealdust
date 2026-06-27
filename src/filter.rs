@@ -226,12 +226,12 @@ pub(crate) fn morph_row<BD: BitDepth>(
 #[inline]
 pub(crate) fn dc_add_row<BD: BitDepth>(bd: BD, dst: &mut [BD::Pixel], dc: i32, n: usize) {
     if BD::BPC == 8 {
-        if let Some(d8) = <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst) {
+        if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
             crate::rowops_dispatch::dc_add_row_8bpc(d8, dc, n);
             return;
         }
     } else if BD::BPC == 16 {
-        if let Some(d16) = <BD::Pixel as crate::pixel::Pixel>::try_as_u16_slice_mut(dst) {
+        if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
             crate::rowops_dispatch::dc_add_row_hbd(d16, dc, n, bd.bitdepth_max());
             return;
         }
@@ -269,12 +269,12 @@ pub(crate) fn residual_add_row<BD: BitDepth>(
     // 8-bit fast path: OnceLock-dispatched real SIMD (NEON/SSE) over u8.
     // BPC==8 ⇒ Pixel == u8, so the reinterpret is a no-op `Some`.
     if BD::BPC == 8 {
-        if let Some(d8) = <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst) {
+        if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
             crate::rowops_dispatch::residual_add_row_8bpc(d8, c, n, rnd, shift);
             return;
         }
     } else if BD::BPC == 16 {
-        if let Some(d16) = <BD::Pixel as crate::pixel::Pixel>::try_as_u16_slice_mut(dst) {
+        if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
             crate::rowops_dispatch::residual_add_row_hbd(d16, c, n, rnd, shift, bd.bitdepth_max());
             return;
         }

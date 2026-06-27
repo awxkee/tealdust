@@ -60,12 +60,7 @@ pub(crate) fn stxfm<C: Coeff>(
 }
 
 #[inline]
-pub(crate) unsafe fn stxfm4_8bpc_scalar(
-    cf: &mut [i16],
-    kernel: &[i8],
-    eob: usize,
-    scan_out: &[u8; 16],
-) {
+pub(crate) fn stxfm4_8bpc_scalar(cf: &mut [i16], kernel: &[i8], eob: usize, scan_out: &[u8; 16]) {
     let mut sums = [0i32; 16];
     stxfm(&mut sums, cf, kernel, 16, eob, 255);
     cf[4..8].fill(0);
@@ -75,7 +70,7 @@ pub(crate) unsafe fn stxfm4_8bpc_scalar(
 }
 
 #[inline]
-pub(crate) unsafe fn stxfm8_8bpc_scalar(
+pub(crate) fn stxfm8_8bpc_scalar(
     cf: &mut [i16],
     kernel: &[i8],
     eob: usize,
@@ -91,7 +86,7 @@ pub(crate) unsafe fn stxfm8_8bpc_scalar(
 }
 
 #[inline]
-pub(crate) unsafe fn stxfm4_hbd_scalar(
+pub(crate) fn stxfm4_hbd_scalar(
     cf: &mut [i32],
     kernel: &[i8],
     eob: usize,
@@ -107,7 +102,7 @@ pub(crate) unsafe fn stxfm4_hbd_scalar(
 }
 
 #[inline]
-pub(crate) unsafe fn stxfm8_hbd_scalar(
+pub(crate) fn stxfm8_hbd_scalar(
     cf: &mut [i32],
     kernel: &[i8],
     eob: usize,

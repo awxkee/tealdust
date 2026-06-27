@@ -124,7 +124,7 @@ fn bilin_scalar(a: i32, b: i32, mxy: i32) -> i32 {
 
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn put_bilin_8bpc_avx2(
+pub(crate) fn put_bilin_8bpc_avx2(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -217,7 +217,7 @@ pub(crate) unsafe fn put_bilin_8bpc_avx2(
 
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn prep_bilin_8bpc_avx2(
+pub(crate) fn prep_bilin_8bpc_avx2(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -426,7 +426,7 @@ fn store_i16x8_shift(dst: &mut [i16], v: __m256i, rnd: i32, shift: i32) {
 
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn put_8tap_8bpc_avx2(
+pub(crate) fn put_8tap_8bpc_avx2(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -551,7 +551,7 @@ pub(crate) unsafe fn put_8tap_8bpc_avx2(
 
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn prep_8tap_8bpc_avx2(
+pub(crate) fn prep_8tap_8bpc_avx2(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],

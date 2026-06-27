@@ -92,7 +92,7 @@ fn store_i32x8_u16_clip(a: &mut [u16; 8], lo: __m128i, hi: __m128i, max_v: __m12
 }
 
 #[target_feature(enable = "sse4.1")]
-pub(crate) unsafe fn residual_add_row_hbd_sse41(
+pub(crate) fn residual_add_row_hbd_sse41(
     dst: &mut [u16],
     c: &[i32],
     n: usize,
@@ -126,7 +126,7 @@ pub(crate) unsafe fn residual_add_row_hbd_sse41(
 }
 
 #[target_feature(enable = "sse4.1")]
-pub(crate) unsafe fn dc_add_row_hbd_sse41(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
+pub(crate) fn dc_add_row_hbd_sse41(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
     if dc == 0 {
         return;
     }
@@ -147,7 +147,7 @@ pub(crate) unsafe fn dc_add_row_hbd_sse41(dst: &mut [u16], dc: i32, n: usize, bi
 }
 
 #[target_feature(enable = "sse4.1")]
-pub(crate) unsafe fn avg_row_hbd_sse41(
+pub(crate) fn avg_row_hbd_sse41(
     dst: &mut [u16],
     t1: &[i16],
     t2: &[i16],
@@ -183,7 +183,7 @@ pub(crate) unsafe fn avg_row_hbd_sse41(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-pub(crate) unsafe fn w_avg_row_hbd_sse41(
+pub(crate) fn w_avg_row_hbd_sse41(
     dst: &mut [u16],
     t1: &[i16],
     t2: &[i16],
@@ -231,7 +231,7 @@ pub(crate) unsafe fn w_avg_row_hbd_sse41(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "sse4.1")]
-pub(crate) unsafe fn mask_row_hbd_sse41(
+pub(crate) fn mask_row_hbd_sse41(
     dst: &mut [u16],
     t1: &[i16],
     t2: &[i16],
@@ -288,7 +288,7 @@ pub(crate) unsafe fn mask_row_hbd_sse41(
 }
 
 #[target_feature(enable = "sse4.1")]
-pub(crate) unsafe fn blend_row_hbd_sse41(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
+pub(crate) fn blend_row_hbd_sse41(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
     let c64 = _mm_set1_epi32(64);
     let rnd_v = _mm_set1_epi32(32);
     let f = |d: __m128i, t: __m128i, m: __m128i| {
@@ -330,7 +330,7 @@ pub(crate) unsafe fn blend_row_hbd_sse41(dst: &mut [u16], tmp: &[u16], mask: &[u
 }
 
 #[target_feature(enable = "sse4.1")]
-pub(crate) unsafe fn morph_row_hbd_sse41(
+pub(crate) fn morph_row_hbd_sse41(
     dst: &mut [u16],
     alpha: i32,
     beta: i32,

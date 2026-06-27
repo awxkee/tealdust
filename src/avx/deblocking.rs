@@ -2574,7 +2574,7 @@ fn setup_store_tmp_u8x16_avx2(v: __m128i) -> [u8; 16] {
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn setup_thr_rows_simple_8bpc_avx2(
+pub(crate) fn setup_thr_rows_simple_8bpc_avx2(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -2604,7 +2604,7 @@ pub(crate) unsafe fn setup_thr_rows_simple_8bpc_avx2(
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn setup_thr_cols_simple_8bpc_avx2(
+pub(crate) fn setup_thr_cols_simple_8bpc_avx2(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -2634,7 +2634,7 @@ pub(crate) unsafe fn setup_thr_cols_simple_8bpc_avx2(
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn setup_thr_rows_dq_8bpc_avx2(
+pub(crate) fn setup_thr_rows_dq_8bpc_avx2(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -2699,7 +2699,7 @@ pub(crate) unsafe fn setup_thr_rows_dq_8bpc_avx2(
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn setup_thr_cols_dq_8bpc_avx2(
+pub(crate) fn setup_thr_cols_dq_8bpc_avx2(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -2753,7 +2753,7 @@ pub(crate) unsafe fn setup_thr_cols_dq_8bpc_avx2(
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn setup_thr_rows_seg_8bpc_avx2(
+pub(crate) fn setup_thr_rows_seg_8bpc_avx2(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     segmap: &[u8],
@@ -2821,7 +2821,7 @@ pub(crate) unsafe fn setup_thr_rows_seg_8bpc_avx2(
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn setup_thr_cols_seg_8bpc_avx2(
+pub(crate) fn setup_thr_cols_seg_8bpc_avx2(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     segmap: &[u8],

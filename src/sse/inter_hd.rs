@@ -211,7 +211,7 @@ pub(crate) fn prep_hbd_sse41(
 
 #[target_feature(enable = "sse4.1")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn put_bilin_hbd_sse41(
+pub(crate) fn put_bilin_hbd_sse41(
     dst: &mut [u16],
     dst_stride: usize,
     src: &[u16],
@@ -440,7 +440,7 @@ pub(crate) fn prep_bilin_hbd_sse41(
 
 #[target_feature(enable = "sse4.1")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn put_8tap_hbd_sse41(
+pub(crate) fn put_8tap_hbd_sse41(
     dst: &mut [u16],
     dst_stride: usize,
     src: &[u16],
@@ -577,7 +577,7 @@ pub(crate) unsafe fn put_8tap_hbd_sse41(
 
 #[target_feature(enable = "sse4.1")]
 #[allow(clippy::too_many_arguments)]
-pub(crate) unsafe fn prep_8tap_hbd_sse41(
+pub(crate) fn prep_8tap_hbd_sse41(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u16],

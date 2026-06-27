@@ -422,7 +422,7 @@ pub(crate) fn mask_row_8bpc_avx2(
 }
 
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn blend_row_8bpc_avx2(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: usize) {
+pub(crate) fn blend_row_8bpc_avx2(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: usize) {
     let c64 = _mm256_set1_epi16(64);
     let rnd_v = _mm256_set1_epi16(32);
     let f = |d: __m256i, t: __m256i, m: __m256i| {

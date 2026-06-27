@@ -301,7 +301,7 @@ fn sample_lut_row<'a>(
     &grain_lut[row][col..]
 }
 
-unsafe fn blend_top_grain_row_scalar(
+fn blend_top_grain_row_scalar(
     dst: &mut [i16],
     old: &[i16],
     grain: &[i16],
@@ -531,7 +531,7 @@ type FguvRowHbdFn = unsafe fn(
     i32,
 );
 
-unsafe fn fgy_row_8bpc_scalar(
+fn fgy_row_8bpc_scalar(
     dst: &mut [u8],
     src: &[u8],
     grain: &[i16],
@@ -551,7 +551,7 @@ unsafe fn fgy_row_8bpc_scalar(
     }
 }
 
-unsafe fn fgy_row_hbd_scalar(
+fn fgy_row_hbd_scalar(
     dst: &mut [u16],
     src: &[u16],
     grain: &[i16],
@@ -571,7 +571,7 @@ unsafe fn fgy_row_hbd_scalar(
     }
 }
 
-unsafe fn fguv_row_8bpc_scalar(
+fn fguv_row_8bpc_scalar(
     dst: &mut [u8],
     src: &[u8],
     grain: &[i16],
@@ -616,7 +616,7 @@ unsafe fn fguv_row_8bpc_scalar(
     }
 }
 
-unsafe fn fguv_row_hbd_scalar(
+fn fguv_row_hbd_scalar(
     dst: &mut [u16],
     src: &[u16],
     grain: &[i16],

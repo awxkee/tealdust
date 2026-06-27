@@ -409,7 +409,7 @@ fn neon_identity_i16x4_coeff_to_i32<const IS_RECT2: bool>(
 
 #[inline]
 #[target_feature(enable = "neon")]
-unsafe fn neon_identity_i16x4_scratch_to_i32(scratch: &[i16], off: usize, scale: i16) -> int32x4_t {
+fn neon_identity_i16x4_scratch_to_i32(scratch: &[i16], off: usize, scale: i16) -> int32x4_t {
     let v = neon_load4_i16_scratch(scratch, off);
     vmull_n_s16(v, scale)
 }

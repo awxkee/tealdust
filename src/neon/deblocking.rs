@@ -2511,7 +2511,7 @@ fn setup_store_tmp_u8x16_neon(v: uint8x16_t) -> [u8; 16] {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) unsafe fn setup_thr_rows_simple_8bpc_neon(
+pub(crate) fn setup_thr_rows_simple_8bpc_neon(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -2542,7 +2542,7 @@ pub(crate) unsafe fn setup_thr_rows_simple_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) unsafe fn setup_thr_cols_simple_8bpc_neon(
+pub(crate) fn setup_thr_cols_simple_8bpc_neon(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -2573,7 +2573,7 @@ pub(crate) unsafe fn setup_thr_cols_simple_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) unsafe fn setup_thr_rows_dq_8bpc_neon(
+pub(crate) fn setup_thr_rows_dq_8bpc_neon(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -2636,7 +2636,7 @@ pub(crate) unsafe fn setup_thr_rows_dq_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) unsafe fn setup_thr_cols_dq_8bpc_neon(
+pub(crate) fn setup_thr_cols_dq_8bpc_neon(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -2691,7 +2691,7 @@ pub(crate) unsafe fn setup_thr_cols_dq_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) unsafe fn setup_thr_rows_seg_8bpc_neon(
+pub(crate) fn setup_thr_rows_seg_8bpc_neon(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     segmap: &[u8],

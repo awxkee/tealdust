@@ -64,12 +64,12 @@ fn finish8_u16(dst: &mut [u16], slo: __m128i, shi: __m128i, bitdepth_max: i32) {
 }
 
 #[inline(always)]
-unsafe fn load4_u16_i32(row: &[u16], idx: usize) -> __m128i {
+fn load4_u16_i32(row: &[u16], idx: usize) -> __m128i {
     unsafe { _mm_cvtepu16_epi32(_mm_loadl_epi64(row[idx..].as_ptr() as *const __m128i)) }
 }
 
 #[inline(always)]
-unsafe fn gather4_u16_i32(row: &[u16], idx: usize, step: usize) -> __m128i {
+fn gather4_u16_i32(row: &[u16], idx: usize, step: usize) -> __m128i {
     if step == 1 {
         unsafe { load4_u16_i32(row, idx) }
     } else {
@@ -84,7 +84,7 @@ unsafe fn gather4_u16_i32(row: &[u16], idx: usize, step: usize) -> __m128i {
 }
 
 #[inline(always)]
-unsafe fn finish4_u16(dst: &mut [u16], x: usize, s: __m128i, bitdepth_max: i32) {
+fn finish4_u16(dst: &mut [u16], x: usize, s: __m128i, bitdepth_max: i32) {
     unsafe {
         let v = _mm_min_epi32(
             _mm_max_epi32(

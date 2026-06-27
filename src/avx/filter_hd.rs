@@ -210,7 +210,7 @@ pub(crate) fn mask_row_hbd_avx2(
 }
 
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn blend_row_hbd_avx2(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
+pub(crate) fn blend_row_hbd_avx2(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
     let c64 = _mm256_set1_epi32(64);
     let rnd_v = _mm256_set1_epi32(32);
     let max_v = _mm256_set1_epi32(0xffff);
