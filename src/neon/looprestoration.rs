@@ -32,12 +32,38 @@ use std::arch::aarch64::*;
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn load8_u8_i32(p: &[u8]) -> (int32x4_t, int32x4_t) {
-    let v = unsafe { vld1_u8(p.as_ptr()) }; // 8 x u8
+fn u8x8_to_i32x2(v: uint8x8_t) -> (int32x4_t, int32x4_t) {
     let w = vmovl_u8(v); // 8 x u16
     let lo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w)));
     let hi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w)));
     (lo, hi)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load8_u8_i32(p: &[u8]) -> (int32x4_t, int32x4_t) {
+    let v = unsafe { vld1_u8(p.as_ptr()) }; // 8 x u8
+    u8x8_to_i32x2(v)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn u8x16_to_i32x4(v: uint8x16_t) -> (int32x4_t, int32x4_t, int32x4_t, int32x4_t) {
+    let lo16 = vmovl_u8(vget_low_u8(v));
+    let hi16 = vmovl_u8(vget_high_u8(v));
+    (
+        vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(lo16))),
+        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(lo16))),
+        vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(hi16))),
+        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(hi16))),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load16_u8_i32x4(p: &[u8]) -> (int32x4_t, int32x4_t, int32x4_t, int32x4_t) {
+    let v = unsafe { vld1q_u8(p.as_ptr()) };
+    u8x16_to_i32x4(v)
 }
 
 /// `(s + 64) >> 7`, clamped to `[0, 255]`, then narrow two `int32x4_t` halves
@@ -56,6 +82,28 @@ fn finish_store(dst: &mut [u8], slo: int32x4_t, shi: int32x4_t) {
     let u16hi = vmovn_u32(vreinterpretq_u32_s32(vhi));
     let packed = vmovn_u16(vcombine_u16(u16lo, u16hi));
     unsafe { vst1_u8(dst.as_mut_ptr(), packed) };
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn finish_store16(dst: &mut [u8], s0: int32x4_t, s1: int32x4_t, s2: int32x4_t, s3: int32x4_t) {
+    let rnd = vdupq_n_s32(64);
+    let zero = vdupq_n_s32(0);
+    let max = vdupq_n_s32(255);
+    let v0 = vminq_s32(vmaxq_s32(vshrq_n_s32::<7>(vaddq_s32(s0, rnd)), zero), max);
+    let v1 = vminq_s32(vmaxq_s32(vshrq_n_s32::<7>(vaddq_s32(s1, rnd)), zero), max);
+    let v2 = vminq_s32(vmaxq_s32(vshrq_n_s32::<7>(vaddq_s32(s2, rnd)), zero), max);
+    let v3 = vminq_s32(vmaxq_s32(vshrq_n_s32::<7>(vaddq_s32(s3, rnd)), zero), max);
+    let u16a = vcombine_u16(
+        vmovn_u32(vreinterpretq_u32_s32(v0)),
+        vmovn_u32(vreinterpretq_u32_s32(v1)),
+    );
+    let u16b = vcombine_u16(
+        vmovn_u32(vreinterpretq_u32_s32(v2)),
+        vmovn_u32(vreinterpretq_u32_s32(v3)),
+    );
+    let packed = vcombine_u8(vmovn_u16(u16a), vmovn_u16(u16b));
+    unsafe { vst1q_u8(dst.as_mut_ptr(), packed) };
 }
 
 /// NEON "NS" Wiener FIR. Mirrors `crate::simd::ns_wiener_fir_run_simd`.
@@ -163,51 +211,52 @@ use crate::filter::UvLumaTap;
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn widen4_u8_i32(arr: [u8; 4]) -> int32x4_t {
-    let dup = vreinterpret_u8_u32(vdup_n_u32(u32::from_le_bytes(arr)));
-    vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(dup))))
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn load4u8(row: &[u8], idx: usize) -> int32x4_t {
-    widen4_u8_i32(row[idx..idx + 4].try_into().unwrap())
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn gather4u8(row: &[u8], idx: usize, step: usize) -> int32x4_t {
-    let arr: [u8; 4] = if step == 1 {
-        row[idx..idx + 4].try_into().unwrap()
+fn gather8u8(row: &[u8], idx: usize, step: usize) -> (int32x4_t, int32x4_t) {
+    if step == 1 {
+        load8_u8_i32(&row[idx..])
+    } else if step == 2 && idx + 16 <= row.len() {
+        unsafe {
+            let v = vld1q_u8(row.as_ptr().add(idx));
+            let even = vget_low_u8(vuzp1q_u8(v, v));
+            u8x8_to_i32x2(even)
+        }
     } else {
-        [
+        let arr = [
             row[idx],
             row[idx + step],
             row[idx + 2 * step],
             row[idx + 3 * step],
-        ]
-    };
-    widen4_u8_i32(arr)
+            row[idx + 4 * step],
+            row[idx + 5 * step],
+            row[idx + 6 * step],
+            row[idx + 7 * step],
+        ];
+        load8_u8_i32(&arr)
+    }
 }
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn finish4(dst: &mut [u8], x: usize, s: int32x4_t) {
-    let v = vminq_s32(
-        vmaxq_s32(
-            vshrq_n_s32::<7>(vaddq_s32(s, vdupq_n_s32(64))),
-            vdupq_n_s32(0),
-        ),
-        vdupq_n_s32(255),
-    );
-    let u16x4 = vmovn_u32(vreinterpretq_u32_s32(v));
-    let u8x8 = vmovn_u16(vcombine_u16(u16x4, u16x4));
-    unsafe {
-        vst1_lane_u32::<0>(
-            dst.get_unchecked_mut(x..).as_mut_ptr().cast(),
-            vreinterpret_u32_u8(u8x8),
-        );
+fn gather16u8(row: &[u8], idx: usize, step: usize) -> (int32x4_t, int32x4_t, int32x4_t, int32x4_t) {
+    if step == 1 {
+        load16_u8_i32x4(&row[idx..])
+    } else if step == 2 && idx + 32 <= row.len() {
+        unsafe {
+            let lo = vld1q_u8(row.as_ptr().add(idx));
+            let hi = vld1q_u8(row.as_ptr().add(idx + 16));
+            u8x16_to_i32x4(vuzp1q_u8(lo, hi))
+        }
+    } else {
+        let (a0, a1) = gather8u8(row, idx, step);
+        let (a2, a3) = gather8u8(row, idx + 8 * step, step);
+        (a0, a1, a2, a3)
     }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn finish8(dst: &mut [u8], slo: int32x4_t, shi: int32x4_t) {
+    finish_store(dst, slo, shi);
 }
 
 /// NEON chroma NS-Wiener FIR. Mirror of `ns_wiener_uv_fir_run_sse41`.
@@ -224,28 +273,76 @@ pub(crate) fn ns_wiener_uv_fir_run_neon(
     n: usize,
 ) {
     let mut x = 0;
-    while x + 4 <= n {
+    while x + 16 <= n {
         let cb = co + x;
         unsafe {
-            let m = load4u8(c_center, cb);
-            let two_m = vaddq_s32(m, m);
-            let mut s = vshlq_n_s32::<7>(m);
+            let (m0, m1, m2, m3) = load16_u8_i32x4(&c_center[cb..]);
+            let two_m0 = vaddq_s32(m0, m0);
+            let two_m1 = vaddq_s32(m1, m1);
+            let two_m2 = vaddq_s32(m2, m2);
+            let two_m3 = vaddq_s32(m3, m3);
+            let mut s0 = vshlq_n_s32::<7>(m0);
+            let mut s1 = vshlq_n_s32::<7>(m1);
+            let mut s2 = vshlq_n_s32::<7>(m2);
+            let mut s3 = vshlq_n_s32::<7>(m3);
             for t in ctaps {
-                let a = load4u8(t.row_p, (cb as i32 + t.dx) as usize);
-                let b = load4u8(t.row_m, (cb as i32 - t.dx) as usize);
+                let cp = (cb as i32 + t.dx) as usize;
+                let cm = (cb as i32 - t.dx) as usize;
+                let (a0, a1, a2, a3) = load16_u8_i32x4(&t.row_p[cp..]);
+                let (b0, b1, b2, b3) = load16_u8_i32x4(&t.row_m[cm..]);
                 let coef = vdupq_n_s32(t.coef);
-                s = vaddq_s32(s, vmulq_s32(vsubq_s32(vaddq_s32(a, b), two_m), coef));
+                s0 = vaddq_s32(s0, vmulq_s32(vsubq_s32(vaddq_s32(a0, b0), two_m0), coef));
+                s1 = vaddq_s32(s1, vmulq_s32(vsubq_s32(vaddq_s32(a1, b1), two_m1), coef));
+                s2 = vaddq_s32(s2, vmulq_s32(vsubq_s32(vaddq_s32(a2, b2), two_m2), coef));
+                s3 = vaddq_s32(s3, vmulq_s32(vsubq_s32(vaddq_s32(a3, b3), two_m3), coef));
             }
             let lb = lo + x * lstep;
-            let lc = gather4u8(l_center, lb, lstep);
+            let (lc0, lc1, lc2, lc3) = gather16u8(l_center, lb, lstep);
             for t in ltaps {
-                let lv = gather4u8(t.row, (lb as i32 + t.ldx) as usize, lstep);
+                let li = (lb as i32 + t.ldx) as usize;
+                let (lv0, lv1, lv2, lv3) = gather16u8(t.row, li, lstep);
                 let coef = vdupq_n_s32(t.coef);
-                s = vaddq_s32(s, vmulq_s32(vsubq_s32(lv, lc), coef));
+                s0 = vaddq_s32(s0, vmulq_s32(vsubq_s32(lv0, lc0), coef));
+                s1 = vaddq_s32(s1, vmulq_s32(vsubq_s32(lv1, lc1), coef));
+                s2 = vaddq_s32(s2, vmulq_s32(vsubq_s32(lv2, lc2), coef));
+                s3 = vaddq_s32(s3, vmulq_s32(vsubq_s32(lv3, lc3), coef));
             }
-            finish4(dst, x, s);
+            finish_store16(&mut dst[x..], s0, s1, s2, s3);
         }
-        x += 4;
+        x += 16;
+    }
+    while x + 8 <= n {
+        let cb = co + x;
+        unsafe {
+            let (mlo, mhi) = load8_u8_i32(&c_center[cb..]);
+            let two_mlo = vaddq_s32(mlo, mlo);
+            let two_mhi = vaddq_s32(mhi, mhi);
+            let mut slo = vshlq_n_s32::<7>(mlo);
+            let mut shi = vshlq_n_s32::<7>(mhi);
+            for t in ctaps {
+                let (alo, ahi) = load8_u8_i32(&t.row_p[(cb as i32 + t.dx) as usize..]);
+                let (blo, bhi) = load8_u8_i32(&t.row_m[(cb as i32 - t.dx) as usize..]);
+                let coef = vdupq_n_s32(t.coef);
+                slo = vaddq_s32(
+                    slo,
+                    vmulq_s32(vsubq_s32(vaddq_s32(alo, blo), two_mlo), coef),
+                );
+                shi = vaddq_s32(
+                    shi,
+                    vmulq_s32(vsubq_s32(vaddq_s32(ahi, bhi), two_mhi), coef),
+                );
+            }
+            let lb = lo + x * lstep;
+            let (lclo, lchi) = gather8u8(l_center, lb, lstep);
+            for t in ltaps {
+                let (lvlo, lvhi) = gather8u8(t.row, (lb as i32 + t.ldx) as usize, lstep);
+                let coef = vdupq_n_s32(t.coef);
+                slo = vaddq_s32(slo, vmulq_s32(vsubq_s32(lvlo, lclo), coef));
+                shi = vaddq_s32(shi, vmulq_s32(vsubq_s32(lvhi, lchi), coef));
+            }
+            finish8(&mut dst[x..], slo, shi);
+        }
+        x += 8;
     }
     while x < n {
         let cc = co + x;

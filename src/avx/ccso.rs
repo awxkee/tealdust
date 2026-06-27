@@ -288,6 +288,9 @@ fn fill_offsets_4_i16(out: &mut [i16; 8], idx: &[u8], offset_idxs: &[u8], offset
     }
 }
 
+#[repr(C, align(16))]
+pub(crate) struct AlignedSseS16(pub(crate) [i16; 8]);
+
 #[inline]
 #[target_feature(enable = "avx2")]
 fn ccso_add_4x4_8bpc(
@@ -301,19 +304,23 @@ fn ccso_add_4x4_8bpc(
     yy: usize,
 ) {
     let zero = _mm_setzero_si128();
-    let mut off_tmp = [0i16; 8];
+    let mut off_tmp = AlignedSseS16([0; 8]);
     for y in yy..yy + 4 {
         let ip = y * idx_stride + xx;
-        fill_offsets_4_i16(&mut off_tmp, &idx_buf[ip..ip + 4], offset_idxs, offset_lut);
-        let off = unsafe { _mm_loadu_si128(off_tmp.as_ptr() as *const __m128i) };
+        fill_offsets_4_i16(
+            &mut off_tmp.0,
+            &idx_buf[ip..ip + 4],
+            offset_idxs,
+            offset_lut,
+        );
+        let off = unsafe { _mm_load_si128(off_tmp.0.as_ptr().cast()) };
         let dp = y * dst_stride + xx;
-        let cur32 = unsafe { core::ptr::read_unaligned(dst.as_ptr().add(dp) as *const u32) };
-        let cur = _mm_cvtsi32_si128(cur32 as i32);
+        let cur = unsafe { _mm_castps_si128(_mm_load_ss(dst.as_ptr().add(dp).cast())) };
         let cur = _mm_unpacklo_epi8(cur, zero);
         let out = _mm_packus_epi16(_mm_add_epi16(cur, off), zero);
-        let packed = _mm_cvtsi128_si32(out) as u32;
-        let bytes = packed.to_le_bytes();
-        dst[dp..dp + 4].copy_from_slice(&bytes);
+        unsafe {
+            _mm_store_ss(dst.as_mut_ptr().add(dp).cast(), _mm_castsi128_ps(out));
+        }
     }
 }
 

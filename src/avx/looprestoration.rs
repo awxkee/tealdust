@@ -32,40 +32,111 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-use crate::filter::WienerTap;
+use crate::filter::{UvLumaTap, WienerTap};
 
-/// Load 8 consecutive `u8` and zero-extend into two `__m128i` (4×i32) halves.
-#[inline(always)]
-fn load8(p: &[u8]) -> (__m128i, __m128i) {
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load8_u8_i32(p: &[u8]) -> __m256i {
+    unsafe { _mm256_cvtepu8_epi32(_mm_loadl_epi64(p.as_ptr().cast())) }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn load16_u8_i32x2(p: &[u8]) -> (__m256i, __m256i) {
     unsafe {
-        let v = _mm_loadl_epi64(p.as_ptr().cast());
-        let lo = _mm_cvtepu8_epi32(v);
-        let hi = _mm_cvtepu8_epi32(_mm_srli_si128(v, 4));
+        let v = _mm_loadu_si128(p.as_ptr().cast());
+        let lo = _mm256_cvtepu8_epi32(v);
+        let hi = _mm256_cvtepu8_epi32(_mm_srli_si128::<8>(v));
         (lo, hi)
     }
 }
 
-/// `(s + 64) >> 7`, clamped to `[0, 255]`, narrowed to 8 packed `u8`, stored.
-#[inline(always)]
-fn finish(dst: &mut [u8], slo: __m128i, shi: __m128i) {
-    unsafe {
-        let rnd = _mm_set1_epi32(64);
-        let zero = _mm_setzero_si128();
-        let max = _mm_set1_epi32(255);
-        // _mm_srai_epi32 is an arithmetic shift, matching `>> 7` on i32.
-        let vlo = _mm_min_epi32(
-            _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(slo, rnd), 7), zero),
-            max,
-        );
-        let vhi = _mm_min_epi32(
-            _mm_max_epi32(_mm_srai_epi32(_mm_add_epi32(shi, rnd), 7), zero),
-            max,
-        );
-        // Values are in [0, 255], so the saturating packs are exact.
-        let packed16 = _mm_packus_epi32(vlo, vhi); // 8 x u16
-        let packed8 = _mm_packus_epi16(packed16, packed16); // low 8 bytes = result
-        _mm_storel_epi64(dst.as_mut_ptr().cast(), packed8);
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gather8_u8_i32(row: &[u8], idx: usize, step: usize) -> __m256i {
+    if step == 1 {
+        load8_u8_i32(&row[idx..])
+    } else if step == 2 && idx + 16 <= row.len() {
+        // AV2 chroma LR samples the luma plane with lstep=2 for 4:2:x.
+        // Avoid the old scalar gather-through-stack: bytes [0,2,..14] are the
+        // low bytes of eight little-endian u16 lanes.
+        unsafe {
+            let v = _mm_loadu_si128(row.as_ptr().add(idx).cast());
+            let even = _mm_and_si128(v, _mm_set1_epi16(0x00ff));
+            _mm256_cvtepu16_epi32(even)
+        }
+    } else {
+        let arr = [
+            row[idx],
+            row[idx + step],
+            row[idx + 2 * step],
+            row[idx + 3 * step],
+            row[idx + 4 * step],
+            row[idx + 5 * step],
+            row[idx + 6 * step],
+            row[idx + 7 * step],
+        ];
+        unsafe { _mm256_cvtepu8_epi32(_mm_loadl_epi64(arr.as_ptr().cast())) }
     }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gather16_u8_i32x2(row: &[u8], idx: usize, step: usize) -> (__m256i, __m256i) {
+    if step == 1 {
+        load16_u8_i32x2(&row[idx..])
+    } else if step == 2 && idx + 32 <= row.len() {
+        unsafe {
+            let v = _mm256_loadu_si256(row.as_ptr().add(idx).cast());
+            let even = _mm256_and_si256(v, _mm256_set1_epi16(0x00ff));
+            let lo = _mm256_cvtepu16_epi32(_mm256_castsi256_si128(even));
+            let hi = _mm256_cvtepu16_epi32(_mm256_extracti128_si256::<1>(even));
+            (lo, hi)
+        }
+    } else {
+        (
+            gather8_u8_i32(row, idx, step),
+            gather8_u8_i32(row, idx + 8 * step, step),
+        )
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn clip8_i32(v: __m256i) -> __m256i {
+    _mm256_min_epi32(
+        _mm256_max_epi32(
+            _mm256_srai_epi32::<7>(_mm256_add_epi32(v, _mm256_set1_epi32(64))),
+            _mm256_setzero_si256(),
+        ),
+        _mm256_set1_epi32(255),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn finish8(dst: &mut [u8], s: __m256i) {
+    let v = clip8_i32(s);
+    let lo = _mm256_castsi256_si128(v);
+    let hi = _mm256_extracti128_si256::<1>(v);
+    let u16x8 = _mm_packus_epi32(lo, hi);
+    let u8x16 = _mm_packus_epi16(u16x8, u16x8);
+    unsafe { _mm_storel_epi64(dst.as_mut_ptr().cast(), u8x16) };
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn finish16(dst: &mut [u8], slo: __m256i, shi: __m256i) {
+    let vlo = clip8_i32(slo);
+    let vhi = clip8_i32(shi);
+    // packus_epi32 is lane-local: [lo0..3 hi0..3 | lo4..7 hi4..7].
+    // Swap 64-bit lanes 1 and 2 so the subsequent 128-bit pack sees pixels
+    // in strictly increasing order.
+    let u16x16 = _mm256_permute4x64_epi64::<0xd8>(_mm256_packus_epi32(vlo, vhi));
+    let lo16 = _mm256_castsi256_si128(u16x16);
+    let hi16 = _mm256_extracti128_si256::<1>(u16x16);
+    let u8x16 = _mm_packus_epi16(lo16, hi16);
+    unsafe { _mm_storeu_si128(dst.as_mut_ptr().cast(), u8x16) };
 }
 
 #[target_feature(enable = "avx2")]
@@ -76,33 +147,53 @@ pub(crate) fn ns_wiener_fir_run_avx2(
     taps: &[WienerTap],
     n: usize,
 ) {
-    let mut x = 0;
+    let mut x = 0usize;
+    while x + 16 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 16 <= center.len());
+        let (mlo, mhi) = load16_u8_i32x2(&center[c..]);
+        let mut slo = _mm256_slli_epi32::<7>(mlo);
+        let mut shi = _mm256_slli_epi32::<7>(mhi);
+        let two_mlo = _mm256_add_epi32(mlo, mlo);
+        let two_mhi = _mm256_add_epi32(mhi, mhi);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 16 <= t.row_p.len() && cm + 16 <= t.row_m.len());
+            let (alo, ahi) = load16_u8_i32x2(&t.row_p[cp..]);
+            let (blo, bhi) = load16_u8_i32x2(&t.row_m[cm..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            slo = _mm256_add_epi32(
+                slo,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(alo, blo), two_mlo), coef),
+            );
+            shi = _mm256_add_epi32(
+                shi,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(ahi, bhi), two_mhi), coef),
+            );
+        }
+        finish16(&mut dst[x..], slo, shi);
+        x += 16;
+    }
     while x + 8 <= n {
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
-        let (mlo, mhi) = load8(&center[c..]);
-        let mut slo = _mm_slli_epi32(mlo, 7);
-        let mut shi = _mm_slli_epi32(mhi, 7);
-        let two_mlo = _mm_add_epi32(mlo, mlo);
-        let two_mhi = _mm_add_epi32(mhi, mhi);
+        let m = load8_u8_i32(&center[c..]);
+        let mut s = _mm256_slli_epi32::<7>(m);
+        let two_m = _mm256_add_epi32(m, m);
         for t in taps {
             let cp = (c as i32 + t.dx) as usize;
             let cm = (c as i32 - t.dx) as usize;
             debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-            let (alo, ahi) = load8(&t.row_p[cp..]);
-            let (blo, bhi) = load8(&t.row_m[cm..]);
-            let coef = _mm_set1_epi32(t.coef);
-            // (a + b - 2*m) * coef
-            slo = _mm_add_epi32(
-                slo,
-                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(alo, blo), two_mlo), coef),
-            );
-            shi = _mm_add_epi32(
-                shi,
-                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(ahi, bhi), two_mhi), coef),
+            let a = load8_u8_i32(&t.row_p[cp..]);
+            let b = load8_u8_i32(&t.row_m[cm..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            s = _mm256_add_epi32(
+                s,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(a, b), two_m), coef),
             );
         }
-        finish(&mut dst[x..], slo, shi);
+        finish8(&mut dst[x..], s);
         x += 8;
     }
     while x < n {
@@ -128,26 +219,43 @@ pub(crate) fn pc_wiener_fir_run_avx2(
     taps: &[WienerTap],
     n: usize,
 ) {
-    let mut x = 0;
+    let mut x = 0usize;
+    while x + 16 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 16 <= center.len());
+        let (mlo, mhi) = load16_u8_i32x2(&center[c..]);
+        let cc = _mm256_set1_epi32(center_coef);
+        let mut slo = _mm256_mullo_epi32(mlo, cc);
+        let mut shi = _mm256_mullo_epi32(mhi, cc);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 16 <= t.row_p.len() && cm + 16 <= t.row_m.len());
+            let (alo, ahi) = load16_u8_i32x2(&t.row_p[cp..]);
+            let (blo, bhi) = load16_u8_i32x2(&t.row_m[cm..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            slo = _mm256_add_epi32(slo, _mm256_mullo_epi32(_mm256_add_epi32(alo, blo), coef));
+            shi = _mm256_add_epi32(shi, _mm256_mullo_epi32(_mm256_add_epi32(ahi, bhi), coef));
+        }
+        finish16(&mut dst[x..], slo, shi);
+        x += 16;
+    }
     while x + 8 <= n {
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
-        let (mlo, mhi) = load8(&center[c..]);
-        let cc = _mm_set1_epi32(center_coef);
-        let mut slo = _mm_mullo_epi32(mlo, cc);
-        let mut shi = _mm_mullo_epi32(mhi, cc);
+        let m = load8_u8_i32(&center[c..]);
+        let cc = _mm256_set1_epi32(center_coef);
+        let mut s = _mm256_mullo_epi32(m, cc);
         for t in taps {
             let cp = (c as i32 + t.dx) as usize;
             let cm = (c as i32 - t.dx) as usize;
             debug_assert!(cp + 8 <= t.row_p.len() && cm + 8 <= t.row_m.len());
-            let (alo, ahi) = load8(&t.row_p[cp..]);
-            let (blo, bhi) = load8(&t.row_m[cm..]);
-            let coef = _mm_set1_epi32(t.coef);
-            // (a + b) * coef
-            slo = _mm_add_epi32(slo, _mm_mullo_epi32(_mm_add_epi32(alo, blo), coef));
-            shi = _mm_add_epi32(shi, _mm_mullo_epi32(_mm_add_epi32(ahi, bhi), coef));
+            let a = load8_u8_i32(&t.row_p[cp..]);
+            let b = load8_u8_i32(&t.row_m[cm..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            s = _mm256_add_epi32(s, _mm256_mullo_epi32(_mm256_add_epi32(a, b), coef));
         }
-        finish(&mut dst[x..], slo, shi);
+        finish8(&mut dst[x..], s);
         x += 8;
     }
     while x < n {
@@ -164,53 +272,8 @@ pub(crate) fn pc_wiener_fir_run_avx2(
     }
 }
 
-// Safe entry point. Only assigned in the dispatcher under an
-// `is_x86_feature_detected!("avx2")` guard, so the feature is present.
-use crate::filter::UvLumaTap;
-
-/// 4 consecutive `u8` -> i32x4.
-#[inline(always)]
-fn load4u8(row: &[u8], idx: usize) -> __m128i {
-    unsafe { _mm_cvtepu8_epi32(_mm_castps_si128(_mm_load_ss(row.as_ptr().add(idx).cast()))) }
-}
-
-/// Gather 4 `u8` at `idx, idx+step, ..` -> i32x4 (contiguous fast path for step 1).
-#[inline(always)]
-fn gather4u8(row: &[u8], idx: usize, step: usize) -> __m128i {
-    let arr: [u8; 4] = if step == 1 {
-        row[idx..idx + 4].try_into().unwrap()
-    } else {
-        [
-            row[idx],
-            row[idx + step],
-            row[idx + 2 * step],
-            row[idx + 3 * step],
-        ]
-    };
-    unsafe { _mm_cvtepu8_epi32(_mm_castps_si128(_mm_load_ss(arr.as_ptr().cast()))) }
-}
-
-/// `(s + 64) >> 7` clamped to `[0,255]`, narrowed to 4 `u8`, stored at `dst[x..x+4]`.
-#[inline]
 #[target_feature(enable = "avx2")]
-fn finish4(dst: &mut [u8], x: usize, s: __m128i) {
-    let v = _mm_min_epi32(
-        _mm_max_epi32(
-            _mm_srai_epi32(_mm_add_epi32(s, _mm_set1_epi32(64)), 7),
-            _mm_setzero_si128(),
-        ),
-        _mm_set1_epi32(255),
-    );
-    let p8 = _mm_packus_epi16(_mm_packus_epi32(v, v), _mm_packus_epi32(v, v));
-    unsafe {
-        _mm_store_ss(
-            dst.get_unchecked_mut(x..).as_mut_ptr().cast(),
-            _mm_castsi128_ps(p8),
-        );
-    }
-}
-
-#[target_feature(enable = "avx2")]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn ns_wiener_uv_fir_run_avx2(
     dst: &mut [u8],
     c_center: &[u8],
@@ -222,30 +285,64 @@ pub(crate) fn ns_wiener_uv_fir_run_avx2(
     lstep: usize,
     n: usize,
 ) {
-    let mut x = 0;
-    while x + 4 <= n {
+    let mut x = 0usize;
+    while x + 16 <= n {
         let cb = co + x;
-        let m = load4u8(c_center, cb);
-        let two_m = _mm_add_epi32(m, m);
-        let mut s = _mm_slli_epi32::<7>(m);
+        let (mlo, mhi) = load16_u8_i32x2(&c_center[cb..]);
+        let two_mlo = _mm256_add_epi32(mlo, mlo);
+        let two_mhi = _mm256_add_epi32(mhi, mhi);
+        let mut slo = _mm256_slli_epi32::<7>(mlo);
+        let mut shi = _mm256_slli_epi32::<7>(mhi);
         for t in ctaps {
-            let a = load4u8(t.row_p, (cb as i32 + t.dx) as usize);
-            let b = load4u8(t.row_m, (cb as i32 - t.dx) as usize);
-            let coef = _mm_set1_epi32(t.coef);
-            s = _mm_add_epi32(
-                s,
-                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(a, b), two_m), coef),
+            let cp = (cb as i32 + t.dx) as usize;
+            let cm = (cb as i32 - t.dx) as usize;
+            let (alo, ahi) = load16_u8_i32x2(&t.row_p[cp..]);
+            let (blo, bhi) = load16_u8_i32x2(&t.row_m[cm..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            slo = _mm256_add_epi32(
+                slo,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(alo, blo), two_mlo), coef),
+            );
+            shi = _mm256_add_epi32(
+                shi,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(ahi, bhi), two_mhi), coef),
             );
         }
         let lb = lo + x * lstep;
-        let lc = gather4u8(l_center, lb, lstep);
+        let (lclo, lchi) = gather16_u8_i32x2(l_center, lb, lstep);
         for t in ltaps {
-            let lv = gather4u8(t.row, (lb as i32 + t.ldx) as usize, lstep);
-            let coef = _mm_set1_epi32(t.coef);
-            s = _mm_add_epi32(s, _mm_mullo_epi32(_mm_sub_epi32(lv, lc), coef));
+            let li = (lb as i32 + t.ldx) as usize;
+            let (lvlo, lvhi) = gather16_u8_i32x2(t.row, li, lstep);
+            let coef = _mm256_set1_epi32(t.coef);
+            slo = _mm256_add_epi32(slo, _mm256_mullo_epi32(_mm256_sub_epi32(lvlo, lclo), coef));
+            shi = _mm256_add_epi32(shi, _mm256_mullo_epi32(_mm256_sub_epi32(lvhi, lchi), coef));
         }
-        finish4(dst, x, s);
-        x += 4;
+        finish16(&mut dst[x..], slo, shi);
+        x += 16;
+    }
+    while x + 8 <= n {
+        let cb = co + x;
+        let m = load8_u8_i32(&c_center[cb..]);
+        let two_m = _mm256_add_epi32(m, m);
+        let mut s = _mm256_slli_epi32::<7>(m);
+        for t in ctaps {
+            let a = load8_u8_i32(&t.row_p[(cb as i32 + t.dx) as usize..]);
+            let b = load8_u8_i32(&t.row_m[(cb as i32 - t.dx) as usize..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            s = _mm256_add_epi32(
+                s,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(a, b), two_m), coef),
+            );
+        }
+        let lb = lo + x * lstep;
+        let lc = gather8_u8_i32(l_center, lb, lstep);
+        for t in ltaps {
+            let lv = gather8_u8_i32(t.row, (lb as i32 + t.ldx) as usize, lstep);
+            let coef = _mm256_set1_epi32(t.coef);
+            s = _mm256_add_epi32(s, _mm256_mullo_epi32(_mm256_sub_epi32(lv, lc), coef));
+        }
+        finish8(&mut dst[x..], s);
+        x += 8;
     }
     while x < n {
         let cc = co + x;
@@ -266,8 +363,6 @@ pub(crate) fn ns_wiener_uv_fir_run_avx2(
         x += 1;
     }
 }
-
-/// Safe entry point. See [`ns_wiener_fir_run_avx2`].
 
 #[cfg(test)]
 mod uv_fir_sse_tests {
@@ -323,7 +418,7 @@ mod uv_fir_sse_tests {
 
             let co = 8usize;
             let lo = 8usize;
-            let n = (rng.range(1, 4) as usize) * 4; // 4,8,12,16
+            let n = rng.range(1, 16) as usize;
 
             let mut a = vec![0u8; n];
             let mut b = vec![0u8; n];

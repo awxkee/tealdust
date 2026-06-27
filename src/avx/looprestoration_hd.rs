@@ -42,6 +42,16 @@ fn load8_u16_i32(p: &[u16]) -> __m256i {
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn load16_u16_i32x2(p: &[u16]) -> (__m256i, __m256i) {
+    unsafe {
+        let lo = _mm256_cvtepu16_epi32(_mm_loadu_si128(p.as_ptr().cast()));
+        let hi = _mm256_cvtepu16_epi32(_mm_loadu_si128(p.as_ptr().add(8).cast()));
+        (lo, hi)
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn finish8_u16(dst: &mut [u16], s: __m256i, bitdepth_max: i32) {
     let rnd = _mm256_set1_epi32(64);
     let zero = _mm256_setzero_si256();
@@ -60,39 +70,70 @@ fn finish8_u16(dst: &mut [u16], s: __m256i, bitdepth_max: i32) {
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn load4_u16_i32(row: &[u16], idx: usize) -> __m128i {
-    unsafe { _mm_cvtepu16_epi32(_mm_loadl_epi64(row[idx..].as_ptr() as *const __m128i)) }
+fn clip8_u16_i32(s: __m256i, bitdepth_max: i32) -> __m256i {
+    _mm256_min_epi32(
+        _mm256_max_epi32(
+            _mm256_srai_epi32::<7>(_mm256_add_epi32(s, _mm256_set1_epi32(64))),
+            _mm256_setzero_si256(),
+        ),
+        _mm256_set1_epi32(bitdepth_max),
+    )
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn gather4_u16_i32(row: &[u16], idx: usize, step: usize) -> __m128i {
+fn finish16_u16(dst: &mut [u16], slo: __m256i, shi: __m256i, bitdepth_max: i32) {
+    let vlo = clip8_u16_i32(slo, bitdepth_max);
+    let vhi = clip8_u16_i32(shi, bitdepth_max);
+    let packed = _mm256_permute4x64_epi64::<0xd8>(_mm256_packus_epi32(vlo, vhi));
+    unsafe { _mm256_storeu_si256(dst.as_mut_ptr().cast(), packed) };
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gather8_u16_i32(row: &[u16], idx: usize, step: usize) -> __m256i {
     if step == 1 {
-        load4_u16_i32(row, idx)
+        load8_u16_i32(&row[idx..])
+    } else if step == 2 && idx + 16 <= row.len() {
+        unsafe {
+            // Select u16 lanes [0,2,4,6] and [8,10,12,14] without a scalar
+            // stack gather. pshufb is lane-local, so join the two 64-bit packs.
+            let v = _mm256_loadu_si256(row.as_ptr().add(idx).cast());
+            let mask = _mm256_setr_epi8(
+                0, 1, 4, 5, 8, 9, 12, 13, -1, -1, -1, -1, -1, -1, -1, -1, 0, 1, 4, 5, 8, 9, 12, 13,
+                -1, -1, -1, -1, -1, -1, -1, -1,
+            );
+            let packed = _mm256_shuffle_epi8(v, mask);
+            let lo = _mm256_castsi256_si128(packed);
+            let hi = _mm256_extracti128_si256::<1>(packed);
+            let even = _mm_unpacklo_epi64(lo, hi);
+            _mm256_cvtepu16_epi32(even)
+        }
     } else {
         let arr = [
             row[idx],
             row[idx + step],
             row[idx + 2 * step],
             row[idx + 3 * step],
+            row[idx + 4 * step],
+            row[idx + 5 * step],
+            row[idx + 6 * step],
+            row[idx + 7 * step],
         ];
-        unsafe { _mm_cvtepu16_epi32(_mm_loadl_epi64(arr.as_ptr() as *const __m128i)) }
+        unsafe { _mm256_cvtepu16_epi32(_mm_loadu_si128(arr.as_ptr().cast())) }
     }
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn finish4_u16(dst: &mut [u16], x: usize, s: __m128i, bitdepth_max: i32) {
-    let v = _mm_min_epi32(
-        _mm_max_epi32(
-            _mm_srai_epi32(_mm_add_epi32(s, _mm_set1_epi32(64)), 7),
-            _mm_setzero_si128(),
-        ),
-        _mm_set1_epi32(bitdepth_max),
-    );
-    let packed = _mm_packus_epi32(v, v);
-    unsafe {
-        _mm_storel_epi64(dst[x..].as_mut_ptr().cast(), packed);
+fn gather16_u16_i32x2(row: &[u16], idx: usize, step: usize) -> (__m256i, __m256i) {
+    if step == 1 {
+        load16_u16_i32x2(&row[idx..])
+    } else {
+        (
+            gather8_u16_i32(row, idx, step),
+            gather8_u16_i32(row, idx + 8 * step, step),
+        )
     }
 }
 
@@ -106,6 +147,33 @@ pub(crate) fn ns_wiener_fir_run_hbd_avx2(
     bitdepth_max: i32,
 ) {
     let mut x = 0usize;
+    while x + 16 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 16 <= center.len());
+        let (mlo, mhi) = load16_u16_i32x2(&center[c..]);
+        let mut slo = _mm256_slli_epi32::<7>(mlo);
+        let mut shi = _mm256_slli_epi32::<7>(mhi);
+        let two_mlo = _mm256_add_epi32(mlo, mlo);
+        let two_mhi = _mm256_add_epi32(mhi, mhi);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 16 <= t.row_p.len() && cm + 16 <= t.row_m.len());
+            let (alo, ahi) = load16_u16_i32x2(&t.row_p[cp..]);
+            let (blo, bhi) = load16_u16_i32x2(&t.row_m[cm..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            slo = _mm256_add_epi32(
+                slo,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(alo, blo), two_mlo), coef),
+            );
+            shi = _mm256_add_epi32(
+                shi,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(ahi, bhi), two_mhi), coef),
+            );
+        }
+        finish16_u16(&mut dst[x..], slo, shi, bitdepth_max);
+        x += 16;
+    }
     while x + 8 <= n {
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
@@ -152,6 +220,26 @@ pub(crate) fn pc_wiener_fir_run_hbd_avx2(
     bitdepth_max: i32,
 ) {
     let mut x = 0usize;
+    while x + 16 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 16 <= center.len());
+        let (mlo, mhi) = load16_u16_i32x2(&center[c..]);
+        let cc = _mm256_set1_epi32(center_coef);
+        let mut slo = _mm256_mullo_epi32(mlo, cc);
+        let mut shi = _mm256_mullo_epi32(mhi, cc);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 16 <= t.row_p.len() && cm + 16 <= t.row_m.len());
+            let (alo, ahi) = load16_u16_i32x2(&t.row_p[cp..]);
+            let (blo, bhi) = load16_u16_i32x2(&t.row_m[cm..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            slo = _mm256_add_epi32(slo, _mm256_mullo_epi32(_mm256_add_epi32(alo, blo), coef));
+            shi = _mm256_add_epi32(shi, _mm256_mullo_epi32(_mm256_add_epi32(ahi, bhi), coef));
+        }
+        finish16_u16(&mut dst[x..], slo, shi, bitdepth_max);
+        x += 16;
+    }
     while x + 8 <= n {
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
@@ -199,29 +287,63 @@ pub(crate) fn ns_wiener_uv_fir_run_hbd_avx2(
     bitdepth_max: i32,
 ) {
     let mut x = 0usize;
-    while x + 4 <= n {
+    while x + 16 <= n {
         let cb = co + x;
-        let m = load4_u16_i32(c_center, cb);
-        let two_m = _mm_add_epi32(m, m);
-        let mut s = _mm_slli_epi32(m, 7);
+        let (mlo, mhi) = load16_u16_i32x2(&c_center[cb..]);
+        let two_mlo = _mm256_add_epi32(mlo, mlo);
+        let two_mhi = _mm256_add_epi32(mhi, mhi);
+        let mut slo = _mm256_slli_epi32::<7>(mlo);
+        let mut shi = _mm256_slli_epi32::<7>(mhi);
         for t in ctaps {
-            let a = load4_u16_i32(t.row_p, (cb as i32 + t.dx) as usize);
-            let b = load4_u16_i32(t.row_m, (cb as i32 - t.dx) as usize);
-            let coef = _mm_set1_epi32(t.coef);
-            s = _mm_add_epi32(
-                s,
-                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(a, b), two_m), coef),
+            let cp = (cb as i32 + t.dx) as usize;
+            let cm = (cb as i32 - t.dx) as usize;
+            let (alo, ahi) = load16_u16_i32x2(&t.row_p[cp..]);
+            let (blo, bhi) = load16_u16_i32x2(&t.row_m[cm..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            slo = _mm256_add_epi32(
+                slo,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(alo, blo), two_mlo), coef),
+            );
+            shi = _mm256_add_epi32(
+                shi,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(ahi, bhi), two_mhi), coef),
             );
         }
         let lb = lo + x * lstep;
-        let lc = gather4_u16_i32(l_center, lb, lstep);
+        let (lclo, lchi) = gather16_u16_i32x2(l_center, lb, lstep);
         for t in ltaps {
-            let lv = gather4_u16_i32(t.row, (lb as i32 + t.ldx) as usize, lstep);
-            let coef = _mm_set1_epi32(t.coef);
-            s = _mm_add_epi32(s, _mm_mullo_epi32(_mm_sub_epi32(lv, lc), coef));
+            let li = (lb as i32 + t.ldx) as usize;
+            let (lvlo, lvhi) = gather16_u16_i32x2(t.row, li, lstep);
+            let coef = _mm256_set1_epi32(t.coef);
+            slo = _mm256_add_epi32(slo, _mm256_mullo_epi32(_mm256_sub_epi32(lvlo, lclo), coef));
+            shi = _mm256_add_epi32(shi, _mm256_mullo_epi32(_mm256_sub_epi32(lvhi, lchi), coef));
         }
-        finish4_u16(dst, x, s, bitdepth_max);
-        x += 4;
+        finish16_u16(&mut dst[x..], slo, shi, bitdepth_max);
+        x += 16;
+    }
+    while x + 8 <= n {
+        let cb = co + x;
+        let m = load8_u16_i32(&c_center[cb..]);
+        let two_m = _mm256_add_epi32(m, m);
+        let mut s = _mm256_slli_epi32::<7>(m);
+        for t in ctaps {
+            let a = load8_u16_i32(&t.row_p[(cb as i32 + t.dx) as usize..]);
+            let b = load8_u16_i32(&t.row_m[(cb as i32 - t.dx) as usize..]);
+            let coef = _mm256_set1_epi32(t.coef);
+            s = _mm256_add_epi32(
+                s,
+                _mm256_mullo_epi32(_mm256_sub_epi32(_mm256_add_epi32(a, b), two_m), coef),
+            );
+        }
+        let lb = lo + x * lstep;
+        let lc = gather8_u16_i32(l_center, lb, lstep);
+        for t in ltaps {
+            let lv = gather8_u16_i32(t.row, (lb as i32 + t.ldx) as usize, lstep);
+            let coef = _mm256_set1_epi32(t.coef);
+            s = _mm256_add_epi32(s, _mm256_mullo_epi32(_mm256_sub_epi32(lv, lc), coef));
+        }
+        finish8_u16(&mut dst[x..], s, bitdepth_max);
+        x += 8;
     }
     while x < n {
         let cc = co + x;
