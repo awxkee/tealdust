@@ -1023,8 +1023,10 @@ fn setup_thr_rows_simple(
     let mask_rows = &mask[starty4..starty4 + h];
 
     for ((q_row, side_row), mask_row) in q_thr_dst
-        .chunks_exact_mut(16)
-        .zip(side_thr_dst.chunks_exact_mut(16))
+        .as_chunks_mut::<16>()
+        .0
+        .iter_mut()
+        .zip(side_thr_dst.as_chunks_mut::<16>().0.iter_mut())
         .zip(mask_rows.iter())
         .take(h)
     {
@@ -1105,8 +1107,10 @@ fn setup_thr_rows_dq(
     }
 
     for (y4, ((q_row, side_row), mask_row)) in q_thr_dst
-        .chunks_exact_mut(16)
-        .zip(side_thr_dst.chunks_exact_mut(16))
+        .as_chunks_mut::<16>()
+        .0
+        .iter_mut()
+        .zip(side_thr_dst.as_chunks_mut::<16>().0.iter_mut())
         .zip(mask_rows.iter())
         .take(h)
         .enumerate()
@@ -1219,8 +1223,10 @@ fn setup_thr_rows(
     let mask_rows = &mask[starty4..starty4 + h];
 
     for (y4, ((q_row, side_row), mask_row)) in q_thr_dst
-        .chunks_exact_mut(16)
-        .zip(side_thr_dst.chunks_exact_mut(16))
+        .as_chunks_mut::<16>()
+        .0
+        .iter_mut()
+        .zip(side_thr_dst.as_chunks_mut::<16>().0.iter_mut())
         .zip(mask_rows.iter())
         .take(h)
         .enumerate()

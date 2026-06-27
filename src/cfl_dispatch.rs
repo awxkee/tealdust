@@ -441,7 +441,9 @@ pub(crate) fn cfl_apply_422_8bpc_scalar(args: CflApply8<'_>) {
                     let udst = &mut u[urow..urow + xlim];
                     let vdst = &mut v[vrow..vrow + xlim];
                     for ((pair, du), dv) in ysrc
-                        .chunks_exact(2)
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
                         .zip(udst.iter_mut())
                         .zip(vdst.iter_mut())
                     {
@@ -452,14 +454,14 @@ pub(crate) fn cfl_apply_422_8bpc_scalar(args: CflApply8<'_>) {
                 }
                 (true, false) => {
                     let udst = &mut u[urow..urow + xlim];
-                    for (pair, du) in ysrc.chunks_exact(2).zip(udst.iter_mut()) {
+                    for (pair, du) in ysrc.as_chunks::<2>().0.iter().zip(udst.iter_mut()) {
                         let ac = ((pair[0] as i32 + pair[1] as i32) << 2) - dc0;
                         *du = predict_one(dc1, alpha0, ac);
                     }
                 }
                 (false, true) => {
                     let vdst = &mut v[vrow..vrow + xlim];
-                    for (pair, dv) in ysrc.chunks_exact(2).zip(vdst.iter_mut()) {
+                    for (pair, dv) in ysrc.as_chunks::<2>().0.iter().zip(vdst.iter_mut()) {
                         let ac = ((pair[0] as i32 + pair[1] as i32) << 2) - dc0;
                         *dv = predict_one(dc2, alpha1, ac);
                     }

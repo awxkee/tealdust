@@ -1639,7 +1639,7 @@ pub(crate) fn pal_pred<P: Pixel>(
 ) {
     let mut idx_iter = idx.iter();
     for dst_row in dst.chunks_mut(stride).take(h) {
-        for pair in dst_row[..w].chunks_exact_mut(2) {
+        for pair in dst_row[..w].as_chunks_mut::<2>().0.iter_mut() {
             let i = *idx_iter.next().expect("palette index buffer too small");
             pair[0] = pal[(i & 7) as usize];
             pair[1] = pal[(i >> 4) as usize];

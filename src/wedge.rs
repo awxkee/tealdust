@@ -492,7 +492,7 @@ fn copy2d(dst: &mut [u8], src: &[u8], w8: usize, h8: usize, x_off: usize, y_off:
     let row_len = w8 * 8;
     for (dst_row, src_row) in dst
         .chunks_exact_mut(row_len)
-        .zip(src[src_start..].chunks_exact(128))
+        .zip(src[src_start..].as_chunks::<128>().0.iter())
         .take(h8 * 8)
     {
         dst_row.copy_from_slice(&src_row[..row_len]);
@@ -571,7 +571,7 @@ fn gen_master(master: &mut [u8; 128 * 128], mul: i32, wd: WedgeDirection) {
     let idx = wd as usize;
     let s = SIN_LUT[idx] as i32 * mul;
     let c = COS_LUT[idx] as i32 * mul;
-    for (y, row) in master.chunks_exact_mut(128).enumerate() {
+    for (y, row) in master.as_chunks_mut::<128>().0.iter_mut().enumerate() {
         let dy = (2 * y as i32 - 127) * s;
         for (x, dst) in row.iter_mut().enumerate() {
             let d = iclip((2 * x as i32 - 127) * c + dy, -28, 28);
