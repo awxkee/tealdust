@@ -1749,7 +1749,7 @@ fn decode_frame_main_select<const UPDATE_CDF: bool>(
     n_tc: i32,
     pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
-    // if UPDATE_CDF {
+    if UPDATE_CDF {
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512dq")
@@ -1772,7 +1772,7 @@ fn decode_frame_main_select<const UPDATE_CDF: bool>(
                 fc, n_passes, n_tc, pool,
             );
         }
-    // }
+    }
 
     decode_frame_main_inner::<UPDATE_CDF, crate::msac::ScalarMsacBackend>(fc, n_passes, n_tc, pool)
 }

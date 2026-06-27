@@ -157,6 +157,33 @@ fn ns_wiener_fir_run_hbd_neon_impl(
     bitdepth_max: i32,
 ) {
     let mut x = 0usize;
+    while x + 16 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 16 <= center.len());
+        let (m0, m1, m2, m3) = load16_u16_i32x4(&center[c..]);
+        let mut s0 = vshlq_n_s32::<7>(m0);
+        let mut s1 = vshlq_n_s32::<7>(m1);
+        let mut s2 = vshlq_n_s32::<7>(m2);
+        let mut s3 = vshlq_n_s32::<7>(m3);
+        let two_m0 = vaddq_s32(m0, m0);
+        let two_m1 = vaddq_s32(m1, m1);
+        let two_m2 = vaddq_s32(m2, m2);
+        let two_m3 = vaddq_s32(m3, m3);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 16 <= t.row_p.len() && cm + 16 <= t.row_m.len());
+            let (a0, a1, a2, a3) = load16_u16_i32x4(&t.row_p[cp..]);
+            let (b0, b1, b2, b3) = load16_u16_i32x4(&t.row_m[cm..]);
+            let coef = vdupq_n_s32(t.coef);
+            s0 = vaddq_s32(s0, vmulq_s32(vsubq_s32(vaddq_s32(a0, b0), two_m0), coef));
+            s1 = vaddq_s32(s1, vmulq_s32(vsubq_s32(vaddq_s32(a1, b1), two_m1), coef));
+            s2 = vaddq_s32(s2, vmulq_s32(vsubq_s32(vaddq_s32(a2, b2), two_m2), coef));
+            s3 = vaddq_s32(s3, vmulq_s32(vsubq_s32(vaddq_s32(a3, b3), two_m3), coef));
+        }
+        finish16_u16(&mut dst[x..], s0, s1, s2, s3, bitdepth_max);
+        x += 16;
+    }
     while x + 8 <= n {
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
@@ -209,6 +236,30 @@ fn pc_wiener_fir_run_hbd_neon_impl(
     bitdepth_max: i32,
 ) {
     let mut x = 0usize;
+    while x + 16 <= n {
+        let c = col0 + x;
+        debug_assert!(c + 16 <= center.len());
+        let (m0, m1, m2, m3) = load16_u16_i32x4(&center[c..]);
+        let cc = vdupq_n_s32(center_coef);
+        let mut s0 = vmulq_s32(m0, cc);
+        let mut s1 = vmulq_s32(m1, cc);
+        let mut s2 = vmulq_s32(m2, cc);
+        let mut s3 = vmulq_s32(m3, cc);
+        for t in taps {
+            let cp = (c as i32 + t.dx) as usize;
+            let cm = (c as i32 - t.dx) as usize;
+            debug_assert!(cp + 16 <= t.row_p.len() && cm + 16 <= t.row_m.len());
+            let (a0, a1, a2, a3) = load16_u16_i32x4(&t.row_p[cp..]);
+            let (b0, b1, b2, b3) = load16_u16_i32x4(&t.row_m[cm..]);
+            let coef = vdupq_n_s32(t.coef);
+            s0 = vaddq_s32(s0, vmulq_s32(vaddq_s32(a0, b0), coef));
+            s1 = vaddq_s32(s1, vmulq_s32(vaddq_s32(a1, b1), coef));
+            s2 = vaddq_s32(s2, vmulq_s32(vaddq_s32(a2, b2), coef));
+            s3 = vaddq_s32(s3, vmulq_s32(vaddq_s32(a3, b3), coef));
+        }
+        finish16_u16(&mut dst[x..], s0, s1, s2, s3, bitdepth_max);
+        x += 16;
+    }
     while x + 8 <= n {
         let c = col0 + x;
         debug_assert!(c + 8 <= center.len());
