@@ -627,361 +627,6 @@ pub(crate) fn is_itx_dense_kind(kind: usize) -> bool {
     )
 }
 
-macro_rules! dispatch_dct_adst_pair {
-    ($first:expr, $second:expr, |$fk:ident, $sk:ident| $body:expr) => {{
-        match ($first, $second) {
-            (TX_KIND_DCT, TX_KIND_DCT) => {
-                const $fk: usize = TX_KIND_DCT;
-                const $sk: usize = TX_KIND_DCT;
-                $body
-            }
-            (TX_KIND_DCT, TX_KIND_ADST) => {
-                const $fk: usize = TX_KIND_DCT;
-                const $sk: usize = TX_KIND_ADST;
-                $body
-            }
-            (TX_KIND_DCT, TX_KIND_FLIPADST) => {
-                const $fk: usize = TX_KIND_DCT;
-                const $sk: usize = TX_KIND_FLIPADST;
-                $body
-            }
-            (TX_KIND_ADST, TX_KIND_DCT) => {
-                const $fk: usize = TX_KIND_ADST;
-                const $sk: usize = TX_KIND_DCT;
-                $body
-            }
-            (TX_KIND_ADST, TX_KIND_ADST) => {
-                const $fk: usize = TX_KIND_ADST;
-                const $sk: usize = TX_KIND_ADST;
-                $body
-            }
-            (TX_KIND_ADST, TX_KIND_FLIPADST) => {
-                const $fk: usize = TX_KIND_ADST;
-                const $sk: usize = TX_KIND_FLIPADST;
-                $body
-            }
-            (TX_KIND_FLIPADST, TX_KIND_DCT) => {
-                const $fk: usize = TX_KIND_FLIPADST;
-                const $sk: usize = TX_KIND_DCT;
-                $body
-            }
-            (TX_KIND_FLIPADST, TX_KIND_ADST) => {
-                const $fk: usize = TX_KIND_FLIPADST;
-                const $sk: usize = TX_KIND_ADST;
-                $body
-            }
-            (TX_KIND_FLIPADST, TX_KIND_FLIPADST) => {
-                const $fk: usize = TX_KIND_FLIPADST;
-                const $sk: usize = TX_KIND_FLIPADST;
-                $body
-            }
-            _ => unreachable!(),
-        }
-    }};
-}
-
-pub(crate) trait Dct2dBackend {
-    fn idct_dequant_4x4(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    );
-
-    fn idct_dequant_8x8(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    );
-
-    fn idct_dequant_16x16(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    );
-
-    fn idct_dequant_32x32(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    );
-
-    fn idct_dequant_64x64(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    );
-}
-
-pub(crate) trait Adst2dBackend {
-    fn iadst_dequant_4x4(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-        first_kind: usize,
-        second_kind: usize,
-    );
-
-    fn iadst_dequant_8x8(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-        first_kind: usize,
-        second_kind: usize,
-    );
-
-    fn iadst_dequant_16x16(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-        first_kind: usize,
-        second_kind: usize,
-    );
-}
-
-pub(crate) struct ScalarDct2d;
-
-impl Dct2dBackend for ScalarDct2d {
-    #[inline(always)]
-    fn idct_dequant_4x4(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        idct_dequant_scalar_core::<16, 4, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    #[inline(always)]
-    fn idct_dequant_8x8(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        idct_dequant_scalar_core::<64, 8, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    #[inline(always)]
-    fn idct_dequant_16x16(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        idct_dequant_scalar_core::<256, 16, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    #[inline(always)]
-    fn idct_dequant_32x32(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        idct_dequant_scalar_core::<1024, 32, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-
-    #[inline(always)]
-    fn idct_dequant_64x64(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-    ) {
-        // 64x64 DCT uses the same active 32x32 core; the caller expands the
-        // residual during add, exactly like the generic path.
-        idct_dequant_scalar_core::<1024, 32, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        );
-    }
-}
-
-impl Adst2dBackend for ScalarDct2d {
-    #[inline(always)]
-    fn iadst_dequant_4x4(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-        first_kind: usize,
-        second_kind: usize,
-    ) {
-        itx_dequant_scalar_core::<16, 4, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        );
-    }
-
-    #[inline(always)]
-    fn iadst_dequant_8x8(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-        first_kind: usize,
-        second_kind: usize,
-    ) {
-        itx_dequant_scalar_core::<64, 8, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        );
-    }
-
-    #[inline(always)]
-    fn iadst_dequant_16x16(
-        coeff: &mut [i32],
-        tmp: &mut [i32; ITX_TMP_PIXELS],
-        eob: i32,
-        tx: usize,
-        is_rect2: bool,
-        shift0: i32,
-        row_clip_min: i32,
-        row_clip_max: i32,
-        first_kind: usize,
-        second_kind: usize,
-    ) {
-        itx_dequant_scalar_core::<256, 16, i32>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-            first_kind,
-            second_kind,
-        );
-    }
-}
-
 #[inline(always)]
 pub(crate) fn row_mut(tmp: &mut [i32; ITX_TMP_PIXELS], y: usize) -> &mut [i32; ITX_TMP_STRIDE] {
     (&mut tmp[y * ITX_TMP_STRIDE..(y + 1) * ITX_TMP_STRIDE])
@@ -989,9 +634,9 @@ pub(crate) fn row_mut(tmp: &mut [i32; ITX_TMP_PIXELS], y: usize) -> &mut [i32; I
         .unwrap()
 }
 
-#[inline(always)]
-pub(crate) fn dct_1d<const S: usize>(c: &mut [i32], stride: usize) {
-    match S {
+#[inline(never)]
+fn dct_1d_dyn(size: usize, c: &mut [i32], stride: usize) {
+    match size {
         4 => inv_dct4_1d(c, stride),
         8 => inv_dct8_1d(c, stride),
         16 => inv_dct16_1d(c, stride),
@@ -1001,8 +646,26 @@ pub(crate) fn dct_1d<const S: usize>(c: &mut [i32], stride: usize) {
 }
 
 #[inline(always)]
-fn dct_1d_x8<const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: usize) -> bool {
-    let tx_size = match S {
+fn tx_size_idx_dyn(size: usize) -> usize {
+    match size {
+        4 => 0,
+        8 => 1,
+        16 => 2,
+        32 => 3,
+        _ => unreachable!(),
+    }
+}
+
+#[inline(never)]
+fn tx_1d_scalar_dyn(size: usize, kind: usize, c: &mut [i32], stride: usize) {
+    debug_assert!(is_dct_adst_kind(kind));
+    let f = TX1D_FNS[tx_size_idx_dyn(size)][kind].expect("unsupported 1D transform");
+    f(c, stride);
+}
+
+#[inline(never)]
+fn dct_1d_x8_dyn(size: usize, tmp: &mut [i32; ITX_TMP_PIXELS], x: usize) -> bool {
+    let tx_size = match size {
         8 => 1,
         16 => 2,
         32 => 3,
@@ -1017,6 +680,160 @@ fn dct_1d_x8<const S: usize>(tmp: &mut [i32; ITX_TMP_PIXELS], x: usize) -> bool 
     }
 }
 
+#[inline(never)]
+fn idct_dequant_scalar_core_dyn<C: Coeff>(
+    n: usize,
+    size: usize,
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    debug_assert!(matches!(size, 4 | 8 | 16 | 32));
+    debug_assert!(n <= coeff.len());
+    debug_assert!(size * size <= n);
+
+    let coeff = &mut coeff[..n];
+    let off = usize::from(LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &LAST_EOB_PER_COL.table[off..];
+    let mut ei = 0usize;
+    let mut y = 0usize;
+
+    loop {
+        let dst_row = row_mut(tmp, y);
+        for (x, dst) in dst_row[..size].iter_mut().enumerate() {
+            let v = coeff[y + x * size].to_i32();
+            *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
+        }
+
+        dct_1d_dyn(size, dst_row, 1);
+        y += 1;
+
+        if y & 3 == 0 {
+            if eob > last_eob[ei] as i32 {
+                ei += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    while y < size {
+        row_mut(tmp, y)[..size].fill(0);
+        y += 1;
+    }
+
+    coeff[..size * size].fill(C::ZERO);
+
+    let rnd0 = (1 << shift0) >> 1;
+    for y in 0..size {
+        crate::filter::row_clip(
+            row_mut(tmp, y),
+            size,
+            rnd0,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    }
+
+    let mut x = 0usize;
+    while x + 8 <= size {
+        if !dct_1d_x8_dyn(size, tmp, x) {
+            for sx in x..x + 8 {
+                dct_1d_dyn(size, &mut tmp[sx..], ITX_TMP_STRIDE);
+            }
+        }
+        x += 8;
+    }
+    while x < size {
+        dct_1d_dyn(size, &mut tmp[x..], ITX_TMP_STRIDE);
+        x += 1;
+    }
+}
+
+#[inline(never)]
+fn itx_dequant_scalar_core_dyn<C: Coeff>(
+    n: usize,
+    size: usize,
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    debug_assert!(matches!(size, 4 | 8 | 16));
+    debug_assert!(n <= coeff.len());
+    debug_assert!(size * size <= n);
+    debug_assert!(is_dct_adst_kind(first_kind));
+    debug_assert!(is_dct_adst_kind(second_kind));
+
+    let coeff = &mut coeff[..n];
+    let off = usize::from(LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &LAST_EOB_PER_COL.table[off..];
+    let mut ei = 0usize;
+    let mut y = 0usize;
+
+    loop {
+        let dst_row = row_mut(tmp, y);
+        for (x, dst) in dst_row[..size].iter_mut().enumerate() {
+            let v = coeff[y + x * size].to_i32();
+            *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
+        }
+
+        tx_1d_scalar_dyn(size, first_kind, dst_row, 1);
+        y += 1;
+
+        if y & 3 == 0 {
+            if eob > last_eob[ei] as i32 {
+                ei += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    while y < size {
+        row_mut(tmp, y)[..size].fill(0);
+        y += 1;
+    }
+
+    coeff[..size * size].fill(C::ZERO);
+
+    let rnd0 = (1 << shift0) >> 1;
+    for y in 0..size {
+        crate::filter::row_clip(
+            row_mut(tmp, y),
+            size,
+            rnd0,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    }
+
+    let mut x = 0usize;
+    if let Some(f8) = crate::itx_1d::tx1d_x8_dispatch(tx_size_idx_dyn(size), second_kind) {
+        while x + 8 <= size {
+            unsafe { f8(tmp, x, ITX_TMP_STRIDE) };
+            x += 8;
+        }
+    }
+    while x < size {
+        tx_1d_scalar_dyn(size, second_kind, &mut tmp[x..], ITX_TMP_STRIDE);
+        x += 1;
+    }
+}
+
 pub(crate) fn idct_dequant_scalar_core<const N: usize, const S: usize, C: Coeff>(
     coeff: &mut [C],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1027,150 +844,18 @@ pub(crate) fn idct_dequant_scalar_core<const N: usize, const S: usize, C: Coeff>
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    debug_assert!(S == 4 || S == 8 || S == 16 || S == 32);
-    debug_assert!(N <= coeff.len());
-    debug_assert!(S * S <= N);
-
-    let coeff = &mut coeff[..N];
-    let off = usize::from(LAST_EOB_PER_COL.offset[tx]);
-    let last_eob = &LAST_EOB_PER_COL.table[off..];
-    let mut ei = 0usize;
-    let mut y = 0usize;
-
-    loop {
-        let dst_row = row_mut(tmp, y);
-        for (x, dst) in dst_row[..S].iter_mut().enumerate() {
-            let v = coeff[y + x * S].to_i32();
-            *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
-        }
-
-        dct_1d::<S>(dst_row, 1);
-        y += 1;
-
-        if y & 3 == 0 {
-            if eob > last_eob[ei] as i32 {
-                ei += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    while y < S {
-        row_mut(tmp, y)[..S].fill(0);
-        y += 1;
-    }
-
-    coeff[..S * S].fill(C::ZERO);
-
-    let rnd0 = (1 << shift0) >> 1;
-    for y in 0..S {
-        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
-    }
-
-    let mut x = 0usize;
-    while x + 8 <= S {
-        if !dct_1d_x8::<S>(tmp, x) {
-            for sx in x..x + 8 {
-                dct_1d::<S>(&mut tmp[sx..], ITX_TMP_STRIDE);
-            }
-        }
-        x += 8;
-    }
-    while x < S {
-        dct_1d::<S>(&mut tmp[x..], ITX_TMP_STRIDE);
-        x += 1;
-    }
-}
-
-#[inline(always)]
-fn tx_size_idx<const S: usize>() -> usize {
-    match S {
-        4 => 0,
-        8 => 1,
-        16 => 2,
-        32 => 3,
-        _ => unreachable!(),
-    }
-}
-
-#[inline(always)]
-pub(crate) fn tx_1d_scalar_mono<const S: usize, const KIND: usize>(c: &mut [i32], stride: usize) {
-    debug_assert!(is_dct_adst_kind(KIND));
-    let f = TX1D_FNS[tx_size_idx::<S>()][KIND].expect("unsupported 1D transform");
-    f(c, stride);
-}
-
-pub(crate) fn itx_dequant_scalar_core_mono<
-    const N: usize,
-    const S: usize,
-    C: Coeff,
-    const FIRST_KIND: usize,
-    const SECOND_KIND: usize,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    debug_assert!(S == 4 || S == 8 || S == 16);
-    debug_assert!(N <= coeff.len());
-    debug_assert!(S * S <= N);
-    debug_assert!(is_dct_adst_kind(FIRST_KIND));
-    debug_assert!(is_dct_adst_kind(SECOND_KIND));
-
-    let coeff = &mut coeff[..N];
-    let off = usize::from(LAST_EOB_PER_COL.offset[tx]);
-    let last_eob = &LAST_EOB_PER_COL.table[off..];
-    let mut ei = 0usize;
-    let mut y = 0usize;
-
-    loop {
-        let dst_row = row_mut(tmp, y);
-        for (x, dst) in dst_row[..S].iter_mut().enumerate() {
-            let v = coeff[y + x * S].to_i32();
-            *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
-        }
-
-        tx_1d_scalar_mono::<S, FIRST_KIND>(dst_row, 1);
-        y += 1;
-
-        if y & 3 == 0 {
-            if eob > last_eob[ei] as i32 {
-                ei += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    while y < S {
-        row_mut(tmp, y)[..S].fill(0);
-        y += 1;
-    }
-
-    coeff[..S * S].fill(C::ZERO);
-
-    let rnd0 = (1 << shift0) >> 1;
-    for y in 0..S {
-        crate::filter::row_clip(row_mut(tmp, y), S, rnd0, shift0, row_clip_min, row_clip_max);
-    }
-
-    let mut x = 0usize;
-    if let Some(f8) = crate::itx_1d::tx1d_x8_dispatch(tx_size_idx::<S>(), SECOND_KIND) {
-        while x + 8 <= S {
-            unsafe { f8(tmp, x, ITX_TMP_STRIDE) };
-            x += 8;
-        }
-    }
-    while x < S {
-        tx_1d_scalar_mono::<S, SECOND_KIND>(&mut tmp[x..], ITX_TMP_STRIDE);
-        x += 1;
-    }
+    idct_dequant_scalar_core_dyn::<C>(
+        N,
+        S,
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+    );
 }
 
 pub(crate) fn itx_dequant_scalar_core<const N: usize, const S: usize, C: Coeff>(
@@ -1185,20 +870,20 @@ pub(crate) fn itx_dequant_scalar_core<const N: usize, const S: usize, C: Coeff>(
     first_kind: usize,
     second_kind: usize,
 ) {
-    debug_assert!(is_dct_adst_kind(first_kind));
-    debug_assert!(is_dct_adst_kind(second_kind));
-    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
-        itx_dequant_scalar_core_mono::<N, S, C, FK, SK>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    });
+    itx_dequant_scalar_core_dyn::<C>(
+        N,
+        S,
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        first_kind,
+        second_kind,
+    );
 }
 
 /// Full size-16 inverse DCT-II kernel `K16[in*16 + out]` for the flat butterfly.
@@ -1905,7 +1590,9 @@ pub(crate) fn idct_dequant_4x4_scalar(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    ScalarDct2d::idct_dequant_4x4(
+    idct_dequant_scalar_core_dyn::<i32>(
+        16,
+        4,
         coeff,
         tmp,
         eob,
@@ -1927,7 +1614,9 @@ pub(crate) fn idct_dequant_8x8_scalar(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    ScalarDct2d::idct_dequant_8x8(
+    idct_dequant_scalar_core_dyn::<i32>(
+        64,
+        8,
         coeff,
         tmp,
         eob,
@@ -1949,7 +1638,9 @@ pub(crate) fn idct_dequant_16x16_scalar(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    ScalarDct2d::idct_dequant_16x16(
+    idct_dequant_scalar_core_dyn::<i32>(
+        256,
+        16,
         coeff,
         tmp,
         eob,
@@ -1971,7 +1662,9 @@ pub(crate) fn idct_dequant_32x32_scalar(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    ScalarDct2d::idct_dequant_32x32(
+    idct_dequant_scalar_core_dyn::<i32>(
+        1024,
+        32,
         coeff,
         tmp,
         eob,
@@ -1993,7 +1686,9 @@ pub(crate) fn idct_dequant_64x64_scalar(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    ScalarDct2d::idct_dequant_64x64(
+    idct_dequant_scalar_core_dyn::<i32>(
+        1024,
+        32,
         coeff,
         tmp,
         eob,
@@ -2017,7 +1712,9 @@ pub(crate) fn iadst_dequant_4x4_scalar(
     first_kind: usize,
     second_kind: usize,
 ) {
-    ScalarDct2d::iadst_dequant_4x4(
+    itx_dequant_scalar_core_dyn::<i32>(
+        16,
+        4,
         coeff,
         tmp,
         eob,
@@ -2043,7 +1740,9 @@ pub(crate) fn iadst_dequant_8x8_scalar(
     first_kind: usize,
     second_kind: usize,
 ) {
-    ScalarDct2d::iadst_dequant_8x8(
+    itx_dequant_scalar_core_dyn::<i32>(
+        64,
+        8,
         coeff,
         tmp,
         eob,
@@ -2069,7 +1768,9 @@ pub(crate) fn iadst_dequant_16x16_scalar(
     first_kind: usize,
     second_kind: usize,
 ) {
-    ScalarDct2d::iadst_dequant_16x16(
+    itx_dequant_scalar_core_dyn::<i32>(
+        256,
+        16,
         coeff,
         tmp,
         eob,
@@ -2083,9 +1784,11 @@ pub(crate) fn iadst_dequant_16x16_scalar(
     );
 }
 
-/// Scalar row pass (used for the rect2 sizes, mirroring the generic path's
-/// `tx_class == 0` loop with the `* 181 + 128 >> 8` rect2 scaling).
-fn idct_dequant_rows_rect_dct_scalar<const N: usize, const W: usize, const H: usize, C: Coeff>(
+#[inline(never)]
+fn idct_dequant_rect_scalar_core_dyn<C: Coeff>(
+    n: usize,
+    width: usize,
+    height: usize,
     coeff: &mut [C],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -2095,7 +1798,7 @@ fn idct_dequant_rows_rect_dct_scalar<const N: usize, const W: usize, const H: us
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    let coeff = &mut coeff[..N];
+    let coeff = &mut coeff[..n];
     let off = usize::from(LAST_EOB_PER_COL.offset[tx]);
     let last_eob = &LAST_EOB_PER_COL.table[off..];
     let mut ei = 0usize;
@@ -2103,11 +1806,11 @@ fn idct_dequant_rows_rect_dct_scalar<const N: usize, const W: usize, const H: us
 
     loop {
         let tmp_row = row_mut(tmp, row);
-        for (x, dst) in tmp_row[..W].iter_mut().enumerate() {
-            let v = coeff[row + x * H].to_i32();
+        for (x, dst) in tmp_row[..width].iter_mut().enumerate() {
+            let v = coeff[row + x * height].to_i32();
             *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
         }
-        dct_1d::<W>(tmp_row, 1);
+        dct_1d_dyn(width, tmp_row, 1);
         row += 1;
         if row & 3 == 0 {
             if eob > last_eob[ei] as i32 {
@@ -2118,16 +1821,93 @@ fn idct_dequant_rows_rect_dct_scalar<const N: usize, const W: usize, const H: us
         }
     }
 
-    while row < H {
-        row_mut(tmp, row)[..W].fill(0);
+    while row < height {
+        row_mut(tmp, row)[..width].fill(0);
         row += 1;
     }
 
-    coeff[..W * H].fill(C::ZERO);
+    coeff[..width * height].fill(C::ZERO);
 
     let rnd0 = (1 << shift0) >> 1;
-    for y in 0..H {
-        crate::filter::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
+    for y in 0..height {
+        crate::filter::row_clip(
+            row_mut(tmp, y),
+            width,
+            rnd0,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    }
+
+    for x in 0..width {
+        dct_1d_dyn(height, &mut tmp[x..], ITX_TMP_STRIDE);
+    }
+}
+
+#[inline(never)]
+fn itx_dequant_rect_scalar_core_dyn<C: Coeff>(
+    n: usize,
+    width: usize,
+    height: usize,
+    coeff: &mut [C],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    debug_assert!(is_dct_adst_kind(first_kind));
+    debug_assert!(is_dct_adst_kind(second_kind));
+
+    let coeff = &mut coeff[..n];
+    let off = usize::from(LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &LAST_EOB_PER_COL.table[off..];
+    let mut ei = 0usize;
+    let mut row = 0usize;
+
+    loop {
+        let dst_row = row_mut(tmp, row);
+        for (x, dst) in dst_row[..width].iter_mut().enumerate() {
+            let v = coeff[row + x * height].to_i32();
+            *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
+        }
+        tx_1d_scalar_dyn(width, first_kind, dst_row, 1);
+        row += 1;
+        if row & 3 == 0 {
+            if eob > last_eob[ei] as i32 {
+                ei += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    while row < height {
+        row_mut(tmp, row)[..width].fill(0);
+        row += 1;
+    }
+
+    coeff[..width * height].fill(C::ZERO);
+
+    let rnd0 = (1 << shift0) >> 1;
+    for y in 0..height {
+        crate::filter::row_clip(
+            row_mut(tmp, y),
+            width,
+            rnd0,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+        );
+    }
+
+    for x in 0..width {
+        tx_1d_scalar_dyn(height, second_kind, &mut tmp[x..], ITX_TMP_STRIDE);
     }
 }
 
@@ -2148,7 +1928,10 @@ pub(crate) fn idct_dequant_rect_scalar_core<
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    idct_dequant_rows_rect_dct_scalar::<N, W, H, C>(
+    idct_dequant_rect_scalar_core_dyn::<C>(
+        N,
+        W,
+        H,
         coeff,
         tmp,
         eob,
@@ -2158,71 +1941,6 @@ pub(crate) fn idct_dequant_rect_scalar_core<
         row_clip_min,
         row_clip_max,
     );
-    for x in 0..W {
-        dct_1d::<H>(&mut tmp[x..], ITX_TMP_STRIDE);
-    }
-}
-
-/// Pure-scalar kind-aware rectangular core (rect2 sizes + universal fallback).
-/// Mirrors the generic path: scalar rows with rect2 scaling, scalar columns.
-pub(crate) fn itx_dequant_rect_scalar_core_mono<
-    const N: usize,
-    const W: usize,
-    const H: usize,
-    C: Coeff,
-    const FIRST_KIND: usize,
-    const SECOND_KIND: usize,
->(
-    coeff: &mut [C],
-    tmp: &mut [i32; ITX_TMP_PIXELS],
-    eob: i32,
-    tx: usize,
-    is_rect2: bool,
-    shift0: i32,
-    row_clip_min: i32,
-    row_clip_max: i32,
-) {
-    debug_assert!(is_dct_adst_kind(FIRST_KIND));
-    debug_assert!(is_dct_adst_kind(SECOND_KIND));
-
-    let coeff = &mut coeff[..N];
-    let off = usize::from(LAST_EOB_PER_COL.offset[tx]);
-    let last_eob = &LAST_EOB_PER_COL.table[off..];
-    let mut ei = 0usize;
-    let mut row = 0usize;
-
-    loop {
-        let dst_row = row_mut(tmp, row);
-        for (x, dst) in dst_row[..W].iter_mut().enumerate() {
-            let v = coeff[row + x * H].to_i32();
-            *dst = if is_rect2 { (v * 181 + 128) >> 8 } else { v };
-        }
-        tx_1d_scalar_mono::<W, FIRST_KIND>(dst_row, 1);
-        row += 1;
-        if row & 3 == 0 {
-            if eob > last_eob[ei] as i32 {
-                ei += 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    while row < H {
-        row_mut(tmp, row)[..W].fill(0);
-        row += 1;
-    }
-
-    coeff[..W * H].fill(C::ZERO);
-
-    let rnd0 = (1 << shift0) >> 1;
-    for y in 0..H {
-        crate::filter::row_clip(row_mut(tmp, y), W, rnd0, shift0, row_clip_min, row_clip_max);
-    }
-
-    for x in 0..W {
-        tx_1d_scalar_mono::<H, SECOND_KIND>(&mut tmp[x..], ITX_TMP_STRIDE);
-    }
 }
 
 pub(crate) fn itx_dequant_rect_scalar_core<
@@ -2242,20 +1960,21 @@ pub(crate) fn itx_dequant_rect_scalar_core<
     first_kind: usize,
     second_kind: usize,
 ) {
-    debug_assert!(is_dct_adst_kind(first_kind));
-    debug_assert!(is_dct_adst_kind(second_kind));
-    dispatch_dct_adst_pair!(first_kind, second_kind, |FK, SK| {
-        itx_dequant_rect_scalar_core_mono::<N, W, H, C, FK, SK>(
-            coeff,
-            tmp,
-            eob,
-            tx,
-            is_rect2,
-            shift0,
-            row_clip_min,
-            row_clip_max,
-        )
-    });
+    itx_dequant_rect_scalar_core_dyn::<C>(
+        N,
+        W,
+        H,
+        coeff,
+        tmp,
+        eob,
+        tx,
+        is_rect2,
+        shift0,
+        row_clip_min,
+        row_clip_max,
+        first_kind,
+        second_kind,
+    );
 }
 
 static DEQUANT_4X4: OnceLock<IdctDequantFn<16>> = OnceLock::new();
