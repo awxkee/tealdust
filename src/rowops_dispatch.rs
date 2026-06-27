@@ -38,9 +38,9 @@ pub(crate) fn residual_add_row_8bpc_scalar(
     rnd: i32,
     shift: i32,
 ) {
-    for i in 0..n {
-        let p = dst[i] as i32;
-        dst[i] = (p + ((c[i] + rnd) >> shift)).clamp(0, 255) as u8;
+    for (d, &coeff) in dst[..n].iter_mut().zip(&c[..n]) {
+        let p = *d as i32;
+        *d = (p + ((coeff + rnd) >> shift)).clamp(0, 255) as u8;
     }
 }
 
@@ -177,11 +177,13 @@ pub(crate) fn cctx_row_scalar(
     min: i32,
     max: i32,
 ) {
-    for i in 0..sz {
-        let a = u[i] * cosa - v[i] * sina;
-        let b = u[i] * sina + v[i] * cosa;
-        u[i] = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max);
-        v[i] = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max);
+    for (u, v) in u[..sz].iter_mut().zip(&mut v[..sz]) {
+        let ui = *u;
+        let vi = *v;
+        let a = ui * cosa - vi * sina;
+        let b = ui * sina + vi * cosa;
+        *u = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max);
+        *v = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max);
     }
 }
 
@@ -239,8 +241,8 @@ pub(crate) fn avg_row_8bpc_scalar(
     rnd: i32,
     sh: i32,
 ) {
-    for x in 0..n {
-        dst[x] = ((t1[x] as i32 + t2[x] as i32 + rnd) >> sh).clamp(0, 255) as u8;
+    for ((d, &a), &b) in dst[..n].iter_mut().zip(&t1[..n]).zip(&t2[..n]) {
+        *d = ((a as i32 + b as i32 + rnd) >> sh).clamp(0, 255) as u8;
     }
 }
 
@@ -291,9 +293,8 @@ pub(crate) fn w_avg_row_8bpc_scalar(
     rnd: i32,
     sh: i32,
 ) {
-    for x in 0..n {
-        dst[x] = ((t1[x] as i32 * weight + t2[x] as i32 * (16 - weight) + rnd) >> sh).clamp(0, 255)
-            as u8;
+    for ((d, &a), &b) in dst[..n].iter_mut().zip(&t1[..n]).zip(&t2[..n]) {
+        *d = ((a as i32 * weight + b as i32 * (16 - weight) + rnd) >> sh).clamp(0, 255) as u8;
     }
 }
 
@@ -353,9 +354,14 @@ pub(crate) fn mask_row_8bpc_scalar(
     rnd: i32,
     sh: i32,
 ) {
-    for x in 0..n {
-        let m = mask[x] as i32;
-        dst[x] = ((t1[x] as i32 * m + t2[x] as i32 * (64 - m) + rnd) >> sh).clamp(0, 255) as u8;
+    for (((d, &a), &b), &m) in dst[..n]
+        .iter_mut()
+        .zip(&t1[..n])
+        .zip(&t2[..n])
+        .zip(&mask[..n])
+    {
+        let m = m as i32;
+        *d = ((a as i32 * m + b as i32 * (64 - m) + rnd) >> sh).clamp(0, 255) as u8;
     }
 }
 
@@ -406,11 +412,11 @@ pub(crate) fn mask_row_8bpc(
 pub(crate) type BlendFn = unsafe fn(&mut [u8], &[u8], &[u8], usize);
 
 pub(crate) fn blend_row_8bpc_scalar(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: usize) {
-    for x in 0..n {
-        let m = mask[x] as i32;
-        let d = dst[x] as i32;
-        let t = tmp[x] as i32;
-        dst[x] = ((d * (64 - m) + t * m + 32) >> 6) as u8;
+    for ((d, &t), &m) in dst[..n].iter_mut().zip(&tmp[..n]).zip(&mask[..n]) {
+        let m = m as i32;
+        let d0 = *d as i32;
+        let t = t as i32;
+        *d = ((d0 * (64 - m) + t * m + 32) >> 6) as u8;
     }
 }
 
@@ -452,8 +458,8 @@ pub(crate) fn blend_row_8bpc(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: usize) 
 pub(crate) type MorphFn = unsafe fn(&mut [u8], i32, i32, usize);
 
 pub(crate) fn morph_row_8bpc_scalar(dst: &mut [u8], alpha: i32, beta: i32, n: usize) {
-    for x in 0..n {
-        dst[x] = ((alpha * dst[x] as i32 + beta) >> 8).clamp(0, 255) as u8;
+    for d in &mut dst[..n] {
+        *d = ((alpha * *d as i32 + beta) >> 8).clamp(0, 255) as u8;
     }
 }
 
@@ -509,8 +515,8 @@ pub(crate) fn residual_add_row_hbd_scalar(
     shift: i32,
     bitdepth_max: i32,
 ) {
-    for i in 0..n {
-        dst[i] = (dst[i] as i32 + ((c[i] + rnd) >> shift)).clamp(0, bitdepth_max) as u16;
+    for (d, &coeff) in dst[..n].iter_mut().zip(&c[..n]) {
+        *d = (*d as i32 + ((coeff + rnd) >> shift)).clamp(0, bitdepth_max) as u16;
     }
 }
 
@@ -606,8 +612,8 @@ pub(crate) fn avg_row_hbd_scalar(
     sh: i32,
     bitdepth_max: i32,
 ) {
-    for x in 0..n {
-        dst[x] = ((t1[x] as i32 + t2[x] as i32 + rnd) >> sh).clamp(0, bitdepth_max) as u16;
+    for ((d, &a), &b) in dst[..n].iter_mut().zip(&t1[..n]).zip(&t2[..n]) {
+        *d = ((a as i32 + b as i32 + rnd) >> sh).clamp(0, bitdepth_max) as u16;
     }
 }
 
@@ -665,9 +671,9 @@ pub(crate) fn w_avg_row_hbd_scalar(
     sh: i32,
     bitdepth_max: i32,
 ) {
-    for x in 0..n {
-        dst[x] = ((t1[x] as i32 * weight + t2[x] as i32 * (16 - weight) + rnd) >> sh)
-            .clamp(0, bitdepth_max) as u16;
+    for ((d, &a), &b) in dst[..n].iter_mut().zip(&t1[..n]).zip(&t2[..n]) {
+        *d = ((a as i32 * weight + b as i32 * (16 - weight) + rnd) >> sh).clamp(0, bitdepth_max)
+            as u16;
     }
 }
 
@@ -727,10 +733,14 @@ pub(crate) fn mask_row_hbd_scalar(
     sh: i32,
     bitdepth_max: i32,
 ) {
-    for x in 0..n {
-        let m = mask[x] as i32;
-        dst[x] = ((t1[x] as i32 * m + t2[x] as i32 * (64 - m) + rnd) >> sh).clamp(0, bitdepth_max)
-            as u16;
+    for (((d, &a), &b), &m) in dst[..n]
+        .iter_mut()
+        .zip(&t1[..n])
+        .zip(&t2[..n])
+        .zip(&mask[..n])
+    {
+        let m = m as i32;
+        *d = ((a as i32 * m + b as i32 * (64 - m) + rnd) >> sh).clamp(0, bitdepth_max) as u16;
     }
 }
 
@@ -780,9 +790,9 @@ pub(crate) fn mask_row_hbd(
 pub(crate) type BlendHbdFn = unsafe fn(&mut [u16], &[u16], &[u8], usize);
 
 pub(crate) fn blend_row_hbd_scalar(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
-    for x in 0..n {
-        let m = mask[x] as i32;
-        dst[x] = ((dst[x] as i32 * (64 - m) + tmp[x] as i32 * m + 32) >> 6) as u16;
+    for ((d, &t), &m) in dst[..n].iter_mut().zip(&tmp[..n]).zip(&mask[..n]) {
+        let m = m as i32;
+        *d = ((*d as i32 * (64 - m) + t as i32 * m + 32) >> 6) as u16;
     }
 }
 
@@ -876,11 +886,11 @@ pub(crate) fn morph_row_hbd(dst: &mut [u16], alpha: i32, beta: i32, n: usize, bi
 pub(crate) type GdfAddFn = unsafe fn(&mut [u8], &[i8], i32, usize);
 
 pub(crate) fn gdf_add_run_8bpc_scalar(dst: &mut [u8], err: &[i8], scale: i32, n: usize) {
-    for x in 0..n {
-        let diff = err[x] as i32 * scale;
+    for (d, &err) in dst[..n].iter_mut().zip(&err[..n]) {
+        let diff = err as i32 * scale;
         let mag = (diff.abs() + 8) >> 4;
         let adj = if diff < 0 { -mag } else { mag };
-        dst[x] = (dst[x] as i32 + adj).clamp(0, 255) as u8;
+        *d = (*d as i32 + adj).clamp(0, 255) as u8;
     }
 }
 
@@ -956,15 +966,18 @@ pub(crate) fn gdf_gradient_group_scalar(
         let brow: &[u8; 8] = center_rows[y][bcol..bcol + 8].try_into().unwrap();
         let arow: &[u8; 8] = a_rows[y][acol..acol + 8].try_into().unwrap();
         let crow: &[u8; 8] = c_rows[y][ccol..ccol + 8].try_into().unwrap();
-        for k in 0..8 {
-            let b = (brow[k] as i32) >> shift;
-            let a = (arow[k] as i32) >> shift;
-            let c = (crow[k] as i32) >> shift;
-            acc[k] += (b + b - a - c).abs();
+        for (((acc, &b), &a), &c) in acc.iter_mut().zip(brow).zip(arow).zip(crow) {
+            let b = (b as i32) >> shift;
+            let a = (a as i32) >> shift;
+            let c = (c as i32) >> shift;
+            *acc += (b + b - a - c).abs();
         }
     }
-    for k in 0..ncells {
-        dst[base_cell + k][d] = (acc[2 * k] + acc[2 * k + 1]) as u16;
+    for (cell, pair) in dst[base_cell..base_cell + ncells]
+        .iter_mut()
+        .zip(acc.as_chunks::<2>().0.iter())
+    {
+        cell[d] = (pair[0] + pair[1]) as u16;
     }
 }
 
@@ -1039,13 +1052,13 @@ pub(crate) fn cctx_row_i16_scalar(
     min: i32,
     max: i32,
 ) {
-    for i in 0..sz {
-        let ui = u[i] as i32;
-        let vi = v[i] as i32;
+    for (u, v) in u[..sz].iter_mut().zip(&mut v[..sz]) {
+        let ui = *u as i32;
+        let vi = *v as i32;
         let a = ui * cosa - vi * sina;
         let b = ui * sina + vi * cosa;
-        u[i] = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
-        v[i] = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
+        *u = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
+        *v = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
     }
 }
 

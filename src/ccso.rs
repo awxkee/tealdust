@@ -497,22 +497,23 @@ pub(crate) fn ccso_add_8bpc_scalar(
     h: usize,
     ll_mask: &[[u16; 4]],
 ) {
-    for yy in (0..h).step_by(4) {
-        let mi = yy >> 2;
-        let mut bx = 0usize;
-        let mut xx = 0usize;
-        while xx < w {
+    for (mi, yy) in (0..h).step_by(4).enumerate() {
+        let dst_rows = &mut dst[yy * dst_stride..(yy + 4) * dst_stride];
+        let idx_rows = &idx_buf[yy * idx_stride..(yy + 4) * idx_stride];
+        for (bx, xx) in (0..w).step_by(4).enumerate() {
             if ll_mask[mi][0] & (1 << bx) == 0 {
-                for y in yy..yy + 4 {
-                    for x in xx..xx + 4 {
-                        let off = ccso_offset(idx_buf[y * idx_stride + x], offset_idxs, offset_lut);
-                        let cur = dst[y * dst_stride + x] as i32;
-                        dst[y * dst_stride + x] = (cur + off as i32).clamp(0, 255) as u8;
+                for (dst_row, idx_row) in dst_rows
+                    .chunks_exact_mut(dst_stride)
+                    .zip(idx_rows.chunks_exact(idx_stride))
+                    .take(4)
+                {
+                    for (dst, &idx) in dst_row[xx..xx + 4].iter_mut().zip(&idx_row[xx..xx + 4]) {
+                        let off = ccso_offset(idx, offset_idxs, offset_lut);
+                        let cur = *dst as i32;
+                        *dst = (cur + off as i32).clamp(0, 255) as u8;
                     }
                 }
             }
-            xx += 4;
-            bx += 1;
         }
     }
 }
@@ -530,22 +531,23 @@ pub(crate) fn ccso_add_hbd_scalar(
     ll_mask: &[[u16; 4]],
     bitdepth_max: i32,
 ) {
-    for yy in (0..h).step_by(4) {
-        let mi = yy >> 2;
-        let mut bx = 0usize;
-        let mut xx = 0usize;
-        while xx < w {
+    for (mi, yy) in (0..h).step_by(4).enumerate() {
+        let dst_rows = &mut dst[yy * dst_stride..(yy + 4) * dst_stride];
+        let idx_rows = &idx_buf[yy * idx_stride..(yy + 4) * idx_stride];
+        for (bx, xx) in (0..w).step_by(4).enumerate() {
             if ll_mask[mi][0] & (1 << bx) == 0 {
-                for y in yy..yy + 4 {
-                    for x in xx..xx + 4 {
-                        let off = ccso_offset(idx_buf[y * idx_stride + x], offset_idxs, offset_lut);
-                        let cur = dst[y * dst_stride + x] as i32;
-                        dst[y * dst_stride + x] = (cur + off as i32).clamp(0, bitdepth_max) as u16;
+                for (dst_row, idx_row) in dst_rows
+                    .chunks_exact_mut(dst_stride)
+                    .zip(idx_rows.chunks_exact(idx_stride))
+                    .take(4)
+                {
+                    for (dst, &idx) in dst_row[xx..xx + 4].iter_mut().zip(&idx_row[xx..xx + 4]) {
+                        let off = ccso_offset(idx, offset_idxs, offset_lut);
+                        let cur = *dst as i32;
+                        *dst = (cur + off as i32).clamp(0, bitdepth_max) as u16;
                     }
                 }
             }
-            xx += 4;
-            bx += 1;
         }
     }
 }

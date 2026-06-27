@@ -490,50 +490,63 @@ static WEDGE_CODEBOOK_16: [WedgeCodeType; 68] = [
 fn copy2d(dst: &mut [u8], src: &[u8], w8: usize, h8: usize, x_off: usize, y_off: usize) {
     let src_start = (64 - y_off * h8) * 128 + (64 - x_off * w8);
     let row_len = w8 * 8;
-    for y in 0..h8 * 8 {
-        let s = src_start + y * 128;
-        let d = y * row_len;
-        dst[d..d + row_len].copy_from_slice(&src[s..s + row_len]);
+    for (dst_row, src_row) in dst
+        .chunks_exact_mut(row_len)
+        .zip(src[src_start..].chunks_exact(128))
+        .take(h8 * 8)
+    {
+        dst_row.copy_from_slice(&src_row[..row_len]);
     }
 }
 
 fn subsample_420(dst: &mut [u8], src: &[u8], w8: usize, h8: usize) {
     let stride = w8 * 8;
-    for y in 0..h8 * 4 {
-        for x in 0..w8 * 4 {
-            dst[y * w8 * 4 + x] = ((src[y * 2 * stride + x * 2] as u16
-                + src[y * 2 * stride + x * 2 + 1] as u16
-                + src[(y * 2 + 1) * stride + x * 2] as u16
-                + src[(y * 2 + 1) * stride + x * 2 + 1] as u16
-                + 2)
-                >> 2) as u8;
+    let dst_stride = w8 * 4;
+    for (dst_row, src_rows) in dst
+        .chunks_exact_mut(dst_stride)
+        .zip(src.chunks_exact(stride * 2))
+        .take(h8 * 4)
+    {
+        let (top, bottom) = src_rows.split_at(stride);
+        for (dst, (top, bottom)) in dst_row.iter_mut().zip(
+            top.as_chunks::<2>()
+                .0
+                .iter()
+                .zip(bottom.as_chunks::<2>().0.iter()),
+        ) {
+            *dst = ((top[0] as u16 + top[1] as u16 + bottom[0] as u16 + bottom[1] as u16 + 2) >> 2)
+                as u8;
         }
     }
 }
 
 fn subsample_422(dst: &mut [u8], src: &[u8], w8: usize, h8: usize) {
     let stride = w8 * 8;
-    for y in 0..h8 * 8 {
-        for x in 0..w8 * 4 {
-            dst[y * w8 * 4 + x] =
-                ((src[y * stride + x * 2] as u16 + src[y * stride + x * 2 + 1] as u16 + 1) >> 1)
-                    as u8;
+    let dst_stride = w8 * 4;
+    for (dst_row, src_row) in dst
+        .chunks_exact_mut(dst_stride)
+        .zip(src.chunks_exact(stride))
+        .take(h8 * 8)
+    {
+        for (dst, pair) in dst_row.iter_mut().zip(src_row.as_chunks::<2>().0.iter()) {
+            *dst = ((pair[0] as u16 + pair[1] as u16 + 1) >> 1) as u8;
         }
     }
 }
 
 fn fill_tmvp(dst: &mut [u8], src: &[u8], w8: usize, h8: usize) {
     let stride = w8 * 8;
-    for y in 0..h8 {
-        for x in 0..w8 {
+    for (y, dst_row) in dst.chunks_exact_mut(w8).take(h8).enumerate() {
+        for (x, dst) in dst_row.iter_mut().enumerate() {
             let mut score = [0i32; 2];
-            for yy in y * 8..y * 8 + 8 {
-                for xx in x * 8..x * 8 + 8 {
-                    score[0] += (src[yy * stride + xx] < 4) as i32;
-                    score[1] += (src[yy * stride + xx] > 60) as i32;
+            let block = &src[(y * 8) * stride + x * 8..];
+            for row in block.chunks_exact(stride).take(8) {
+                for &p in &row[..8] {
+                    score[0] += (p < 4) as i32;
+                    score[1] += (p > 60) as i32;
                 }
             }
-            dst[y * w8 + x] = if score[0] >= 60 {
+            *dst = if score[0] >= 60 {
                 0
             } else if score[1] >= 60 {
                 1
@@ -558,11 +571,11 @@ fn gen_master(master: &mut [u8; 128 * 128], mul: i32, wd: WedgeDirection) {
     let idx = wd as usize;
     let s = SIN_LUT[idx] as i32 * mul;
     let c = COS_LUT[idx] as i32 * mul;
-    for y in 0..128 {
+    for (y, row) in master.chunks_exact_mut(128).enumerate() {
         let dy = (2 * y as i32 - 127) * s;
-        for x in 0..128 {
+        for (x, dst) in row.iter_mut().enumerate() {
             let d = iclip((2 * x as i32 - 127) * c + dy, -28, 28);
-            master[y * 128 + x] = (4 * if d >= 0 {
+            *dst = (4 * if d >= 0 {
                 16 - WEIGHT[d as usize] as i32
             } else {
                 WEIGHT[(-d) as usize] as i32
@@ -582,13 +595,23 @@ fn build_nondc_ii_masks(mask_v: &mut [u8], w: usize, h: usize, step: usize) {
     // mask_v[0..area]     = vertical mask
     // mask_v[area..2*area] = horizontal mask (mask_h)
     // mask_v[2*area..3*area] = smooth mask (mask_sm)
-    for y in 0..h {
-        let off = y * w;
+    let (mask_v_plane, rest) = mask_v.split_at_mut(area);
+    let (mask_h_plane, mask_sm_plane) = rest.split_at_mut(area);
+    for (y, ((mask_v_row, mask_h_row), mask_sm_row)) in mask_v_plane
+        .chunks_exact_mut(w)
+        .zip(mask_h_plane.chunks_exact_mut(w))
+        .zip(mask_sm_plane.chunks_exact_mut(w))
+        .enumerate()
+    {
         let wt = II_WEIGHTS_1D[y * step];
-        for x in 0..w {
-            mask_v[off + x] = wt;
-            mask_v[area + off + x] = II_WEIGHTS_1D[x * step];
-            mask_v[2 * area + off + x] = II_WEIGHTS_1D[imin(x as i32, y as i32) as usize * step];
+        mask_v_row.fill(wt);
+        for (x, (h, sm)) in mask_h_row
+            .iter_mut()
+            .zip(mask_sm_row.iter_mut())
+            .enumerate()
+        {
+            *h = II_WEIGHTS_1D[x * step];
+            *sm = II_WEIGHTS_1D[imin(x as i32, y as i32) as usize * step];
         }
     }
 }

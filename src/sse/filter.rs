@@ -1066,10 +1066,11 @@ pub(crate) fn cctx_row_i16_sse41(
         let zero = _mm_setzero_si128();
         let min_v = _mm_set1_epi32(min);
         let max_v = _mm_set1_epi32(max);
-        let mut i = 0usize;
-        while i + 4 <= sz {
-            let uu16 = _mm_loadl_epi64(u.as_ptr().add(i) as *const __m128i);
-            let vv16 = _mm_loadl_epi64(v.as_ptr().add(i) as *const __m128i);
+        let (u_chunks, ur) = u[..sz].as_chunks_mut::<4>();
+        let (v_chunks, vr) = v[..sz].as_chunks_mut::<4>();
+        for (uch, vch) in u_chunks.iter_mut().zip(v_chunks.iter_mut()) {
+            let uu16 = _mm_loadl_epi64(uch.as_ptr() as *const __m128i);
+            let vv16 = _mm_loadl_epi64(vch.as_ptr() as *const __m128i);
             let uv = _mm_unpacklo_epi16(uu16, vv16);
             let a = _mm_madd_epi16(uv, a_pair_v);
             let b = _mm_madd_epi16(uv, b_pair_v);
@@ -1093,24 +1094,16 @@ pub(crate) fn cctx_row_i16_sse41(
                 ),
                 max_v,
             );
-            _mm_storel_epi64(
-                u.as_mut_ptr().add(i) as *mut __m128i,
-                _mm_packs_epi32(ru, zero),
-            );
-            _mm_storel_epi64(
-                v.as_mut_ptr().add(i) as *mut __m128i,
-                _mm_packs_epi32(rv, zero),
-            );
-            i += 4;
+            _mm_storel_epi64(uch.as_mut_ptr() as *mut __m128i, _mm_packs_epi32(ru, zero));
+            _mm_storel_epi64(vch.as_mut_ptr() as *mut __m128i, _mm_packs_epi32(rv, zero));
         }
-        while i < sz {
-            let ui = u[i] as i32;
-            let vi = v[i] as i32;
+        for (uu, vv) in ur.iter_mut().zip(vr.iter_mut()) {
+            let ui = *uu as i32;
+            let vi = *vv as i32;
             let a = ui * cosa - vi * sina;
             let b = ui * sina + vi * cosa;
-            u[i] = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
-            v[i] = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
-            i += 1;
+            *uu = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
+            *vv = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
         }
     }
 }

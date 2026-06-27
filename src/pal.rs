@@ -36,9 +36,11 @@ pub(crate) fn pal_idx_finish(dst: &mut [u8], src: &[u8], bw: usize, bh: usize, w
     let dst_w = w / 2;
     let dst_bw = bw / 2;
 
-    for y in 0..h {
-        let src_row = &src[y * bw..];
-        let dst_row = &mut dst[y * dst_bw..];
+    for (dst_row, src_row) in dst
+        .chunks_exact_mut(dst_bw)
+        .zip(src.chunks_exact(bw))
+        .take(h)
+    {
         for (dst, src) in dst_row[..dst_w]
             .iter_mut()
             .zip(src_row.as_chunks::<2>().0.iter())
@@ -53,11 +55,10 @@ pub(crate) fn pal_idx_finish(dst: &mut [u8], src: &[u8], bw: usize, bh: usize, w
 
     if h < bh {
         let last_row_start = (h - 1) * dst_bw;
-        for y in h..bh {
-            let row_start = y * dst_bw;
-            for x in 0..dst_bw {
-                dst[row_start + x] = dst[last_row_start + x];
-            }
+        let (written, tail) = dst.split_at_mut(h * dst_bw);
+        let last_row = &written[last_row_start..last_row_start + dst_bw];
+        for row in tail.chunks_exact_mut(dst_bw).take(bh - h) {
+            row.copy_from_slice(last_row);
         }
     }
 }

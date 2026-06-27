@@ -69,18 +69,18 @@ pub(crate) fn generate_scaling_8bpc(points: &[[u8; 2]], scaling: &mut [u8; 256])
     let first_x = points[0][0] as usize;
     scaling[..first_x].fill(points[0][1]);
 
-    for i in 0..num - 1 {
-        let bx = points[i][0] as i32;
-        let by = points[i][1] as i32;
-        let ex = points[i + 1][0] as i32;
-        let ey = points[i + 1][1] as i32;
+    for pair in points.windows(2) {
+        let bx = pair[0][0] as i32;
+        let by = pair[0][1] as i32;
+        let ex = pair[1][0] as i32;
+        let ey = pair[1][1] as i32;
         let dx = ex - bx;
         let dy = ey - by;
         debug_assert!(dx > 0);
         let delta = dy * ((0x10000 + (dx >> 1)) / dx);
         let mut d = 0x8000i32;
-        for x in 0..dx as usize {
-            scaling[bx as usize + x] = (by + (d >> 16)) as u8;
+        for out in &mut scaling[bx as usize..ex as usize] {
+            *out = (by + (d >> 16)) as u8;
             d += delta;
         }
     }
@@ -106,18 +106,20 @@ pub(crate) fn generate_scaling_hbd(points: &[[u8; 2]], bitdepth: usize, scaling:
     let first_x = (points[0][0] as usize) << shift_x;
     scaling[..first_x].fill(points[0][1]);
 
-    for i in 0..num - 1 {
-        let bx = points[i][0] as i32;
-        let by = points[i][1] as i32;
-        let ex = points[i + 1][0] as i32;
-        let ey = points[i + 1][1] as i32;
+    for pair in points.windows(2) {
+        let bx = pair[0][0] as i32;
+        let by = pair[0][1] as i32;
+        let ex = pair[1][0] as i32;
+        let ey = pair[1][1] as i32;
         let dx = ex - bx;
         let dy = ey - by;
         debug_assert!(dx > 0);
         let delta = dy * ((0x10000 + (dx >> 1)) / dx);
         let mut d = 0x8000i32;
-        for x in 0..dx as usize {
-            scaling[((bx as usize) + x) << shift_x] = (by + (d >> 16)) as u8;
+        let start = (bx as usize) << shift_x;
+        let end = (ex as usize) << shift_x;
+        for out in scaling[start..end].iter_mut().step_by(pad) {
+            *out = (by + (d >> 16)) as u8;
             d += delta;
         }
     }
@@ -126,17 +128,17 @@ pub(crate) fn generate_scaling_hbd(points: &[[u8; 2]], bitdepth: usize, scaling:
     scaling[n..].fill(points[num - 1][1]);
 
     let rnd = pad >> 1;
-    for i in 0..num - 1 {
-        let bx = (points[i][0] as usize) << shift_x;
-        let ex = (points[i + 1][0] as usize) << shift_x;
+    for pair in points.windows(2) {
+        let bx = (pair[0][0] as usize) << shift_x;
+        let ex = (pair[1][0] as usize) << shift_x;
         let mut x = bx;
         while x < ex {
             let range = scaling[x + pad] as i32 - scaling[x] as i32;
             let base = scaling[x] as i32;
             let mut r = rnd as i32;
-            for n in 1..pad {
+            for out in &mut scaling[x + 1..x + pad] {
                 r += range;
-                scaling[x + n] = (base + (r >> shift_x)) as u8;
+                *out = (base + (r >> shift_x)) as u8;
             }
             x += pad;
         }
@@ -309,9 +311,9 @@ unsafe fn blend_top_grain_row_scalar(
     new_w: i32,
 ) {
     let n = dst.len().min(old.len()).min(grain.len());
-    for i in 0..n {
-        dst[i] = iclip(
-            round2(old[i] as i32 * old_w + grain[i] as i32 * new_w, 5),
+    for ((d, &old), &grain) in dst[..n].iter_mut().zip(&old[..n]).zip(&grain[..n]) {
+        *d = iclip(
+            round2(old as i32 * old_w + grain as i32 * new_w, 5),
             grain_min,
             grain_max,
         ) as i16;
@@ -393,11 +395,11 @@ fn blend_left_grain_row<'a>(
     weights: &[[i32; 2]; 2],
 ) -> &'a [i16] {
     debug_assert!(len <= 2);
-    for x in 0..len {
+    for (x, (tmp, weights)) in tmp[..len].iter_mut().zip(&weights[..len]).enumerate() {
         let grain = sample_lut(grain_lut, bs, offsets, subx, suby, 0, 0, x, y) as i32;
         let old = sample_lut(grain_lut, bs, offsets, subx, suby, 1, 0, x, y) as i32;
-        tmp[x] = iclip(
-            round2(old * weights[x][0] + grain * weights[x][1], 5),
+        *tmp = iclip(
+            round2(old * weights[0] + grain * weights[1], 5),
             grain_min,
             grain_max,
         ) as i16;
@@ -421,11 +423,12 @@ fn blend_top_left_grain_row<'a>(
     v_weights: &[[i32; 2]; 2],
 ) -> &'a [i16] {
     debug_assert!(len <= 2);
-    for x in 0..len {
+    let v_weights = v_weights[y];
+    for (x, (tmp, h_weights)) in tmp[..len].iter_mut().zip(&h_weights[..len]).enumerate() {
         let mut top = sample_lut(grain_lut, bs, offsets, subx, suby, 0, 1, x, y) as i32;
         let old_top = sample_lut(grain_lut, bs, offsets, subx, suby, 1, 1, x, y) as i32;
         top = iclip(
-            round2(old_top * h_weights[x][0] + top * h_weights[x][1], 5),
+            round2(old_top * h_weights[0] + top * h_weights[1], 5),
             grain_min,
             grain_max,
         );
@@ -433,13 +436,13 @@ fn blend_top_left_grain_row<'a>(
         let mut grain = sample_lut(grain_lut, bs, offsets, subx, suby, 0, 0, x, y) as i32;
         let old = sample_lut(grain_lut, bs, offsets, subx, suby, 1, 0, x, y) as i32;
         grain = iclip(
-            round2(old * h_weights[x][0] + grain * h_weights[x][1], 5),
+            round2(old * h_weights[0] + grain * h_weights[1], 5),
             grain_min,
             grain_max,
         );
 
-        tmp[x] = iclip(
-            round2(top * v_weights[y][0] + grain * v_weights[y][1], 5),
+        *tmp = iclip(
+            round2(top * v_weights[0] + grain * v_weights[1], 5),
             grain_min,
             grain_max,
         ) as i16;
@@ -538,13 +541,13 @@ unsafe fn fgy_row_8bpc_scalar(
     max_value: i32,
 ) {
     let n = dst.len().min(src.len()).min(grain.len());
-    for x in 0..n {
-        let s = src[x] as i32;
+    for ((d, &s), &grain) in dst[..n].iter_mut().zip(&src[..n]).zip(&grain[..n]) {
+        let s = s as i32;
         let noise = round2(
-            scaling[s as usize] as i32 * grain[x] as i32,
+            scaling[s as usize] as i32 * grain as i32,
             scaling_shift as u32,
         );
-        dst[x] = iclip(s + noise, min_value, max_value) as u8;
+        *d = iclip(s + noise, min_value, max_value) as u8;
     }
 }
 
@@ -558,13 +561,13 @@ unsafe fn fgy_row_hbd_scalar(
     max_value: i32,
 ) {
     let n = dst.len().min(src.len()).min(grain.len());
-    for x in 0..n {
-        let s = src[x] as i32;
+    for ((d, &s), &grain) in dst[..n].iter_mut().zip(&src[..n]).zip(&grain[..n]) {
+        let s = s as i32;
         let noise = round2(
-            scaling[s as usize] as i32 * grain[x] as i32,
+            scaling[s as usize] as i32 * grain as i32,
             scaling_shift as u32,
         );
-        dst[x] = iclip(s + noise, min_value, max_value) as u16;
+        *d = iclip(s + noise, min_value, max_value) as u16;
     }
 }
 
@@ -585,7 +588,12 @@ unsafe fn fguv_row_8bpc_scalar(
     chroma_scaling_from_luma: bool,
 ) {
     let n = dst.len().min(src.len()).min(grain.len());
-    for x in 0..n {
+    for (x, ((d, &s), &grain)) in dst[..n]
+        .iter_mut()
+        .zip(&src[..n])
+        .zip(&grain[..n])
+        .enumerate()
+    {
         let lx = (cx_base + x) << sx;
         let luma0 = luma[lx] as i32;
         let avg = if sx != 0 {
@@ -593,17 +601,18 @@ unsafe fn fguv_row_8bpc_scalar(
         } else {
             luma0
         };
+        let s = s as i32;
         let val = if !chroma_scaling_from_luma {
             iclip(
-                ((avg * uv_luma_mult + src[x] as i32 * uv_mult) >> 6) + uv_offset,
+                ((avg * uv_luma_mult + s * uv_mult) >> 6) + uv_offset,
                 0,
                 255,
             ) as usize
         } else {
             avg as usize
         };
-        let noise = round2(scaling[val] as i32 * grain[x] as i32, scaling_shift as u32);
-        dst[x] = iclip(src[x] as i32 + noise, min_value, max_value) as u8;
+        let noise = round2(scaling[val] as i32 * grain as i32, scaling_shift as u32);
+        *d = iclip(s + noise, min_value, max_value) as u8;
     }
 }
 
@@ -625,7 +634,12 @@ unsafe fn fguv_row_hbd_scalar(
     bitdepth_max: i32,
 ) {
     let n = dst.len().min(src.len()).min(grain.len());
-    for x in 0..n {
+    for (x, ((d, &s), &grain)) in dst[..n]
+        .iter_mut()
+        .zip(&src[..n])
+        .zip(&grain[..n])
+        .enumerate()
+    {
         let lx = (cx_base + x) << sx;
         let luma0 = luma[lx] as i32;
         let avg = if sx != 0 {
@@ -633,17 +647,18 @@ unsafe fn fguv_row_hbd_scalar(
         } else {
             luma0
         };
+        let s = s as i32;
         let val = if !chroma_scaling_from_luma {
             iclip(
-                ((avg * uv_luma_mult + src[x] as i32 * uv_mult) >> 6) + uv_offset_scaled,
+                ((avg * uv_luma_mult + s * uv_mult) >> 6) + uv_offset_scaled,
                 0,
                 bitdepth_max,
             ) as usize
         } else {
             avg as usize
         };
-        let noise = round2(scaling[val] as i32 * grain[x] as i32, scaling_shift as u32);
-        dst[x] = iclip(src[x] as i32 + noise, min_value, max_value) as u16;
+        let noise = round2(scaling[val] as i32 * grain as i32, scaling_shift as u32);
+        *d = iclip(s + noise, min_value, max_value) as u16;
     }
 }
 

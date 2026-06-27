@@ -69,8 +69,8 @@ pub(crate) unsafe fn stxfm4_8bpc_scalar(
     let mut sums = [0i32; 16];
     stxfm(&mut sums, cf, kernel, 16, eob, 255);
     cf[4..8].fill(0);
-    for n in 0..16 {
-        cf[scan_out[n] as usize] = sums[n] as i16;
+    for (&scan, &sum) in scan_out.iter().zip(sums.iter()) {
+        cf[scan as usize] = sum as i16;
     }
 }
 
@@ -85,8 +85,8 @@ pub(crate) unsafe fn stxfm8_8bpc_scalar(
     let mut sums = [0i32; 48];
     stxfm(&mut sums, cf, kernel, 48, eob, 255);
     cf[..32].fill(0);
-    for n in 0..48 {
-        cf[scan_out[mapping[n] as usize] as usize] = sums[n] as i16;
+    for (&map, &sum) in mapping.iter().zip(sums.iter()) {
+        cf[scan_out[map as usize] as usize] = sum as i16;
     }
 }
 
@@ -101,8 +101,8 @@ pub(crate) unsafe fn stxfm4_hbd_scalar(
     let mut sums = [0i32; 16];
     stxfm(&mut sums, cf, kernel, 16, eob, bitdepth_max);
     cf[4..8].fill(0);
-    for n in 0..16 {
-        cf[scan_out[n] as usize] = sums[n];
+    for (&scan, &sum) in scan_out.iter().zip(sums.iter()) {
+        cf[scan as usize] = sum;
     }
 }
 
@@ -118,8 +118,8 @@ pub(crate) unsafe fn stxfm8_hbd_scalar(
     let mut sums = [0i32; 48];
     stxfm(&mut sums, cf, kernel, 48, eob, bitdepth_max);
     cf[..32].fill(0);
-    for n in 0..48 {
-        cf[scan_out[mapping[n] as usize] as usize] = sums[n];
+    for (&map, &sum) in mapping.iter().zip(sums.iter()) {
+        cf[scan_out[map as usize] as usize] = sum;
     }
 }
 
@@ -234,8 +234,8 @@ pub(crate) fn stxfm4_dispatch<C: Coeff>(
     let mut sums = [0i32; 16];
     stxfm(&mut sums, cf, kernel, 16, eob, bitdepth_max);
     cf[4..8].fill(C::ZERO);
-    for n in 0..16 {
-        cf[scan_out[n] as usize] = C::from_i32(sums[n]);
+    for (&scan, &sum) in scan_out.iter().zip(sums.iter()) {
+        cf[scan as usize] = C::from_i32(sum);
     }
 }
 
@@ -264,7 +264,7 @@ pub(crate) fn stxfm8_dispatch<C: Coeff>(
     let mut sums = [0i32; 48];
     stxfm(&mut sums, cf, kernel, 48, eob, bitdepth_max);
     cf[..32].fill(C::ZERO);
-    for n in 0..48 {
-        cf[scan_out[mapping[n] as usize] as usize] = C::from_i32(sums[n]);
+    for (&map, &sum) in mapping.iter().zip(sums.iter()) {
+        cf[scan_out[map as usize] as usize] = C::from_i32(sum);
     }
 }

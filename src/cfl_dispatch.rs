@@ -406,29 +406,29 @@ pub(crate) fn cfl_apply_422_8bpc_scalar(args: CflApply8<'_>) {
                 (true, true) => {
                     let udst = &mut u[urow..urow + xlim];
                     let vdst = &mut v[vrow..vrow + xlim];
-                    for ((&yy, du), dv) in ysrc
+                    for ((pair, du), dv) in ysrc
+                        .as_chunks::<2>()
+                        .0
                         .iter()
-                        .step_by(2)
-                        .take(xlim)
                         .zip(udst.iter_mut())
                         .zip(vdst.iter_mut())
                     {
-                        let ac = ((yy as i32) << 3) - dc0;
+                        let ac = ((pair[0] as i32) << 3) - dc0;
                         *du = predict_one(dc1, alpha0, ac);
                         *dv = predict_one(dc2, alpha1, ac);
                     }
                 }
                 (true, false) => {
                     let udst = &mut u[urow..urow + xlim];
-                    for (&yy, du) in ysrc.iter().step_by(2).take(xlim).zip(udst.iter_mut()) {
-                        let ac = ((yy as i32) << 3) - dc0;
+                    for (pair, du) in ysrc.as_chunks::<2>().0.iter().zip(udst.iter_mut()) {
+                        let ac = ((pair[0] as i32) << 3) - dc0;
                         *du = predict_one(dc1, alpha0, ac);
                     }
                 }
                 (false, true) => {
                     let vdst = &mut v[vrow..vrow + xlim];
-                    for (&yy, dv) in ysrc.iter().step_by(2).take(xlim).zip(vdst.iter_mut()) {
-                        let ac = ((yy as i32) << 3) - dc0;
+                    for (pair, dv) in ysrc.as_chunks::<2>().0.iter().zip(vdst.iter_mut()) {
+                        let ac = ((pair[0] as i32) << 3) - dc0;
                         *dv = predict_one(dc2, alpha1, ac);
                     }
                 }
@@ -613,15 +613,35 @@ pub(crate) fn cfl_apply_444_hbd_scalar(args: CflApplyHbd<'_>) {
     let mut urow = urow0;
     let mut vrow = vrow0;
     for _y in 0..ylim {
-        for x in 0..xlim {
-            let ac = ((y[yrow + x] as i32) << 3) - dc0;
-            if do_u {
-                u[urow + x] = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+        let ysrc = &y[yrow..yrow + xlim];
+
+        match (do_u, do_v) {
+            (true, true) => {
+                let udst = &mut u[urow..urow + xlim];
+                let vdst = &mut v[vrow..vrow + xlim];
+                for ((&yy, du), dv) in ysrc.iter().zip(udst.iter_mut()).zip(vdst.iter_mut()) {
+                    let ac = ((yy as i32) << 3) - dc0;
+                    *du = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+                    *dv = predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+                }
             }
-            if do_v {
-                v[vrow + x] = predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+            (true, false) => {
+                let udst = &mut u[urow..urow + xlim];
+                for (&yy, du) in ysrc.iter().zip(udst.iter_mut()) {
+                    let ac = ((yy as i32) << 3) - dc0;
+                    *du = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+                }
             }
+            (false, true) => {
+                let vdst = &mut v[vrow..vrow + xlim];
+                for (&yy, dv) in ysrc.iter().zip(vdst.iter_mut()) {
+                    let ac = ((yy as i32) << 3) - dc0;
+                    *dv = predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+                }
+            }
+            (false, false) => unreachable!(),
         }
+
         if do_u {
             let last = u[urow + xlim - 1];
             u[urow + xlim..urow + w].fill(last);
@@ -699,13 +719,83 @@ pub(crate) fn cfl_apply_422_hbd_scalar(args: CflApplyHbd<'_>) {
     let mut urow = urow0;
     let mut vrow = vrow0;
     for _y in 0..ylim {
-        for x in 0..xlim {
-            let ac = cfl_ac_422_hbd_scalar(y, yrow, x, dc0, filter_type);
-            if do_u {
-                u[urow + x] = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+        if filter_type == CFL_FLT_TYPE_GAUSS {
+            let ysrc = &y[yrow..yrow + (xlim << 1)];
+            match (do_u, do_v) {
+                (true, true) => {
+                    let udst = &mut u[urow..urow + xlim];
+                    let vdst = &mut v[vrow..vrow + xlim];
+                    for ((pair, du), dv) in ysrc
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .zip(udst.iter_mut())
+                        .zip(vdst.iter_mut())
+                    {
+                        let ac = ((pair[0] as i32) << 3) - dc0;
+                        *du = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+                        *dv = predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+                    }
+                }
+                (true, false) => {
+                    let udst = &mut u[urow..urow + xlim];
+                    for (pair, du) in ysrc.as_chunks::<2>().0.iter().zip(udst.iter_mut()) {
+                        let ac = ((pair[0] as i32) << 3) - dc0;
+                        *du = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+                    }
+                }
+                (false, true) => {
+                    let vdst = &mut v[vrow..vrow + xlim];
+                    for (pair, dv) in ysrc.as_chunks::<2>().0.iter().zip(vdst.iter_mut()) {
+                        let ac = ((pair[0] as i32) << 3) - dc0;
+                        *dv = predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+                    }
+                }
+                (false, false) => unreachable!(),
             }
-            if do_v {
-                v[vrow + x] = predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+        } else if filter_type != CFL_FLT_TYPE_VSTRIP {
+            let ysrc = &y[yrow..yrow + (xlim << 1)];
+            match (do_u, do_v) {
+                (true, true) => {
+                    let udst = &mut u[urow..urow + xlim];
+                    let vdst = &mut v[vrow..vrow + xlim];
+                    for ((pair, du), dv) in ysrc
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .zip(udst.iter_mut())
+                        .zip(vdst.iter_mut())
+                    {
+                        let ac = ((pair[0] as i32 + pair[1] as i32) << 2) - dc0;
+                        *du = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+                        *dv = predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+                    }
+                }
+                (true, false) => {
+                    let udst = &mut u[urow..urow + xlim];
+                    for (pair, du) in ysrc.as_chunks::<2>().0.iter().zip(udst.iter_mut()) {
+                        let ac = ((pair[0] as i32 + pair[1] as i32) << 2) - dc0;
+                        *du = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+                    }
+                }
+                (false, true) => {
+                    let vdst = &mut v[vrow..vrow + xlim];
+                    for (pair, dv) in ysrc.as_chunks::<2>().0.iter().zip(vdst.iter_mut()) {
+                        let ac = ((pair[0] as i32 + pair[1] as i32) << 2) - dc0;
+                        *dv = predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+                    }
+                }
+                (false, false) => unreachable!(),
+            }
+        } else {
+            for x in 0..xlim {
+                let ac = cfl_ac_422_hbd_scalar(y, yrow, x, dc0, filter_type);
+                if do_u {
+                    u[urow + x] = predict_one_hbd(dc1, alpha0, ac, bitdepth_max);
+                }
+                if do_v {
+                    v[vrow + x] = predict_one_hbd(dc2, alpha1, ac, bitdepth_max);
+                }
             }
         }
         if do_u {

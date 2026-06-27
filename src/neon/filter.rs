@@ -516,37 +516,40 @@ pub(crate) fn gdf_add_run_8bpc_neon(dst: &mut [u8], err: &[i8], scale: i32, n: u
         let mag = vshrq_n_s16::<4>(vaddq_s16(vabsq_s16(diff), rnd));
         vbslq_s16(vcltq_s16(diff, zero), vnegq_s16(mag), mag)
     };
-    let mut x = 0usize;
-    while x + 16 <= n {
-        let e = unsafe { vld1q_s8(err.as_ptr().add(x)) };
-        let d = unsafe { vld1q_u8(dst.as_ptr().add(x)) };
+
+    let (dst16, dst_rem16) = dst[..n].as_chunks_mut::<16>();
+    let (err16, err_rem16) = err[..n].as_chunks::<16>();
+    for (d, e) in dst16.iter_mut().zip(err16) {
+        let e = unsafe { vld1q_s8(e.as_ptr()) };
+        let d0 = unsafe { vld1q_u8(d.as_ptr()) };
         let e0 = vmovl_s8(vget_low_s8(e));
         let e1 = vmovl_s8(vget_high_s8(e));
-        let d0 = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(d)));
-        let d1 = vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(d)));
-        let o0 = vaddq_s16(d0, adj(e0));
-        let o1 = vaddq_s16(d1, adj(e1));
+        let d0_lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(d0)));
+        let d0_hi = vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(d0)));
+        let o0 = vaddq_s16(d0_lo, adj(e0));
+        let o1 = vaddq_s16(d0_hi, adj(e1));
         unsafe {
             vst1q_u8(
-                dst.as_mut_ptr().add(x),
+                d.as_mut_ptr(),
                 vcombine_u8(vqmovun_s16(o0), vqmovun_s16(o1)),
             )
         };
-        x += 16;
     }
-    while x + 8 <= n {
-        let e = unsafe { vld1_s8(err.as_ptr().add(x)) };
-        let d = unsafe { vld1_u8(dst.as_ptr().add(x)) };
-        let o = vaddq_s16(vreinterpretq_s16_u16(vmovl_u8(d)), adj(vmovl_s8(e)));
-        unsafe { vst1_u8(dst.as_mut_ptr().add(x), vqmovun_s16(o)) };
-        x += 8;
+
+    let (dst8, dst_tail) = dst_rem16.as_chunks_mut::<8>();
+    let (err8, err_tail) = err_rem16.as_chunks::<8>();
+    for (d, e) in dst8.iter_mut().zip(err8) {
+        let e = unsafe { vld1_s8(e.as_ptr()) };
+        let d0 = unsafe { vld1_u8(d.as_ptr()) };
+        let o = vaddq_s16(vreinterpretq_s16_u16(vmovl_u8(d0)), adj(vmovl_s8(e)));
+        unsafe { vst1_u8(d.as_mut_ptr(), vqmovun_s16(o)) };
     }
-    while x < n {
-        let diff = err[x] as i32 * scale;
+
+    for (d, &e) in dst_tail.iter_mut().zip(err_tail) {
+        let diff = e as i32 * scale;
         let mag = (diff.abs() + 8) >> 4;
         let a = if diff < 0 { -mag } else { mag };
-        dst[x] = (dst[x] as i32 + a).clamp(0, 255) as u8;
-        x += 1;
+        *d = (*d as i32 + a).clamp(0, 255) as u8;
     }
 }
 
@@ -609,55 +612,54 @@ pub(crate) fn cctx_row_i16_neon(
         let min_v = vdupq_n_s32(min);
         let max_v = vdupq_n_s32(max);
         let zero = vdupq_n_s32(0);
-        let mut i = 0usize;
-        while i + 8 <= sz {
-            let uu16 = vld1q_s16(u.as_ptr().add(i));
-            let vv16 = vld1q_s16(v.as_ptr().add(i));
-            let rot = |uu: int16x4_t, vv: int16x4_t| -> (int32x4_t, int32x4_t) {
-                let a = vmlsl_n_s16(vmull_n_s16(uu, cosa16), vv, sina16);
-                let b = vmlal_n_s16(vmull_n_s16(uu, sina16), vv, cosa16);
-                let ra = vminq_s32(
-                    vmaxq_s32(
-                        vshrq_n_s32::<8>(vaddq_s32(
-                            vaddq_s32(a, c128),
-                            vreinterpretq_s32_u32(vcltq_s32(a, zero)),
-                        )),
-                        min_v,
-                    ),
-                    max_v,
-                );
-                let rb = vminq_s32(
-                    vmaxq_s32(
-                        vshrq_n_s32::<8>(vaddq_s32(
-                            vaddq_s32(b, c128),
-                            vreinterpretq_s32_u32(vcltq_s32(b, zero)),
-                        )),
-                        min_v,
-                    ),
-                    max_v,
-                );
-                (ra, rb)
-            };
+        let rot = |uu: int16x4_t, vv: int16x4_t| -> (int32x4_t, int32x4_t) {
+            let a = vmlsl_n_s16(vmull_n_s16(uu, cosa16), vv, sina16);
+            let b = vmlal_n_s16(vmull_n_s16(uu, sina16), vv, cosa16);
+            let ra = vminq_s32(
+                vmaxq_s32(
+                    vshrq_n_s32::<8>(vaddq_s32(
+                        vaddq_s32(a, c128),
+                        vreinterpretq_s32_u32(vcltq_s32(a, zero)),
+                    )),
+                    min_v,
+                ),
+                max_v,
+            );
+            let rb = vminq_s32(
+                vmaxq_s32(
+                    vshrq_n_s32::<8>(vaddq_s32(
+                        vaddq_s32(b, c128),
+                        vreinterpretq_s32_u32(vcltq_s32(b, zero)),
+                    )),
+                    min_v,
+                ),
+                max_v,
+            );
+            (ra, rb)
+        };
+        let (u_chunks, ur) = u[..sz].as_chunks_mut::<8>();
+        let (v_chunks, vr) = v[..sz].as_chunks_mut::<8>();
+        for (uch, vch) in u_chunks.iter_mut().zip(v_chunks.iter_mut()) {
+            let uu16 = vld1q_s16(uch.as_ptr());
+            let vv16 = vld1q_s16(vch.as_ptr());
             let (ulo, vlo) = rot(vget_low_s16(uu16), vget_low_s16(vv16));
             let (uhi, vhi) = rot(vget_high_s16(uu16), vget_high_s16(vv16));
             vst1q_s16(
-                u.as_mut_ptr().add(i),
+                uch.as_mut_ptr(),
                 vcombine_s16(vmovn_s32(ulo), vmovn_s32(uhi)),
             );
             vst1q_s16(
-                v.as_mut_ptr().add(i),
+                vch.as_mut_ptr(),
                 vcombine_s16(vmovn_s32(vlo), vmovn_s32(vhi)),
             );
-            i += 8;
         }
-        while i < sz {
-            let ui = u[i] as i32;
-            let vi = v[i] as i32;
+        for (uu, vv) in ur.iter_mut().zip(vr.iter_mut()) {
+            let ui = *uu as i32;
+            let vi = *vv as i32;
             let a = ui * cosa - vi * sina;
             let b = ui * sina + vi * cosa;
-            u[i] = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
-            v[i] = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
-            i += 1;
+            *uu = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
+            *vv = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
         }
     }
 }

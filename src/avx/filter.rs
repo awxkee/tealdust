@@ -511,34 +511,33 @@ pub(crate) fn gdf_add_run_8bpc_avx2(dst: &mut [u8], err: &[i8], scale: i32, n: u
         )
     };
 
-    let mut x = 0usize;
-    while x + 16 <= n {
-        let a = adj(load_i8x16_i16(unsafe { err.get_unchecked(x..) }));
-        let d = load_u8x16_i16_slice(unsafe { dst.get_unchecked(x..) });
-        store_u8x16_from_i16(
-            unsafe { dst.get_unchecked_mut(x..) },
-            _mm256_add_epi16(d, a),
-        );
-        x += 16;
+    let (dst16, dst_rem16) = dst[..n].as_chunks_mut::<16>();
+    let (err16, err_rem16) = err[..n].as_chunks::<16>();
+    for (d, e) in dst16.iter_mut().zip(err16) {
+        let a = adj(load_i8x16_i16(e));
+        let d0 = load_u8x16_i16_slice(&*d);
+        store_u8x16_from_i16(d, _mm256_add_epi16(d0, a));
     }
-    while x + 8 <= n {
+
+    let (dst8, dst_tail) = dst_rem16.as_chunks_mut::<8>();
+    let (err8, err_tail) = err_rem16.as_chunks::<8>();
+    for (d, e) in dst8.iter_mut().zip(err8) {
         let a = adj(_mm256_cvtepi8_epi16(unsafe {
-            _mm_loadl_epi64(err.as_ptr().add(x).cast())
+            _mm_loadl_epi64(e.as_ptr().cast())
         }));
-        let d = _mm256_cvtepu8_epi16(unsafe { _mm_loadl_epi64(dst.as_ptr().add(x).cast()) });
-        let out = _mm256_add_epi16(d, a);
+        let d0 = _mm256_cvtepu8_epi16(unsafe { _mm_loadl_epi64(d.as_ptr().cast()) });
+        let out = _mm256_add_epi16(d0, a);
         unsafe {
             let p8 = _mm256_packus_epi16(out, out);
-            _mm_storel_epi64(dst.as_mut_ptr().add(x).cast(), _mm256_castsi256_si128(p8));
+            _mm_storel_epi64(d.as_mut_ptr().cast(), _mm256_castsi256_si128(p8));
         }
-        x += 8;
     }
-    while x < n {
-        let diff = err[x] as i32 * scale;
+
+    for (d, &e) in dst_tail.iter_mut().zip(err_tail) {
+        let diff = e as i32 * scale;
         let mag = (diff.abs() + 8) >> 4;
         let a = if diff < 0 { -mag } else { mag };
-        dst[x] = (dst[x] as i32 + a).clamp(0, 255) as u8;
-        x += 1;
+        *d = (*d as i32 + a).clamp(0, 255) as u8;
     }
 }
 
@@ -600,10 +599,11 @@ pub(crate) fn cctx_row_i16_avx2(
         let zero = _mm256_setzero_si256();
         let min_v = _mm256_set1_epi32(min);
         let max_v = _mm256_set1_epi32(max);
-        let mut i = 0usize;
-        while i + 8 <= sz {
-            let uu16 = _mm_loadu_si128(u.as_ptr().add(i) as *const __m128i);
-            let vv16 = _mm_loadu_si128(v.as_ptr().add(i) as *const __m128i);
+        let (u_chunks, ur) = u[..sz].as_chunks_mut::<8>();
+        let (v_chunks, vr) = v[..sz].as_chunks_mut::<8>();
+        for (uch, vch) in u_chunks.iter_mut().zip(v_chunks.iter_mut()) {
+            let uu16 = _mm_loadu_si128(uch.as_ptr() as *const __m128i);
+            let vv16 = _mm_loadu_si128(vch.as_ptr() as *const __m128i);
             let uv_lo = _mm_unpacklo_epi16(uu16, vv16);
             let uv_hi = _mm_unpackhi_epi16(uu16, vv16);
             let uv = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(uv_lo), uv_hi);
@@ -633,24 +633,16 @@ pub(crate) fn cctx_row_i16_avx2(
                 _mm256_permute4x64_epi64::<0xd8>(_mm256_packs_epi32(ru, _mm256_setzero_si256()));
             let pv =
                 _mm256_permute4x64_epi64::<0xd8>(_mm256_packs_epi32(rv, _mm256_setzero_si256()));
-            _mm_storeu_si128(
-                u.as_mut_ptr().add(i) as *mut __m128i,
-                _mm256_castsi256_si128(pu),
-            );
-            _mm_storeu_si128(
-                v.as_mut_ptr().add(i) as *mut __m128i,
-                _mm256_castsi256_si128(pv),
-            );
-            i += 8;
+            _mm_storeu_si128(uch.as_mut_ptr() as *mut __m128i, _mm256_castsi256_si128(pu));
+            _mm_storeu_si128(vch.as_mut_ptr() as *mut __m128i, _mm256_castsi256_si128(pv));
         }
-        while i < sz {
-            let ui = u[i] as i32;
-            let vi = v[i] as i32;
+        for (uu, vv) in ur.iter_mut().zip(vr.iter_mut()) {
+            let ui = *uu as i32;
+            let vi = *vv as i32;
             let a = ui * cosa - vi * sina;
             let b = ui * sina + vi * cosa;
-            u[i] = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
-            v[i] = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
-            i += 1;
+            *uu = ((a + 128 - (a < 0) as i32) >> 8).max(min).min(max) as i16;
+            *vv = ((b + 128 - (b < 0) as i32) >> 8).max(min).min(max) as i16;
         }
     }
 }
