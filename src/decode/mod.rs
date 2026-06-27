@@ -1774,15 +1774,6 @@ fn decode_frame_main_select<const UPDATE_CDF: bool>(
         }
     }
 
-    #[cfg(target_arch = "x86_64")]
-    {
-        if std::is_x86_feature_detected!("lzcnt") {
-            return decode_frame_main_inner::<UPDATE_CDF, crate::msac::ScalarLzcntMsacBackend>(
-                fc, n_passes, n_tc, pool,
-            );
-        }
-    }
-
     decode_frame_main_inner::<UPDATE_CDF, crate::msac::ScalarMsacBackend>(fc, n_passes, n_tc, pool)
 }
 

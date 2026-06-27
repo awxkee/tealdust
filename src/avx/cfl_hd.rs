@@ -111,9 +111,9 @@ fn store_i32x2_u16_clip(a: &mut [u16], v: __m256i, max_v: __m256i) {
     debug_assert!(a.len() >= 2);
     let v = _mm256_min_epi32(_mm256_max_epi32(v, _mm256_setzero_si256()), max_v);
     let p = _mm_packus_epi32(_mm256_castsi256_si128(v), _mm_setzero_si128());
-    let packed = _mm_cvtsi128_si32(p) as u32;
-    a[0] = packed as u16;
-    a[1] = (packed >> 16) as u16;
+    unsafe {
+        _mm_store_ss(a.as_mut_ptr().cast(), _mm_castsi128_ps(p));
+    }
 }
 
 #[inline]
@@ -121,7 +121,9 @@ fn store_i32x2_u16_clip(a: &mut [u16], v: __m256i, max_v: __m256i) {
 fn store_i32x1_u16_clip(a: &mut u16, v: __m256i, max_v: __m256i) {
     let v = _mm256_min_epi32(_mm256_max_epi32(v, _mm256_setzero_si256()), max_v);
     let p = _mm_packus_epi32(_mm256_castsi256_si128(v), _mm_setzero_si128());
-    *a = _mm_cvtsi128_si32(p) as u16;
+    unsafe {
+        _mm_storeu_si16(a as *mut u16 as *mut u8, p);
+    }
 }
 
 #[inline(always)]
