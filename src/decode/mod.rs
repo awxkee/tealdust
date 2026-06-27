@@ -2315,7 +2315,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                 // epoch is only a spin/scan-avoidance hint: the authoritative park
                 // decision is still the full predicate recheck under `park_mx`, so a
                 // missed bump can at worst cost a redundant scan, never a lost wakeup.
-                let progress_epoch = std::sync::atomic::AtomicU64::new(0);
+                let progress_epoch = std::sync::atomic::AtomicUsize::new(0);
                 let progress_epoch = &progress_epoch;
                 // Number of cheap epoch-poll spins before falling back to yield then
                 // pthread_cond_wait. Each spin is now a single atomic load (not an
