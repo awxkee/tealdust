@@ -900,7 +900,7 @@ pub(crate) fn ipred_z1<BD: BitDepth>(
 
     if mrl_mul {
         let e_stride = (width + height) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = vec![BD::Pixel::default(); 64 * 64];
+        let mut tmp = [BD::Pixel::default(); 64 * 64];
         ipred_z1(
             bd,
             &mut tmp,
@@ -1011,7 +1011,7 @@ pub(crate) fn ipred_z1<BD: BitDepth>(
 
     if enable_ibp {
         let mode_idx = imin(10 - (angle >> 3), 6) as usize;
-        let mut tmp = vec![BD::Pixel::default(); 64 * 64];
+        let mut tmp = [BD::Pixel::default(); 64 * 64];
         ipred_z3(
             bd,
             &mut tmp,
@@ -1093,7 +1093,7 @@ pub(crate) fn ipred_z3<BD: BitDepth>(
 
     if mrl_mul {
         let e_stride = (width + height) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = vec![BD::Pixel::default(); 64 * 64];
+        let mut tmp = [BD::Pixel::default(); 64 * 64];
         ipred_z3(
             bd,
             &mut tmp,
@@ -1198,7 +1198,7 @@ pub(crate) fn ipred_z3<BD: BitDepth>(
 
     if enable_ibp {
         let mode_idx = imin((angle - 183) >> 3, 6) as usize;
-        let mut tmp = vec![BD::Pixel::default(); 64 * 64];
+        let mut tmp = [BD::Pixel::default(); 64 * 64];
         ipred_z1(
             bd,
             &mut tmp,
@@ -1267,7 +1267,7 @@ pub(crate) fn ipred_z2<BD: BitDepth>(
 
     if mrl_mul {
         let e_stride = (width + height) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = vec![BD::Pixel::default(); 64 * 64];
+        let mut tmp = [BD::Pixel::default(); 64 * 64];
         ipred_z2(
             bd,
             &mut tmp,

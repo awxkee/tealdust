@@ -60,9 +60,7 @@ fn load_u8x8(a: &[u8; 8]) -> __m128i {
 #[inline(always)]
 fn load_u8x4_tail(src: &[u8]) -> __m128i {
     debug_assert!(src.len() >= 4);
-    let mut tmp = [0u8; 8];
-    tmp[..4].copy_from_slice(&src[..4]);
-    load_u8x8(&tmp)
+    unsafe { _mm_castps_si128(_mm_load_ss(src.as_ptr().cast())) }
 }
 
 #[inline(always)]

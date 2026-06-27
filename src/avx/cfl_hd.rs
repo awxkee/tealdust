@@ -69,20 +69,22 @@ fn load_u16x4_i32(a: &[u16; 4]) -> __m256i {
     _mm256_cvtepu16_epi32(unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) })
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn load_u16x4_tail(src: &[u16]) -> __m256i {
     debug_assert!(src.len() >= 4);
-    let mut tmp = [0u16; 8];
-    tmp[..4].copy_from_slice(&src[..4]);
-    unsafe { load_u16x8(&tmp) }
+
+    let q = unsafe { _mm_loadu_si64(src.as_ptr().cast()) };
+    _mm256_cvtepu16_epi32(q)
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn load_u16x2_i32_tail(src: &[u16]) -> __m256i {
     debug_assert!(src.len() >= 2);
-    let mut tmp = [0u16; 4];
-    tmp[..2].copy_from_slice(&src[..2]);
-    unsafe { load_u16x4_i32(&tmp) }
+
+    let q = unsafe { _mm_castps_si128(_mm_load_ss(src.as_ptr().cast())) };
+    _mm256_cvtepu16_epi32(q)
 }
 
 #[inline]

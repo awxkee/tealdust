@@ -1915,6 +1915,23 @@ pub(crate) fn decode_coefs_scalar<C: Coeff, const UPDATE_CDF: bool>(
 }
 
 #[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "lzcnt")]
+pub(crate) unsafe fn decode_coefs_scalar_lzcnt<C: Coeff, const UPDATE_CDF: bool>(
+    msac: &mut crate::msac::MsacContextScalarLzcnt<'_, UPDATE_CDF>,
+    coef: &mut CdfCoefContext,
+    mode: &mut CdfModeContext,
+    a: &[u8],
+    l: &[u8],
+    p: &DecodeCoefParams,
+    cf: &mut [C],
+    txtp: &mut u16,
+    res_ctx: &mut u8,
+    levels_scratch: &mut [i8; 1089],
+) -> i32 {
+    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+}
+
+#[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse2")]
 pub(crate) unsafe fn decode_coefs_sse2<C: Coeff, const UPDATE_CDF: bool>(
     msac: &mut crate::sse::MsacContextSse<'_, UPDATE_CDF>,
