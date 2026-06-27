@@ -71,7 +71,7 @@ fn load4_u16_i32(row: &[u16], idx: usize) -> __m128i {
 #[inline(always)]
 fn gather4_u16_i32(row: &[u16], idx: usize, step: usize) -> __m128i {
     if step == 1 {
-        unsafe { load4_u16_i32(row, idx) }
+        load4_u16_i32(row, idx)
     } else {
         let arr = [
             row[idx],
@@ -208,49 +208,47 @@ pub(crate) fn ns_wiener_uv_fir_run_hbd_sse41(
     n: usize,
     bitdepth_max: i32,
 ) {
-    unsafe {
-        let mut x = 0usize;
-        while x + 4 <= n {
-            let cb = co + x;
-            let m = load4_u16_i32(c_center, cb);
-            let two_m = _mm_add_epi32(m, m);
-            let mut s = _mm_slli_epi32(m, 7);
-            for t in ctaps {
-                let a = load4_u16_i32(t.row_p, (cb as i32 + t.dx) as usize);
-                let b = load4_u16_i32(t.row_m, (cb as i32 - t.dx) as usize);
-                let coef = _mm_set1_epi32(t.coef);
-                s = _mm_add_epi32(
-                    s,
-                    _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(a, b), two_m), coef),
-                );
-            }
-            let lb = lo + x * lstep;
-            let lc = gather4_u16_i32(l_center, lb, lstep);
-            for t in ltaps {
-                let lv = gather4_u16_i32(t.row, (lb as i32 + t.ldx) as usize, lstep);
-                let coef = _mm_set1_epi32(t.coef);
-                s = _mm_add_epi32(s, _mm_mullo_epi32(_mm_sub_epi32(lv, lc), coef));
-            }
-            finish4_u16(dst, x, s, bitdepth_max);
-            x += 4;
+    let mut x = 0usize;
+    while x + 4 <= n {
+        let cb = co + x;
+        let m = load4_u16_i32(c_center, cb);
+        let two_m = _mm_add_epi32(m, m);
+        let mut s = _mm_slli_epi32(m, 7);
+        for t in ctaps {
+            let a = load4_u16_i32(t.row_p, (cb as i32 + t.dx) as usize);
+            let b = load4_u16_i32(t.row_m, (cb as i32 - t.dx) as usize);
+            let coef = _mm_set1_epi32(t.coef);
+            s = _mm_add_epi32(
+                s,
+                _mm_mullo_epi32(_mm_sub_epi32(_mm_add_epi32(a, b), two_m), coef),
+            );
         }
-        while x < n {
-            let cc = co + x;
-            let m = c_center[cc] as i32;
-            let mut s = m << 7;
-            for t in ctaps {
-                let a = t.row_p[(cc as i32 + t.dx) as usize] as i32;
-                let b = t.row_m[(cc as i32 - t.dx) as usize] as i32;
-                s += (a + b - 2 * m) * t.coef;
-            }
-            let lcx = lo + x * lstep;
-            let lc = l_center[lcx] as i32;
-            for t in ltaps {
-                let lv = t.row[(lcx as i32 + t.ldx) as usize] as i32;
-                s += (lv - lc) * t.coef;
-            }
-            dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
-            x += 1;
+        let lb = lo + x * lstep;
+        let lc = gather4_u16_i32(l_center, lb, lstep);
+        for t in ltaps {
+            let lv = gather4_u16_i32(t.row, (lb as i32 + t.ldx) as usize, lstep);
+            let coef = _mm_set1_epi32(t.coef);
+            s = _mm_add_epi32(s, _mm_mullo_epi32(_mm_sub_epi32(lv, lc), coef));
         }
+        finish4_u16(dst, x, s, bitdepth_max);
+        x += 4;
+    }
+    while x < n {
+        let cc = co + x;
+        let m = c_center[cc] as i32;
+        let mut s = m << 7;
+        for t in ctaps {
+            let a = t.row_p[(cc as i32 + t.dx) as usize] as i32;
+            let b = t.row_m[(cc as i32 - t.dx) as usize] as i32;
+            s += (a + b - 2 * m) * t.coef;
+        }
+        let lcx = lo + x * lstep;
+        let lc = l_center[lcx] as i32;
+        for t in ltaps {
+            let lv = t.row[(lcx as i32 + t.ldx) as usize] as i32;
+            s += (lv - lc) * t.coef;
+        }
+        dst[x] = ((s + 64) >> 7).clamp(0, bitdepth_max) as u16;
+        x += 1;
     }
 }

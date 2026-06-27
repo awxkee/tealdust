@@ -2599,7 +2599,7 @@ where
         }
     }
 
-    let mut seg_mask = vec![0u8; 128 * 128];
+    let mut seg_mask = recon.scratch.take_compound_seg_mask();
     let mut seg_mask_stride = 0usize;
     if has_luma {
         let b_dim = &BLOCK_DIMENSIONS[lbs as u8 as usize];
@@ -2611,7 +2611,7 @@ where
         let dst_off = 4 * (by as usize * y_stride + bx as usize);
 
         let _len = crate::mc_dispatch::compound_tmp_len(w, h);
-        let mut tmp = [vec![0i16; _len], vec![0i16; _len]];
+        let mut tmp = recon.scratch.take_compound_tmp(_len);
         let mut opfl_bacp = false;
         if is_opfl {
             let w4 = imin(bw4, fi.bw - bx);
@@ -2782,6 +2782,7 @@ where
                 }
             }
         }
+        recon.scratch.put_compound_tmp(tmp);
 
         // Luma residual (same walk as single-ref).
         let seg_id = b.seg_id as usize;
@@ -2911,7 +2912,7 @@ where
         for pl in (1..3usize).filter(|_| !sub8x8 && do_chroma_mc) {
             let dst_off = 4 * ((cby >> ss_ver) as usize * uv_stride + (cbx >> ss_hor) as usize);
             let _len = crate::mc_dispatch::compound_tmp_len(cw, ch);
-            let mut tmp = [vec![0i16; _len], vec![0i16; _len]];
+            let mut tmp = recon.scratch.take_compound_tmp(_len);
             let mut opfl_bacp_chroma = false;
             if is_opfl {
                 opfl_bacp_chroma = rmv_uvpred(
@@ -3049,6 +3050,7 @@ where
                 }
             }
             let _ = opfl_bacp_chroma;
+            recon.scratch.put_compound_tmp(tmp);
         }
         let _ = (seg_mask_stride, cb_dim);
 
@@ -3085,5 +3087,6 @@ where
             fi,
         )?;
     }
+    recon.scratch.put_compound_seg_mask(seg_mask);
     Ok(())
 }

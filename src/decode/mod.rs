@@ -35,7 +35,7 @@ use crate::levels::{Av2Block, BlockSize, Mv, RefPair, TIP_FRAME};
 
 use crate::msac::{MsacBackend, MsacReader};
 
-use crate::pixel::BitDepth;
+use crate::pixel::{BitDepth, Pixel};
 use crate::quantizer::dq_lookup;
 use crate::refmvs;
 use crate::tables::{NS_WIENER_COEF_RANGE_UV, NS_WIENER_COEF_RANGE_Y};
@@ -879,6 +879,14 @@ pub struct ReconScratch {
     /// Reusable inverse-transform scratch (`Txfm2d` buffer). Threaded into
     /// `inv_txfm_add` so the transform path needs no thread-local / `RefCell`.
     pub itx_tmp: Box<[i32; crate::itx_2d::ITX_TMP_PIXELS]>,
+    /// Reusable compound-prediction temporary planes. Compound inter used to
+    /// allocate two `Vec<i16>` buffers for every luma/chroma block; these buffers
+    /// are taken out around the MC/blend step so `ReconCtx` can still be borrowed
+    /// mutably by the prediction helpers.
+    compound_tmp0: Vec<i16>,
+    compound_tmp1: Vec<i16>,
+    /// Reusable 128x128 mask buffer for SEG/BACP compound blending.
+    compound_seg_mask: Vec<u8>,
 }
 
 impl Default for ReconScratch {
@@ -909,6 +917,9 @@ impl Default for ReconScratch {
             pal_idx_y: Box::new([0u8; 64 * 64]),
             coef_levels: [0i8; 1089],
             itx_tmp: Box::new([0i32; crate::itx_2d::ITX_TMP_PIXELS]),
+            compound_tmp0: Vec::new(),
+            compound_tmp1: Vec::new(),
+            compound_seg_mask: Vec::new(),
         }
     }
 }
@@ -971,7 +982,46 @@ impl ReconScratch {
         self.chroma_cf8.clear();
         self.chroma_cf32.clear();
         self.pal_idx_y.fill(0);
-        // `itx_tmp` is fully overwritten on the used prefix.
+        // `itx_tmp` and the compound MC temporaries are fully overwritten on the
+        // used prefix when taken. Keep their capacity across superblock rows.
+    }
+
+    #[inline]
+    pub(crate) fn take_compound_tmp(&mut self, len: usize) -> [Vec<i16>; 2] {
+        let mut tmp = [
+            core::mem::take(&mut self.compound_tmp0),
+            core::mem::take(&mut self.compound_tmp1),
+        ];
+        for v in &mut tmp {
+            if v.len() != len {
+                v.resize(len, 0);
+            }
+            v.fill(0);
+        }
+        tmp
+    }
+
+    #[inline]
+    pub(crate) fn put_compound_tmp(&mut self, tmp: [Vec<i16>; 2]) {
+        let [tmp0, tmp1] = tmp;
+        self.compound_tmp0 = tmp0;
+        self.compound_tmp1 = tmp1;
+    }
+
+    #[inline]
+    pub(crate) fn take_compound_seg_mask(&mut self) -> Vec<u8> {
+        let mut mask = core::mem::take(&mut self.compound_seg_mask);
+        if mask.len() != 128 * 128 {
+            mask.resize(128 * 128, 0);
+        } else {
+            mask.fill(0);
+        }
+        mask
+    }
+
+    #[inline]
+    pub(crate) fn put_compound_seg_mask(&mut self, mask: Vec<u8>) {
+        self.compound_seg_mask = mask;
     }
 
     #[inline]
@@ -1037,6 +1087,8 @@ struct DecodeWorkerScratch {
     part_w: Vec<u8>,
     ccso_tmp_buf: Vec<u8>,
     ccso_tmp_buf_hbd: Vec<u16>,
+    recon_edge8: Box<[u8; 2048]>,
+    recon_edge16: Box<[u16; 2048]>,
 }
 
 impl DecodeWorkerScratch {
@@ -1047,12 +1099,41 @@ impl DecodeWorkerScratch {
             part_w: Vec::new(),
             ccso_tmp_buf: Vec::new(),
             ccso_tmp_buf_hbd: Vec::new(),
+            recon_edge8: Box::new([0u8; 2048]),
+            recon_edge16: Box::new([0u16; 2048]),
         }
     }
 
     fn prepare(&mut self, ra_len: usize, bw: i32, bh: i32) {
         prepare_refmv_tile(&mut self.rt, ra_len, bw, bh);
         self.part_w.clear();
+    }
+}
+
+trait DecodeEdgePixel: Pixel {
+    fn edge_mut<'a>(
+        edge8: &'a mut Box<[u8; 2048]>,
+        edge16: &'a mut Box<[u16; 2048]>,
+    ) -> &'a mut [Self; 2048];
+}
+
+impl DecodeEdgePixel for u8 {
+    #[inline(always)]
+    fn edge_mut<'a>(
+        edge8: &'a mut Box<[u8; 2048]>,
+        _edge16: &'a mut Box<[u16; 2048]>,
+    ) -> &'a mut [Self; 2048] {
+        edge8.as_mut()
+    }
+}
+
+impl DecodeEdgePixel for u16 {
+    #[inline(always)]
+    fn edge_mut<'a>(
+        _edge8: &'a mut Box<[u8; 2048]>,
+        edge16: &'a mut Box<[u16; 2048]>,
+    ) -> &'a mut [Self; 2048] {
+        edge16.as_mut()
     }
 }
 
@@ -1924,9 +2005,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
         }
     }
 
-    let mut l = BlockContext::default();
-
-    // Initialise the reference-MV frame state (`f->rf`) and a per-tile working
+    // Initialize the reference-MV frame state (`f->rf`) and a per-tile working
     // Tile. For IntraBC on an intra frame only the spatial grid / above-row /
     // banks are needed (no temporal candidates). For inter frames the reference
     // temporal MVs are wired and (when use_ref_frame_mvs) projected per sbrow.
@@ -2309,14 +2388,19 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                 DecodeWorkerScratch::new(rf_rp_stride.max(1) as usize, bw, bh)
                             });
                             ws.prepare(rf_rp_stride.max(1) as usize, bw, bh);
-                            let mut rt = &mut ws.rt;
-                            let mut recon_scratch = &mut ws.recon_scratch;
-                            let mut part_w = &mut ws.part_w;
-                            let ccso_tmp_buf = &mut ws.ccso_tmp_buf;
-                            let ccso_tmp_buf_hbd = &mut ws.ccso_tmp_buf_hbd;
+                            let DecodeWorkerScratch {
+                                rt,
+                                recon_scratch,
+                                part_w,
+                                ccso_tmp_buf,
+                                ccso_tmp_buf_hbd,
+                                recon_edge8,
+                                recon_edge16,
+                            } = &mut *ws;
+                            let recon_edge =
+                                <$Pixel as DecodeEdgePixel>::edge_mut(recon_edge8, recon_edge16);
                             let mut l = BlockContext::default();
-                            let part_r: Vec<u8> = Vec::new();
-                            let mut recon_edge = Box::new([<$Pixel as Default>::default(); 2048]);
+                            let part_r: &[u8] = &[];
                             let mut cached_fi: Option<(usize, SbFrameInfo)> = None;
 
                             loop {
@@ -2419,8 +2503,8 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                                     dst_u: &mut *dst_u,
                                                     dst_v: &mut *dst_v,
                                                     cf: &mut *cf,
-                                                    recon_scratch: &mut recon_scratch,
-                                                    recon_edge: &mut recon_edge,
+                                                    recon_scratch: &mut *recon_scratch,
+                                                    recon_edge: &mut *recon_edge,
                                                     recon_frame,
                                                     cur_segmap: &mut cur_segmap[..],
                                                     prev_segmap: prev_segmap_ref,
@@ -2428,14 +2512,14 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                                     segmap_uv_stride: uv_segmap_stride,
                                                     cur_ccsomap: &mut cur_ccsomap[..],
                                                     prev_ccsomap: prev_ccsomap_ref,
-                                                    part_w: &mut part_w,
-                                                    part_r: &part_r,
+                                                    part_w: &mut *part_w,
+                                                    part_r,
                                                     by,
                                                     sb256w,
                                                     pass: crate::internal::PASS_ALL,
                                                     root_bs,
                                                     c_root_bs,
-                                                    rt: &mut rt,
+                                                    rt: &mut *rt,
                                                     rf: rf_imm,
                                                     cur_mvs: &mut *cur_mvs,
                                                     refp: refp_pics,
@@ -2793,237 +2877,253 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                     return Err(());
                 }
             } else {
-                let mut cf = vec![<$Coef as crate::pixel::Coeff>::ZERO; 64 * 64];
-                let mut rt = make_refmv_tile(rf_rp_stride.max(1) as usize, bw, bh);
-                let mut recon_scratch = ReconScratch::default();
-                let mut recon_edge = Box::new([<$Pixel as Default>::default(); 2048]);
-                for tr in 0..rows {
-                    let ts_base = (tr * cols) as usize;
-                    let mut bufs: Vec<Vec<u8>> = Vec::with_capacity(cols as usize);
-                    let mut fis: Vec<SbFrameInfo> = Vec::with_capacity(cols as usize);
-                    let mut ranges: Vec<(i32, i32)> = Vec::with_capacity(cols as usize); // (rs, re)
-                    for tc in 0..cols {
-                        let ts_idx = ts_base + tc as usize;
-                        let (cs, ce, rs, re) = {
-                            let t = &ts[ts_idx].tiling;
-                            (t.col_start, t.col_end, t.row_start, t.row_end)
-                        };
-                        fis.push(SbFrameInfo::from_frame(SbFrameInfoArgs {
-                            seq_hdr,
-                            frame_hdr,
-                            bw,
-                            bh,
-                            root_bs,
-                            sb_step,
-                            n_passes,
-                            refdir,
-                            refdist,
-                            absrefdist,
-                            skip_mode_refs,
-                            tile_col_start: cs,
-                            tile_col_end: ce,
-                            tile_row_start: rs,
-                            tile_row_end: re,
-                            furthest_future_refidx: ffr_idx,
-                            tip: tip_ref,
-                        }));
-                        ranges.push((rs, re));
-                        bufs.push(std::mem::take(&mut ts[ts_idx].msac_buf));
-                    }
-                    // The buffers Vec now owns the tile data; build the symbol decoders
-                    // borrowing from it (read-only) so they persist across the sby loop.
-                    let mut msacs: Vec<<B as MsacBackend<UPDATE_CDF>>::Ctx<'_>> =
-                        bufs.iter().map(|b| B::new(b)).collect();
-                    let mut part_ws: Vec<Vec<u8>> = (0..cols).map(|_| Vec::new()).collect();
-                    let part_r: Vec<u8> = Vec::new();
+                <$Coef as DecodeCoeff>::with_cf_scratch(|cf| {
+                    WORKER_SCRATCH.with(|ws_cell| -> Result<(), ()> {
+                        let mut ws_guard = ws_cell.borrow_mut();
+                        let ws = ws_guard.get_or_insert_with(|| {
+                            DecodeWorkerScratch::new(rf_rp_stride.max(1) as usize, bw, bh)
+                        });
+                        ws.prepare(rf_rp_stride.max(1) as usize, bw, bh);
+                        let DecodeWorkerScratch {
+                            rt,
+                            recon_scratch,
+                            part_w,
+                            recon_edge8,
+                            recon_edge16,
+                            ..
+                        } = &mut *ws;
+                        let recon_edge =
+                            <$Pixel as DecodeEdgePixel>::edge_mut(recon_edge8, recon_edge16);
+                        let mut l = BlockContext::default();
+                        let part_r: &[u8] = &[];
 
-                    // The tile row spans the same block-row range for every tile-col (only
-                    // the column range differs), so derive the sbrow loop from tile-col 0.
-                    let (row_rs, row_re) = ranges[0];
+                        for tr in 0..rows {
+                            let ts_base = (tr * cols) as usize;
+                            // Every tile-col in a tile row has the same row range;
+                            // derive it from tile-col zero and compute the tiny
+                            // per-tile `SbFrameInfo` on demand. This removes the
+                            // ST-only Vec<Vec<u8>>/Vec<Msac>/Vec<SbFrameInfo>
+                            // setup and uses the same save/resume MSAC state that
+                            // the worker path already uses.
+                            let (row_rs, row_re) = {
+                                let t = &ts[ts_base].tiling;
+                                (t.row_start, t.row_end)
+                            };
 
-                    // PHASE A: decode every superblock-row across all tile-cols.
-                    let mut by = row_rs;
-                    while by < row_re {
-                        // Project reference temporal MVs into the rolling-window `rf.rp_proj`
-                        // Run once per sbrow over the full block-row width, before any
-                        // tile-col reads it, so the inter tmvp candidates and frame_mode=2
-                        // whole-frame TIP recon see this row's projection.
-                        if need_load_tmvs {
-                            let by_end = (by + sb_step) >> 1;
-                            refmvs::load_tmvs(
-                                rf,
-                                tr,
-                                0,
-                                bw >> 1,
-                                by >> 1,
-                                by_end,
-                                seq_hdr.mv_traj,
-                                frame_hdr.tip.frame_mode,
-                                seq_hdr.tip_hole_fill,
-                                frame_hdr.tmvp_sample_step as i32,
-                                frame_hdr.n_ref_frames as i32,
-                            );
-                        }
-                        let rf_ref: &refmvs::Frame = &*rf;
-                        for tc in 0..cols as usize {
-                            let ts_idx = ts_base + tc;
-                            let (rs, re) = ranges[tc];
-                            if by < rs || by >= re {
-                                continue;
-                            }
-                            reset_context(&mut l, keyframe, is_tip);
-                            decode_tile_sbrow_entropy(DecodeTileSbrowEntropyCtx {
-                                bd: bd_local,
-                                fi: &fis[tc],
-                                frame_hdr,
-                                ts: &mut ts[ts_idx],
-                                msac: &mut msacs[tc],
-                                a_arr: &mut *a,
-                                lf_mask: &mut lf.mask,
-                                lr_mask: &mut lf.lr_mask,
-                                l: &mut l,
-                                dst_y: &mut *dst_y,
-                                dst_u: &mut *dst_u,
-                                dst_v: &mut *dst_v,
-                                cf: &mut cf,
-                                recon_scratch: &mut recon_scratch,
-                                recon_edge: &mut recon_edge,
-                                recon_frame: &recon_frame,
-                                cur_segmap: &mut cur_segmap[..],
-                                prev_segmap: prev_segmap_ref,
-                                segmap_uv: std::sync::Arc::make_mut(&mut lf.segmap_uv)
-                                    .as_mut_slice(),
-                                segmap_uv_stride: lf.uv_segmap_stride,
-                                cur_ccsomap: &mut cur_ccsomap[..],
-                                prev_ccsomap: prev_ccsomap_ref,
-                                part_w: &mut part_ws[tc],
-                                part_r: &part_r,
-                                by,
-                                sb256w,
-                                pass: crate::internal::PASS_ALL,
-                                root_bs,
-                                c_root_bs,
-                                rt: &mut rt,
-                                rf: rf_ref,
-                                cur_mvs: &mut cur_mvs[..],
-                                refp: &refp_pics,
-                                svc: &svc_v,
-                                seq_hdr,
-                                frm_hdr: frame_hdr,
-                                masks,
-                            })?;
-                        }
-                        by += sb_step;
-                    }
-
-                    // Return the MSAC buffers to the tile states.
-                    drop(msacs);
-                    for (tc, buf) in bufs.into_iter().enumerate() {
-                        ts[ts_base + tc].msac_buf = buf;
-                    }
-
-                    // PHASE B: frame-level spec-order filter
-                    if tr + 1 == rows {
-                        let sb64h = (bh + 15) >> 4;
-                        let nfb = ((bh >> 4).max(0) as usize).min(sb64h as usize) as i32;
-                        let n_roots = ((sb64h >> sb128) + 2) as usize;
-                        let mono = seq_hdr.layout == crate::headers::PixelLayout::I400;
-                        ensure_filter_lines(
-                            &mut lf.cdef_line_store,
-                            &mut lf.cdef_top_store,
-                            &mut lf.lr_db_store,
-                            bh,
-                            filter_params.y_stride,
-                            filter_params.uv_stride,
-                            n_roots,
-                            mono,
-                        );
-                        if bd_local.bitdepth() > 8 {
-                            ensure_filter_lines_hbd(
-                                &mut lf.cdef_line_store_hbd,
-                                &mut lf.cdef_top_store_hbd,
-                                &mut lf.lr_db_store_hbd,
-                                bh,
-                                filter_params.y_stride,
-                                filter_params.uv_stride,
-                                n_roots,
-                                mono,
-                            );
-                        }
-                        for stage in [
-                            crate::decode::STAGE_DEBLOCK,
-                            crate::decode::STAGE_CDEF,
-                            crate::decode::STAGE_LR,
-                        ] {
-                            for by64 in 0..nfb {
-                                if stage & crate::decode::STAGE_DEBLOCK != 0 {
-                                    let mask_row = ((by64 >> 2) * sb256w) as usize;
-                                    crate::deblock::deblock_crop_bottom_edge(
-                                        &mut lf.mask,
-                                        mask_row,
-                                        sb256w,
-                                        bw,
-                                        bh,
+                            // PHASE A: decode every superblock-row across all tile-cols.
+                            let mut by = row_rs;
+                            while by < row_re {
+                                // Project reference temporal MVs into the rolling-window `rf.rp_proj`.
+                                // Run once per sbrow over the full block-row width, before any
+                                // tile-col reads it, so the inter tmvp candidates and frame_mode=2
+                                // whole-frame TIP recon see this row's projection.
+                                if need_load_tmvs {
+                                    let by_end = (by + sb_step) >> 1;
+                                    refmvs::load_tmvs(
+                                        rf,
+                                        tr,
                                         0,
-                                        by64,
+                                        bw >> 1,
+                                        by >> 1,
+                                        by_end,
+                                        seq_hdr.mv_traj,
+                                        frame_hdr.tip.frame_mode,
+                                        seq_hdr.tip_hole_fill,
+                                        frame_hdr.tmvp_sample_step as i32,
+                                        frame_hdr.n_ref_frames as i32,
                                     );
                                 }
-                                let sh = FilterShared {
-                                    mask: &lf.mask[..],
-                                    lr_mask: &lf.lr_mask[..],
-                                    segmap_uv: &lf.segmap_uv[..],
-                                    start_of_tile_row: &lf.start_of_tile_row[..],
-                                    lr_cdef_line: &lf.lr_cdef_line,
-                                    lr_cdef_line_hbd: &lf.lr_cdef_line_hbd,
-                                    uv_segmap_stride: lf.uv_segmap_stride,
-                                    base_q: lf.base_q,
-                                    gdf_ref_dst_idx: lf.gdf_ref_dst_idx,
-                                    wiener_idx: lf.wiener_idx,
-                                    ns_subclass_class_idx: lf.ns_subclass_class_idx,
-                                    restore_planes: lf.restore_planes,
-                                };
-                                filter_sb64(
-                                    bd_local,
-                                    crate::decode::loopfilter::FilterSb64Ctx {
+                                let rf_ref: &refmvs::Frame = &*rf;
+                                for tc in 0..cols as usize {
+                                    let ts_idx = ts_base + tc;
+                                    let (cs, ce, rs, re) = {
+                                        let t = &ts[ts_idx].tiling;
+                                        (t.col_start, t.col_end, t.row_start, t.row_end)
+                                    };
+                                    if by < rs || by >= re {
+                                        continue;
+                                    }
+                                    let fi = SbFrameInfo::from_frame(SbFrameInfoArgs {
                                         seq_hdr,
                                         frame_hdr,
-                                        sh: &sh,
-                                        fp: &filter_params,
-                                        cur_segmap,
-                                        b4_stride: b4_stride_v,
-                                        hbd: hbd_v,
-                                        inloop: fc_inloop_filters,
-                                        sbh: fc_sbh,
-                                        sb_step,
-                                        sb256w,
-                                        sb128,
                                         bw,
                                         bh,
-                                    },
-                                    crate::decode::loopfilter::FilterSb64Scratch {
-                                        cdef_line: &mut lf.cdef_line_store,
-                                        cdef_top: &mut lf.cdef_top_store,
-                                        lr_db_line: &mut lf.lr_db_store,
-                                        ccso_tmp_buf: &mut lf.ccso_tmp_buf,
-                                        cdef_line_hbd: &mut lf.cdef_line_store_hbd,
-                                        cdef_top_hbd: &mut lf.cdef_top_store_hbd,
-                                        lr_db_line_hbd: &mut lf.lr_db_store_hbd,
-                                        ccso_tmp_buf_hbd: &mut lf.ccso_tmp_buf_hbd,
-                                    },
-                                    crate::decode::loopfilter::FilterSb64Dst {
-                                        y: &mut *dst_y,
-                                        u: &mut *dst_u,
-                                        v: &mut *dst_v,
-                                    },
-                                    crate::decode::loopfilter::FilterSb64Band {
-                                        by64,
-                                        stages: stage,
-                                    },
+                                        root_bs,
+                                        sb_step,
+                                        n_passes,
+                                        refdir,
+                                        refdist,
+                                        absrefdist,
+                                        skip_mode_refs,
+                                        tile_col_start: cs,
+                                        tile_col_end: ce,
+                                        tile_row_start: rs,
+                                        tile_row_end: re,
+                                        furthest_future_refidx: ffr_idx,
+                                        tip: tip_ref,
+                                    });
+                                    let buf = std::mem::take(&mut ts[ts_idx].msac_buf);
+                                    part_w.clear();
+                                    reset_context(&mut l, keyframe, is_tip);
+                                    let (sbrow_res, saved_msac_state) = {
+                                        let mut msac = B::resume(&buf, ts[ts_idx].msac_state);
+                                        let sbrow_res = decode_tile_sbrow_entropy(
+                                            DecodeTileSbrowEntropyCtx {
+                                                bd: bd_local,
+                                                fi: &fi,
+                                                frame_hdr,
+                                                ts: &mut ts[ts_idx],
+                                                msac: &mut msac,
+                                                a_arr: &mut *a,
+                                                lf_mask: &mut lf.mask,
+                                                lr_mask: &mut lf.lr_mask,
+                                                l: &mut l,
+                                                dst_y: &mut *dst_y,
+                                                dst_u: &mut *dst_u,
+                                                dst_v: &mut *dst_v,
+                                                cf: &mut *cf,
+                                                recon_scratch: &mut *recon_scratch,
+                                                recon_edge: &mut *recon_edge,
+                                                recon_frame: &recon_frame,
+                                                cur_segmap: &mut cur_segmap[..],
+                                                prev_segmap: prev_segmap_ref,
+                                                segmap_uv: std::sync::Arc::make_mut(&mut lf.segmap_uv)
+                                                    .as_mut_slice(),
+                                                segmap_uv_stride: lf.uv_segmap_stride,
+                                                cur_ccsomap: &mut cur_ccsomap[..],
+                                                prev_ccsomap: prev_ccsomap_ref,
+                                                part_w: &mut *part_w,
+                                                part_r,
+                                                by,
+                                                sb256w,
+                                                pass: crate::internal::PASS_ALL,
+                                                root_bs,
+                                                c_root_bs,
+                                                rt: &mut *rt,
+                                                rf: rf_ref,
+                                                cur_mvs: &mut cur_mvs[..],
+                                                refp: &refp_pics,
+                                                svc: &svc_v,
+                                                seq_hdr,
+                                                frm_hdr: frame_hdr,
+                                                masks,
+                                            },
+                                        );
+                                        let saved_msac_state = msac.save();
+                                        (sbrow_res, saved_msac_state)
+                                    };
+                                    ts[ts_idx].msac_state = saved_msac_state;
+                                    ts[ts_idx].msac_buf = buf;
+                                    sbrow_res?;
+                                }
+                                by += sb_step;
+                            }
+
+                            // PHASE B: frame-level spec-order filter
+                            if tr + 1 == rows {
+                                let sb64h = (bh + 15) >> 4;
+                                let nfb = ((bh >> 4).max(0) as usize).min(sb64h as usize) as i32;
+                                let n_roots = ((sb64h >> sb128) + 2) as usize;
+                                let mono = seq_hdr.layout == crate::headers::PixelLayout::I400;
+                                ensure_filter_lines(
+                                    &mut lf.cdef_line_store,
+                                    &mut lf.cdef_top_store,
+                                    &mut lf.lr_db_store,
+                                    bh,
+                                    filter_params.y_stride,
+                                    filter_params.uv_stride,
+                                    n_roots,
+                                    mono,
                                 );
+                                if bd_local.bitdepth() > 8 {
+                                    ensure_filter_lines_hbd(
+                                        &mut lf.cdef_line_store_hbd,
+                                        &mut lf.cdef_top_store_hbd,
+                                        &mut lf.lr_db_store_hbd,
+                                        bh,
+                                        filter_params.y_stride,
+                                        filter_params.uv_stride,
+                                        n_roots,
+                                        mono,
+                                    );
+                                }
+                                for stage in [
+                                    crate::decode::STAGE_DEBLOCK,
+                                    crate::decode::STAGE_CDEF,
+                                    crate::decode::STAGE_LR,
+                                ] {
+                                    for by64 in 0..nfb {
+                                        if stage & crate::decode::STAGE_DEBLOCK != 0 {
+                                            let mask_row = ((by64 >> 2) * sb256w) as usize;
+                                            crate::deblock::deblock_crop_bottom_edge(
+                                                &mut lf.mask,
+                                                mask_row,
+                                                sb256w,
+                                                bw,
+                                                bh,
+                                                0,
+                                                by64,
+                                            );
+                                        }
+                                        let sh = FilterShared {
+                                            mask: &lf.mask[..],
+                                            lr_mask: &lf.lr_mask[..],
+                                            segmap_uv: &lf.segmap_uv[..],
+                                            start_of_tile_row: &lf.start_of_tile_row[..],
+                                            lr_cdef_line: &lf.lr_cdef_line,
+                                            lr_cdef_line_hbd: &lf.lr_cdef_line_hbd,
+                                            uv_segmap_stride: lf.uv_segmap_stride,
+                                            base_q: lf.base_q,
+                                            gdf_ref_dst_idx: lf.gdf_ref_dst_idx,
+                                            wiener_idx: lf.wiener_idx,
+                                            ns_subclass_class_idx: lf.ns_subclass_class_idx,
+                                            restore_planes: lf.restore_planes,
+                                        };
+                                        filter_sb64(
+                                            bd_local,
+                                            crate::decode::loopfilter::FilterSb64Ctx {
+                                                seq_hdr,
+                                                frame_hdr,
+                                                sh: &sh,
+                                                fp: &filter_params,
+                                                cur_segmap,
+                                                b4_stride: b4_stride_v,
+                                                hbd: hbd_v,
+                                                inloop: fc_inloop_filters,
+                                                sbh: fc_sbh,
+                                                sb_step,
+                                                sb256w,
+                                                sb128,
+                                                bw,
+                                                bh,
+                                            },
+                                            crate::decode::loopfilter::FilterSb64Scratch {
+                                                cdef_line: &mut lf.cdef_line_store,
+                                                cdef_top: &mut lf.cdef_top_store,
+                                                lr_db_line: &mut lf.lr_db_store,
+                                                ccso_tmp_buf: &mut lf.ccso_tmp_buf,
+                                                cdef_line_hbd: &mut lf.cdef_line_store_hbd,
+                                                cdef_top_hbd: &mut lf.cdef_top_store_hbd,
+                                                lr_db_line_hbd: &mut lf.lr_db_store_hbd,
+                                                ccso_tmp_buf_hbd: &mut lf.ccso_tmp_buf_hbd,
+                                            },
+                                            crate::decode::loopfilter::FilterSb64Dst {
+                                                y: &mut *dst_y,
+                                                u: &mut *dst_u,
+                                                v: &mut *dst_v,
+                                            },
+                                            crate::decode::loopfilter::FilterSb64Band {
+                                                by64,
+                                                stages: stage,
+                                            },
+                                        );
+                                    }
+                                }
                             }
                         }
-                    }
-                }
+                        Ok(())
+                    })
+                })?;
             }
         }};
     }

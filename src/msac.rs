@@ -234,6 +234,7 @@ pub(crate) trait MsacBackend<const UPDATE_CDF: bool> {
     where
         Self: 'a;
 
+    #[allow(unused)]
     fn new<'a>(data: &'a [u8]) -> Self::Ctx<'a>;
     fn resume<'a>(data: &'a [u8], st: MsacState) -> Self::Ctx<'a>;
 }

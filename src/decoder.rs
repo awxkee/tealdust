@@ -286,17 +286,22 @@ impl Decoder {
                     }
                     // Frames reconstructed during parsing: enqueue all of them in
                     // decode order (a single parse_obus call may decode several).
-                    let frames: Vec<_> = self.ctx.frame_out.drain(..).collect();
-                    for pic in frames {
+                    // Drain directly into the output ring; collecting into a temporary
+                    // Vec added one avoidable allocation on the single-thread path.
+                    let dpb = &mut self.dpb;
+                    let dpb_sz = self.dpb_sz;
+                    let dpb_in = &mut self.dpb_in;
+                    let dpb_poc = &mut self.dpb_poc;
+                    for pic in self.ctx.frame_out.drain(..) {
                         // recently queued frame so end-of-stream queue_flush can
                         // re-display deferred show_implicit frames in order.
                         if let Some(fh) = pic.frame_hdr.as_ref() {
-                            self.dpb_poc = fh.frame_offset;
+                            *dpb_poc = fh.frame_offset;
                         }
-                        self.dpb[self.dpb_in].pic.p = pic;
-                        self.dpb_in += 1;
-                        if self.dpb_in == self.dpb_sz {
-                            self.dpb_in = 0;
+                        dpb[*dpb_in].pic.p = pic;
+                        *dpb_in += 1;
+                        if *dpb_in == dpb_sz {
+                            *dpb_in = 0;
                         }
                     }
                 }
