@@ -226,7 +226,7 @@ impl<'a> GetBits<'a> {
     }
 
     pub(crate) fn get_bits_subexp_u(&mut self, ref_val: u32, n: u32, k: i32) -> u32 {
-        if n == 0 || ref_val >= n || k < 0 || k >= 32 {
+        if n == 0 || ref_val >= n || !(0..32).contains(&k) {
             self.error = true;
             return 0;
         }
@@ -236,7 +236,7 @@ impl<'a> GetBits<'a> {
         let mut i = 0;
         loop {
             let b = if i != 0 { k + i - 1 } else { k };
-            if b < 0 || b >= 32 {
+            if !(0..32).contains(&b) {
                 self.error = true;
                 return 0;
             }

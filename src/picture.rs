@@ -138,7 +138,7 @@ impl PlaneStorage {
         }
 
         if hbd {
-            if byte_len % core::mem::size_of::<u16>() != 0 {
+            if !byte_len.is_multiple_of(core::mem::size_of::<u16>()) {
                 return None;
             }
             let len = byte_len / core::mem::size_of::<u16>();

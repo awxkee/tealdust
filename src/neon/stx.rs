@@ -311,7 +311,7 @@ pub(crate) fn stxfm4_8bpc_neon(cf: &mut [i16], kernel: &[i8], eob: usize, scan_o
     store_i16x8(&mut sums[8..16], s1);
 
     cf[4..8].fill(0);
-    unsafe { scatter_stx4_i16(cf, &sums, scan_out) };
+    scatter_stx4_i16(cf, &sums, scan_out);
 }
 
 #[inline]
@@ -334,11 +334,8 @@ pub(crate) unsafe fn stxfm8_8bpc_neon(
     store_i16x8(&mut sums[24..32], s3);
     store_i16x8(&mut sums[32..40], s4);
     store_i16x8(&mut sums[40..48], s5);
-
-    unsafe {
-        zero_stx8_i16_neon(cf);
-        scatter_stx8_i16(cf, &sums, scan_out, mapping);
-    }
+    zero_stx8_i16_neon(cf);
+    scatter_stx8_i16(cf, &sums, scan_out, mapping);
 }
 
 #[inline]
@@ -561,7 +558,7 @@ pub(crate) fn stxfm4_hbd_neon(
     store_i32x4(&mut sums[12..16], s3);
 
     cf[4..8].fill(0);
-    unsafe { scatter_stx4_i32(cf, &sums, scan_out) };
+    scatter_stx4_i32(cf, &sums, scan_out);
 }
 
 #[inline]
@@ -584,9 +581,6 @@ pub(crate) fn stxfm8_hbd_neon(
         store_i32x4(&mut sums[x * 4..x * 4 + 4], s[x]);
         x += 1;
     }
-
-    unsafe {
-        zero_stx8_i32_neon(cf);
-        scatter_stx8_i32(cf, &sums, scan_out, mapping);
-    }
+    zero_stx8_i32_neon(cf);
+    scatter_stx8_i32(cf, &sums, scan_out, mapping);
 }

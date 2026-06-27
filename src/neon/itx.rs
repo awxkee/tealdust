@@ -3923,7 +3923,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
         return;
     }
 
-    with_neon_itx_i16_scratch(N, |scratch| unsafe {
+    with_neon_itx_i16_scratch(N, |scratch| {
         // Row pass fully writes rows 0..nrows; column pass reads rows 0..H, so
         // clear only the reused tail (nrows..H) rather than the whole buffer.
         scratch[nrows * W..H * W].fill(0);
