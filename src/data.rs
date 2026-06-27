@@ -77,7 +77,9 @@ impl Data {
         if size > usize::MAX / 2 {
             return None;
         }
-        let buf = vec![0u8; size];
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(size).ok()?;
+        buf.resize(size, 0);
         Some(Self {
             buf: Some(Arc::new(buf)),
             offset: 0,

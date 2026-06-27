@@ -34,6 +34,15 @@ use crate::intops::imin;
 
 use crate::msac::MsacContextScalar;
 
+#[inline]
+fn try_resize_with_default<T: Default>(v: &mut Vec<T>, len: usize) -> Result<(), ()> {
+    if len > v.len() {
+        v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+    }
+    v.resize_with(len, Default::default);
+    Ok(())
+}
+
 pub(crate) fn decode_frame_init(
     frame_hdr: &FrameHeader,
     seq_hdr: &crate::headers::SequenceHeader,
@@ -51,33 +60,33 @@ pub(crate) fn decode_frame_init(
     _bw: i32,
     _bh: i32,
     n_tc: i32,
-) {
+) -> Result<(), ()> {
     init_start_of_tile_row(
         &mut lf.start_of_tile_row,
         sbh,
         frame_hdr.tiling.t.rows,
         frame_hdr.tiling.t.row_start_sb.as_ref(),
-    );
+    )?;
 
     let new_n_ts = frame_hdr.tiling.t.cols as i32 * frame_hdr.tiling.t.rows as i32;
     if new_n_ts != *n_ts {
         *n_ts = new_n_ts;
     }
-    ts.resize_with(new_n_ts as usize, Default::default);
+    try_resize_with_default(ts, new_n_ts as usize)?;
 
     let new_a_sz = sb256w * frame_hdr.tiling.t.rows as i32;
     if new_a_sz != *a_sz {
-        a.resize_with(new_a_sz as usize, Default::default);
+        try_resize_with_default(a, new_a_sz as usize)?;
         *a_sz = new_a_sz;
     }
 
     let num_sb256 = (sb256w * sb256h) as usize;
     lf.restore_planes = compute_restore_planes(frame_hdr);
-    lf.mask.resize_with(num_sb256, Default::default);
+    try_resize_with_default(&mut lf.mask, num_sb256)?;
     for m in lf.mask.iter_mut() {
         *m = Default::default();
     }
-    lf.lr_mask.resize_with(num_sb256, Default::default);
+    try_resize_with_default(&mut lf.lr_mask, num_sb256)?;
     // The LR mask (~num_sb256 * 24 KB) is consumed only by loop restoration; when
     // no plane is restored it is never read, so the per-frame re-zero is dead work
     // and is skipped. `resize_with` already zero-fills any newly grown elements,
@@ -103,6 +112,8 @@ pub(crate) fn decode_frame_init(
         {
             let seg = std::sync::Arc::make_mut(&mut lf.segmap_uv);
             if seg.len() != size {
+                seg.try_reserve_exact(size.saturating_sub(seg.len()))
+                    .map_err(|_| ())?;
                 seg.resize(size, 0);
             }
             seg.fill(0);
@@ -133,6 +144,8 @@ pub(crate) fn decode_frame_init(
             reset_context(ctx, keyframe, is_tip);
         }
     }
+
+    Ok(())
 }
 
 pub(crate) fn setup_tile_bounds(
@@ -190,14 +203,16 @@ pub(crate) fn setup_tile(
     bh: i32,
     n_tc: i32,
     tile_start_off: u32,
-) {
+) -> Result<(), ()> {
     if let Some(cdf) = in_cdf {
         ts.cdf = cdf.clone();
     } else {
         ts.cdf = crate::cdf::CdfContext::init_from_defaults(qcat);
     }
     ts.last_qidx = frame_hdr.quant.yac as i32;
-    ts.msac_buf = data.to_vec();
+    ts.msac_buf.clear();
+    ts.msac_buf.try_reserve_exact(data.len()).map_err(|_| ())?;
+    ts.msac_buf.extend_from_slice(data);
     // Seed the resumable entropy state so every sbrow — including the first —
     // restores uniformly from `ts.msac_state` (sbrow-granularity scheduling).
     ts.msac_state = MsacContextScalar::<true>::new(&ts.msac_buf).save();
@@ -215,6 +230,7 @@ pub(crate) fn setup_tile(
         n_tc,
     );
     setup_tile_wiener_banks(ts, frame_hdr);
+    Ok(())
 }
 
 pub(crate) fn decode_frame_init_cdf(
@@ -243,7 +259,8 @@ pub(crate) fn decode_frame_init_cdf(
         tile_col: i32,
         start_off: u32,
     }
-    let mut inits: Vec<TileInit> = Vec::with_capacity(ts.len());
+    let mut inits: Vec<TileInit> = Vec::new();
+    inits.try_reserve_exact(ts.len()).map_err(|_| ())?;
     let mut tile_row = 0i32;
     let mut tile_col = 0i32;
     for tg in tile_groups.iter() {
@@ -309,6 +326,8 @@ pub(crate) fn decode_frame_init_cdf(
     let inits = &inits[..];
     let cursor = std::sync::atomic::AtomicUsize::new(0);
     let cursor = &cursor;
+    let allocation_failed = std::sync::atomic::AtomicBool::new(false);
+    let allocation_failed = &allocation_failed;
     let n_workers = (n_tc as usize).min(n_units).max(1);
     let job = || {
         loop {
@@ -320,7 +339,7 @@ pub(crate) fn decode_frame_init_cdf(
             // SAFETY: each unit has a distinct tile index `it.j`, so this is the
             // only access to `ts[it.j]` (disjoint from every other worker).
             let ts_slice = unsafe { ts_dm.whole() };
-            setup_tile(
+            if setup_tile(
                 &mut ts_slice[it.j],
                 it.data,
                 frame_hdr,
@@ -335,10 +354,17 @@ pub(crate) fn decode_frame_init_cdf(
                 bh,
                 n_tc,
                 it.start_off,
-            );
+            )
+            .is_err()
+            {
+                allocation_failed.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     };
     crate::mtpool::dispatch(active, n_workers, &job);
+    if allocation_failed.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(());
+    }
 
     Ok(())
 }

@@ -1,3 +1,7 @@
+[workspace]
+members = ["fuzz"]
+exclude = []
+
 [package]
 name = "tealdust"
 version = "0.1.0"

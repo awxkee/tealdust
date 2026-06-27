@@ -2749,7 +2749,11 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                 if gb.has_error() {
                     return Err(TealdustError::InvalidData);
                 }
-                tg.data = gb.remaining_slice().to_vec();
+                let rem = gb.remaining_slice();
+                tg.data
+                    .try_reserve_exact(rem.len())
+                    .map_err(|_| TealdustError::OutOfMemory)?;
+                tg.data.extend_from_slice(rem);
 
                 if tg.start > tg.end || tg.start != c.n_tiles {
                     c.tile.clear();
@@ -2758,6 +2762,9 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                     return Err(TealdustError::InvalidData);
                 }
                 c.n_tiles += 1 + tg.end - tg.start;
+                c.tile
+                    .try_reserve_exact(1)
+                    .map_err(|_| TealdustError::OutOfMemory)?;
                 c.tile.push(tg);
                 c.n_tile_data += 1;
             }

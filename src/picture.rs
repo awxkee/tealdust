@@ -1,9 +1,3 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicI32;
-
-use crate::data::DataProps;
-use crate::headers::{ContentLightLevel, FilmGrainData, FrameHeader, PixelLayout, SequenceHeader};
-
 /*
  * Copyright (c) Radzivon Bartoshyk 6/2026. All rights reserved.
  *
@@ -32,8 +26,16 @@ use crate::headers::{ContentLightLevel, FilmGrainData, FrameHeader, PixelLayout,
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+use std::sync::Arc;
+use std::sync::atomic::AtomicI32;
+
+use crate::data::DataProps;
+use crate::headers::{ContentLightLevel, FilmGrainData, FrameHeader, PixelLayout, SequenceHeader};
 
 pub const PICTURE_ALIGNMENT: usize = 64;
+const MAX_PICTURE_TOTAL_BYTES: usize = 512 * 1024 * 1024;
+const MAX_POOLED_PLANE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_POOLED_TOTAL_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PictureParameters {
@@ -177,6 +179,10 @@ fn empty_planes() -> [PlaneStorage; 3] {
 pub trait PicAllocator: Send + Sync {
     fn alloc_picture(&self, p: &PictureParameters) -> Option<PictureAllocation>;
     fn release_picture(&self, alloc: PictureAllocation);
+
+    /// Drop allocator-owned idle buffers. Live pictures keep their own plane
+    /// storage through `Arc`; this only releases the recycler's free list.
+    fn clear_pool(&self) {}
 }
 
 pub struct PictureAllocation {
@@ -226,6 +232,10 @@ fn plane_byte_layout(p: &PictureParameters) -> Option<PlaneByteLayout> {
 
     let y_sz = y_stride.checked_mul(aligned_h)?;
     let uv_sz = uv_stride.checked_mul(aligned_h >> (ss_ver as usize))?;
+    let total_sz = y_sz.checked_add(if has_chroma { uv_sz.checked_mul(2)? } else { 0 })?;
+    if total_sz > MAX_PICTURE_TOTAL_BYTES {
+        return None;
+    }
     if y_stride > isize::MAX as usize || uv_stride > isize::MAX as usize {
         return None;
     }
@@ -300,16 +310,31 @@ impl PicAllocator for PoolPicAllocator {
 
     fn release_picture(&self, alloc: PictureAllocation) {
         if let Ok(mut free) = self.free.lock() {
+            let mut pooled_bytes: usize = free.iter().map(PlaneStorage::len_bytes).sum();
             for s in alloc.data {
                 // Recycle only buffers no other live picture still shares. A
                 // plane handed to a ref slot or an emitted output picture has
                 // strong_count > 1 here and is dropped (decrementing the count)
                 // rather than recycled; it becomes reclaimable when its last
                 // holder is released.
-                if s.is_some() && s.is_unique() && free.len() < self.cap {
+                let len = s.len_bytes();
+                if s.is_some()
+                    && s.is_unique()
+                    && len <= MAX_POOLED_PLANE_BYTES
+                    && pooled_bytes.saturating_add(len) <= MAX_POOLED_TOTAL_BYTES
+                    && free.len() < self.cap
+                {
+                    pooled_bytes += len;
                     free.push(s);
                 }
             }
+        }
+    }
+
+    fn clear_pool(&self) {
+        if let Ok(mut free) = self.free.lock() {
+            free.clear();
+            free.shrink_to_fit();
         }
     }
 }

@@ -8,6 +8,11 @@ use crate::picture::{Picture, ThreadPicture};
 
 pub const MAX_THREADS: u32 = 256;
 pub const MAX_FRAME_DELAY: u32 = 256;
+/// Default untrusted-data frame-size cap. 4096x2304 keeps normal 4K/2.5MP
+/// fuzz/bench clips inside the default decoder, while avoiding repeated huge
+/// allocations from tiny malformed headers. Set `Settings::frame_size_limit = 0`
+/// explicitly for trusted streams that may exceed this.
+pub const DEFAULT_FRAME_SIZE_LIMIT: u32 = 4096 * 2304;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -59,7 +64,11 @@ pub struct Settings {
     pub operating_point: u32,
     /// Output all temporal/spatial layers.
     pub all_layers: bool,
-    /// Maximum frame size in pixels (width × height). 0 = unlimited.
+    /// Maximum frame size in pixels (width × height).
+    ///
+    /// `Settings::default()` uses [`DEFAULT_FRAME_SIZE_LIMIT`] as an
+    /// untrusted-data safety cap. Set this to `0` explicitly to decode trusted
+    /// streams without a pixel-count cap.
     pub frame_size_limit: u32,
     /// Abort on spec-violating bitstreams instead of best-effort.
     pub strict_std_compliance: bool,
@@ -83,7 +92,7 @@ impl Default for Settings {
             apply_grain: true,
             operating_point: 0,
             all_layers: true,
-            frame_size_limit: 0,
+            frame_size_limit: DEFAULT_FRAME_SIZE_LIMIT,
             strict_std_compliance: false,
             output_invisible_frames: false,
             inloop_filters: InloopFilterType::All,
@@ -306,7 +315,11 @@ impl Decoder {
                     }
                 }
                 Err(_e) => {
-                    self.input.unref();
+                    // A malformed OBU can force large transient frame/tile/scratch
+                    // allocations before the parser eventually rejects it. Do not
+                    // keep those capacities around for the next fuzz iteration or
+                    // next untrusted packet on the same decoder.
+                    self.flush();
                     return Err(TealdustError::InvalidData);
                 }
             }
@@ -435,15 +448,27 @@ impl Decoder {
             r.segmap = None;
             r.refmvs = None;
             r.ccsomap = None;
+            r.p.showable = false;
             r.p.frame_hdr = None;
+            r.p.pic = None;
             r.refpoc = [0; 7];
         }
 
         self.ctx.frame_hdr = None;
         self.ctx.seq_hdr = None;
         self.ctx.tile.clear();
+        self.ctx.tile.shrink_to_fit();
         self.ctx.n_tile_data = 0;
         self.ctx.n_tiles = 0;
+        self.ctx.frame_out.clear();
+        self.ctx.frame_out.shrink_to_fit();
+
+        // `FrameContext` is intentionally reusable during normal decode, but a
+        // public flush/error reset should not retain attacker-sized allocation
+        // capacities. Drop it back to the zero-allocation default.
+        self.ctx.fc = crate::internal::FrameContext::default();
+        self.ctx.pic_allocator.clear_pool();
+        crate::decode::clear_thread_local_decode_scratch();
 
         self.flush.store(false, Ordering::Release);
     }

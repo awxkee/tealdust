@@ -115,6 +115,8 @@ pub enum AvifError {
     InvalidCodecConfig,
     /// An attacker-controlled count or size exceeded a safety limit.
     LimitExceeded,
+    /// A fallible heap allocation failed while parsing/container-copying.
+    OutOfMemory,
 }
 
 impl fmt::Display for AvifError {
@@ -130,6 +132,7 @@ impl fmt::Display for AvifError {
             Self::DecodeError(e) => write!(f, "AV2 decode error: {e}"),
             Self::InvalidCodecConfig => write!(f, "invalid av2C/av1C codec config box"),
             Self::LimitExceeded => write!(f, "parser limit exceeded"),
+            Self::OutOfMemory => write!(f, "out of memory"),
         }
     }
 }
@@ -1124,7 +1127,10 @@ impl AvifParser {
                 return Err(AvifError::LimitExceeded);
             }
 
-            let mut extents: Vec<(u64, u64)> = Vec::with_capacity(extent_count as usize);
+            let mut extents: Vec<(u64, u64)> = Vec::new();
+            extents
+                .try_reserve_exact(extent_count as usize)
+                .map_err(|_| AvifError::OutOfMemory)?;
 
             for _ in 0..extent_count {
                 if index_size > 0 {
@@ -1944,7 +1950,10 @@ impl<'a> AvifDecoder<'a> {
             return Err(AvifError::LimitExceeded);
         }
 
-        let mut obu_data: Vec<u8> = Vec::with_capacity(total_obu_len as usize);
+        let mut obu_data: Vec<u8> = Vec::new();
+        obu_data
+            .try_reserve_exact(total_obu_len as usize)
+            .map_err(|_| AvifError::OutOfMemory)?;
         if !cfg.config_obus.is_empty() {
             obu_data.extend_from_slice(&cfg.config_obus);
         }
@@ -2076,7 +2085,9 @@ fn copy_plane(
     let w_bytes = w.checked_mul(bps).ok_or(AvifError::InvalidBox)?;
     let total = h.checked_mul(w_bytes).ok_or(AvifError::InvalidBox)?;
 
-    let mut out = Vec::with_capacity(total);
+    let mut out = Vec::new();
+    out.try_reserve_exact(total)
+        .map_err(|_| AvifError::OutOfMemory)?;
     for row in 0..h {
         let row_offset = row.checked_mul(stride).ok_or(AvifError::InvalidBox)?;
         let row_end = row_offset

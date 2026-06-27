@@ -2092,6 +2092,165 @@ fn tx_dequant_dense_sse41_i32_impl<const N: usize, const W: usize, const H: usiz
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
+fn tx_dequant_4x4_sse41_i32_impl(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    _eob: i32,
+    _tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    if is_rect2 {
+        tx_dequant_4x4_sse41_i32_impl_const::<true>(
+            coeff,
+            tmp,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        )
+    } else {
+        tx_dequant_4x4_sse41_i32_impl_const::<false>(
+            coeff,
+            tmp,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        )
+    }
+}
+
+#[inline(never)]
+#[target_feature(enable = "sse4.1")]
+fn tx_dequant_4x4_sse41_i32_impl_const<const IS_RECT2: bool>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    unsafe {
+        debug_assert!(coeff.len() >= 16);
+        let z = _mm_setzero_si128();
+        let rect_mul = _mm_set1_epi32(181);
+        let rect_rnd = _mm_set1_epi32(128);
+        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+        let sh = _mm_cvtsi32_si128(shift0);
+        let minv = _mm_set1_epi32(row_clip_min);
+        let maxv = _mm_set1_epi32(row_clip_max);
+
+        macro_rules! load_col {
+            ($j:expr) => {{
+                let mut v = _mm_loadu_si128(coeff.as_ptr().add(($j) * 4) as *const __m128i);
+                if IS_RECT2 {
+                    v = _mm_srai_epi32::<8>(_mm_add_epi32(_mm_mullo_epi32(v, rect_mul), rect_rnd));
+                }
+                v
+            }};
+        }
+
+        let c0 = load_col!(0);
+        let c1 = load_col!(1);
+        let c2 = load_col!(2);
+        let c3 = load_col!(3);
+
+        macro_rules! row_pass {
+            ($m:expr) => {{
+                let mut a = z;
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        c0,
+                        _mm_set1_epi32(sse41_tx_dense_coeff(first_kind, 4, $m, 0)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        c1,
+                        _mm_set1_epi32(sse41_tx_dense_coeff(first_kind, 4, $m, 1)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        c2,
+                        _mm_set1_epi32(sse41_tx_dense_coeff(first_kind, 4, $m, 2)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        c3,
+                        _mm_set1_epi32(sse41_tx_dense_coeff(first_kind, 4, $m, 3)),
+                    ),
+                );
+                a
+            }};
+        }
+
+        let row = [row_pass!(0), row_pass!(1), row_pass!(2), row_pass!(3)];
+        sse41_store4x4_i32_clip(tmp, 0, &row, rnd, sh, minv, maxv);
+        coeff[..16].fill(0);
+
+        let r0 = _mm_loadu_si128(tmp.as_ptr() as *const __m128i);
+        let r1 = _mm_loadu_si128(tmp.as_ptr().add(32) as *const __m128i);
+        let r2 = _mm_loadu_si128(tmp.as_ptr().add(64) as *const __m128i);
+        let r3 = _mm_loadu_si128(tmp.as_ptr().add(96) as *const __m128i);
+
+        macro_rules! col_pass {
+            ($m:expr) => {{
+                let mut a = z;
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        r0,
+                        _mm_set1_epi32(sse41_tx_dense_coeff(second_kind, 4, $m, 0)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        r1,
+                        _mm_set1_epi32(sse41_tx_dense_coeff(second_kind, 4, $m, 1)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        r2,
+                        _mm_set1_epi32(sse41_tx_dense_coeff(second_kind, 4, $m, 2)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        r3,
+                        _mm_set1_epi32(sse41_tx_dense_coeff(second_kind, 4, $m, 3)),
+                    ),
+                );
+                a
+            }};
+        }
+
+        _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, col_pass!(0));
+        _mm_storeu_si128(tmp.as_mut_ptr().add(32) as *mut __m128i, col_pass!(1));
+        _mm_storeu_si128(tmp.as_mut_ptr().add(64) as *mut __m128i, col_pass!(2));
+        _mm_storeu_si128(tmp.as_mut_ptr().add(96) as *mut __m128i, col_pass!(3));
+    }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn tx_dequant_dense_sse41_i32_impl_const<
     const N: usize,
     const W: usize,
@@ -2332,46 +2491,9 @@ fn tx_dequant_dense_sse41_i16_impl_const<
         let mut y = 0usize;
 
         if first_kind == crate::itx_2d::TX_KIND_IDENTITY {
-            let scale = _mm_set1_epi32(sse41_identity_scale(W));
-            while y + 4 <= nrows {
-                let mut m = 0usize;
-                while m < W {
-                    let a0 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
-                        coeff,
-                        y + (m + 0) * H,
-                        scale,
-                    );
-                    let a1 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
-                        coeff,
-                        y + (m + 1) * H,
-                        scale,
-                    );
-                    let a2 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
-                        coeff,
-                        y + (m + 2) * H,
-                        scale,
-                    );
-                    let a3 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(
-                        coeff,
-                        y + (m + 3) * H,
-                        scale,
-                    );
-                    sse41_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        a0,
-                        a1,
-                        a2,
-                        a3,
-                        rnd,
-                        sh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-                y += 4;
-            }
+            y = sse41_fused_identity_pass::<W, H, IS_RECT2>(
+                coeff, nrows, rnd, sh, minv, maxv, scratch, y,
+            );
         }
 
         while y + 8 <= nrows && first_kind == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
@@ -2531,16 +2653,7 @@ fn tx_dequant_dense_sse41_i16_impl_const<
 
         let mut x = 0usize;
         if second_kind == crate::itx_2d::TX_KIND_IDENTITY {
-            let scale = _mm_set1_epi32(sse41_identity_scale(H));
-            while x < W {
-                let mut m = 0usize;
-                while m < H {
-                    let a = sse41_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
-                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, a);
-                    m += 1;
-                }
-                x += 4;
-            }
+            x = sse41_identity_second_pass::<W, H>(scratch, tmp, x);
         }
         while x < W {
             if second_kind == crate::itx_2d::TX_KIND_DCT && H == 16 {
@@ -2596,6 +2709,56 @@ fn tx_dequant_dense_sse41_i16_impl_const<
             x += 4;
         }
     });
+}
+
+#[inline(never)]
+#[target_feature(enable = "sse4.1")]
+fn sse41_fused_identity_pass<const W: usize, const H: usize, const IS_RECT2: bool>(
+    coeff: &mut [i16],
+    nrows: usize,
+    rnd: __m128i,
+    sh: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+    scratch: &mut [i16],
+    mut y: usize,
+) -> usize {
+    let scale = _mm_set1_epi32(sse41_identity_scale(W));
+    while y + 4 <= nrows {
+        let mut m = 0usize;
+        while m < W {
+            let a0 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 0) * H, scale);
+            let a1 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 1) * H, scale);
+            let a2 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 2) * H, scale);
+            let a3 = sse41_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 3) * H, scale);
+            sse41_store4x4_i16_clip::<W>(scratch, y * W + m, a0, a1, a2, a3, rnd, sh, minv, maxv);
+            m += 4;
+        }
+        y += 4;
+    }
+    y
+}
+
+#[inline(never)]
+#[target_feature(enable = "sse4.1")]
+fn sse41_identity_second_pass<const W: usize, const H: usize>(
+    scratch: &[i16],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    mut x: usize,
+) -> usize {
+    unsafe {
+        let scale = _mm_set1_epi32(sse41_identity_scale(H));
+        while x < W {
+            let mut m = 0usize;
+            while m < H {
+                let a = sse41_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
+                _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, a);
+                m += 1;
+            }
+            x += 4;
+        }
+        x
+    }
 }
 
 #[inline]
@@ -3004,7 +3167,7 @@ pub(crate) fn idct_dequant_4x4_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<16, 4, 4>(
+    tx_dequant_4x4_sse41_i32_impl(
         coeff,
         tmp,
         eob,
@@ -3128,7 +3291,7 @@ pub(crate) fn iadst_dequant_4x4_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<16, 4, 4>(
+    tx_dequant_4x4_sse41_i32_impl(
         coeff,
         tmp,
         eob,

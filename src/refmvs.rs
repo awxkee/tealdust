@@ -3062,6 +3062,14 @@ pub(crate) fn load_tmvs(
     }
 }
 
+#[inline]
+fn try_resize_default<T: Default + Clone>(v: &mut Vec<T>, len: usize) -> Result<(), ()> {
+    if len > v.len() {
+        v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+    }
+    v.resize(len, T::default());
+    Ok(())
+}
 pub(crate) fn init_frame(
     rf: &mut Frame,
     seq_hdr: &crate::headers::SequenceHeader,
@@ -3072,7 +3080,7 @@ pub(crate) fn init_frame(
     rp_ref: &[Option<Vec<TemporalBlock>>; 7],
     have_threading: bool,
     have_frame_threading: bool,
-) {
+) -> Result<(), ()> {
     use crate::env::get_poc_diff;
 
     let rp_stride = ((frm_hdr.width + 255) & !255) >> 3;
@@ -3107,22 +3115,16 @@ pub(crate) fn init_frame(
         let rp_map_sz = sbsz8 as usize * n_blocks as usize;
         let r_above_sz = n_blocks as usize;
 
-        rf.rp_proj = vec![
-            SnglMvBlock {
-                mv: Mv::default(),
-                r#ref: 0
-            };
-            rp_proj_sz
-        ];
+        try_resize_default(&mut rf.rp_proj, rp_proj_sz)?;
         for n in 0..7 {
-            rf.rp_traj[n] = vec![Mv::default(); rp_traj_sz];
+            try_resize_default(&mut rf.rp_traj[n], rp_traj_sz)?;
         }
         for n in 0..3 {
             for m in 0..7 {
-                rf.rp_map[n][m] = vec![TrajMap::default(); rp_map_sz];
+                try_resize_default(&mut rf.rp_map[n][m], rp_map_sz)?;
             }
         }
-        rf.ra = vec![Block::default(); r_above_sz];
+        try_resize_default(&mut rf.ra, r_above_sz)?;
         rf.n_blocks = n_blocks * rf.sbsz;
     }
 
@@ -3442,6 +3444,7 @@ pub(crate) fn init_frame(
     }
 
     rf.use_ref_frame_mvs = if rf.n_mfmvs > 0 { 1 } else { 0 };
+    Ok(())
 }
 
 pub(crate) fn tile_sbrow_init(

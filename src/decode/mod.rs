@@ -127,14 +127,29 @@ pub(crate) fn init_ns_wiener_bank(bank: &mut NsWienerBank, pl: usize, n_classes:
     }
 }
 
+#[inline]
+fn try_clone_vec<T: Clone>(src: &[T]) -> Result<Vec<T>, ()> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(src.len()).map_err(|_| ())?;
+    out.extend_from_slice(src);
+    Ok(out)
+}
+
 pub(crate) fn init_start_of_tile_row(
     buf: &mut Vec<u8>,
     sbh: i32,
     tile_rows: u8,
     row_start_sb: &[u16],
-) {
-    buf.resize(sbh as usize, 0);
-    let sbh = sbh as usize;
+) -> Result<(), ()> {
+    let sbh = usize::try_from(sbh).map_err(|_| ())?;
+    if buf.len() != sbh {
+        if sbh > buf.len() {
+            buf.try_reserve_exact(sbh - buf.len()).map_err(|_| ())?;
+        }
+        buf.resize(sbh, 0);
+    } else {
+        buf.fill(0);
+    }
     let mut sby = 0usize;
     for tile_row in 0..tile_rows as usize {
         if sby >= sbh {
@@ -151,6 +166,7 @@ pub(crate) fn init_start_of_tile_row(
             sby += 1;
         }
     }
+    Ok(())
 }
 
 pub fn neg_deinterleave(diff: i32, r: i32, max: i32) -> i32 {
@@ -957,6 +973,37 @@ impl ReconScratch {
     }
 
     #[inline]
+    fn trim_retained_capacity(&mut self) {
+        drop_vec_if_capacity_gt(&mut self.chroma_cf8, MAX_RETAINED_REPLAY_COEF_BYTES);
+        drop_vec_if_capacity_gt(&mut self.chroma_cf32, MAX_RETAINED_REPLAY_COEF_BYTES);
+        drop_vec_if_capacity_gt(
+            &mut self.chroma_tx,
+            MAX_RETAINED_REPLAY_RECORDS * core::mem::size_of::<ChromaTxRecord>(),
+        );
+        drop_vec_if_capacity_gt(&mut self.chroma_tx_cf8, MAX_RETAINED_REPLAY_COEF_BYTES);
+        drop_vec_if_capacity_gt(&mut self.chroma_tx_cf32, MAX_RETAINED_REPLAY_COEF_BYTES);
+        drop_vec_if_capacity_gt(
+            &mut self.block_rec,
+            MAX_RETAINED_REPLAY_RECORDS * core::mem::size_of::<BlockRecord>(),
+        );
+        drop_vec_if_capacity_gt(
+            &mut self.luma_tx,
+            MAX_RETAINED_REPLAY_RECORDS * core::mem::size_of::<LumaTxRecord>(),
+        );
+        drop_vec_if_capacity_gt(&mut self.luma_tx_cf8, MAX_RETAINED_REPLAY_COEF_BYTES);
+        drop_vec_if_capacity_gt(&mut self.luma_tx_cf32, MAX_RETAINED_REPLAY_COEF_BYTES);
+        drop_vec_if_capacity_gt(
+            &mut self.compound_tmp0,
+            128 * 128 * core::mem::size_of::<i16>(),
+        );
+        drop_vec_if_capacity_gt(
+            &mut self.compound_tmp1,
+            128 * 128 * core::mem::size_of::<i16>(),
+        );
+        drop_vec_if_capacity_gt(&mut self.compound_seg_mask, 128 * 128);
+    }
+
+    #[inline]
     fn reset_for_sbrow(&mut self) {
         self.is_coded = [[0u64; 64]; 2];
         self.luma_intra_dir_mode_map = [0u8; 256];
@@ -1062,9 +1109,15 @@ fn make_refmv_tile(ra_len: usize, bw: i32, bh: i32) -> refmvs::Tile {
     }
 }
 
-fn prepare_refmv_tile(rt: &mut refmvs::Tile, ra_len: usize, bw: i32, bh: i32) {
-    if rt.ra.len() != ra_len.max(1) {
-        rt.ra.resize(ra_len.max(1), refmvs::Block::default());
+fn prepare_refmv_tile(rt: &mut refmvs::Tile, ra_len: usize, bw: i32, bh: i32) -> Result<(), ()> {
+    let ra_len = ra_len.max(1);
+    if rt.ra.len() != ra_len {
+        if ra_len > rt.ra.len() {
+            rt.ra
+                .try_reserve_exact(ra_len - rt.ra.len())
+                .map_err(|_| ())?;
+        }
+        rt.ra.resize(ra_len, refmvs::Block::default());
     }
     rt.rp_proj_off = 0;
     rt.rp_traj_off = 0;
@@ -1079,6 +1132,7 @@ fn prepare_refmv_tile(rt: &mut refmvs::Tile, ra_len: usize, bw: i32, bh: i32) {
     rt.warp.size = [0; 7];
     rt.warp.idx = [0; 7];
     rt.warp.hits = 0;
+    Ok(())
 }
 
 struct DecodeWorkerScratch {
@@ -1104,9 +1158,20 @@ impl DecodeWorkerScratch {
         }
     }
 
-    fn prepare(&mut self, ra_len: usize, bw: i32, bh: i32) {
-        prepare_refmv_tile(&mut self.rt, ra_len, bw, bh);
+    fn prepare(&mut self, ra_len: usize, bw: i32, bh: i32) -> Result<(), ()> {
+        prepare_refmv_tile(&mut self.rt, ra_len, bw, bh)?;
         self.part_w.clear();
+        Ok(())
+    }
+
+    fn trim_retained_capacity(&mut self) {
+        if self.rt.ra.capacity() > MAX_RETAINED_WORKER_RA_BLOCKS {
+            self.rt.ra = Vec::new();
+        }
+        drop_vec_if_capacity_gt(&mut self.part_w, MAX_RETAINED_PARTITION_BYTES);
+        drop_vec_if_capacity_gt(&mut self.ccso_tmp_buf, MAX_RETAINED_CCSO_TMP_BYTES);
+        drop_vec_if_capacity_gt(&mut self.ccso_tmp_buf_hbd, MAX_RETAINED_CCSO_TMP_BYTES);
+        self.recon_scratch.trim_retained_capacity();
     }
 }
 
@@ -1137,11 +1202,40 @@ impl DecodeEdgePixel for u16 {
     }
 }
 
+const MAX_RETAINED_WORKER_RA_BLOCKS: usize = 1 << 20;
+const MAX_RETAINED_PARTITION_BYTES: usize = 1 << 20;
+const MAX_RETAINED_CCSO_TMP_BYTES: usize = 2 << 20;
+const MAX_RETAINED_REPLAY_RECORDS: usize = 1 << 18;
+const MAX_RETAINED_REPLAY_COEF_BYTES: usize = 8 << 20;
+
+#[inline]
+fn drop_vec_if_capacity_gt<T>(v: &mut Vec<T>, max_bytes: usize) {
+    let elem = core::mem::size_of::<T>().max(1);
+    if v.capacity() > max_bytes / elem {
+        *v = Vec::new();
+    }
+}
+
 std::thread_local! {
     /// Per-pool-worker decode scratch that used to allocate/zero ~512 KiB of
     /// ref-MV state plus recon scratch every frame.
     static WORKER_SCRATCH: core::cell::RefCell<Option<DecodeWorkerScratch>> =
         const { core::cell::RefCell::new(None) };
+}
+
+/// Release caller-thread TLS decode scratch. Worker-thread TLS is destroyed when
+/// the decoder's private thread pool is dropped; this helper covers the caller
+/// thread used by ST decode and by the scoped MT participant.
+pub(crate) fn clear_thread_local_decode_scratch() {
+    WORKER_SCRATCH.with(|ws| {
+        *ws.borrow_mut() = None;
+    });
+    LUMA_SNAP.with(|snap| {
+        *snap.borrow_mut() = Vec::new();
+    });
+    LUMA_SNAP_HBD.with(|snap| {
+        *snap.borrow_mut() = Vec::new();
+    });
 }
 /// Mutable reconstruction borrows bundled so only one new param threads through
 /// decode_sb's recursion (Rust auto-reborrows &mut ReconCtx at each call).
@@ -1920,6 +2014,11 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     if frame_hdr.segmentation.enabled != 0 {
         let needed = (b4_stride_v as usize) * 64 * (fc_sb256h as usize);
         if cur_segmap.len() != needed {
+            if needed > cur_segmap.len() {
+                cur_segmap
+                    .try_reserve_exact(needed - cur_segmap.len())
+                    .map_err(|_| ())?;
+            }
             cur_segmap.resize(needed, 0);
         }
         cur_segmap.fill(0);
@@ -2015,7 +2114,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     if refmvs_active {
         refmvs::init_frame(
             rf, seq_hdr, frame_hdr, refpoc, refrefpoc, refcnt, ref_mvs, false, false,
-        );
+        )?;
     }
 
     // ref_frame_mvs is enabled, sized for the whole frame; the per-block splat
@@ -2024,10 +2123,14 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     if refmvs_active && seq_hdr.ref_frame_mvs {
         let needed = (fc_sb256h as usize) * 32 * ((b4_stride_v >> 1) as usize);
         if rf.rp.len() != needed {
-            rf.rp = vec![refmvs::TemporalBlock::default(); needed];
-        } else {
-            rf.rp.fill(refmvs::TemporalBlock::default());
+            if needed > rf.rp.len() {
+                rf.rp
+                    .try_reserve_exact(needed - rf.rp.len())
+                    .map_err(|_| ())?;
+            }
+            rf.rp.resize(needed, refmvs::TemporalBlock::default());
         }
+        rf.rp.fill(refmvs::TemporalBlock::default());
     } else {
         rf.rp.clear();
     }
@@ -2274,7 +2377,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                     filter_params.uv_stride,
                     n_roots_alloc,
                     mono_alloc,
-                );
+                )?;
                 if bd_local.bitdepth() > 8 {
                     ensure_filter_lines_hbd(
                         &mut lf.cdef_line_store_hbd,
@@ -2285,7 +2388,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                         filter_params.uv_stride,
                         n_roots_alloc,
                         mono_alloc,
-                    );
+                    )?;
                 }
                 let cdef_line_dm = DisjointMut::new(&mut lf.cdef_line_store[..]);
                 let cdef_line_dm = &cdef_line_dm;
@@ -2387,7 +2490,11 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                             let ws = ws_guard.get_or_insert_with(|| {
                                 DecodeWorkerScratch::new(rf_rp_stride.max(1) as usize, bw, bh)
                             });
-                            ws.prepare(rf_rp_stride.max(1) as usize, bw, bh);
+                            ws.trim_retained_capacity();
+                            if ws.prepare(rf_rp_stride.max(1) as usize, bw, bh).is_err() {
+                                got_err.store(true, Relaxed);
+                                return;
+                            }
                             let DecodeWorkerScratch {
                                 rt,
                                 recon_scratch,
@@ -2883,7 +2990,8 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                         let ws = ws_guard.get_or_insert_with(|| {
                             DecodeWorkerScratch::new(rf_rp_stride.max(1) as usize, bw, bh)
                         });
-                        ws.prepare(rf_rp_stride.max(1) as usize, bw, bh);
+                        ws.trim_retained_capacity();
+                        ws.prepare(rf_rp_stride.max(1) as usize, bw, bh)?;
                         let DecodeWorkerScratch {
                             rt,
                             recon_scratch,
@@ -3034,7 +3142,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                     filter_params.uv_stride,
                                     n_roots,
                                     mono,
-                                );
+                                )?;
                                 if bd_local.bitdepth() > 8 {
                                     ensure_filter_lines_hbd(
                                         &mut lf.cdef_line_store_hbd,
@@ -3045,7 +3153,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                         filter_params.uv_stride,
                                         n_roots,
                                         mono,
-                                    );
+                                    )?;
                                 }
                                 for stage in [
                                     crate::decode::STAGE_DEBLOCK,
@@ -3171,7 +3279,7 @@ pub fn decode_frame(
         fc.bw,
         fc.bh,
         n_tc,
-    );
+    )?;
 
     if frame_hdr.tip.frame_mode != 2 {
         let r = decode_frame_init_cdf(
@@ -3476,12 +3584,12 @@ fn submit_frame_inner(
             in_cdf_ref.map(std::sync::Arc::new)
         };
     let cur_segmap_arc: Option<Vec<u8>> = if !fc.cur_segmap.is_empty() {
-        Some(fc.cur_segmap.clone())
+        Some(try_clone_vec(&fc.cur_segmap)?)
     } else {
         None
     };
     let cur_ccsomap_arc: Option<Vec<u8>> = if !fc.cur_ccsomap.is_empty() {
-        Some(fc.cur_ccsomap.clone())
+        Some(try_clone_vec(&fc.cur_ccsomap)?)
     } else {
         None
     };
@@ -3501,7 +3609,7 @@ fn submit_frame_inner(
                 c.refs[i].refmvs = if fc.rf.rp.is_empty() {
                     None
                 } else {
-                    Some(fc.rf.rp.clone())
+                    Some(try_clone_vec(&fc.rf.rp)?)
                 };
             }
             c.refs[i].ccsomap = cur_ccsomap_arc.clone();
@@ -3517,6 +3625,7 @@ fn submit_frame_inner(
     // any other mutation copies on write, so the shared storage is never
     // observed changing.
     let out = shared.shallow_clone();
+    c.frame_out.try_reserve_exact(1).map_err(|_| ())?;
     c.frame_out.push(out);
     Ok(())
 }

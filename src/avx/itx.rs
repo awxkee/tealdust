@@ -3212,6 +3212,166 @@ fn tx_dequant_dense_avx2_i32_impl<const N: usize, const W: usize, const H: usize
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn tx_dequant_4x4_avx2_i32_impl(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    _eob: i32,
+    _tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    if is_rect2 {
+        tx_dequant_4x4_avx2_i32_impl_const::<true>(
+            coeff,
+            tmp,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        )
+    } else {
+        tx_dequant_4x4_avx2_i32_impl_const::<false>(
+            coeff,
+            tmp,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        )
+    }
+}
+
+#[inline(never)]
+#[target_feature(enable = "avx2")]
+fn tx_dequant_4x4_avx2_i32_impl_const<const IS_RECT2: bool>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    unsafe {
+        debug_assert!(coeff.len() >= 16);
+        let z = _mm_setzero_si128();
+        let rect_mul = _mm_set1_epi32(181);
+        let rect_rnd = _mm_set1_epi32(128);
+        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+        let sh = _mm_cvtsi32_si128(shift0);
+        let minv = _mm_set1_epi32(row_clip_min);
+        let maxv = _mm_set1_epi32(row_clip_max);
+
+        macro_rules! load_col {
+            ($j:expr) => {{
+                let mut v = _mm_loadu_si128(coeff.as_ptr().add(($j) * 4) as *const __m128i);
+                if IS_RECT2 {
+                    v = _mm_srai_epi32::<8>(_mm_add_epi32(_mm_mullo_epi32(v, rect_mul), rect_rnd));
+                }
+                v
+            }};
+        }
+
+        let c0 = load_col!(0);
+        let c1 = load_col!(1);
+        let c2 = load_col!(2);
+        let c3 = load_col!(3);
+
+        macro_rules! row_pass {
+            ($m:expr) => {{
+                let mut a = z;
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        c0,
+                        _mm_set1_epi32(avx2_tx_dense_coeff(first_kind, 4, $m, 0)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        c1,
+                        _mm_set1_epi32(avx2_tx_dense_coeff(first_kind, 4, $m, 1)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        c2,
+                        _mm_set1_epi32(avx2_tx_dense_coeff(first_kind, 4, $m, 2)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        c3,
+                        _mm_set1_epi32(avx2_tx_dense_coeff(first_kind, 4, $m, 3)),
+                    ),
+                );
+                a
+            }};
+        }
+
+        let row = [row_pass!(0), row_pass!(1), row_pass!(2), row_pass!(3)];
+        avx2_store4x4_i32_clip(tmp, 0, &row, rnd, sh, minv, maxv);
+        coeff[..16].fill(0);
+
+        // Snapshot the row pass before writing back in-place.
+        let r0 = _mm_loadu_si128(tmp.as_ptr() as *const __m128i);
+        let r1 = _mm_loadu_si128(tmp.as_ptr().add(32) as *const __m128i);
+        let r2 = _mm_loadu_si128(tmp.as_ptr().add(64) as *const __m128i);
+        let r3 = _mm_loadu_si128(tmp.as_ptr().add(96) as *const __m128i);
+
+        macro_rules! col_pass {
+            ($m:expr) => {{
+                let mut a = z;
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        r0,
+                        _mm_set1_epi32(avx2_tx_dense_coeff(second_kind, 4, $m, 0)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        r1,
+                        _mm_set1_epi32(avx2_tx_dense_coeff(second_kind, 4, $m, 1)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        r2,
+                        _mm_set1_epi32(avx2_tx_dense_coeff(second_kind, 4, $m, 2)),
+                    ),
+                );
+                a = _mm_add_epi32(
+                    a,
+                    _mm_mullo_epi32(
+                        r3,
+                        _mm_set1_epi32(avx2_tx_dense_coeff(second_kind, 4, $m, 3)),
+                    ),
+                );
+                a
+            }};
+        }
+
+        _mm_storeu_si128(tmp.as_mut_ptr() as *mut __m128i, col_pass!(0));
+        _mm_storeu_si128(tmp.as_mut_ptr().add(32) as *mut __m128i, col_pass!(1));
+        _mm_storeu_si128(tmp.as_mut_ptr().add(64) as *mut __m128i, col_pass!(2));
+        _mm_storeu_si128(tmp.as_mut_ptr().add(96) as *mut __m128i, col_pass!(3));
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i32_impl_const<
     const N: usize,
     const W: usize,
@@ -3968,31 +4128,9 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
         // This removes the dense loop over H with zero coefficient pairs for
         // IDTX and H/V transforms.
         if SECOND_KIND == crate::itx_2d::TX_KIND_IDENTITY {
-            let scale = _mm_set1_epi32(avx2_identity_scale(H));
-            while x + 8 <= W {
-                let mut m = 0usize;
-                while m < H {
-                    let lo = avx2_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
-                    let hi = avx2_identity_i16x4_scratch_to_i32(scratch, x + 4 + m * W, scale);
-                    let v = _mm256_set_m128i(hi, lo);
-                    avx2_writeback8_i32_u8::<W, H>(
-                        dst, dst_off, dst_stride, out_w, out_h, x, m, v, rnd1_8, sh1,
-                    );
-                    m += 1;
-                }
-                x += 8;
-            }
-            while x < W {
-                let mut m = 0usize;
-                while m < H {
-                    let a = avx2_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
-                    avx2_writeback4_i32_u8::<W, H>(
-                        dst, dst_off, dst_stride, out_w, out_h, x, m, a, rnd1_4, sh1,
-                    );
-                    m += 1;
-                }
-                x += 4;
-            }
+            x = fused_identity_second_pass::<W, H>(
+                scratch, dst, dst_off, dst_stride, out_w, out_h, rnd1_4, rnd1_8, sh1, x,
+            );
         }
 
         while x + 8 <= W && SECOND_KIND == crate::itx_2d::TX_KIND_DCT && (H == 16 || H == 32) {
@@ -4093,6 +4231,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
     });
 }
 
+#[inline(never)]
 #[target_feature(enable = "avx2")]
 fn fused_identity_pass<const W: usize, const H: usize, const IS_RECT2: bool>(
     coeff: &mut [i16],
@@ -4119,6 +4258,48 @@ fn fused_identity_pass<const W: usize, const H: usize, const IS_RECT2: bool>(
         y += 4;
     }
     y
+}
+
+#[inline(never)]
+#[target_feature(enable = "avx2")]
+fn fused_identity_second_pass<const W: usize, const H: usize>(
+    scratch: &[i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    rnd1_4: __m128i,
+    rnd1_8: __m256i,
+    sh1: __m128i,
+    mut x: usize,
+) -> usize {
+    let scale = _mm_set1_epi32(avx2_identity_scale(H));
+    while x + 8 <= W {
+        let mut m = 0usize;
+        while m < H {
+            let lo = avx2_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
+            let hi = avx2_identity_i16x4_scratch_to_i32(scratch, x + 4 + m * W, scale);
+            let v = _mm256_set_m128i(hi, lo);
+            avx2_writeback8_i32_u8::<W, H>(
+                dst, dst_off, dst_stride, out_w, out_h, x, m, v, rnd1_8, sh1,
+            );
+            m += 1;
+        }
+        x += 8;
+    }
+    while x < W {
+        let mut m = 0usize;
+        while m < H {
+            let a = avx2_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
+            avx2_writeback4_i32_u8::<W, H>(
+                dst, dst_off, dst_stride, out_w, out_h, x, m, a, rnd1_4, sh1,
+            );
+            m += 1;
+        }
+        x += 4;
+    }
+    x
 }
 
 #[inline]
@@ -5143,7 +5324,7 @@ pub(crate) fn idct_dequant_4x4_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<16, 4, 4>(
+    tx_dequant_4x4_avx2_i32_impl(
         coeff,
         tmp,
         eob,
@@ -5266,7 +5447,7 @@ pub(crate) fn iadst_dequant_4x4_avx2(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<16, 4, 4>(
+    tx_dequant_4x4_avx2_i32_impl(
         coeff,
         tmp,
         eob,

@@ -835,6 +835,7 @@ fn itx_dequant_scalar_core_dyn<C: Coeff>(
     }
 }
 
+#[inline(never)]
 pub(crate) fn idct_dequant_scalar_core<const N: usize, const S: usize, C: Coeff>(
     coeff: &mut [C],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -859,6 +860,7 @@ pub(crate) fn idct_dequant_scalar_core<const N: usize, const S: usize, C: Coeff>
     );
 }
 
+#[inline(never)]
 pub(crate) fn itx_dequant_scalar_core<const N: usize, const S: usize, C: Coeff>(
     coeff: &mut [C],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -1915,6 +1917,7 @@ fn itx_dequant_rect_scalar_core_dyn<C: Coeff>(
 
 /// Pure-scalar rectangular DCT_DCT core (the universal fallback). The column
 /// pass uses the scalar `dct_1d`, matching the generic path exactly.
+#[inline(never)]
 pub(crate) fn idct_dequant_rect_scalar_core<
     const N: usize,
     const W: usize,
@@ -1945,6 +1948,7 @@ pub(crate) fn idct_dequant_rect_scalar_core<
     );
 }
 
+#[inline(never)]
 pub(crate) fn itx_dequant_rect_scalar_core<
     const N: usize,
     const W: usize,

@@ -1612,6 +1612,125 @@ fn tx_dequant_dense_neon_i32_impl<const N: usize, const W: usize, const H: usize
 
 #[inline]
 #[target_feature(enable = "neon")]
+fn tx_dequant_4x4_neon_i32_impl(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    _eob: i32,
+    _tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    if is_rect2 {
+        tx_dequant_4x4_neon_i32_impl_const::<true>(
+            coeff,
+            tmp,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        )
+    } else {
+        tx_dequant_4x4_neon_i32_impl_const::<false>(
+            coeff,
+            tmp,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        )
+    }
+}
+
+#[inline(never)]
+#[target_feature(enable = "neon")]
+fn tx_dequant_4x4_neon_i32_impl_const<const IS_RECT2: bool>(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    unsafe {
+        debug_assert!(coeff.len() >= 16);
+        let z = vdupq_n_s32(0);
+        let rnd = vdupq_n_s32((1 << shift0) >> 1);
+        let nsh = vdupq_n_s32(-shift0);
+        let minv = vdupq_n_s32(row_clip_min);
+        let maxv = vdupq_n_s32(row_clip_max);
+
+        macro_rules! load_col {
+            ($j:expr) => {{
+                let mut v = vld1q_s32(coeff.as_ptr().add(($j) * 4));
+                if IS_RECT2 {
+                    v = vshrq_n_s32::<8>(vmlaq_n_s32(vdupq_n_s32(128), v, 181));
+                }
+                v
+            }};
+        }
+
+        let c0 = load_col!(0);
+        let c1 = load_col!(1);
+        let c2 = load_col!(2);
+        let c3 = load_col!(3);
+
+        macro_rules! row_pass {
+            ($m:expr) => {{
+                let mut a = z;
+                a = vmlaq_n_s32(a, c0, neon_tx_dense_coeff(first_kind, 4, $m, 0));
+                a = vmlaq_n_s32(a, c1, neon_tx_dense_coeff(first_kind, 4, $m, 1));
+                a = vmlaq_n_s32(a, c2, neon_tx_dense_coeff(first_kind, 4, $m, 2));
+                a = vmlaq_n_s32(a, c3, neon_tx_dense_coeff(first_kind, 4, $m, 3));
+                a
+            }};
+        }
+
+        neon_store4x4_i32_clip(
+            tmp,
+            0,
+            row_pass!(0),
+            row_pass!(1),
+            row_pass!(2),
+            row_pass!(3),
+            rnd,
+            nsh,
+            minv,
+            maxv,
+        );
+        coeff[..16].fill(0);
+
+        let r0 = vld1q_s32(tmp.as_ptr());
+        let r1 = vld1q_s32(tmp.as_ptr().add(32));
+        let r2 = vld1q_s32(tmp.as_ptr().add(64));
+        let r3 = vld1q_s32(tmp.as_ptr().add(96));
+
+        macro_rules! col_pass {
+            ($m:expr) => {{
+                let mut a = z;
+                a = vmlaq_n_s32(a, r0, neon_tx_dense_coeff(second_kind, 4, $m, 0));
+                a = vmlaq_n_s32(a, r1, neon_tx_dense_coeff(second_kind, 4, $m, 1));
+                a = vmlaq_n_s32(a, r2, neon_tx_dense_coeff(second_kind, 4, $m, 2));
+                a = vmlaq_n_s32(a, r3, neon_tx_dense_coeff(second_kind, 4, $m, 3));
+                a
+            }};
+        }
+
+        vst1q_s32(tmp.as_mut_ptr(), col_pass!(0));
+        vst1q_s32(tmp.as_mut_ptr().add(32), col_pass!(1));
+        vst1q_s32(tmp.as_mut_ptr().add(64), col_pass!(2));
+        vst1q_s32(tmp.as_mut_ptr().add(96), col_pass!(3));
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i32_impl_const<
     const N: usize,
     const W: usize,
@@ -2328,6 +2447,7 @@ fn tx_dequant_dense_neon_i16_impl_const<
     });
 }
 
+#[inline(never)]
 #[target_feature(enable = "neon")]
 fn identity_pass<const W: usize, const H: usize, const IS_RECT2: bool>(
     coeff: &mut [i16],
@@ -2354,6 +2474,34 @@ fn identity_pass<const W: usize, const H: usize, const IS_RECT2: bool>(
         y += 4;
     }
     y
+}
+
+#[inline(never)]
+#[target_feature(enable = "neon")]
+fn neon_identity_second_pass<const W: usize, const H: usize>(
+    scratch: &[i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    rnd1: int32x4_t,
+    nsh1: int32x4_t,
+    mut x: usize,
+) -> usize {
+    let scale = neon_identity_scale(H);
+    while x < W {
+        let mut m = 0usize;
+        while m < H {
+            let a = neon_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
+            neon_writeback4_i32_u8::<W, H>(
+                dst, dst_off, dst_stride, out_w, out_h, x, m, a, rnd1, nsh1,
+            );
+            m += 1;
+        }
+        x += 4;
+    }
+    x
 }
 
 #[inline]
@@ -3206,39 +3354,6 @@ macro_rules! idct_neon_fn {
     };
 }
 
-macro_rules! iadst_neon_fn {
-    ($pub:ident, $n:expr, $s:expr) => {
-        #[inline]
-        pub(crate) fn $pub(
-            coeff: &mut [i32],
-            tmp: &mut [i32; ITX_TMP_PIXELS],
-            eob: i32,
-            tx: usize,
-            is_rect2: bool,
-            shift0: i32,
-            row_clip_min: i32,
-            row_clip_max: i32,
-            first_kind: usize,
-            second_kind: usize,
-        ) {
-            unsafe {
-                tx_dequant_dense_neon_i32_impl::<{ $n }, { $s }, { $s }>(
-                    coeff,
-                    tmp,
-                    eob,
-                    tx,
-                    is_rect2,
-                    shift0,
-                    row_clip_min,
-                    row_clip_max,
-                    first_kind,
-                    second_kind,
-                )
-            };
-        }
-    };
-}
-
 macro_rules! idct_rect_neon_fn {
     ($pub:ident, $n:expr, $w:expr, $h:expr) => {
         #[inline]
@@ -3303,7 +3418,32 @@ macro_rules! iadst_rect_neon_fn {
     };
 }
 
-idct_neon_fn!(idct_dequant_4x4_neon, 16, 4);
+#[inline]
+pub(crate) fn idct_dequant_4x4_neon(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+) {
+    unsafe {
+        tx_dequant_4x4_neon_i32_impl(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            crate::itx_2d::TX_KIND_DCT,
+            crate::itx_2d::TX_KIND_DCT,
+        )
+    }
+}
 #[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_8x8_neon(
@@ -3378,7 +3518,34 @@ pub(crate) fn idct_dequant_32x32_neon(
     }
 }
 idct_neon_fn!(idct_dequant_64x64_neon, 1024, 32);
-iadst_neon_fn!(iadst_dequant_4x4_neon, 16, 4);
+#[inline]
+pub(crate) fn iadst_dequant_4x4_neon(
+    coeff: &mut [i32],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    eob: i32,
+    tx: usize,
+    is_rect2: bool,
+    shift0: i32,
+    row_clip_min: i32,
+    row_clip_max: i32,
+    first_kind: usize,
+    second_kind: usize,
+) {
+    unsafe {
+        tx_dequant_4x4_neon_i32_impl(
+            coeff,
+            tmp,
+            eob,
+            tx,
+            is_rect2,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            first_kind,
+            second_kind,
+        )
+    }
+}
 #[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn iadst_dequant_8x8_neon(
@@ -3820,106 +3987,18 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
     let maxv = vdupq_n_s32(row_clip_max);
 
     if W == 4 && H == 4 {
-        let rnd1 = vdupq_n_s32((1 << shift1) >> 1);
-        let nsh1 = vdupq_n_s32(-shift1);
-        let c0 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 0);
-        let c1 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 4);
-        let c2 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 8);
-        let c3 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, 12);
-        macro_rules! rrow {
-            ($m:expr) => {{
-                let mut a =
-                    vmlal_n_s16(z, c0, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 0));
-                a = vmlal_n_s16(a, c1, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 1));
-                a = vmlal_n_s16(a, c2, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 2));
-                a = vmlal_n_s16(a, c3, neon_tx_dense_coeff_i16_const::<FIRST_KIND, 4>($m, 3));
-                vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32(a, rnd), nsh), minv), maxv)
-            }};
-        }
-        let cc0 = rrow!(0);
-        let cc1 = rrow!(1);
-        let cc2 = rrow!(2);
-        let cc3 = rrow!(3);
-        let t01 = vtrnq_s32(cc0, cc1);
-        let t23 = vtrnq_s32(cc2, cc3);
-        let r0 = vqmovn_s32(vcombine_s32(vget_low_s32(t01.0), vget_low_s32(t23.0)));
-        let r1 = vqmovn_s32(vcombine_s32(vget_low_s32(t01.1), vget_low_s32(t23.1)));
-        let r2 = vqmovn_s32(vcombine_s32(vget_high_s32(t01.0), vget_high_s32(t23.0)));
-        let r3 = vqmovn_s32(vcombine_s32(vget_high_s32(t01.1), vget_high_s32(t23.1)));
-        macro_rules! rcol {
-            ($m:expr) => {{
-                let mut b = vmlal_n_s16(
-                    z,
-                    r0,
-                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 0),
-                );
-                b = vmlal_n_s16(
-                    b,
-                    r1,
-                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 1),
-                );
-                b = vmlal_n_s16(
-                    b,
-                    r2,
-                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 2),
-                );
-                b = vmlal_n_s16(
-                    b,
-                    r3,
-                    neon_tx_dense_coeff_i16_const::<SECOND_KIND, 4>($m, 3),
-                );
-                b
-            }};
-        }
-        neon_writeback4_i32_u8::<4, 4>(
+        tx_dequant_dense_neon_i16_fused_4x4::<N, W, H, IS_RECT2, FIRST_KIND, SECOND_KIND>(
+            coeff,
             dst,
             dst_off,
             dst_stride,
             out_w,
             out_h,
-            0,
-            0,
-            rcol!(0),
-            rnd1,
-            nsh1,
+            shift0,
+            row_clip_min,
+            row_clip_max,
+            shift1,
         );
-        neon_writeback4_i32_u8::<4, 4>(
-            dst,
-            dst_off,
-            dst_stride,
-            out_w,
-            out_h,
-            0,
-            1,
-            rcol!(1),
-            rnd1,
-            nsh1,
-        );
-        neon_writeback4_i32_u8::<4, 4>(
-            dst,
-            dst_off,
-            dst_stride,
-            out_w,
-            out_h,
-            0,
-            2,
-            rcol!(2),
-            rnd1,
-            nsh1,
-        );
-        neon_writeback4_i32_u8::<4, 4>(
-            dst,
-            dst_off,
-            dst_stride,
-            out_w,
-            out_h,
-            0,
-            3,
-            rcol!(3),
-            rnd1,
-            nsh1,
-        );
-        coeff[..W * H].fill(0);
         return;
     }
 
@@ -3930,34 +4009,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
         let mut y = 0usize;
 
         if FIRST_KIND == crate::itx_2d::TX_KIND_IDENTITY {
-            let scale = neon_identity_scale(W);
-            while y + 4 <= nrows {
-                let mut m = 0usize;
-                while m < W {
-                    let a0 =
-                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 0) * H, scale);
-                    let a1 =
-                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 1) * H, scale);
-                    let a2 =
-                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 2) * H, scale);
-                    let a3 =
-                        neon_identity_i16x4_coeff_to_i32::<IS_RECT2>(coeff, y + (m + 3) * H, scale);
-                    neon_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        a0,
-                        a1,
-                        a2,
-                        a3,
-                        rnd,
-                        nsh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-                y += 4;
-            }
+            y = identity_pass::<W, H, IS_RECT2>(coeff, nrows, rnd, nsh, minv, maxv, scratch, y);
         }
 
         while y + 8 <= nrows && FIRST_KIND == crate::itx_2d::TX_KIND_DCT && (W == 16 || W == 32) {
@@ -4139,18 +4191,9 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
 
         let mut x = 0usize;
         if SECOND_KIND == crate::itx_2d::TX_KIND_IDENTITY {
-            let scale = neon_identity_scale(H);
-            while x < W {
-                let mut m = 0usize;
-                while m < H {
-                    let a = neon_identity_i16x4_scratch_to_i32(scratch, x + m * W, scale);
-                    neon_writeback4_i32_u8::<W, H>(
-                        dst, dst_off, dst_stride, out_w, out_h, x, m, a, rnd1, nsh1,
-                    );
-                    m += 1;
-                }
-                x += 4;
-            }
+            x = neon_identity_second_pass::<W, H>(
+                scratch, dst, dst_off, dst_stride, out_w, out_h, rnd1, nsh1, x,
+            );
         }
         while x < W {
             if SECOND_KIND == crate::itx_2d::TX_KIND_DCT && H == 16 {
@@ -4344,8 +4387,9 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
     });
 }
 
-#[target_feature(enable = "rdm")]
-fn tx_dequant_dense_neon_i16_rdm_fused_4x4<
+#[inline(never)]
+#[target_feature(enable = "neon")]
+fn tx_dequant_dense_neon_i16_fused_4x4<
     const N: usize,
     const W: usize,
     const H: usize,
@@ -4515,7 +4559,7 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
     let maxv = vdupq_n_s32(row_clip_max);
 
     if W == 4 && H == 4 {
-        tx_dequant_dense_neon_i16_rdm_fused_4x4::<N, W, H, IS_RECT2, FIRST_KIND, SECOND_KIND>(
+        tx_dequant_dense_neon_i16_fused_4x4::<N, W, H, IS_RECT2, FIRST_KIND, SECOND_KIND>(
             coeff,
             dst,
             dst_off,

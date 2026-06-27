@@ -117,7 +117,7 @@ pub(crate) fn ensure_filter_lines(
     uv_stride: isize,
     n_roots: usize,
     mono: bool,
-) {
+) -> Result<(), ()> {
     let y_ls = y_stride.unsigned_abs();
     let uv_ls = uv_stride.unsigned_abs();
     let need_y = 2 * y_ls;
@@ -157,39 +157,65 @@ pub(crate) fn ensure_filter_lines(
             .last()
             .map_or(n_roots == 0, |s| slot_has(s, lr_y, lr_uv, mono))
     {
-        return;
+        return Ok(());
     }
 
-    fn ensure_plane(v: &mut Vec<u8>, len: usize) {
+    fn ensure_plane(v: &mut Vec<u8>, len: usize) -> Result<(), ()> {
         if v.len() != len {
+            if len > v.len() {
+                v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+            }
             v.resize(len, 0);
         }
+        Ok(())
     }
 
-    fn ensure_slot(slot: &mut [Vec<u8>; 3], y_len: usize, uv_len: usize, mono: bool) {
-        ensure_plane(&mut slot[0], y_len);
+    fn ensure_slot(
+        slot: &mut [Vec<u8>; 3],
+        y_len: usize,
+        uv_len: usize,
+        mono: bool,
+    ) -> Result<(), ()> {
+        ensure_plane(&mut slot[0], y_len)?;
         if mono {
             slot[1].clear();
             slot[2].clear();
         } else {
-            ensure_plane(&mut slot[1], uv_len);
-            ensure_plane(&mut slot[2], uv_len);
+            ensure_plane(&mut slot[1], uv_len)?;
+            ensure_plane(&mut slot[2], uv_len)?;
         }
+        Ok(())
     }
 
+    if n_units > cdef_line.len() {
+        cdef_line
+            .try_reserve_exact(n_units - cdef_line.len())
+            .map_err(|_| ())?;
+    }
     cdef_line.resize_with(n_units, || [Vec::new(), Vec::new(), Vec::new()]);
+    if n_units > cdef_top.len() {
+        cdef_top
+            .try_reserve_exact(n_units - cdef_top.len())
+            .map_err(|_| ())?;
+    }
     cdef_top.resize_with(n_units, || [Vec::new(), Vec::new(), Vec::new()]);
+    if n_roots > lr_db_line.len() {
+        lr_db_line
+            .try_reserve_exact(n_roots - lr_db_line.len())
+            .map_err(|_| ())?;
+    }
     lr_db_line.resize_with(n_roots, || [Vec::new(), Vec::new(), Vec::new()]);
 
     for slot in cdef_line.iter_mut() {
-        ensure_slot(slot, need_y, need_uv, mono);
+        ensure_slot(slot, need_y, need_uv, mono)?;
     }
     for slot in cdef_top.iter_mut() {
-        ensure_slot(slot, need_y, need_uv, mono);
+        ensure_slot(slot, need_y, need_uv, mono)?;
     }
     for slot in lr_db_line.iter_mut() {
-        ensure_slot(slot, lr_y, lr_uv, mono);
+        ensure_slot(slot, lr_y, lr_uv, mono)?;
     }
+    Ok(())
 }
 
 #[inline(always)]
@@ -214,7 +240,7 @@ pub(crate) fn ensure_filter_lines_hbd(
     uv_stride: isize,
     n_roots: usize,
     mono: bool,
-) {
+) -> Result<(), ()> {
     let y_stride = hbd_sample_stride(y_stride);
     let uv_stride = hbd_sample_stride(uv_stride);
     let y_ls = y_stride.unsigned_abs();
@@ -256,39 +282,65 @@ pub(crate) fn ensure_filter_lines_hbd(
             .last()
             .map_or(n_roots == 0, |s| slot_has(s, lr_y, lr_uv, mono))
     {
-        return;
+        return Ok(());
     }
 
-    fn ensure_plane(v: &mut Vec<u16>, len: usize) {
+    fn ensure_plane(v: &mut Vec<u16>, len: usize) -> Result<(), ()> {
         if v.len() != len {
+            if len > v.len() {
+                v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+            }
             v.resize(len, 0);
         }
+        Ok(())
     }
 
-    fn ensure_slot(slot: &mut [Vec<u16>; 3], y_len: usize, uv_len: usize, mono: bool) {
-        ensure_plane(&mut slot[0], y_len);
+    fn ensure_slot(
+        slot: &mut [Vec<u16>; 3],
+        y_len: usize,
+        uv_len: usize,
+        mono: bool,
+    ) -> Result<(), ()> {
+        ensure_plane(&mut slot[0], y_len)?;
         if mono {
             slot[1].clear();
             slot[2].clear();
         } else {
-            ensure_plane(&mut slot[1], uv_len);
-            ensure_plane(&mut slot[2], uv_len);
+            ensure_plane(&mut slot[1], uv_len)?;
+            ensure_plane(&mut slot[2], uv_len)?;
         }
+        Ok(())
     }
 
+    if n_units > cdef_line.len() {
+        cdef_line
+            .try_reserve_exact(n_units - cdef_line.len())
+            .map_err(|_| ())?;
+    }
     cdef_line.resize_with(n_units, || [Vec::new(), Vec::new(), Vec::new()]);
+    if n_units > cdef_top.len() {
+        cdef_top
+            .try_reserve_exact(n_units - cdef_top.len())
+            .map_err(|_| ())?;
+    }
     cdef_top.resize_with(n_units, || [Vec::new(), Vec::new(), Vec::new()]);
+    if n_roots > lr_db_line.len() {
+        lr_db_line
+            .try_reserve_exact(n_roots - lr_db_line.len())
+            .map_err(|_| ())?;
+    }
     lr_db_line.resize_with(n_roots, || [Vec::new(), Vec::new(), Vec::new()]);
 
     for slot in cdef_line.iter_mut() {
-        ensure_slot(slot, need_y, need_uv, mono);
+        ensure_slot(slot, need_y, need_uv, mono)?;
     }
     for slot in cdef_top.iter_mut() {
-        ensure_slot(slot, need_y, need_uv, mono);
+        ensure_slot(slot, need_y, need_uv, mono)?;
     }
     for slot in lr_db_line.iter_mut() {
-        ensure_slot(slot, lr_y, lr_uv, mono);
+        ensure_slot(slot, lr_y, lr_uv, mono)?;
     }
+    Ok(())
 }
 
 pub(crate) const STAGE_DEBLOCK: u8 = 1;

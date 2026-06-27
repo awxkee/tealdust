@@ -124,7 +124,8 @@ pub(crate) mod sse;
 pub use avif::*;
 pub use data::Data;
 pub use decoder::{
-    DecodeFrameType, Decoder, InloopFilterType, MAX_FRAME_DELAY, MAX_THREADS, Settings,
+    DEFAULT_FRAME_SIZE_LIMIT, DecodeFrameType, Decoder, InloopFilterType, MAX_FRAME_DELAY,
+    MAX_THREADS, Settings,
 };
 pub use decoder::{get_frame_delay, version, version_api};
 pub use error::TealdustError;
