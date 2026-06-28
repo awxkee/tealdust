@@ -70,7 +70,6 @@ fn copy_u8_to_i16_avx2(dst: &mut [i16], src: &[u8]) {
     }
 }
 
-
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -149,29 +148,65 @@ pub(crate) unsafe fn cdef_padding_8bpc_avx2(
         match (w, h) {
             (8, 8) => {
                 cdef_padding_8bpc_avx2_full::<8, 8>(
-                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
-                    bottom_off, bottom_stride,
+                    tmp,
+                    tmp_stride,
+                    src,
+                    src_stride,
+                    src_off,
+                    left,
+                    top,
+                    top_off,
+                    bottom,
+                    bottom_off,
+                    bottom_stride,
                 );
                 return;
             }
             (8, 4) => {
                 cdef_padding_8bpc_avx2_full::<8, 4>(
-                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
-                    bottom_off, bottom_stride,
+                    tmp,
+                    tmp_stride,
+                    src,
+                    src_stride,
+                    src_off,
+                    left,
+                    top,
+                    top_off,
+                    bottom,
+                    bottom_off,
+                    bottom_stride,
                 );
                 return;
             }
             (4, 8) => {
                 cdef_padding_8bpc_avx2_full::<4, 8>(
-                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
-                    bottom_off, bottom_stride,
+                    tmp,
+                    tmp_stride,
+                    src,
+                    src_stride,
+                    src_off,
+                    left,
+                    top,
+                    top_off,
+                    bottom,
+                    bottom_off,
+                    bottom_stride,
                 );
                 return;
             }
             (4, 4) => {
                 cdef_padding_8bpc_avx2_full::<4, 4>(
-                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
-                    bottom_off, bottom_stride,
+                    tmp,
+                    tmp_stride,
+                    src,
+                    src_stride,
+                    src_off,
+                    left,
+                    top,
+                    top_off,
+                    bottom,
+                    bottom_off,
+                    bottom_stride,
                 );
                 return;
             }

@@ -69,7 +69,6 @@ fn copy_u16_to_i16_neon(dst: &mut [i16], src: &[u16]) {
     }
 }
 
-
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
@@ -148,29 +147,65 @@ pub(crate) unsafe fn cdef_padding_hbd_neon(
         match (w, h) {
             (8, 8) => {
                 cdef_padding_hbd_neon_full::<8, 8>(
-                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
-                    bottom_off, bottom_stride,
+                    tmp,
+                    tmp_stride,
+                    src,
+                    src_stride,
+                    src_off,
+                    left,
+                    top,
+                    top_off,
+                    bottom,
+                    bottom_off,
+                    bottom_stride,
                 );
                 return;
             }
             (8, 4) => {
                 cdef_padding_hbd_neon_full::<8, 4>(
-                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
-                    bottom_off, bottom_stride,
+                    tmp,
+                    tmp_stride,
+                    src,
+                    src_stride,
+                    src_off,
+                    left,
+                    top,
+                    top_off,
+                    bottom,
+                    bottom_off,
+                    bottom_stride,
                 );
                 return;
             }
             (4, 8) => {
                 cdef_padding_hbd_neon_full::<4, 8>(
-                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
-                    bottom_off, bottom_stride,
+                    tmp,
+                    tmp_stride,
+                    src,
+                    src_stride,
+                    src_off,
+                    left,
+                    top,
+                    top_off,
+                    bottom,
+                    bottom_off,
+                    bottom_stride,
                 );
                 return;
             }
             (4, 4) => {
                 cdef_padding_hbd_neon_full::<4, 4>(
-                    tmp, tmp_stride, src, src_stride, src_off, left, top, top_off, bottom,
-                    bottom_off, bottom_stride,
+                    tmp,
+                    tmp_stride,
+                    src,
+                    src_stride,
+                    src_off,
+                    left,
+                    top,
+                    top_off,
+                    bottom,
+                    bottom_off,
+                    bottom_stride,
                 );
                 return;
             }
@@ -449,11 +484,7 @@ fn cdef_filter_block_4w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, cons
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
-fn cdef_filter_block_8w_hbd_neon_shape<
-    const H: usize,
-    const HAS_PRI: bool,
-    const HAS_SEC: bool,
->(
+fn cdef_filter_block_8w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, const HAS_SEC: bool>(
     dst: &mut [u16],
     dst_stride: usize,
     dst_off: usize,
@@ -493,16 +524,8 @@ fn cdef_filter_block_8w_hbd_neon_shape<
                 let off = dirs[dir + 2][k] as isize;
                 let p0 = load(off);
                 let p1 = load(-off);
-                sum = madd_tap_i16q(
-                    sum,
-                    constrain_i16q(vsubq_s16(p0, px), pri_s, pri_nsh),
-                    ptap,
-                );
-                sum = madd_tap_i16q(
-                    sum,
-                    constrain_i16q(vsubq_s16(p1, px), pri_s, pri_nsh),
-                    ptap,
-                );
+                sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(p0, px), pri_s, pri_nsh), ptap);
+                sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(p1, px), pri_s, pri_nsh), ptap);
                 ptap = (ptap & 3) | 2;
                 if clip {
                     min_v = cdef_min_i16q(min_v, cdef_min_i16q(p0, p1));
@@ -516,26 +539,10 @@ fn cdef_filter_block_8w_hbd_neon_shape<
                     let s2 = load(off3);
                     let s3 = load(-off3);
                     let st = 2 - k as i32;
-                    sum = madd_tap_i16q(
-                        sum,
-                        constrain_i16q(vsubq_s16(s0, px), sec_s, sec_nsh),
-                        st,
-                    );
-                    sum = madd_tap_i16q(
-                        sum,
-                        constrain_i16q(vsubq_s16(s1, px), sec_s, sec_nsh),
-                        st,
-                    );
-                    sum = madd_tap_i16q(
-                        sum,
-                        constrain_i16q(vsubq_s16(s2, px), sec_s, sec_nsh),
-                        st,
-                    );
-                    sum = madd_tap_i16q(
-                        sum,
-                        constrain_i16q(vsubq_s16(s3, px), sec_s, sec_nsh),
-                        st,
-                    );
+                    sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(s0, px), sec_s, sec_nsh), st);
+                    sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(s1, px), sec_s, sec_nsh), st);
+                    sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(s2, px), sec_s, sec_nsh), st);
+                    sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(s3, px), sec_s, sec_nsh), st);
                     min_v = cdef_min_i16q(
                         min_v,
                         cdef_min_i16q(cdef_min_i16q(s0, s1), cdef_min_i16q(s2, s3)),
@@ -552,26 +559,10 @@ fn cdef_filter_block_8w_hbd_neon_shape<
                 let s2 = load(off2);
                 let s3 = load(-off2);
                 let st = 2 - k as i32;
-                sum = madd_tap_i16q(
-                    sum,
-                    constrain_i16q(vsubq_s16(s0, px), sec_s, sec_nsh),
-                    st,
-                );
-                sum = madd_tap_i16q(
-                    sum,
-                    constrain_i16q(vsubq_s16(s1, px), sec_s, sec_nsh),
-                    st,
-                );
-                sum = madd_tap_i16q(
-                    sum,
-                    constrain_i16q(vsubq_s16(s2, px), sec_s, sec_nsh),
-                    st,
-                );
-                sum = madd_tap_i16q(
-                    sum,
-                    constrain_i16q(vsubq_s16(s3, px), sec_s, sec_nsh),
-                    st,
-                );
+                sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(s0, px), sec_s, sec_nsh), st);
+                sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(s1, px), sec_s, sec_nsh), st);
+                sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(s2, px), sec_s, sec_nsh), st);
+                sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(s3, px), sec_s, sec_nsh), st);
             }
         }
 
@@ -954,14 +945,10 @@ pub(crate) fn cdef_filter_block_hbd_neon(
                         let s2 = load(off3);
                         let s3 = load(-off3);
                         let st = 2 - k as i32;
-                        sum =
-                            madd_tap_i16(sum, cnst_i16(vsub_s16(s0, px), sec_s, sec_nsh), st);
-                        sum =
-                            madd_tap_i16(sum, cnst_i16(vsub_s16(s1, px), sec_s, sec_nsh), st);
-                        sum =
-                            madd_tap_i16(sum, cnst_i16(vsub_s16(s2, px), sec_s, sec_nsh), st);
-                        sum =
-                            madd_tap_i16(sum, cnst_i16(vsub_s16(s3, px), sec_s, sec_nsh), st);
+                        sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s0, px), sec_s, sec_nsh), st);
+                        sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s1, px), sec_s, sec_nsh), st);
+                        sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s2, px), sec_s, sec_nsh), st);
+                        sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s3, px), sec_s, sec_nsh), st);
                         min_v = cdef_min_i16(
                             min_v,
                             cdef_min_i16(cdef_min_i16(s0, s1), cdef_min_i16(s2, s3)),
