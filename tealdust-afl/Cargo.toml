@@ -1,0 +1,8 @@
+[package]
+name = "tealdust-afl"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+afl = "0.18.2"
+tealdust = { path = ".." }
