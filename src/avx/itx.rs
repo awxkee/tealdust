@@ -4305,8 +4305,6 @@ fn tx_dequant_dense_avx2_i16_fused_4x4_const<const IS_RECT2: bool>(
 
 #[inline]
 #[target_feature(enable = "avx2")]
-#[inline]
-#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_fused_hot_square<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -4386,6 +4384,7 @@ fn tx_dequant_dense_avx2_i16_fused_hot_square<const N: usize, const W: usize, co
     }
 }
 
+#[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
