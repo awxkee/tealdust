@@ -831,11 +831,9 @@ fn resolve_cfl_apply_420() -> CflApplyFn {
         let mut _f: CflApplyFn = cfl_apply_420_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cfl_apply_420_8bpc_neon;
-                if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
-                    _f = crate::neon::cfl_apply_420_8bpc_neon_rdm;
-                }
+            _f = crate::neon::cfl_apply_420_8bpc_neon;
+            if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
+                _f = crate::neon::cfl_apply_420_8bpc_neon_rdm;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -864,11 +862,9 @@ fn resolve_cfl_apply_420_filtered() -> CflApplyFn {
         // filter coverage.
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cfl_apply_420_8bpc_neon;
-                if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
-                    _f = crate::neon::cfl_apply_420_8bpc_neon_rdm;
-                }
+            _f = crate::neon::cfl_apply_420_8bpc_neon;
+            if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
+                _f = crate::neon::cfl_apply_420_8bpc_neon_rdm;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
@@ -887,11 +883,9 @@ fn resolve_cfl_apply_422() -> CflApplyFn {
         let mut _f: CflApplyFn = cfl_apply_422_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cfl_apply_422_8bpc_neon;
-                if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
-                    _f = crate::neon::cfl_apply_422_8bpc_neon_rdm;
-                }
+            _f = crate::neon::cfl_apply_422_8bpc_neon;
+            if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
+                _f = crate::neon::cfl_apply_422_8bpc_neon_rdm;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -917,11 +911,9 @@ fn resolve_cfl_apply_444() -> CflApplyFn {
         let mut _f: CflApplyFn = cfl_apply_444_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cfl_apply_444_8bpc_neon;
-                if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
-                    _f = crate::neon::cfl_apply_444_8bpc_neon_rdm;
-                }
+            _f = crate::neon::cfl_apply_444_8bpc_neon;
+            if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
+                _f = crate::neon::cfl_apply_444_8bpc_neon_rdm;
             }
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -976,9 +968,7 @@ fn resolve_cfl_apply_420_hbd() -> CflApplyHbdFn {
         let mut _f: CflApplyHbdFn = cfl_apply_420_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cfl_apply_420_hbd_neon;
-            }
+            _f = crate::neon::cfl_apply_420_hbd_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -1004,9 +994,7 @@ fn resolve_cfl_apply_420_hbd_filtered() -> CflApplyHbdFn {
         // the scalar fallback until its 4:2:0 entry grows the same filter coverage.
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cfl_apply_420_hbd_neon;
-            }
+            _f = crate::neon::cfl_apply_420_hbd_neon;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1024,9 +1012,7 @@ fn resolve_cfl_apply_422_hbd() -> CflApplyHbdFn {
         let mut _f: CflApplyHbdFn = cfl_apply_422_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cfl_apply_422_hbd_neon;
-            }
+            _f = crate::neon::cfl_apply_422_hbd_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -1050,9 +1036,7 @@ fn resolve_cfl_apply_444_hbd() -> CflApplyHbdFn {
         let mut _f: CflApplyHbdFn = cfl_apply_444_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cfl_apply_444_hbd_neon;
-            }
+            _f = crate::neon::cfl_apply_444_hbd_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {

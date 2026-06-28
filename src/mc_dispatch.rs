@@ -64,9 +64,7 @@ fn resolve_prep_hbd() -> PrepHbdFn {
         let mut _f = prep_hbd_scalar as PrepHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::prep_hbd_neon as PrepHbdFn;
-            }
+            _f = crate::neon::prep_hbd_neon as PrepHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -134,9 +132,7 @@ fn resolve_put_bilin_hbd() -> PutBilinHbdFn {
         let mut _f = put_bilin_hbd_scalar as PutBilinHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::put_bilin_hbd_neon as PutBilinHbdFn;
-            }
+            _f = crate::neon::put_bilin_hbd_neon as PutBilinHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -206,9 +202,7 @@ fn resolve_prep_bilin_hbd() -> PrepBilinHbdFn {
         let mut _f = prep_bilin_hbd_scalar as PrepBilinHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::prep_bilin_hbd_neon as PrepBilinHbdFn;
-            }
+            _f = crate::neon::prep_bilin_hbd_neon as PrepBilinHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -282,9 +276,7 @@ fn resolve_put_8tap_hbd() -> Put8tapHbdFn {
         let mut _f = put_8tap_hbd_scalar as Put8tapHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::put_8tap_hbd_neon as Put8tapHbdFn;
-            }
+            _f = crate::neon::put_8tap_hbd_neon as Put8tapHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -374,9 +366,7 @@ fn resolve_prep_8tap_hbd() -> Prep8tapHbdFn {
         let mut _f = prep_8tap_hbd_scalar as Prep8tapHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::prep_8tap_hbd_neon as Prep8tapHbdFn;
-            }
+            _f = crate::neon::prep_8tap_hbd_neon as Prep8tapHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -467,9 +457,7 @@ fn resolve_put_bilin_8bpc() -> PutBilin8bpcFn {
         let mut _f = put_bilin_8bpc_scalar_dispatch as PutBilin8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::put_bilin_8bpc_neon as PutBilin8bpcFn;
-            }
+            _f = crate::neon::put_bilin_8bpc_neon as PutBilin8bpcFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -493,9 +481,7 @@ fn resolve_prep_bilin_8bpc() -> PrepBilin8bpcFn {
         let mut _f = prep_bilin_8bpc_scalar_dispatch as PrepBilin8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::prep_bilin_8bpc_neon as PrepBilin8bpcFn;
-            }
+            _f = crate::neon::prep_bilin_8bpc_neon as PrepBilin8bpcFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -581,9 +567,7 @@ fn resolve_put_8tap_8bpc() -> Put8tap8bpcFn {
         let mut _f = put_8tap_8bpc_scalar_dispatch as Put8tap8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::put_8tap_8bpc_neon as Put8tap8bpcFn;
-            }
+            _f = crate::neon::put_8tap_8bpc_neon as Put8tap8bpcFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -607,9 +591,7 @@ fn resolve_prep_8tap_8bpc() -> Prep8tap8bpcFn {
         let mut _f = prep_8tap_8bpc_scalar_dispatch as Prep8tap8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::prep_8tap_8bpc_neon as Prep8tap8bpcFn;
-            }
+            _f = crate::neon::prep_8tap_8bpc_neon as Prep8tap8bpcFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {

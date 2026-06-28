@@ -190,24 +190,22 @@ fn add_tmp_to_dst<BD: BitDepth>(
         // shapes.
         if BD::BPC == 8 && dpcm_flag == 0 {
             if let Some(dst8) = <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst) {
-                if std::arch::is_aarch64_feature_detected!("neon") {
-                    if unsafe {
-                        crate::neon::add_tmp_to_dst_8bpc_neon(
-                            dst8,
-                            dst_off,
-                            stride,
-                            tmp.as_slice(),
-                            ITX_TMP_STRIDE,
-                            w,
-                            h,
-                            sw,
-                            sh,
-                            rnd,
-                            shift,
-                        )
-                    } {
-                        return;
-                    }
+                if unsafe {
+                    crate::neon::add_tmp_to_dst_8bpc_neon(
+                        dst8,
+                        dst_off,
+                        stride,
+                        tmp.as_slice(),
+                        ITX_TMP_STRIDE,
+                        w,
+                        h,
+                        sw,
+                        sh,
+                        rnd,
+                        shift,
+                    )
+                } {
+                    return;
                 }
             }
         }
@@ -371,40 +369,10 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
             C::try_as_i16_slice_mut(coeff),
             <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst),
         ) {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                unsafe {
-                    if std::arch::is_aarch64_feature_detected!("rdm") {
-                        if tx == txsz::TX_16X16 {
-                            crate::neon::idct_dequant_16x16_i16_neon_rdm_fused_8bpc(
-                                coeff16,
-                                dst8,
-                                dst_off,
-                                stride,
-                                eob,
-                                tx,
-                                is_rect2,
-                                shift0,
-                                row_clip_min,
-                                row_clip_max,
-                                shift1,
-                            );
-                        } else {
-                            crate::neon::idct_dequant_32x32_i16_neon_rdm_fused_8bpc(
-                                coeff16,
-                                dst8,
-                                dst_off,
-                                stride,
-                                eob,
-                                tx,
-                                is_rect2,
-                                shift0,
-                                row_clip_min,
-                                row_clip_max,
-                                shift1,
-                            );
-                        }
-                    } else if tx == txsz::TX_16X16 {
-                        crate::neon::idct_dequant_16x16_i16_neon_fused_8bpc(
+            unsafe {
+                if std::arch::is_aarch64_feature_detected!("rdm") {
+                    if tx == txsz::TX_16X16 {
+                        crate::neon::idct_dequant_16x16_i16_neon_rdm_fused_8bpc(
                             coeff16,
                             dst8,
                             dst_off,
@@ -418,7 +386,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                             shift1,
                         );
                     } else {
-                        crate::neon::idct_dequant_32x32_i16_neon_fused_8bpc(
+                        crate::neon::idct_dequant_32x32_i16_neon_rdm_fused_8bpc(
                             coeff16,
                             dst8,
                             dst_off,
@@ -432,9 +400,37 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                             shift1,
                         );
                     }
+                } else if tx == txsz::TX_16X16 {
+                    crate::neon::idct_dequant_16x16_i16_neon_fused_8bpc(
+                        coeff16,
+                        dst8,
+                        dst_off,
+                        stride,
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                        shift1,
+                    );
+                } else {
+                    crate::neon::idct_dequant_32x32_i16_neon_fused_8bpc(
+                        coeff16,
+                        dst8,
+                        dst_off,
+                        stride,
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                        shift1,
+                    );
                 }
-                return;
             }
+            return;
         }
     }
 
@@ -455,49 +451,47 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 C::try_as_i16_slice_mut(coeff),
                 <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst),
             ) {
-                if std::arch::is_aarch64_feature_detected!("neon") {
-                    let handled = unsafe {
-                        if std::arch::is_aarch64_feature_detected!("rdm") {
-                            crate::neon::itx_dequant_i16_neon_rdm_fused_8bpc(
-                                coeff16,
-                                dst8,
-                                dst_off,
-                                stride,
-                                w,
-                                h,
-                                eob,
-                                tx,
-                                is_rect2,
-                                shift0,
-                                row_clip_min,
-                                row_clip_max,
-                                shift1,
-                                first_kind,
-                                second_kind,
-                            )
-                        } else {
-                            crate::neon::itx_dequant_i16_neon_fused_8bpc(
-                                coeff16,
-                                dst8,
-                                dst_off,
-                                stride,
-                                w,
-                                h,
-                                eob,
-                                tx,
-                                is_rect2,
-                                shift0,
-                                row_clip_min,
-                                row_clip_max,
-                                shift1,
-                                first_kind,
-                                second_kind,
-                            )
-                        }
-                    };
-                    if handled {
-                        return;
+                let handled = unsafe {
+                    if std::arch::is_aarch64_feature_detected!("rdm") {
+                        crate::neon::itx_dequant_i16_neon_rdm_fused_8bpc(
+                            coeff16,
+                            dst8,
+                            dst_off,
+                            stride,
+                            w,
+                            h,
+                            eob,
+                            tx,
+                            is_rect2,
+                            shift0,
+                            row_clip_min,
+                            row_clip_max,
+                            shift1,
+                            first_kind,
+                            second_kind,
+                        )
+                    } else {
+                        crate::neon::itx_dequant_i16_neon_fused_8bpc(
+                            coeff16,
+                            dst8,
+                            dst_off,
+                            stride,
+                            w,
+                            h,
+                            eob,
+                            tx,
+                            is_rect2,
+                            shift0,
+                            row_clip_min,
+                            row_clip_max,
+                            shift1,
+                            first_kind,
+                            second_kind,
+                        )
                     }
+                };
+                if handled {
+                    return;
                 }
             }
         }

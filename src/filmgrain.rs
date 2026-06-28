@@ -301,6 +301,7 @@ fn sample_lut_row<'a>(
     &grain_lut[row][col..]
 }
 
+#[allow(unused)]
 fn blend_top_grain_row_scalar(
     dst: &mut [i16],
     old: &[i16],
@@ -340,11 +341,12 @@ fn blend_top_grain_row_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                return crate::neon::blend_top_grain_row_neon;
-            }
+            return crate::neon::blend_top_grain_row_neon;
         }
-        blend_top_grain_row_scalar
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            blend_top_grain_row_scalar
+        }
     });
     unsafe { f(dst, old, grain, grain_min, grain_max, old_w, new_w) }
 }
@@ -531,6 +533,7 @@ type FguvRowHbdFn = unsafe fn(
     i32,
 );
 
+#[allow(unused)]
 fn fgy_row_8bpc_scalar(
     dst: &mut [u8],
     src: &[u8],
@@ -551,6 +554,7 @@ fn fgy_row_8bpc_scalar(
     }
 }
 
+#[allow(unused)]
 fn fgy_row_hbd_scalar(
     dst: &mut [u16],
     src: &[u16],
@@ -571,6 +575,7 @@ fn fgy_row_hbd_scalar(
     }
 }
 
+#[allow(unused)]
 fn fguv_row_8bpc_scalar(
     dst: &mut [u8],
     src: &[u8],
@@ -616,6 +621,7 @@ fn fguv_row_8bpc_scalar(
     }
 }
 
+#[allow(unused)]
 fn fguv_row_hbd_scalar(
     dst: &mut [u16],
     src: &[u16],
@@ -682,11 +688,12 @@ fn fgy_row_8bpc_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                return crate::neon::fgy_row_8bpc_neon;
-            }
+            return crate::neon::fgy_row_8bpc_neon;
         }
-        fgy_row_8bpc_scalar
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            fgy_row_8bpc_scalar
+        }
     });
     unsafe {
         f(
@@ -721,11 +728,12 @@ fn fgy_row_hbd_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                return crate::neon::fgy_row_hbd_neon;
-            }
+            return crate::neon::fgy_row_hbd_neon;
         }
-        fgy_row_hbd_scalar
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            fgy_row_hbd_scalar
+        }
     });
     unsafe {
         f(
@@ -767,11 +775,12 @@ fn fguv_row_8bpc_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                return crate::neon::fguv_row_8bpc_neon;
-            }
+            return crate::neon::fguv_row_8bpc_neon;
         }
-        fguv_row_8bpc_scalar
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            crate::filmgrain::fguv_row_8bpc_scalar
+        }
     });
     unsafe {
         f(
@@ -821,11 +830,12 @@ fn fguv_row_hbd_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                return crate::neon::fguv_row_hbd_neon;
-            }
+            return crate::neon::fguv_row_hbd_neon;
         }
-        fguv_row_hbd_scalar
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            fguv_row_hbd_scalar
+        }
     });
     unsafe {
         f(

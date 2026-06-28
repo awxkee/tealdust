@@ -129,9 +129,7 @@ fn resolve_stxfm4_8bpc() -> Stx4Fn8bpc {
         let mut _f = stxfm4_8bpc_scalar as Stx4Fn8bpc;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::stxfm4_8bpc_neon as Stx4Fn8bpc;
-            }
+            _f = crate::neon::stxfm4_8bpc_neon as Stx4Fn8bpc;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -149,9 +147,7 @@ fn resolve_stxfm8_8bpc() -> Stx8Fn8bpc {
         let mut _f = stxfm8_8bpc_scalar as Stx8Fn8bpc;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::stxfm8_8bpc_neon as Stx8Fn8bpc;
-            }
+            _f = crate::neon::stxfm8_8bpc_neon as Stx8Fn8bpc;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -169,9 +165,7 @@ fn resolve_stxfm4_hbd() -> Stx4FnHbd {
         let mut _f = stxfm4_hbd_scalar as Stx4FnHbd;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::stxfm4_hbd_neon as Stx4FnHbd;
-            }
+            _f = crate::neon::stxfm4_hbd_neon as Stx4FnHbd;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -189,9 +183,7 @@ fn resolve_stxfm8_hbd() -> Stx8FnHbd {
         let mut _f = stxfm8_hbd_scalar as Stx8FnHbd;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::stxfm8_hbd_neon as Stx8FnHbd;
-            }
+            _f = crate::neon::stxfm8_hbd_neon as Stx8FnHbd;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {

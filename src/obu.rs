@@ -2669,7 +2669,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
 
             if c.seq_hdr.is_none() {
                 c.frame_hdr = None;
-            } else if c.seq_hdr.as_ref().is_none_or(|old| **old != seq_hdr) {
+            } else if c.seq_hdr.as_ref().map_or(true, |old| **old != seq_hdr) {
                 c.frame_hdr = None;
                 c.content_light = None;
                 c.mastering_display = None;

@@ -951,7 +951,7 @@ where
 
     // CfL is intra-only (`if (intra) cfl()`); IntraBC used the mc copy instead.
     if is_intra && uv_mode == CFL_PRED {
-        if let Err(e) = cfl_predict_8bpc(recon, b, cbs, uvtx, cbx, cby, fi) {
+        if let Err(e) = cfl_predict_8bpc(recon, b, uvtx, cbx, cby, fi) {
             recon.scratch.put_chroma_cf::<BD::Coef>(cf_uv);
             return Err(e);
         }
@@ -1174,7 +1174,6 @@ where
 fn cfl_predict_8bpc<BD: BitDepth>(
     recon: &mut ReconCtx<BD>,
     b: &Av2Block,
-    bs: BlockSize,
     uvtx: usize,
     cbx: i32,
     cby: i32,
@@ -1229,10 +1228,13 @@ fn cfl_predict_8bpc<BD: BitDepth>(
         let utop_off = (coff as isize - cstride as isize) as usize;
         let vtop_off = utop_off;
 
-        let cbw4 = (BLOCK_DIMENSIONS[bs as u8 as usize][0] as usize + ss_hor) >> ss_hor;
-        let cbh4 = (BLOCK_DIMENSIONS[bs as u8 as usize][1] as usize + ss_ver) >> ss_ver;
-        let wpad = cbw4 - ctw4;
-        let hpad = cbh4 - cth4;
+        // AVM pads CfL to the current transform prediction size, not to the
+        // containing chroma block size. Using cbs here over-pads internal TUs
+        // and can reject valid AVM-produced 4:2:2/4:4:4 edge cases.
+        debug_assert!(ctw4 <= t_dim.w as usize);
+        debug_assert!(cth4 <= t_dim.h as usize);
+        let wpad = t_dim.w as usize - ctw4;
+        let hpad = t_dim.h as usize - cth4;
 
         let alpha = b.intra_data().cfl.alpha();
         let cfl_has_left = has_left;
@@ -2351,9 +2353,22 @@ where
             if !sub4 && pl != 0 {
                 return Err(());
             }
-            let i_3only = cbs == BlockSize::Invalid || (!sub4 && bs != BlockSize::Bs32x8);
+            let p1_0 = BlockSize::from_raw(pcc.part[1][0]);
             let p1_1 = BlockSize::from_raw(pcc.part[1][1]);
             let p1_3 = BlockSize::from_raw(pcc.part[1][3]);
+            // AVM only enters the BLOCK_32X8 + PARTITION_VERT_3 multi-ref
+            // chroma layout when the parent partition has a non-zero chroma
+            // reference offset.  For 4:4:4 and 4:2:2 this parent still produces
+            // valid independent chroma children, so treating child 1 as luma-only
+            // there consumes too few chroma symbols and desynchronizes entropy.
+            // In 4px units AVM's V3 offset test is:
+            //   (plane_w < 16px) || (half_plane_h < 4px)
+            // which is equivalent to (bw4 >> ss_hor) < 4 ||
+            // (bh4 >> ss_ver) < 2.
+            let avm_v3_32x8_chroma = cbs != BlockSize::Invalid
+                && bs == BlockSize::Bs32x8
+                && ((bw4 >> ctx.fi.ss_hor) < 4 || (bh4 >> ctx.fi.ss_ver) < 2);
+            let i_3only = cbs == BlockSize::Invalid || (!sub4 && !avm_v3_32x8_chroma);
             let lbs_child = if pl != 0 { BlockSize::Invalid } else { p1_1 };
             let cbs_first = if i_3only { BlockSize::Invalid } else { p1_1 };
             decode_sb(ctx, recon, pass, lbs_child, cbs_first, &mut child_dir)?;
@@ -2364,16 +2379,24 @@ where
                     *ctx.cbx = *ctx.bx;
                 }
                 let lbs_mid = if pl != 0 { BlockSize::Invalid } else { p1_3 };
-                let cbs_mid = if sub4 { p1_3 } else { BlockSize::Invalid };
+                let cbs_mid = if avm_v3_32x8_chroma {
+                    BlockSize::Invalid
+                } else if sub4 {
+                    p1_3
+                } else {
+                    BlockSize::Invalid
+                };
                 decode_sb(ctx, recon, pass, lbs_mid, cbs_mid, &mut child_dir)?;
                 if *ctx.by + hh4 < ctx.fi.bh {
                     *ctx.by += hh4;
                     let cbs_mid2 = if i_3only {
                         BlockSize::Invalid
+                    } else if avm_v3_32x8_chroma {
+                        p1_0
                     } else if sub4 {
                         p1_3
                     } else {
-                        BlockSize::from_raw(pcc.part[1][0])
+                        p1_0
                     };
                     decode_sb(ctx, recon, pass, lbs_mid, cbs_mid2, &mut child_dir)?;
                     *ctx.by -= hh4;
@@ -2396,9 +2419,21 @@ where
             if !sub4 && pl != 0 {
                 return Err(());
             }
-            let i_3only = cbs == BlockSize::Invalid || (!sub4 && bs != BlockSize::Bs8x32);
+            let p0_0 = BlockSize::from_raw(pcc.part[0][0]);
             let p0_1 = BlockSize::from_raw(pcc.part[0][1]);
             let p0_3 = BlockSize::from_raw(pcc.part[0][3]);
+            // Mirror AVM's BLOCK_8X32 + PARTITION_HORZ_3 multi-ref chroma
+            // layout only when AVM's have_nz_chroma_ref_offset() is true.  For
+            // 4:4:4 the four H3 children are still independent chroma refs; for
+            // subsampled cases where the half-width/quarter-height chroma child
+            // would be sub-4, child 1 is luma-only and child 2 carries the
+            // combined 8x16 chroma block.  In 4px units AVM's H3 offset test is:
+            //   (half_plane_w < 4px) || (plane_h < 16px)
+            // equivalent to (bw4 >> ss_hor) < 2 || (bh4 >> ss_ver) < 4.
+            let avm_h3_8x32_chroma = cbs != BlockSize::Invalid
+                && bs == BlockSize::Bs8x32
+                && ((bw4 >> ctx.fi.ss_hor) < 2 || (bh4 >> ctx.fi.ss_ver) < 4);
+            let i_3only = cbs == BlockSize::Invalid || (!sub4 && !avm_h3_8x32_chroma);
             let lbs_child = if pl != 0 { BlockSize::Invalid } else { p0_1 };
             let cbs_first = if i_3only { BlockSize::Invalid } else { p0_1 };
             decode_sb(ctx, recon, pass, lbs_child, cbs_first, &mut child_dir)?;
@@ -2409,16 +2444,24 @@ where
                     *ctx.cby = *ctx.by;
                 }
                 let lbs_mid = if pl != 0 { BlockSize::Invalid } else { p0_3 };
-                let cbs_mid = if sub4 { p0_3 } else { BlockSize::Invalid };
+                let cbs_mid = if avm_h3_8x32_chroma {
+                    BlockSize::Invalid
+                } else if sub4 {
+                    p0_3
+                } else {
+                    BlockSize::Invalid
+                };
                 decode_sb(ctx, recon, pass, lbs_mid, cbs_mid, &mut child_dir)?;
                 if *ctx.bx + hw4 < ctx.fi.bw {
                     *ctx.bx += hw4;
                     let cbs_mid2 = if i_3only {
                         BlockSize::Invalid
+                    } else if avm_h3_8x32_chroma {
+                        p0_0
                     } else if sub4 {
                         p0_3
                     } else {
-                        BlockSize::from_raw(pcc.part[0][0])
+                        p0_0
                     };
                     decode_sb(ctx, recon, pass, lbs_mid, cbs_mid2, &mut child_dir)?;
                     *ctx.bx -= hw4;

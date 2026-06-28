@@ -240,9 +240,7 @@ fn resolve_ipred_v() -> IntraPred8Fn {
         let mut _f: IntraPred8Fn = ipred_v_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_v_8bpc_neon;
-            }
+            _f = crate::neon::ipred_v_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -267,9 +265,7 @@ fn resolve_ipred_h() -> IntraPred8Fn {
         let mut _f: IntraPred8Fn = ipred_h_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_h_8bpc_neon;
-            }
+            _f = crate::neon::ipred_h_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -294,9 +290,7 @@ fn resolve_ipred_smooth() -> SmoothPred8Fn {
         let mut _f: SmoothPred8Fn = ipred_smooth_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_smooth_8bpc_neon;
-            }
+            _f = crate::neon::ipred_smooth_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -321,9 +315,7 @@ fn resolve_ipred_smooth_v() -> SmoothPred8Fn {
         let mut _f: SmoothPred8Fn = ipred_smooth_v_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_smooth_v_8bpc_neon;
-            }
+            _f = crate::neon::ipred_smooth_v_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -348,9 +340,7 @@ fn resolve_ipred_smooth_h() -> SmoothPred8Fn {
         let mut _f: SmoothPred8Fn = ipred_smooth_h_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_smooth_h_8bpc_neon;
-            }
+            _f = crate::neon::ipred_smooth_h_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -478,9 +468,7 @@ fn resolve_ipred_dc() -> IntraPred8Fn {
         let mut _f: IntraPred8Fn = ipred_dc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_dc_8bpc_neon;
-            }
+            _f = crate::neon::ipred_dc_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -505,9 +493,7 @@ fn resolve_ipred_dc_top() -> IntraPred8Fn {
         let mut _f: IntraPred8Fn = ipred_dc_top_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_dc_top_8bpc_neon;
-            }
+            _f = crate::neon::ipred_dc_top_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -532,9 +518,7 @@ fn resolve_ipred_dc_left() -> IntraPred8Fn {
         let mut _f: IntraPred8Fn = ipred_dc_left_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_dc_left_8bpc_neon;
-            }
+            _f = crate::neon::ipred_dc_left_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -559,9 +543,7 @@ fn resolve_ipred_dc_128() -> DcPred128Fn {
         let mut _f: DcPred128Fn = ipred_dc_128_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_dc_128_8bpc_neon;
-            }
+            _f = crate::neon::ipred_dc_128_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -661,9 +643,7 @@ fn resolve_ipred_paeth() -> SmoothPred8Fn {
         let mut _f: SmoothPred8Fn = ipred_paeth_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_paeth_8bpc_neon;
-            }
+            _f = crate::neon::ipred_paeth_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -735,9 +715,7 @@ fn resolve_ipred_z1() -> Z1Pred8Fn {
         let mut _f: Z1Pred8Fn = ipred_z1_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_z1_8bpc_neon;
-            }
+            _f = crate::neon::ipred_z1_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -820,9 +798,7 @@ fn resolve_ipred_z3() -> Z1Pred8Fn {
         let mut _f: Z1Pred8Fn = ipred_z3_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_z3_8bpc_neon;
-            }
+            _f = crate::neon::ipred_z3_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -905,9 +881,7 @@ fn resolve_ipred_z2() -> Z2Pred8Fn {
         let mut _f: Z2Pred8Fn = ipred_z2_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_z2_8bpc_neon;
-            }
+            _f = crate::neon::ipred_z2_8bpc_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -983,9 +957,7 @@ fn resolve_ipred_dip_8bpc() -> DipPred8Fn {
         let mut _f: DipPred8Fn = ipred_dip_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_dip_8bpc_neon;
-            }
+            _f = crate::neon::ipred_dip_8bpc_neon;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1041,9 +1013,7 @@ fn resolve_pal_pred_8bpc() -> PalPred8Fn {
         let mut _f: PalPred8Fn = pal_pred_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::pal_pred_8bpc_neon;
-            }
+            _f = crate::neon::pal_pred_8bpc_neon;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1475,9 +1445,7 @@ macro_rules! resolve_hbd_ipred {
             let mut _f: $ty = $scalar;
             #[cfg(target_arch = "aarch64")]
             {
-                if std::arch::is_aarch64_feature_detected!("neon") {
-                    _f = $neon;
-                }
+                _f = $neon;
             }
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             {
@@ -1658,9 +1626,7 @@ fn resolve_ipred_dip_hbd() -> DipPredHbdFn {
         let mut _f: DipPredHbdFn = ipred_dip_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ipred_dip_hbd_neon;
-            }
+            _f = crate::neon::ipred_dip_hbd_neon;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {

@@ -823,9 +823,7 @@ fn resolve_cdef_dir_8bpc() -> CdefDir8Fn {
         let mut _f = cdef_find_dir_8bpc_scalar as CdefDir8Fn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cdef_find_dir_8bpc_neon as CdefDir8Fn;
-            }
+            _f = crate::neon::cdef_find_dir_8bpc_neon as CdefDir8Fn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -851,9 +849,7 @@ fn resolve_cdef_dir_hbd() -> CdefDirHbdFn {
         let mut _f = cdef_find_dir_hbd_scalar as CdefDirHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cdef_find_dir_hbd_neon as CdefDirHbdFn;
-            }
+            _f = crate::neon::cdef_find_dir_hbd_neon as CdefDirHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -898,9 +894,7 @@ fn resolve_cdef_padding_8bpc() -> CdefPadding8Fn {
         let mut _f = cdef_padding_8bpc_scalar as CdefPadding8Fn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cdef_padding_8bpc_neon as CdefPadding8Fn;
-            }
+            _f = crate::neon::cdef_padding_8bpc_neon as CdefPadding8Fn;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -920,9 +914,7 @@ fn resolve_cdef_padding_hbd() -> CdefPaddingHbdFn {
         let mut _f = cdef_padding_hbd_scalar as CdefPaddingHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cdef_padding_hbd_neon as CdefPaddingHbdFn;
-            }
+            _f = crate::neon::cdef_padding_hbd_neon as CdefPaddingHbdFn;
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1018,9 +1010,7 @@ fn resolve_cdef_filter() -> CdefFilterFn {
         let mut _f = cdef_filter_block_8bpc_scalar as CdefFilterFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cdef_filter_block_8bpc_neon as CdefFilterFn;
-            }
+            _f = crate::neon::cdef_filter_block_8bpc_neon as CdefFilterFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -1047,9 +1037,7 @@ fn resolve_cdef_filter_hbd() -> CdefFilterHbdFn {
         let mut _f = cdef_filter_block_hbd_scalar as CdefFilterHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cdef_filter_block_hbd_neon as CdefFilterHbdFn;
-            }
+            _f = crate::neon::cdef_filter_block_hbd_neon as CdefFilterHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -1080,13 +1068,11 @@ fn resolve_cdef_filter_shapes() -> &'static [CdefFilterShapeFn; 3] {
         ];
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = [
-                    crate::neon::cdef_filter_block_8x8_8bpc_neon as CdefFilterShapeFn,
-                    crate::neon::cdef_filter_block_4x8_8bpc_neon as CdefFilterShapeFn,
-                    crate::neon::cdef_filter_block_4x4_8bpc_neon as CdefFilterShapeFn,
-                ];
-            }
+            _f = [
+                crate::neon::cdef_filter_block_8x8_8bpc_neon as CdefFilterShapeFn,
+                crate::neon::cdef_filter_block_4x8_8bpc_neon as CdefFilterShapeFn,
+                crate::neon::cdef_filter_block_4x4_8bpc_neon as CdefFilterShapeFn,
+            ];
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -1124,13 +1110,11 @@ fn resolve_cdef_filter_hbd_shapes() -> &'static [CdefFilterHbdShapeFn; 3] {
         ];
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = [
-                    crate::neon::cdef_filter_block_8x8_hbd_neon as CdefFilterHbdShapeFn,
-                    crate::neon::cdef_filter_block_4x8_hbd_neon as CdefFilterHbdShapeFn,
-                    crate::neon::cdef_filter_block_4x4_hbd_neon as CdefFilterHbdShapeFn,
-                ];
-            }
+            _f = [
+                crate::neon::cdef_filter_block_8x8_hbd_neon as CdefFilterHbdShapeFn,
+                crate::neon::cdef_filter_block_4x8_hbd_neon as CdefFilterHbdShapeFn,
+                crate::neon::cdef_filter_block_4x4_hbd_neon as CdefFilterHbdShapeFn,
+            ];
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {

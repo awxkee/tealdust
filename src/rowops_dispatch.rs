@@ -51,9 +51,7 @@ fn resolve_residual_add() -> ResidualAddFn {
         let mut _f = residual_add_row_8bpc_scalar as ResidualAddFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::residual_add_row_8bpc_neon as ResidualAddFn;
-            }
+            _f = crate::neon::residual_add_row_8bpc_neon as ResidualAddFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -95,9 +93,7 @@ fn resolve_dc_add() -> DcAddFn {
         let mut _f = dc_add_row_8bpc_scalar as DcAddFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::dc_add_row_8bpc_neon as DcAddFn;
-            }
+            _f = crate::neon::dc_add_row_8bpc_neon as DcAddFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -138,9 +134,7 @@ fn resolve_row_clip() -> RowClipFn {
         let mut _f = row_clip_scalar as RowClipFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::row_clip_neon as RowClipFn;
-            }
+            _f = crate::neon::row_clip_neon as RowClipFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -194,9 +188,7 @@ fn resolve_cctx() -> CctxFn {
         let mut _f = cctx_row_scalar as CctxFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cctx_row_neon as CctxFn;
-            }
+            _f = crate::neon::cctx_row_neon as CctxFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -253,9 +245,7 @@ fn resolve_avg() -> AvgFn {
         let mut _f = avg_row_8bpc_scalar as AvgFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::avg_row_8bpc_neon as AvgFn;
-            }
+            _f = crate::neon::avg_row_8bpc_neon as AvgFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -305,9 +295,7 @@ fn resolve_w_avg() -> WAvgFn {
         let mut _f = w_avg_row_8bpc_scalar as WAvgFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::w_avg_row_8bpc_neon as WAvgFn;
-            }
+            _f = crate::neon::w_avg_row_8bpc_neon as WAvgFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -372,9 +360,7 @@ fn resolve_mask() -> MaskFn {
         let mut _f = mask_row_8bpc_scalar as MaskFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::mask_row_8bpc_neon as MaskFn;
-            }
+            _f = crate::neon::mask_row_8bpc_neon as MaskFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -427,9 +413,7 @@ fn resolve_blend() -> BlendFn {
         let mut _f = blend_row_8bpc_scalar as BlendFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::blend_row_8bpc_neon as BlendFn;
-            }
+            _f = crate::neon::blend_row_8bpc_neon as BlendFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -470,9 +454,7 @@ fn resolve_morph() -> MorphFn {
         let mut _f = morph_row_8bpc_scalar as MorphFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::morph_row_8bpc_neon as MorphFn;
-            }
+            _f = crate::neon::morph_row_8bpc_neon as MorphFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -527,9 +509,7 @@ fn resolve_residual_add_hbd() -> ResidualAddHbdFn {
         let mut _f = residual_add_row_hbd_scalar as ResidualAddHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::residual_add_row_hbd_neon as ResidualAddHbdFn;
-            }
+            _f = crate::neon::residual_add_row_hbd_neon as ResidualAddHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -575,9 +555,7 @@ fn resolve_dc_add_hbd() -> DcAddHbdFn {
         let mut _f = dc_add_row_hbd_scalar as DcAddHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::dc_add_row_hbd_neon as DcAddHbdFn;
-            }
+            _f = crate::neon::dc_add_row_hbd_neon as DcAddHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -624,9 +602,7 @@ fn resolve_avg_hbd() -> AvgHbdFn {
         let mut _f = avg_row_hbd_scalar as AvgHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::avg_row_hbd_neon as AvgHbdFn;
-            }
+            _f = crate::neon::avg_row_hbd_neon as AvgHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -684,9 +660,7 @@ fn resolve_w_avg_hbd() -> WAvgHbdFn {
         let mut _f = w_avg_row_hbd_scalar as WAvgHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::w_avg_row_hbd_neon as WAvgHbdFn;
-            }
+            _f = crate::neon::w_avg_row_hbd_neon as WAvgHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -751,9 +725,7 @@ fn resolve_mask_hbd() -> MaskHbdFn {
         let mut _f = mask_row_hbd_scalar as MaskHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::mask_row_hbd_neon as MaskHbdFn;
-            }
+            _f = crate::neon::mask_row_hbd_neon as MaskHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -803,9 +775,7 @@ fn resolve_blend_hbd() -> BlendHbdFn {
         let mut _f = blend_row_hbd_scalar as BlendHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::blend_row_hbd_neon as BlendHbdFn;
-            }
+            _f = crate::neon::blend_row_hbd_neon as BlendHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -850,9 +820,7 @@ fn resolve_morph_hbd() -> MorphHbdFn {
         let mut _f = morph_row_hbd_scalar as MorphHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::morph_row_hbd_neon as MorphHbdFn;
-            }
+            _f = crate::neon::morph_row_hbd_neon as MorphHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -901,9 +869,7 @@ fn resolve_gdf_add() -> GdfAddFn {
         let mut _f = gdf_add_run_8bpc_scalar as GdfAddFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::gdf_add_run_8bpc_neon as GdfAddFn;
-            }
+            _f = crate::neon::gdf_add_run_8bpc_neon as GdfAddFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -988,9 +954,7 @@ fn resolve_gdf_grad() -> GdfGradFn {
         let mut _f = gdf_gradient_group_scalar as GdfGradFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::gdf_gradient_group_neon as GdfGradFn;
-            }
+            _f = crate::neon::gdf_gradient_group_neon as GdfGradFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -1069,9 +1033,7 @@ fn resolve_cctx_i16() -> CctxI16Fn {
         let mut _f = cctx_row_i16_scalar as CctxI16Fn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::cctx_row_i16_neon as CctxI16Fn;
-            }
+            _f = crate::neon::cctx_row_i16_neon as CctxI16Fn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {

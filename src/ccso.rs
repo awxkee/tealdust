@@ -290,9 +290,7 @@ fn resolve_ccso_prep_8bpc() -> CcsoPrep8bpcFn {
         let mut _f = ccso_prep_lut_8bpc_scalar as CcsoPrep8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ccso_prep_lut_8bpc_neon as CcsoPrep8bpcFn;
-            }
+            _f = crate::neon::ccso_prep_lut_8bpc_neon as CcsoPrep8bpcFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -316,9 +314,7 @@ fn resolve_ccso_prep_hbd() -> CcsoPrepHbdFn {
         let mut _f = ccso_prep_lut_hbd_scalar as CcsoPrepHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ccso_prep_lut_hbd_neon as CcsoPrepHbdFn;
-            }
+            _f = crate::neon::ccso_prep_lut_hbd_neon as CcsoPrepHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -342,9 +338,7 @@ fn resolve_ccso_add_8bpc() -> CcsoAdd8bpcFn {
         let mut _f = ccso_add_8bpc_scalar as CcsoAdd8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ccso_add_8bpc_neon as CcsoAdd8bpcFn;
-            }
+            _f = crate::neon::ccso_add_8bpc_neon as CcsoAdd8bpcFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -368,9 +362,7 @@ fn resolve_ccso_add_hbd() -> CcsoAddHbdFn {
         let mut _f = ccso_add_hbd_scalar as CcsoAddHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ccso_add_hbd_neon as CcsoAddHbdFn;
-            }
+            _f = crate::neon::ccso_add_hbd_neon as CcsoAddHbdFn;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {

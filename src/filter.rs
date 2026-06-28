@@ -332,9 +332,7 @@ pub(crate) fn ns_wiener_fir_run() -> NsWienerFirFn {
         let mut _f: NsWienerFirFn = ns_wiener_fir_run_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ns_wiener_fir_run_neon;
-            }
+            _f = crate::neon::ns_wiener_fir_run_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -359,9 +357,7 @@ pub(crate) fn pc_wiener_fir_run() -> PcWienerFirFn {
         let mut _f: PcWienerFirFn = pc_wiener_fir_run_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::pc_wiener_fir_run_neon;
-            }
+            _f = crate::neon::pc_wiener_fir_run_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -428,9 +424,7 @@ pub(crate) fn ns_wiener_uv_fir_run() -> NsWienerUvFirFn {
         let mut _f: NsWienerUvFirFn = ns_wiener_uv_fir_run_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ns_wiener_uv_fir_run_neon;
-            }
+            _f = crate::neon::ns_wiener_uv_fir_run_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -527,9 +521,7 @@ pub(crate) fn ns_wiener_fir_run_hbd() -> NsWienerFirHbdFn {
         let mut _f: NsWienerFirHbdFn = ns_wiener_fir_run_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ns_wiener_fir_run_hbd_neon;
-            }
+            _f = crate::neon::ns_wiener_fir_run_hbd_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -553,9 +545,7 @@ pub(crate) fn pc_wiener_fir_run_hbd() -> PcWienerFirHbdFn {
         let mut _f: PcWienerFirHbdFn = pc_wiener_fir_run_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::pc_wiener_fir_run_hbd_neon;
-            }
+            _f = crate::neon::pc_wiener_fir_run_hbd_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
@@ -643,9 +633,7 @@ pub(crate) fn ns_wiener_uv_fir_run_hbd() -> NsWienerUvFirHbdFn {
         let mut _f: NsWienerUvFirHbdFn = ns_wiener_uv_fir_run_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("neon") {
-                _f = crate::neon::ns_wiener_uv_fir_run_hbd_neon;
-            }
+            _f = crate::neon::ns_wiener_uv_fir_run_hbd_neon;
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
