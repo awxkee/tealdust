@@ -31,7 +31,8 @@ use crate::cdf::CdfModeContext;
 
 use crate::env::BlockContext;
 
-use crate::intops::{iclip, imax, imin};
+use crate::intops::{apply_sign, iclip, imax, imin, ulog2};
+use crate::intra::intrabc_morph_pred_luma;
 use crate::levels::{Av2Block, BlockSize, CompInterPredMode, MotionMode, Mv, RefPair};
 
 use crate::msac::MsacReader;
@@ -331,6 +332,21 @@ where
                 fi.bw * 4,
                 fi.bh * 4,
             );
+            if b.intra_data().morph_pred != 0 {
+                intrabc_morph_pred_luma(
+                    recon.bd,
+                    recon.dst_y,
+                    recon.frame.y_stride_px,
+                    bw4,
+                    bh4,
+                    bx,
+                    by,
+                    mv.x as i32,
+                    mv.y as i32,
+                    fi.bw * 4,
+                    fi.bh * 4,
+                );
+            }
         }
         recon_b_intra_luma_phase(
             &mut ReconBCtx {
@@ -409,7 +425,7 @@ where
 /// single-thread, full-frame-alias decode used by the conformance harness, so
 /// the top template row resolves to `dst[-stride]` in both the in-SB and the
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn bawp_plane<BD: crate::pixel::BitDepth>(
+pub(crate) fn bawp_plane<BD: BitDepth>(
     recon: &mut ReconCtx<BD>,
     bawp_idx: i32,
     mv: crate::levels::MvXY,

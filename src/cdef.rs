@@ -149,6 +149,7 @@ fn cast_left_u8<P: Pixel>(left: &[[P; 2]]) -> &[[u8; 2]] {
 #[inline(always)]
 fn cast_left_u16<P: Pixel>(left: &[[P; 2]]) -> &[[u16; 2]] {
     debug_assert_eq!(P::BITDEPTH, 16);
+    assert!(align_of::<P>() >= align_of::<u16>());
     // SAFETY: the only 16-bit Pixel implementation is `u16`; the returned slice
     // has the same allocation, element count and lifetime as `left`.
     unsafe { core::slice::from_raw_parts(left.as_ptr().cast::<[u16; 2]>(), left.len()) }

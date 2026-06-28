@@ -190,7 +190,6 @@ pub(crate) fn blend_row<P: Pixel>(dst: &mut [P], tmp: &[P], mask: &[u8], n: usiz
 }
 
 /// `morph` row: `dst[x] = clip((alpha*dst[x] + beta) >> 8)`.
-#[inline]
 pub(crate) fn morph_row<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],

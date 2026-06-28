@@ -112,6 +112,7 @@ mod decoder;
 mod error;
 mod filter;
 mod headers;
+mod intra;
 mod ipred_dispatch;
 mod levels;
 #[cfg(target_arch = "aarch64")]

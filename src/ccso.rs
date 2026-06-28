@@ -528,23 +528,21 @@ pub(crate) fn ccso_add_8bpc_scalar(
 ) {
     let offset_map = ccso_build_offset_map(offset_idxs, offset_lut);
     let n_blocks = (h + 3) >> 2;
-    let dst_block_len = dst_stride * 4 * n_blocks;
-    let idx_block_len = idx_stride * 4 * n_blocks;
-    for ((dst_rows, idx_rows), mask) in dst[..dst_block_len]
-        .chunks_exact_mut(dst_stride * 4)
-        .zip(idx_buf[..idx_block_len].chunks_exact(idx_stride * 4))
-        .zip(ll_mask[..n_blocks].iter())
-    {
+    for (by, mask) in (0..h).step_by(4).zip(ll_mask[..n_blocks].iter()) {
+        let block_h = (h - by).min(4);
+        // `dst` may already start at an x-offset inside the picture row, so
+        // chunking it by `dst_stride` would mix row tails with the next row.
+        let dst_rows = &mut dst[by * dst_stride..];
+        let idx_row_start = by * idx_stride;
+        let idx_rows = &idx_buf[idx_row_start..idx_row_start + block_h * idx_stride];
         let row_mask = mask[0];
         for (bx, xx) in (0..w).step_by(4).enumerate() {
             if row_mask & (1 << bx) == 0 {
-                for (dst_row, idx_row) in dst_rows
-                    .chunks_exact_mut(dst_stride)
-                    .zip(idx_rows.chunks_exact(idx_stride))
-                {
-                    let dst4 = &mut dst_row[xx..xx + 4].as_chunks_mut::<4>().0[0];
-                    let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
-                    for (dst, &idx) in dst4.iter_mut().zip(idx4.iter()) {
+                let x_end = (xx + 4).min(w);
+                for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+                    let dst_row = &mut dst_rows[yy * dst_stride..];
+                    for (dst, &idx) in dst_row[xx..x_end].iter_mut().zip(idx_row[xx..x_end].iter())
+                    {
                         let off = offset_map[idx as usize];
                         let cur = *dst as i32;
                         *dst = (cur + off as i32).clamp(0, 255) as u8;
@@ -570,23 +568,21 @@ pub(crate) fn ccso_add_hbd_scalar(
 ) {
     let offset_map = ccso_build_offset_map(offset_idxs, offset_lut);
     let n_blocks = (h + 3) >> 2;
-    let dst_block_len = dst_stride * 4 * n_blocks;
-    let idx_block_len = idx_stride * 4 * n_blocks;
-    for ((dst_rows, idx_rows), mask) in dst[..dst_block_len]
-        .chunks_exact_mut(dst_stride * 4)
-        .zip(idx_buf[..idx_block_len].chunks_exact(idx_stride * 4))
-        .zip(ll_mask[..n_blocks].iter())
-    {
+    for (by, mask) in (0..h).step_by(4).zip(ll_mask[..n_blocks].iter()) {
+        let block_h = (h - by).min(4);
+        // `dst` may already start at an x-offset inside the picture row, so
+        // chunking it by `dst_stride` would mix row tails with the next row.
+        let dst_rows = &mut dst[by * dst_stride..];
+        let idx_row_start = by * idx_stride;
+        let idx_rows = &idx_buf[idx_row_start..idx_row_start + block_h * idx_stride];
         let row_mask = mask[0];
         for (bx, xx) in (0..w).step_by(4).enumerate() {
             if row_mask & (1 << bx) == 0 {
-                for (dst_row, idx_row) in dst_rows
-                    .chunks_exact_mut(dst_stride)
-                    .zip(idx_rows.chunks_exact(idx_stride))
-                {
-                    let dst4 = &mut dst_row[xx..xx + 4].as_chunks_mut::<4>().0[0];
-                    let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
-                    for (dst, &idx) in dst4.iter_mut().zip(idx4.iter()) {
+                let x_end = (xx + 4).min(w);
+                for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+                    let dst_row = &mut dst_rows[yy * dst_stride..];
+                    for (dst, &idx) in dst_row[xx..x_end].iter_mut().zip(idx_row[xx..x_end].iter())
+                    {
                         let off = offset_map[idx as usize];
                         let cur = *dst as i32;
                         *dst = (cur + off as i32).clamp(0, bitdepth_max) as u16;
@@ -611,9 +607,12 @@ pub(crate) fn ccso_add<BD: BitDepth>(
     ll_mask: &[[u16; 4]],
 ) {
     if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-        // SAFETY: dispatch is guarded by runtime feature detection; scalar default is sound.
-        unsafe {
-            resolve_ccso_add_8bpc()(
+        // The arch kernels operate on 4-pixel CCSO sub-blocks.  At frame edges,
+        // especially chroma in 4:2:2/4:2:0, the visible block width may be 1..3
+        // pixels past the last complete sub-block.  Match AVM's x_end=min(...)
+        // behavior by using the tail-safe scalar path for those edge units.
+        if (w & 3) != 0 {
+            ccso_add_8bpc_scalar(
                 d8,
                 dst_stride,
                 idx_buf,
@@ -623,14 +622,28 @@ pub(crate) fn ccso_add<BD: BitDepth>(
                 w,
                 h,
                 ll_mask,
-            )
-        };
+            );
+        } else {
+            // SAFETY: dispatch is guarded by runtime feature detection; scalar default is sound.
+            unsafe {
+                resolve_ccso_add_8bpc()(
+                    d8,
+                    dst_stride,
+                    idx_buf,
+                    idx_stride,
+                    offset_idxs,
+                    offset_lut,
+                    w,
+                    h,
+                    ll_mask,
+                )
+            };
+        }
         return;
     }
     if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-        // SAFETY: dispatch is guarded by runtime feature detection; scalar default is sound.
-        unsafe {
-            resolve_ccso_add_hbd()(
+        if (w & 3) != 0 {
+            ccso_add_hbd_scalar(
                 d16,
                 dst_stride,
                 idx_buf,
@@ -641,8 +654,24 @@ pub(crate) fn ccso_add<BD: BitDepth>(
                 h,
                 ll_mask,
                 bd.bitdepth_max(),
-            )
-        };
+            );
+        } else {
+            // SAFETY: dispatch is guarded by runtime feature detection; scalar default is sound.
+            unsafe {
+                resolve_ccso_add_hbd()(
+                    d16,
+                    dst_stride,
+                    idx_buf,
+                    idx_stride,
+                    offset_idxs,
+                    offset_lut,
+                    w,
+                    h,
+                    ll_mask,
+                    bd.bitdepth_max(),
+                )
+            };
+        }
         return;
     }
 

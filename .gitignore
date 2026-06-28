@@ -4,3 +4,5 @@ fully_working_state.zip
 *.zip
 Cargo.lock
 findings
+.afl*
+corpus_min

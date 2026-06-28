@@ -34,7 +34,7 @@ extern crate tealdust;
 fn main() {
     fuzz!(|data: &[u8]| {
         if let Ok(mut instance) = tealdust::AvifDecoder::new(data) {
-            instance.decode().unwrap();
+            _ = instance.decode();
         }
     });
 }

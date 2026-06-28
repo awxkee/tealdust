@@ -2000,45 +2000,59 @@ where
         }
     }
 
-    if has_luma && (bx | by) & (63 >> (2 - fi.sb128)) == 0 {
-        let unit_mi = (63 >> (2 - fi.sb128)) + 1; // ccso unit = SB size in mi (32 for sb128)
-        let upr = (64 / unit_mi) as usize; // ccso units per row within a 256px lf region
-        let sub_x = ((bx & 63) / unit_mi) as usize;
-        let sub_y = ((by & 63) / unit_mi) as usize;
-        let sub = sub_y * upr + sub_x;
-        let ccso_idx = (3 * ((bx >> 6) + (by >> 6) * fi.sb256w)) as usize;
-        for p in 0..3 {
-            if !fi.ccso_enabled[p] {
-                continue;
-            }
-            let val = if fi.ccso_sb_reuse[p] {
-                match recon.prev_ccsomap[p] {
-                    Some(prev) => prev[ccso_idx + p],
-                    None => 0,
+    if has_luma {
+        let unit_mi = 1 << (fi.ccso_unit_log2 - 2);
+        if (bx | by) & (unit_mi - 1) == 0 {
+            let slot_x = ((bx & 63) >> 4) as usize;
+            let slot_y = ((by & 63) >> 4) as usize;
+            let span = (unit_mi >> 4) as usize;
+            let ccso_idx = (3 * ((bx / unit_mi) + (by / unit_mi) * fi.ccso_unit_w)) as usize;
+            for p in 0..3 {
+                if !fi.ccso_enabled[p] {
+                    continue;
                 }
-            } else {
-                // ccso is read at the SB's top-left block, which is always at the
-                // SB top boundary; fetch_spatial_neighbors excludes the above
-                // neighbours there, so the ctx uses the left SB only.
-                let left = if bx - unit_mi >= fi.tile_col_start {
-                    Some(if sub_x > 0 {
-                        recon.lf_mask[recon.lf_idx].ccso_sb[(sub - 1) * 3 + p]
-                    } else {
-                        recon.lf_mask[recon.lf_idx - 1].ccso_sb[(sub + upr - 1) * 3 + p]
-                    })
+                let val = if fi.ccso_sb_reuse[p] {
+                    recon.prev_ccsomap[p]
+                        .and_then(|prev| prev.get(ccso_idx + p))
+                        .copied()
+                        .unwrap_or(0)
                 } else {
-                    None
+                    // AVM/spec CCSO context uses only the immediately-left CCSO
+                    // unit in the same tile row. The unit is CcsoLumaSizeLog2,
+                    // not necessarily the coding superblock size.
+                    let left = if bx - unit_mi >= fi.tile_col_start {
+                        let left_bx = bx - unit_mi;
+                        let left_slot_x = ((left_bx & 63) >> 4) as usize;
+                        let left_slot_y = slot_y;
+                        let left_slot = left_slot_y * 4 + left_slot_x;
+                        let left_lf_idx = if (bx & 63) >= unit_mi {
+                            recon.lf_idx
+                        } else {
+                            recon.lf_idx - 1
+                        };
+                        Some(recon.lf_mask[left_lf_idx].ccso_sb[left_slot * 3 + p])
+                    } else {
+                        None
+                    };
+                    let ctx = match left {
+                        Some(l) => (l != 0) as usize * 2,
+                        None => 0,
+                    };
+                    msac.decode_bool_adapt(cdf_m.ccso(p, ctx)) as u8
                 };
-                let ctx = match left {
-                    Some(l) => (l != 0) as usize * 2,
-                    None => 0,
-                };
-                msac.decode_bool_adapt(cdf_m.ccso(p, ctx)) as u8
-            };
-            recon.lf_mask[recon.lf_idx].ccso[p] = val;
-            recon.lf_mask[recon.lf_idx].ccso_sb[sub * 3 + p] = val;
-            if !recon.cur_ccsomap.is_empty() {
-                recon.cur_ccsomap[ccso_idx + p] = val;
+
+                recon.lf_mask[recon.lf_idx].ccso[p] = val;
+                for dy in 0..span {
+                    for dx in 0..span {
+                        let s = (slot_y + dy) * 4 + slot_x + dx;
+                        recon.lf_mask[recon.lf_idx].ccso_sb[s * 3 + p] = val;
+                    }
+                }
+                if !recon.cur_ccsomap.is_empty() {
+                    if let Some(dst) = recon.cur_ccsomap.get_mut(ccso_idx + p) {
+                        *dst = val;
+                    }
+                }
             }
         }
     }
@@ -2573,7 +2587,7 @@ where
         }
 
         b.intra_data_mut().morph_pred = 0;
-        if !fi.is_inter_or_switch && fi.bawp && fi.allow_screen_content_tools {
+        if !fi.is_inter_or_switch && fi.intra_bawp && fi.allow_screen_content_tools {
             let nb_mp_0 = if nb_boff[0] != -1 { nb_morph[0] } else { 0 };
             let nb_mp_1 = if nb_boff[1] != -1 { nb_morph[1] } else { 0 };
             let ctx = nb_mp_0 as usize + nb_mp_1 as usize;

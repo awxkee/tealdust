@@ -59,11 +59,6 @@ pub(crate) fn iclip64to32(v: i64, min: i32, max: i32) -> i32 {
 }
 
 #[inline(always)]
-pub(crate) fn iclip_u8(v: i32) -> i32 {
-    iclip(v, 0, 255)
-}
-
-#[inline(always)]
 pub(crate) fn apply_sign(v: i32, s: i32) -> i32 {
     if s < 0 { -v } else { v }
 }

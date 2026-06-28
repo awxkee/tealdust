@@ -344,6 +344,11 @@ pub struct SbFrameInfo {
     pub cdef_n_strengths: u8,
     pub ccso_enabled: [bool; 3],
     pub ccso_sb_reuse: [bool; 3],
+    /// Base-2 CCSO unit size in luma pixels. Mirrors AVM's
+    /// get_ccso_unit_size_log2_adaptive_tile() / spec CcsoLumaSizeLog2.
+    pub ccso_unit_log2: i32,
+    /// Number of CCSO units per frame row, used for current/previous ccsomap indexing.
+    pub ccso_unit_w: i32,
     pub sb256w: i32,
     // Frame flags
     pub skip_mode_enabled: bool,
@@ -361,6 +366,7 @@ pub struct SbFrameInfo {
     pub max_bvp_drl_bits: u8,
     pub max_drl_bits: u8,
     pub bawp: bool,
+    pub intra_bawp: bool,
     pub txfm_switchable: bool,
     pub skip_mode_refs: RefPair,
     pub n_ref_frames: u8,
@@ -417,6 +423,48 @@ pub struct SbFrameInfoArgs<'a> {
     pub tip: RefPair,
 }
 
+pub(crate) fn ccso_unit_log2_from_headers(
+    seq_hdr: &crate::headers::SequenceHeader,
+    frame_hdr: &FrameHeader,
+) -> i32 {
+    const CCSO_LUMA_SIZE_LOG2: i32 = 8;
+    let sb_size_log2 = 6 + frame_hdr.sb128 as i32;
+
+    if seq_hdr.ccso_unit_matches_sbsz {
+        return sb_size_log2;
+    }
+
+    let tiles = &frame_hdr.tiling.t;
+    if tiles.cols == 1 && tiles.rows == 1 {
+        return CCSO_LUMA_SIZE_LOG2;
+    }
+
+    if sb_size_log2 >= CCSO_LUMA_SIZE_LOG2 {
+        return sb_size_log2;
+    }
+
+    let mut e2 = 0i32;
+    let mut e4 = 0i32;
+    for i in 0..tiles.cols.saturating_sub(1) as usize {
+        let size = tiles.col_start_sb[i + 1] as i32 - tiles.col_start_sb[i] as i32;
+        e2 += size & 1;
+        e4 += size & 3;
+    }
+    for i in 0..tiles.rows.saturating_sub(1) as usize {
+        let size = tiles.row_start_sb[i + 1] as i32 - tiles.row_start_sb[i] as i32;
+        e2 += size & 1;
+        e4 += size & 3;
+    }
+
+    if e4 == 0 {
+        imin(sb_size_log2 + 2, CCSO_LUMA_SIZE_LOG2)
+    } else if e2 == 0 {
+        imin(sb_size_log2 + 1, CCSO_LUMA_SIZE_LOG2)
+    } else {
+        sb_size_log2
+    }
+}
+
 impl SbFrameInfo {
     /// Build the per-superblock frame info bundle from the live sequence and
     /// frame headers plus the frame-level geometry and reference state.
@@ -448,6 +496,10 @@ impl SbFrameInfo {
         refdist8[..7].copy_from_slice(refdist);
         let mut absrefdist8 = [0u8; 8];
         absrefdist8[..7].copy_from_slice(absrefdist);
+
+        let ccso_unit_log2 = ccso_unit_log2_from_headers(seq_hdr, frame_hdr);
+        let ccso_unit_mi = 1 << (ccso_unit_log2 - 2);
+        let ccso_unit_w = (bw + ccso_unit_mi - 1) / ccso_unit_mi;
 
         SbFrameInfo {
             bw,
@@ -499,6 +551,8 @@ impl SbFrameInfo {
                 frame_hdr.ccso.p[1].sb_reuse != 0,
                 frame_hdr.ccso.p[2].sb_reuse != 0,
             ],
+            ccso_unit_log2,
+            ccso_unit_w,
             sb256w: (bw + 63) >> 6,
             skip_mode_enabled: frame_hdr.skip_mode_enabled != 0,
             allow_intrabc: frame_hdr.allow_intrabc != 0,
@@ -514,6 +568,7 @@ impl SbFrameInfo {
             max_bvp_drl_bits: frame_hdr.max_bvp_drl_bits,
             max_drl_bits: frame_hdr.max_drl_bits,
             bawp: frame_hdr.bawp != 0,
+            intra_bawp: frame_hdr.intra_bawp,
             txfm_switchable: frame_hdr.txfm_mode == crate::headers::TxfmMode::Switchable,
             skip_mode_refs,
             n_ref_frames: frame_hdr.n_ref_frames,
@@ -2023,6 +2078,28 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
         }
         cur_segmap.fill(0);
     }
+    let any_ccso_plane = frame_hdr.ccso.p.iter().any(|p| p.enabled != 0);
+    if frame_hdr.ccso.enabled != 0 && any_ccso_plane {
+        let ccso_unit_log2 = ccso_unit_log2_from_headers(seq_hdr, frame_hdr);
+        let ccso_unit_mi = 1usize << (ccso_unit_log2 - 2);
+        let ccso_unit_w = ((bw as usize) + ccso_unit_mi - 1) / ccso_unit_mi;
+        let ccso_unit_h = ((bh as usize) + ccso_unit_mi - 1) / ccso_unit_mi;
+        let needed = 3usize
+            .saturating_mul(ccso_unit_w)
+            .saturating_mul(ccso_unit_h);
+        if cur_ccsomap.len() != needed {
+            if needed > cur_ccsomap.len() {
+                cur_ccsomap
+                    .try_reserve_exact(needed - cur_ccsomap.len())
+                    .map_err(|_| ())?;
+            }
+            cur_ccsomap.resize(needed, 0);
+        }
+        cur_ccsomap.fill(0);
+    } else {
+        cur_ccsomap.clear();
+    }
+
     let prev_segmap_ref: Option<&[u8]> = prev_segmap.as_deref();
     let prev_ccsomap_ref: [Option<&[u8]>; 3] = [
         prev_ccsomap[0].as_deref(),
@@ -3545,6 +3622,20 @@ fn submit_frame_inner(
         let bh = ((frame_hdr.height + 7) >> 3) << 1;
         if ref_w == bw && ref_h == bh {
             fc.prev_segmap = c.refs[frame_hdr.refidx[pri] as usize].segmap.clone();
+        }
+    }
+
+    fc.prev_ccsomap = [None, None, None];
+    if frame_hdr.ccso.enabled != 0 && is_inter_or_switch {
+        for p in 0..3 {
+            let cp = &frame_hdr.ccso.p[p];
+            if cp.enabled != 0 && cp.sb_reuse != 0 {
+                let refidx = frame_hdr.refidx[cp.refidx as usize];
+                if refidx < 0 {
+                    return Err(());
+                }
+                fc.prev_ccsomap[p] = c.refs[refidx as usize].ccsomap.clone();
+            }
         }
     }
 

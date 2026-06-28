@@ -556,7 +556,7 @@ pub struct AvifImageInfo {
     pub premultiplied_alpha: bool,
     /// Display orientation from `irot` / `imir` properties; `None` = identity.
     pub orientation: Option<Orientation>,
-    /// Visible crop rectangle from the `clap` property; `None` = full frame.
+    /// Visible crop rectangle from the `clap` property
     pub clean_aperture: Option<CleanAperture>,
     /// ICC profile, if the `colr` box carried `rICC` or `prof` data.
     pub icc_profile: Option<Vec<u8>>,

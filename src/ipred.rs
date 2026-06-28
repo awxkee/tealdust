@@ -2305,20 +2305,27 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
 
         let v_dn = if ss_ver == 1 { ystr } else { 0 };
         let fwd_c = if subs { 1 } else { 0 };
-        let up = if ss_ver == 1 && gauss { ystr } else { 0 };
         let back_l = if subs && (gauss || vstrip) { 1 } else { 0 };
 
         let mut y_lo = i64::MAX;
         let mut y_hi = i64::MIN;
         if xlim > 0 && ylim > 0 {
-            // apply-loop downsample, base ysrc_off (left column clamped >= 0)
-            y_lo = y_lo.min(ysrc_off as i64 - up);
+            // apply-loop downsample, base ysrc_off (left column clamped >= 0).
+            // The gaussian vertical tap reads the row above only for local rows
+            // cy&31 != 0; the block's first row (cy=0) clamps `top` to the current
+            // row, and every interior row's above-read is yrow-ystride >= ysrc_off.
+            // So the apply loop never reads below ysrc_off — do not extend the low
+            // bound by `up` (that falsely rejected top-edge gaussian CfL blocks).
+            y_lo = y_lo.min(ysrc_off as i64);
             y_hi = y_hi.max(ysrc_off as i64 + (ylim_i - 1) * yv + (xlim_i - 1) * xh + fwd_c + v_dn);
         }
         if has_l && ylim > 0 {
-            // left-edge downsample, base ysrc_off - (1 + ss_hor)
+            // left-edge downsample, base ysrc_off - (1 + ss_hor). The gaussian
+            // above-tap is clamped to the current row on the first row (y==0), so
+            // the column never reads below `base`; only `back_l` (horizontal reach)
+            // extends the low bound, not `up`.
             let base = ysrc_off as i64 - (1 + ss_hor as i64);
-            y_lo = y_lo.min(base - back_l - up);
+            y_lo = y_lo.min(base - back_l);
             y_hi = y_hi.max(base + (ylim_i - 1) * yv + fwd_c + v_dn);
         }
         if has_t && xlim > 0 {

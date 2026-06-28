@@ -33,25 +33,65 @@ use crate::internal::Pass;
 use crate::intops::{iclip, imax, imin};
 use crate::levels::{BlockPartition, BlockSize};
 use crate::msac::MsacReader;
+use crate::tables::{BLOCK_DIMENSIONS, SS_BS};
 
-/// Whether a chroma sub-block of `cw4`×`ch4` (4px units, already subsampled) is a
-/// valid plane block size, mirroring AVM `get_plane_block_size`/`ss_size_lookup`.
-/// A chroma block must be ≥4px in both dims and correspond to a real BLOCK_SIZE:
-/// aspect ≤ 8:1, and the longer side is capped per aspect class — 1:1/1:2 up to
-/// 256px (64 in 4px units), but 1:4 and 1:8 cap at 64px (16 in 4px units, i.e.
-/// 16×64 / 8×64 are the largest). So e.g. 32×128 chroma (from 64×128 luma in I422)
-/// is INVALID even though its 1:4 aspect alone would pass.
-fn chroma_sub_valid(cw4: i32, ch4: i32) -> bool {
-    if cw4 < 1 || ch4 < 1 {
-        return false;
+#[inline(always)]
+fn chroma_layout_idx(ss_hor: i32, ss_ver: i32) -> Option<usize> {
+    match (ss_hor, ss_ver) {
+        // SS_BS is ordered as 4:2:0, 4:2:2, 4:4:4.
+        (1, 1) => Some(0),
+        (1, 0) => Some(1),
+        (0, 0) => Some(2),
+        _ => None,
     }
-    let mn = imin(cw4, ch4);
-    let mx = imax(cw4, ch4);
-    let aspect = mx / mn;
-    if aspect > 8 {
-        return false;
+}
+
+#[inline(always)]
+fn plane_bsize_for_layout(bs: BlockSize, ss_hor: i32, ss_ver: i32) -> Option<BlockSize> {
+    if bs == BlockSize::Invalid {
+        return None;
     }
-    if aspect >= 4 { mx <= 16 } else { mx <= 64 }
+    let idx = chroma_layout_idx(ss_hor, ss_ver)?;
+    let raw = SS_BS[bs as usize][idx];
+    if raw == 255 {
+        None
+    } else {
+        Some(BlockSize::from_raw(raw as i8))
+    }
+}
+
+#[inline(always)]
+fn plane_dims4_for_layout(bs: BlockSize, ss_hor: i32, ss_ver: i32) -> Option<[i32; 2]> {
+    let pbs = plane_bsize_for_layout(bs, ss_hor, ss_ver)?;
+    let d = &BLOCK_DIMENSIONS[pbs as usize];
+    Some([d[0] as i32, d[1] as i32])
+}
+
+#[inline(always)]
+fn bsize_from_dims4(w4: i32, h4: i32) -> Option<BlockSize> {
+    if w4 <= 0 || h4 <= 0 {
+        return None;
+    }
+    let w4 = w4 as u8;
+    let h4 = h4 as u8;
+    for (i, d) in BLOCK_DIMENSIONS.iter().enumerate() {
+        if d[0] == w4 && d[1] == h4 {
+            return Some(BlockSize::from_raw(i as i8));
+        }
+    }
+    None
+}
+
+/// Whether a luma-space sub-block of `w4`×`h4` (4px units) has a valid chroma
+/// plane block for the current subsampling, mirroring AVM `get_plane_block_size()`
+/// / `ss_size_lookup`. Do not validate by shifting dimensions manually: AVM
+/// deliberately maps tiny valid bases such as 4x4 in 4:2:0 to a minimum 4x4
+/// plane block, while still marking shapes such as 4x8 in 4:2:2 invalid.
+#[inline(always)]
+fn chroma_sub_valid(w4: i32, h4: i32, ss_hor: i32, ss_ver: i32) -> bool {
+    bsize_from_dims4(w4, h4)
+        .and_then(|bs| plane_bsize_for_layout(bs, ss_hor, ss_ver))
+        .is_some()
 }
 
 pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
@@ -90,12 +130,14 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
     if pass & (Pass::Entropy as u8) != 0 {
         let bx4 = (*bx & 63) as usize;
         let by4 = (*by & 63) as usize;
-        let eff_ss_ver = fi.ss_ver & (lbs == BlockSize::Invalid) as i32;
-        let eff_ss_hor = fi.ss_hor & (lbs == BlockSize::Invalid) as i32;
-        let bwh4ss = [bw4 >> eff_ss_hor, bh4 >> eff_ss_ver];
-        if bwh4ss[0] < 1 || bwh4ss[1] < 1 {
-            return Err(());
-        }
+        let bwh4ss = if lbs == BlockSize::Invalid {
+            match plane_dims4_for_layout(bs, fi.ss_hor, fi.ss_ver) {
+                Some(d) => d,
+                None => return Err(()),
+            }
+        } else {
+            [bw4, bh4]
+        };
         let mut dir = -1i32;
 
         if imax(bwh4ss[0], bwh4ss[1]) == 1
@@ -118,9 +160,9 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                     true
                 } else if implied_dir != 0 {
                     // SHARED block: chroma uses frame subsampling
-                    chroma_sub_valid((bw4 >> 1) >> fi.ss_hor, bh4 >> fi.ss_ver)
+                    chroma_sub_valid(bw4 >> 1, bh4, fi.ss_hor, fi.ss_ver)
                 } else {
-                    chroma_sub_valid(bw4 >> fi.ss_hor, (bh4 >> 1) >> fi.ss_ver)
+                    chroma_sub_valid(bw4, bh4 >> 1, fi.ss_hor, fi.ss_ver)
                 };
                 if dir_chroma_ok {
                     dir = implied_dir;
@@ -243,14 +285,11 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                                     // so AVM forces the orthogonal rect without
                                     // reading part_dir. Uses frame subsampling.
                                     if bs == BlockSize::Bs128x128 || bs == BlockSize::Bs256x256 {
-                                        return chroma_sub_valid(
-                                            sw4 >> fi.ss_hor,
-                                            sh4 >> fi.ss_ver,
-                                        );
+                                        return chroma_sub_valid(sw4, sh4, fi.ss_hor, fi.ss_ver);
                                     }
                                     return true;
                                 }
-                                chroma_sub_valid(sw4 >> eff_ss_hor, sh4 >> eff_ss_ver)
+                                chroma_sub_valid(sw4, sh4, fi.ss_hor, fi.ss_ver)
                             };
                             let v_ok = v_aspect && chroma_ok(bw4 >> 1, bh4);
                             let h_ok = h_aspect && chroma_ok(bw4, bh4 >> 1);
@@ -272,7 +311,8 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                         };
 
                         if imax(bw4, bh4) <= 16 {
-                            let bwh4ss2 = [bw4 >> fi.ss_hor, bh4 >> fi.ss_ver];
+                            let bwh4ss2 =
+                                plane_dims4_for_layout(bs, fi.ss_hor, fi.ss_ver).unwrap_or([0, 0]);
                             let ndir = (!dir) as usize & 1;
                             let ddir = dir as usize;
                             let has_hv3 = fi.ext_partitions

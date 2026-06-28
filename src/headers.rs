@@ -669,7 +669,7 @@ pub struct FhSegmentation {
     pub preskip: u8,
     pub last_active_segid: i8,
     pub lossless: [u8; MAX_SEGMENTS],
-    pub qidx: [u8; MAX_SEGMENTS],
+    pub qidx: [u16; MAX_SEGMENTS],
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -846,6 +846,11 @@ pub struct FrameHeader {
     pub switchable_comp_refs: u8,
     pub skip_mode_enabled: u8,
     pub bawp: u8,
+    /// Sequence-level enable for intra BAWP / IntraBC morph-pred. AVM sets
+    /// features.enable_intra_bawp = seq.enable_bawp directly (independent of the
+    /// frame-level, inter-only `bawp` flag), so keyframes still gate morph_pred
+    /// on the sequence flag.
+    pub intra_bawp: bool,
     pub warp_motion: u8,
     pub reduced_txtp_set: u8,
     pub gmv: FhGmv,

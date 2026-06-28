@@ -34,7 +34,7 @@ use crate::error::TealdustError;
 use crate::getbits::GetBits;
 use crate::headers::*;
 use crate::internal::{DecoderContext, RefState, TileGroup};
-use crate::intops::{iclip, iclip_u8, imax, imin, ulog2};
+use crate::intops::{iclip, imax, imin, ulog2};
 use crate::warpmv::resolve_divisor_32;
 
 type Result<T> = std::result::Result<T, TealdustError>;
@@ -1313,11 +1313,16 @@ pub fn parse_frame_hdr(
             && hdr.quant.vac_delta == 0;
         hdr.all_lossless = 1;
         hdr.any_lossless = 0;
+        let qmax = 255 + 48 * seqhdr.hbd as i32;
         for i in 0..MAX_SEGMENTS {
             hdr.segmentation.qidx[i] = if hdr.segmentation.enabled != 0 {
-                iclip_u8(hdr.quant.yac as i32 + hdr.segmentation.d.delta_q[i] as i32) as u8
+                iclip(
+                    hdr.quant.yac as i32 + hdr.segmentation.d.delta_q[i] as i32,
+                    0,
+                    qmax,
+                ) as u16
             } else {
-                hdr.quant.yac as u8
+                hdr.quant.yac.min(qmax as u16)
             };
             hdr.segmentation.lossless[i] = (hdr.segmentation.qidx[i] == 0 && delta_lossless) as u8;
             hdr.all_lossless &= hdr.segmentation.lossless[i];
@@ -1792,6 +1797,9 @@ pub fn parse_frame_hdr(
             };
         }
 
+        // AVM: features.enable_intra_bawp = seq.enable_bawp (sequence-level),
+        // set unconditionally and independent of the inter-only frame `bawp` bit.
+        hdr.intra_bawp = seqhdr.bawp;
         if hdr.is_inter_or_switch() {
             hdr.switchable_comp_refs = gb.get_bit() as u8;
             hdr.skip_mode_enabled = gb.get_bit() as u8;
