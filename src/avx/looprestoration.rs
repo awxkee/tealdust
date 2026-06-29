@@ -34,6 +34,10 @@ use std::arch::x86_64::*;
 
 use crate::filter::{UvLumaTap, WienerTap};
 
+// Precision note: AVM/dav2d LR FIRs accumulate in signed int and only round at
+// the final `+64 >> 7` stage.  Keep the SIMD products and sums in i32 here;
+// using 16-bit accumulators would overflow for HBD/PC-Wiener ranges.
+
 #[inline]
 #[target_feature(enable = "avx2")]
 fn load8_u8_i32(p: &[u8]) -> __m256i {

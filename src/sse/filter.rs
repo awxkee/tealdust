@@ -143,35 +143,31 @@ fn load_u8x4_i16(a: &[u8; 4]) -> __m128i {
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn madd_i16x8_const(a: __m128i, b: __m128i, coeff: __m128i) -> (__m128i, __m128i) {
-    unsafe {
-        (
-            _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff),
-            _mm_madd_epi16(_mm_unpackhi_epi16(a, b), coeff),
-        )
-    }
+    (
+        _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff),
+        _mm_madd_epi16(_mm_unpackhi_epi16(a, b), coeff),
+    )
 }
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn madd_i16x4_const(a: __m128i, b: __m128i, coeff: __m128i) -> __m128i {
-    unsafe { _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff) }
+    _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff)
 }
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn madd_i16x8(a: __m128i, b: __m128i, w1: __m128i, w2: __m128i) -> (__m128i, __m128i) {
-    unsafe {
-        (
-            _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2)),
-            _mm_madd_epi16(_mm_unpackhi_epi16(a, b), _mm_unpackhi_epi16(w1, w2)),
-        )
-    }
+    (
+        _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2)),
+        _mm_madd_epi16(_mm_unpackhi_epi16(a, b), _mm_unpackhi_epi16(w1, w2)),
+    )
 }
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn madd_i16x4(a: __m128i, b: __m128i, w1: __m128i, w2: __m128i) -> __m128i {
-    unsafe { _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2)) }
+    _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2))
 }
 
 #[inline(always)]

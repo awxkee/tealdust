@@ -34,6 +34,62 @@ pub(crate) fn compound_tmp_len(w: usize, h: usize) -> usize {
     (w * h).next_multiple_of(16)
 }
 
+#[inline]
+pub(crate) fn inter_bilin_8bpc_tmp_len(w: usize, h: usize, mx: i32, my: i32) -> usize {
+    if mx != 0 && my != 0 {
+        w.next_multiple_of(16).max(64) * (h + 1)
+    } else {
+        0
+    }
+}
+
+#[inline]
+pub(crate) fn inter_8tap_8bpc_tmp_len(
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+) -> usize {
+    if crate::mc::get_h_filter(mx, filter_type, w).is_some()
+        && crate::mc::get_v_filter(my, filter_type, h).is_some()
+    {
+        w.next_multiple_of(8).max(64) * (h + 7)
+    } else {
+        0
+    }
+}
+
+#[inline]
+pub(crate) fn inter_bilin_hbd_tmp_len(h: usize, mx: i32, my: i32) -> usize {
+    if mx != 0 && my != 0 { 64 * (h + 1) } else { 0 }
+}
+
+#[inline]
+pub(crate) fn inter_8tap_hbd_tmp_len(
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+) -> usize {
+    if crate::mc::get_h_filter(mx, filter_type, w).is_some()
+        && crate::mc::get_v_filter(my, filter_type, h).is_some()
+    {
+        64 * (h + 7)
+    } else {
+        0
+    }
+}
+
+#[inline]
+fn inter_tmp(scratch: &mut Vec<i16>, len: usize) -> &mut [i16] {
+    if scratch.len() < len {
+        scratch.resize(len, 0);
+    }
+    &mut scratch[..len]
+}
+
 pub(crate) type PrepHbdFn = unsafe fn(&mut [i16], usize, &[u16], usize, usize, usize, u8);
 
 pub(crate) fn prep_hbd_scalar(
@@ -97,7 +153,7 @@ pub(crate) fn prep_hbd(
 }
 
 pub(crate) type PutBilinHbdFn =
-    unsafe fn(&mut [u16], usize, &[u16], usize, usize, usize, i32, i32, u8);
+    unsafe fn(&mut [u16], usize, &[u16], usize, usize, usize, i32, i32, u8, &mut [i16]);
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn put_bilin_hbd_scalar(
@@ -110,6 +166,7 @@ pub(crate) fn put_bilin_hbd_scalar(
     mx: i32,
     my: i32,
     bitdepth: u8,
+    _mid_scratch: &mut [i16],
 ) {
     crate::mc::put_bilin_scalar(
         <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
@@ -152,6 +209,28 @@ fn resolve_put_bilin_hbd() -> PutBilinHbdFn {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
+pub(crate) fn put_bilin_hbd_with_scratch(
+    dst: &mut [u16],
+    dst_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    bitdepth: u8,
+    scratch: &mut Vec<i16>,
+) {
+    let mid = inter_tmp(scratch, inter_bilin_hbd_tmp_len(h, mx, my));
+    unsafe {
+        resolve_put_bilin_hbd()(
+            dst, dst_stride, src, src_stride, w, h, mx, my, bitdepth, mid,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
 pub(crate) fn put_bilin_hbd(
     dst: &mut [u16],
     dst_stride: usize,
@@ -163,11 +242,23 @@ pub(crate) fn put_bilin_hbd(
     my: i32,
     bitdepth: u8,
 ) {
-    unsafe { resolve_put_bilin_hbd()(dst, dst_stride, src, src_stride, w, h, mx, my, bitdepth) }
+    let mut scratch = Vec::new();
+    put_bilin_hbd_with_scratch(
+        dst,
+        dst_stride,
+        src,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+        bitdepth,
+        &mut scratch,
+    );
 }
 
 pub(crate) type PrepBilinHbdFn =
-    unsafe fn(&mut [i16], usize, &[u16], usize, usize, usize, i32, i32, u8);
+    unsafe fn(&mut [i16], usize, &[u16], usize, usize, usize, i32, i32, u8, &mut [i16]);
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prep_bilin_hbd_scalar(
@@ -180,6 +271,7 @@ pub(crate) fn prep_bilin_hbd_scalar(
     mx: i32,
     my: i32,
     bitdepth: u8,
+    _mid_scratch: &mut [i16],
 ) {
     crate::mc::prep_bilin_scalar(
         <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
@@ -222,6 +314,28 @@ fn resolve_prep_bilin_hbd() -> PrepBilinHbdFn {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
+pub(crate) fn prep_bilin_hbd_with_scratch(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    bitdepth: u8,
+    scratch: &mut Vec<i16>,
+) {
+    let mid = inter_tmp(scratch, inter_bilin_hbd_tmp_len(h, mx, my));
+    unsafe {
+        resolve_prep_bilin_hbd()(
+            tmp, tmp_stride, src, src_stride, w, h, mx, my, bitdepth, mid,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
 pub(crate) fn prep_bilin_hbd(
     tmp: &mut [i16],
     tmp_stride: usize,
@@ -233,11 +347,23 @@ pub(crate) fn prep_bilin_hbd(
     my: i32,
     bitdepth: u8,
 ) {
-    unsafe { resolve_prep_bilin_hbd()(tmp, tmp_stride, src, src_stride, w, h, mx, my, bitdepth) }
+    let mut scratch = Vec::new();
+    prep_bilin_hbd_with_scratch(
+        tmp,
+        tmp_stride,
+        src,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+        bitdepth,
+        &mut scratch,
+    );
 }
 
 pub(crate) type Put8tapHbdFn =
-    unsafe fn(&mut [u16], usize, &[u16], usize, usize, usize, usize, i32, i32, i32, u8);
+    unsafe fn(&mut [u16], usize, &[u16], usize, usize, usize, usize, i32, i32, i32, u8, &mut [i16]);
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn put_8tap_hbd_scalar(
@@ -252,6 +378,7 @@ pub(crate) fn put_8tap_hbd_scalar(
     my: i32,
     filter_type: i32,
     bitdepth: u8,
+    _mid_scratch: &mut [i16],
 ) {
     crate::mc::put_8tap_scalar(
         <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
@@ -296,7 +423,7 @@ fn resolve_put_8tap_hbd() -> Put8tapHbdFn {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn put_8tap_hbd(
+pub(crate) fn put_8tap_hbd_with_scratch(
     dst: &mut [u16],
     dst_stride: usize,
     src: &[u16],
@@ -308,7 +435,9 @@ pub(crate) fn put_8tap_hbd(
     my: i32,
     filter_type: i32,
     bitdepth: u8,
+    scratch: &mut Vec<i16>,
 ) {
+    let mid = inter_tmp(scratch, inter_8tap_hbd_tmp_len(w, h, mx, my, filter_type));
     unsafe {
         resolve_put_8tap_hbd()(
             dst,
@@ -322,12 +451,45 @@ pub(crate) fn put_8tap_hbd(
             my,
             filter_type,
             bitdepth,
+            mid,
         )
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn put_8tap_hbd(
+    dst: &mut [u16],
+    dst_stride: usize,
+    src: &[u16],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+    bitdepth: u8,
+) {
+    let mut scratch = Vec::new();
+    put_8tap_hbd_with_scratch(
+        dst,
+        dst_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+        filter_type,
+        bitdepth,
+        &mut scratch,
+    );
+}
+
 pub(crate) type Prep8tapHbdFn =
-    unsafe fn(&mut [i16], usize, &[u16], usize, usize, usize, usize, i32, i32, i32, u8);
+    unsafe fn(&mut [i16], usize, &[u16], usize, usize, usize, usize, i32, i32, i32, u8, &mut [i16]);
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn prep_8tap_hbd_scalar(
@@ -342,6 +504,7 @@ pub(crate) fn prep_8tap_hbd_scalar(
     my: i32,
     filter_type: i32,
     bitdepth: u8,
+    _mid_scratch: &mut [i16],
 ) {
     crate::mc::prep_8tap_scalar(
         <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
@@ -386,7 +549,7 @@ fn resolve_prep_8tap_hbd() -> Prep8tapHbdFn {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn prep_8tap_hbd(
+pub(crate) fn prep_8tap_hbd_with_scratch(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u16],
@@ -398,7 +561,9 @@ pub(crate) fn prep_8tap_hbd(
     my: i32,
     filter_type: i32,
     bitdepth: u8,
+    scratch: &mut Vec<i16>,
 ) {
+    let mid = inter_tmp(scratch, inter_8tap_hbd_tmp_len(w, h, mx, my, filter_type));
     unsafe {
         resolve_prep_8tap_hbd()(
             tmp,
@@ -412,13 +577,47 @@ pub(crate) fn prep_8tap_hbd(
             my,
             filter_type,
             bitdepth,
+            mid,
         )
     }
 }
 
-pub(crate) type PutBilin8bpcFn = unsafe fn(&mut [u8], usize, &[u8], usize, usize, usize, i32, i32);
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn prep_8tap_hbd(
+    tmp: &mut [i16],
+    tmp_stride: usize,
+    src: &[u16],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    filter_type: i32,
+    bitdepth: u8,
+) {
+    let mut scratch = Vec::new();
+    prep_8tap_hbd_with_scratch(
+        tmp,
+        tmp_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+        filter_type,
+        bitdepth,
+        &mut scratch,
+    );
+}
+
+pub(crate) type PutBilin8bpcFn =
+    unsafe fn(&mut [u8], usize, &[u8], usize, usize, usize, i32, i32, &mut [i16]);
 pub(crate) type PrepBilin8bpcFn =
-    unsafe fn(&mut [i16], usize, &[u8], usize, usize, usize, i32, i32);
+    unsafe fn(&mut [i16], usize, &[u8], usize, usize, usize, i32, i32, &mut [i16]);
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn put_bilin_8bpc_scalar_dispatch(
@@ -430,6 +629,7 @@ pub(crate) fn put_bilin_8bpc_scalar_dispatch(
     h: usize,
     mx: i32,
     my: i32,
+    _mid_scratch: &mut [i16],
 ) {
     crate::mc::put_bilin_8bpc(dst, dst_stride, src, src_stride, w, h, mx, my);
 }
@@ -444,6 +644,7 @@ pub(crate) fn prep_bilin_8bpc_scalar_dispatch(
     h: usize,
     mx: i32,
     my: i32,
+    _mid_scratch: &mut [i16],
 ) {
     crate::mc::prep_bilin_8bpc(tmp, tmp_stride, src, src_stride, w, h, mx, my);
 }
@@ -500,9 +701,9 @@ fn resolve_prep_bilin_8bpc() -> PrepBilin8bpcFn {
 }
 
 pub(crate) type Put8tap8bpcFn =
-    unsafe fn(&mut [u8], usize, &[u8], usize, usize, usize, usize, i32, i32, i32);
+    unsafe fn(&mut [u8], usize, &[u8], usize, usize, usize, usize, i32, i32, i32, &mut [i16]);
 pub(crate) type Prep8tap8bpcFn =
-    unsafe fn(&mut [i16], usize, &[u8], usize, usize, usize, usize, i32, i32, i32);
+    unsafe fn(&mut [i16], usize, &[u8], usize, usize, usize, usize, i32, i32, i32, &mut [i16]);
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn put_8tap_8bpc_scalar_dispatch(
@@ -516,6 +717,7 @@ pub(crate) fn put_8tap_8bpc_scalar_dispatch(
     mx: i32,
     my: i32,
     filter_type: i32,
+    _mid_scratch: &mut [i16],
 ) {
     crate::mc::put_8tap_8bpc(
         dst,
@@ -543,6 +745,7 @@ pub(crate) fn prep_8tap_8bpc_scalar_dispatch(
     mx: i32,
     my: i32,
     filter_type: i32,
+    _mid_scratch: &mut [i16],
 ) {
     crate::mc::prep_8tap_8bpc(
         tmp,
@@ -611,7 +814,7 @@ fn resolve_prep_8tap_8bpc() -> Prep8tap8bpcFn {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn put_8tap_8bpc(
+pub(crate) fn put_8tap_8bpc_with_scratch(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -622,8 +825,9 @@ pub(crate) fn put_8tap_8bpc(
     mx: i32,
     my: i32,
     filter_type: i32,
+    scratch: &mut Vec<i16>,
 ) {
-    // SAFETY: resolver only installs SIMD kernels after runtime feature detection.
+    let mid = inter_tmp(scratch, inter_8tap_8bpc_tmp_len(w, h, mx, my, filter_type));
     unsafe {
         resolve_put_8tap_8bpc()(
             dst,
@@ -636,13 +840,14 @@ pub(crate) fn put_8tap_8bpc(
             mx,
             my,
             filter_type,
+            mid,
         )
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn prep_8tap_8bpc(
+pub(crate) fn prep_8tap_8bpc_with_scratch(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -653,8 +858,9 @@ pub(crate) fn prep_8tap_8bpc(
     mx: i32,
     my: i32,
     filter_type: i32,
+    scratch: &mut Vec<i16>,
 ) {
-    // SAFETY: resolver only installs SIMD kernels after runtime feature detection.
+    let mid = inter_tmp(scratch, inter_8tap_8bpc_tmp_len(w, h, mx, my, filter_type));
     unsafe {
         resolve_prep_8tap_8bpc()(
             tmp,
@@ -667,13 +873,14 @@ pub(crate) fn prep_8tap_8bpc(
             mx,
             my,
             filter_type,
+            mid,
         )
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn put_bilin_8bpc(
+pub(crate) fn put_bilin_8bpc_with_scratch(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -682,14 +889,15 @@ pub(crate) fn put_bilin_8bpc(
     h: usize,
     mx: i32,
     my: i32,
+    scratch: &mut Vec<i16>,
 ) {
-    // SAFETY: resolver only installs SIMD kernels after runtime feature detection.
-    unsafe { resolve_put_bilin_8bpc()(dst, dst_stride, src, src_stride, w, h, mx, my) }
+    let mid = inter_tmp(scratch, inter_bilin_8bpc_tmp_len(w, h, mx, my));
+    unsafe { resolve_put_bilin_8bpc()(dst, dst_stride, src, src_stride, w, h, mx, my, mid) }
 }
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn prep_bilin_8bpc(
+pub(crate) fn prep_bilin_8bpc_with_scratch(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -698,9 +906,10 @@ pub(crate) fn prep_bilin_8bpc(
     h: usize,
     mx: i32,
     my: i32,
+    scratch: &mut Vec<i16>,
 ) {
-    // SAFETY: resolver only installs SIMD kernels after runtime feature detection.
-    unsafe { resolve_prep_bilin_8bpc()(tmp, tmp_stride, src, src_stride, w, h, mx, my) }
+    let mid = inter_tmp(scratch, inter_bilin_8bpc_tmp_len(w, h, mx, my));
+    unsafe { resolve_prep_bilin_8bpc()(tmp, tmp_stride, src, src_stride, w, h, mx, my, mid) }
 }
 
 pub(crate) fn avg_8bpc(

@@ -1036,6 +1036,8 @@ pub(crate) fn read_restoration_info<const UPDATE_CDF: bool, M: MsacReader<UPDATE
             };
         }
     } else {
+        // AVM disables PC-Wiener for chroma, so non-switchable chroma LR can
+        // only signal NS-Wiener or None.
         debug_assert!(p == 0 || frame_type == RestorationType::NsWiener);
         let cdf = if frame_type == RestorationType::NsWiener {
             cdf_m.rst_ns_wiener()

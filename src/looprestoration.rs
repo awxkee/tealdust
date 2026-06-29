@@ -4071,3 +4071,83 @@ pub(crate) fn lr_sbrow_hbd(ctx: &LrContextHbd, dst: &mut [&mut [u16]; 3], sby: i
         );
     }
 }
+
+#[cfg(test)]
+mod avm_looprestoration_shape_tests {
+    use super::*;
+
+    #[test]
+    fn restoration_type_ids_match_avm_lr_syntax() {
+        assert_eq!(RestorationType::None as u8, 0);
+        assert_eq!(RestorationType::PcWiener as u8, 1);
+        assert_eq!(RestorationType::NsWiener as u8, 2);
+        assert_eq!(RestorationType::Switchable as u8, 3);
+        assert_eq!(
+            crate::headers::RestorationType::None as u8,
+            RestorationType::None as u8
+        );
+        assert_eq!(
+            crate::headers::RestorationType::PcWiener as u8,
+            RestorationType::PcWiener as u8,
+        );
+        assert_eq!(
+            crate::headers::RestorationType::NsWiener as u8,
+            RestorationType::NsWiener as u8,
+        );
+        assert_eq!(
+            crate::headers::RestorationType::Switchable as u8,
+            RestorationType::Switchable as u8,
+        );
+    }
+
+    #[test]
+    fn wiener_nonsep_and_pc_tap_shapes_match_avm_symmetric_form() {
+        // AVM stores both symmetric offsets plus an explicit center tap.  The
+        // Rust FIR builders store one representative of each symmetric pair;
+        // the center tap is implicit in the FIR formula (`m << 7` for NS) or
+        // passed separately as `center_coef` for PC.
+        assert_eq!(
+            WIENER_NS_CONFIG_Y,
+            [
+                [1, 0],
+                [0, 1],
+                [2, 0],
+                [0, 2],
+                [1, 1],
+                [-1, 1],
+                [2, 1],
+                [2, -1],
+                [1, 2],
+                [1, -2],
+                [3, 0],
+                [0, 3],
+                [4, 0],
+                [0, 4],
+                [3, 3],
+                [3, -3],
+            ]
+        );
+        assert_eq!(
+            WIENER_NS_CONFIG_UV,
+            [[1, 0], [0, 1], [1, 1], [-1, 1], [2, 0], [0, 2]]
+        );
+        assert_eq!(
+            WIENER_NS_CONFIG_UV_FROM_Y,
+            [
+                [1, 0],
+                [-1, 0],
+                [0, 1],
+                [0, -1],
+                [1, 1],
+                [-1, -1],
+                [-1, 1],
+                [1, -1],
+                [2, 0],
+                [-2, 0],
+                [0, 2],
+                [0, -2],
+            ]
+        );
+        assert_eq!(&PC_WIENER_CONFIG[..], &WIENER_NS_CONFIG_Y[..12]);
+    }
+}

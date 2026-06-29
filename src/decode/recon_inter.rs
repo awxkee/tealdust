@@ -636,6 +636,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: crate::pixel::BitDepth>(
     ss_ver: i32,
     cur_bw: i32,
     cur_bh: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
@@ -728,7 +729,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: crate::pixel::BitDepth>(
         let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_dispatch::put_bilin_8bpc(
+            crate::mc_dispatch::put_bilin_8bpc_with_scratch(
                 dst8,
                 dst_stride,
                 &src8[src_off..],
@@ -737,9 +738,10 @@ pub(crate) fn inter_mc_plane_8bpc<BD: crate::pixel::BitDepth>(
                 h,
                 mxf,
                 myf,
+                inter_scratch,
             );
         } else {
-            crate::mc_dispatch::put_8tap_8bpc(
+            crate::mc_dispatch::put_8tap_8bpc_with_scratch(
                 dst8,
                 dst_stride,
                 src8,
@@ -750,34 +752,42 @@ pub(crate) fn inter_mc_plane_8bpc<BD: crate::pixel::BitDepth>(
                 mxf,
                 myf,
                 filter as i32,
+                inter_scratch,
             );
         }
-    } else if is_bilin {
-        crate::mc::put_bilin(
-            bd,
-            dst,
-            dst_stride,
-            &src[src_off..],
-            src_stride,
-            w,
-            h,
-            mxf,
-            myf,
-        );
-    } else {
-        crate::mc::put_8tap(
-            bd,
-            dst,
-            dst_stride,
-            src,
-            src_off,
-            src_stride,
-            w,
-            h,
-            mxf,
-            myf,
-            filter as i32,
-        );
+    } else if let (Some(dst16), Some(src16)) = (
+        <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst),
+        <BD::Pixel as Pixel>::try_as_u16_slice(src),
+    ) {
+        if is_bilin {
+            crate::mc_dispatch::put_bilin_hbd_with_scratch(
+                dst16,
+                dst_stride,
+                &src16[src_off..],
+                src_stride,
+                w,
+                h,
+                mxf,
+                myf,
+                bd.bitdepth(),
+                inter_scratch,
+            );
+        } else {
+            crate::mc_dispatch::put_8tap_hbd_with_scratch(
+                dst16,
+                dst_stride,
+                src16,
+                src_off,
+                src_stride,
+                w,
+                h,
+                mxf,
+                myf,
+                filter as i32,
+                bd.bitdepth(),
+                inter_scratch,
+            );
+        }
     }
 }
 
@@ -801,6 +811,7 @@ fn inter_mc_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     ss_ver: i32,
     cur_bw: i32,
     cur_bh: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
@@ -889,7 +900,7 @@ fn inter_mc_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8; the prep kernels write i16 `tmp`.
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_dispatch::prep_bilin_8bpc(
+            crate::mc_dispatch::prep_bilin_8bpc_with_scratch(
                 tmp,
                 tmp_stride,
                 &src8[src_off..],
@@ -898,9 +909,10 @@ fn inter_mc_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                 h,
                 mxf,
                 myf,
+                inter_scratch,
             );
         } else {
-            crate::mc_dispatch::prep_8tap_8bpc(
+            crate::mc_dispatch::prep_8tap_8bpc_with_scratch(
                 tmp,
                 tmp_stride,
                 src8,
@@ -911,34 +923,39 @@ fn inter_mc_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                 mxf,
                 myf,
                 filter as i32,
+                inter_scratch,
             );
         }
-    } else if is_bilin {
-        crate::mc::prep_bilin(
-            bd,
-            tmp,
-            tmp_stride,
-            &src[src_off..],
-            src_stride,
-            w,
-            h,
-            mxf,
-            myf,
-        );
-    } else {
-        crate::mc::prep_8tap(
-            bd,
-            tmp,
-            tmp_stride,
-            src,
-            src_off,
-            src_stride,
-            w,
-            h,
-            mxf,
-            myf,
-            filter as i32,
-        );
+    } else if let Some(src16) = <BD::Pixel as Pixel>::try_as_u16_slice(src) {
+        if is_bilin {
+            crate::mc_dispatch::prep_bilin_hbd_with_scratch(
+                tmp,
+                tmp_stride,
+                &src16[src_off..],
+                src_stride,
+                w,
+                h,
+                mxf,
+                myf,
+                bd.bitdepth(),
+                inter_scratch,
+            );
+        } else {
+            crate::mc_dispatch::prep_8tap_hbd_with_scratch(
+                tmp,
+                tmp_stride,
+                src16,
+                src_off,
+                src_stride,
+                w,
+                h,
+                mxf,
+                myf,
+                filter as i32,
+                bd.bitdepth(),
+                inter_scratch,
+            );
+        }
     }
 }
 
@@ -1064,6 +1081,7 @@ pub(crate) fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
     ss_ver: i32,
     frame_bw: i32,
     frame_bh: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
@@ -1148,15 +1166,10 @@ pub(crate) fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
                         // SAFETY: BPC==8 => BD::Pixel == u8.
                         let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(&mut dst[dst_sub..]);
                         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                        crate::mc_dispatch::put_8tap_8bpc(
-                            dst8, dst_stride, src8, src_off, src_stride, 4, 4, mx, my, -1,
-                        );
-                    } else {
-                        crate::mc::put_8tap(
-                            bd,
-                            &mut dst[dst_sub..],
+                        crate::mc_dispatch::put_8tap_8bpc_with_scratch(
+                            dst8,
                             dst_stride,
-                            src,
+                            src8,
                             src_off,
                             src_stride,
                             4,
@@ -1164,6 +1177,25 @@ pub(crate) fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
                             mx,
                             my,
                             -1,
+                            inter_scratch,
+                        );
+                    } else if let (Some(dst16), Some(src16)) = (
+                        <BD::Pixel as Pixel>::try_as_u16_slice_mut(&mut dst[dst_sub..]),
+                        <BD::Pixel as Pixel>::try_as_u16_slice(src),
+                    ) {
+                        crate::mc_dispatch::put_8tap_hbd_with_scratch(
+                            dst16,
+                            dst_stride,
+                            src16,
+                            src_off,
+                            src_stride,
+                            4,
+                            4,
+                            mx,
+                            my,
+                            -1,
+                            bd.bitdepth(),
+                            inter_scratch,
                         );
                     }
                     xx += 4;
@@ -1195,6 +1227,7 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     ss_ver: i32,
     frame_bw: i32,
     frame_bh: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
@@ -1202,8 +1235,20 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     let v_mul = 4 >> plss_ver;
     if wmp.affine == 0 || imin(b_dim[0] as i32 * h_mul, b_dim[1] as i32 * v_mul) < 8 {
         ext_warp_plane_prep_8bpc::<BD>(
-            bd, tmp, tmp_stride, ref_pic, pl, bx, by, b_dim, wmp, ss_hor, ss_ver, frame_bw,
+            bd,
+            tmp,
+            tmp_stride,
+            ref_pic,
+            pl,
+            bx,
+            by,
+            b_dim,
+            wmp,
+            ss_hor,
+            ss_ver,
+            frame_bw,
             frame_bh,
+            inter_scratch,
         );
         return;
     }
@@ -1309,6 +1354,7 @@ fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     ss_ver: i32,
     frame_bw: i32,
     frame_bh: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
@@ -1392,7 +1438,7 @@ fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                     if BD::BPC == 8 {
                         // SAFETY: BPC==8 => BD::Pixel == u8.
                         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                        crate::mc_dispatch::prep_8tap_8bpc(
+                        crate::mc_dispatch::prep_8tap_8bpc_with_scratch(
                             &mut tmp[dst_sub..],
                             tmp_stride,
                             src8,
@@ -1403,13 +1449,13 @@ fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                             mx,
                             my,
                             -1,
+                            inter_scratch,
                         );
-                    } else {
-                        crate::mc::prep_8tap(
-                            bd,
+                    } else if let Some(src16) = <BD::Pixel as Pixel>::try_as_u16_slice(src) {
+                        crate::mc_dispatch::prep_8tap_hbd_with_scratch(
                             &mut tmp[dst_sub..],
                             tmp_stride,
-                            src,
+                            src16,
                             src_off,
                             src_stride,
                             4,
@@ -1417,6 +1463,8 @@ fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                             mx,
                             my,
                             -1,
+                            bd.bitdepth(),
+                            inter_scratch,
                         );
                     }
                     xx += 4;
@@ -2657,6 +2705,7 @@ where
                         ss_ver,
                         fi.bw,
                         fi.bh,
+                        recon.scratch.inter_mc_tmp_mut(),
                     );
                 } else {
                     inter_mc_plane_prep_8bpc(
@@ -2675,6 +2724,7 @@ where
                         ss_ver,
                         fi.bw,
                         fi.bh,
+                        recon.scratch.inter_mc_tmp_mut(),
                     );
                 }
             }
@@ -2912,8 +2962,23 @@ where
                             &mut recon.dst_v[dst_off..]
                         };
                         inter_mc_plane_8bpc(
-                            bd, dst, uv_stride, &s_refp, pl, s_cbx, s_cby, s_bw4, s_bh4, s_mv.x,
-                            s_mv.y, s_filter, ss_hor, ss_ver, fi.bw, fi.bh,
+                            bd,
+                            dst,
+                            uv_stride,
+                            &s_refp,
+                            pl,
+                            s_cbx,
+                            s_cby,
+                            s_bw4,
+                            s_bh4,
+                            s_mv.x,
+                            s_mv.y,
+                            s_filter,
+                            ss_hor,
+                            ss_ver,
+                            fi.bw,
+                            fi.bh,
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
                 }
@@ -2962,6 +3027,7 @@ where
                             ss_ver,
                             fi.bw,
                             fi.bh,
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                     } else {
                         inter_mc_plane_prep_8bpc(
@@ -2980,6 +3046,7 @@ where
                             ss_ver,
                             fi.bw,
                             fi.bh,
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
                 }

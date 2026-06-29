@@ -40,6 +40,63 @@ fn iclip_scalar(v: i32, min_value: i32, max_value: i32) -> i32 {
 }
 
 #[inline]
+fn avg_chroma_luma<T: Copy + Into<i32>>(
+    luma: &[T],
+    luma_width: usize,
+    lx: usize,
+    sx: usize,
+) -> i32 {
+    let l0 = luma[lx].into();
+    if sx != 0 {
+        let l1 = if lx + 1 < luma_width {
+            luma[lx + 1].into()
+        } else {
+            l0
+        };
+        (l0 + l1 + 1) >> 1
+    } else {
+        l0
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn blend_top_grain8_avx2(
+    old: __m128i,
+    grain: __m128i,
+    old_w: __m128i,
+    new_w: __m128i,
+    round: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+) -> __m128i {
+    let old_lo = _mm_cvtepi16_epi32(old);
+    let old_hi = _mm_cvtepi16_epi32(_mm_srli_si128::<8>(old));
+    let grain_lo = _mm_cvtepi16_epi32(grain);
+    let grain_hi = _mm_cvtepi16_epi32(_mm_srli_si128::<8>(grain));
+
+    let sum_lo = _mm_srai_epi32::<5>(_mm_add_epi32(
+        _mm_add_epi32(
+            _mm_mullo_epi32(old_lo, old_w),
+            _mm_mullo_epi32(grain_lo, new_w),
+        ),
+        round,
+    ));
+    let sum_hi = _mm_srai_epi32::<5>(_mm_add_epi32(
+        _mm_add_epi32(
+            _mm_mullo_epi32(old_hi, old_w),
+            _mm_mullo_epi32(grain_hi, new_w),
+        ),
+        round,
+    ));
+
+    _mm_packs_epi32(
+        _mm_min_epi32(_mm_max_epi32(sum_lo, minv), maxv),
+        _mm_min_epi32(_mm_max_epi32(sum_hi, minv), maxv),
+    )
+}
+
+#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn blend_top_grain_row_avx2(
     dst: &mut [i16],
@@ -51,25 +108,22 @@ pub(crate) fn blend_top_grain_row_avx2(
     new_w: i32,
 ) {
     let n = dst.len().min(old.len()).min(grain.len());
-    let old_w_i16 = _mm256_set1_epi16(old_w as i16);
-    let new_w_i16 = _mm256_set1_epi16(new_w as i16);
-    let round = _mm256_set1_epi16(16);
-    let minv = _mm256_set1_epi16(grain_min as i16);
-    let maxv = _mm256_set1_epi16(grain_max as i16);
+    let old_w_v = _mm_set1_epi32(old_w);
+    let new_w_v = _mm_set1_epi32(new_w);
+    let round = _mm_set1_epi32(16);
+    let minv = _mm_set1_epi32(grain_min);
+    let maxv = _mm_set1_epi32(grain_max);
     let (dst_chunks, dst_tail) = dst[..n].as_chunks_mut::<16>();
     let (old_chunks, old_tail) = old[..n].as_chunks::<16>();
     let (grain_chunks, grain_tail) = grain[..n].as_chunks::<16>();
     for ((d, o), g) in dst_chunks.iter_mut().zip(old_chunks).zip(grain_chunks) {
-        let o = unsafe { _mm256_loadu_si256(o.as_ptr() as *const __m256i) };
-        let g = unsafe { _mm256_loadu_si256(g.as_ptr() as *const __m256i) };
-        let sum = _mm256_add_epi16(
-            _mm256_mullo_epi16(o, old_w_i16),
-            _mm256_mullo_epi16(g, new_w_i16),
-        );
-        let out = _mm256_min_epi16(
-            _mm256_max_epi16(_mm256_srai_epi16::<5>(_mm256_add_epi16(sum, round)), minv),
-            maxv,
-        );
+        let o_lo = unsafe { _mm_loadu_si128(o.as_ptr() as *const __m128i) };
+        let o_hi = unsafe { _mm_loadu_si128(o.as_ptr().add(8) as *const __m128i) };
+        let g_lo = unsafe { _mm_loadu_si128(g.as_ptr() as *const __m128i) };
+        let g_hi = unsafe { _mm_loadu_si128(g.as_ptr().add(8) as *const __m128i) };
+        let out_lo = blend_top_grain8_avx2(o_lo, g_lo, old_w_v, new_w_v, round, minv, maxv);
+        let out_hi = blend_top_grain8_avx2(o_hi, g_hi, old_w_v, new_w_v, round, minv, maxv);
+        let out = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(out_lo), out_hi);
         unsafe { _mm256_storeu_si256(d.as_mut_ptr() as *mut __m256i, out) };
     }
     for ((d, &o), &g) in dst_tail.iter_mut().zip(old_tail).zip(grain_tail) {
@@ -314,6 +368,7 @@ pub(crate) fn fguv_row_8bpc_avx2(
     grain: &[i16],
     luma: &[u8],
     cx_base: usize,
+    luma_width: usize,
     sx: usize,
     scaling: &[u8],
     scaling_shift: i32,
@@ -338,12 +393,7 @@ pub(crate) fn fguv_row_8bpc_avx2(
         let mut scale = [0i16; 16];
         for (i, (scale, &src_px)) in scale.iter_mut().zip(s.iter()).enumerate() {
             let lx = (cx_base + base_x + i) << sx;
-            let l = luma[lx] as i32;
-            let avg = if sx != 0 {
-                (l + luma[lx + 1] as i32 + 1) >> 1
-            } else {
-                l
-            };
+            let avg = avg_chroma_luma(luma, luma_width, lx, sx);
             let val = if !chroma_scaling_from_luma {
                 iclip_scalar(
                     ((avg * uv_luma_mult + src_px as i32 * uv_mult) >> 6) + uv_offset,
@@ -374,12 +424,7 @@ pub(crate) fn fguv_row_8bpc_avx2(
     {
         let x = tail_base + i;
         let lx = (cx_base + x) << sx;
-        let l = luma[lx] as i32;
-        let avg = if sx != 0 {
-            (l + luma[lx + 1] as i32 + 1) >> 1
-        } else {
-            l
-        };
+        let avg = avg_chroma_luma(luma, luma_width, lx, sx);
         let val = if !chroma_scaling_from_luma {
             iclip_scalar(
                 ((avg * uv_luma_mult + s as i32 * uv_mult) >> 6) + uv_offset,
@@ -402,6 +447,7 @@ pub(crate) fn fguv_row_hbd_avx2(
     grain: &[i16],
     luma: &[u16],
     cx_base: usize,
+    luma_width: usize,
     sx: usize,
     scaling: &[u8],
     scaling_shift: i32,
@@ -422,12 +468,7 @@ pub(crate) fn fguv_row_hbd_avx2(
         let mut scale = [0i32; 8];
         for (i, (scale, &src_px)) in scale.iter_mut().zip(s.iter()).enumerate() {
             let lx = (cx_base + base_x + i) << sx;
-            let l = luma[lx] as i32;
-            let avg = if sx != 0 {
-                (l + luma[lx + 1] as i32 + 1) >> 1
-            } else {
-                l
-            };
+            let avg = avg_chroma_luma(luma, luma_width, lx, sx);
             let val = if !chroma_scaling_from_luma {
                 iclip_scalar(
                     ((avg * uv_luma_mult + src_px as i32 * uv_mult) >> 6) + uv_offset_scaled,
@@ -458,12 +499,7 @@ pub(crate) fn fguv_row_hbd_avx2(
         let mut scale = [0i32; 4];
         for (i, (scale, &src_px)) in scale.iter_mut().zip(s.iter()).enumerate() {
             let lx = (cx_base + base_x + i) << sx;
-            let l = luma[lx] as i32;
-            let avg = if sx != 0 {
-                (l + luma[lx + 1] as i32 + 1) >> 1
-            } else {
-                l
-            };
+            let avg = avg_chroma_luma(luma, luma_width, lx, sx);
             let val = if !chroma_scaling_from_luma {
                 iclip_scalar(
                     ((avg * uv_luma_mult + src_px as i32 * uv_mult) >> 6) + uv_offset_scaled,
@@ -494,12 +530,7 @@ pub(crate) fn fguv_row_hbd_avx2(
     {
         let x = tail_base + i;
         let lx = (cx_base + x) << sx;
-        let l = luma[lx] as i32;
-        let avg = if sx != 0 {
-            (l + luma[lx + 1] as i32 + 1) >> 1
-        } else {
-            l
-        };
+        let avg = avg_chroma_luma(luma, luma_width, lx, sx);
         let val = if !chroma_scaling_from_luma {
             iclip_scalar(
                 ((avg * uv_luma_mult + s as i32 * uv_mult) >> 6) + uv_offset_scaled,

@@ -69,39 +69,35 @@ fn load_i16x16(a: &[i16; 16]) -> __m256i {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn madd_i16x16_const(a: __m256i, b: __m256i, coeff: __m256i) -> (__m256i, __m256i) {
-    unsafe {
-        let lo = _mm256_madd_epi16(_mm256_unpacklo_epi16(a, b), coeff);
-        let hi = _mm256_madd_epi16(_mm256_unpackhi_epi16(a, b), coeff);
-        (
-            _mm256_inserti128_si256::<1>(
-                _mm256_castsi128_si256(_mm256_castsi256_si128(lo)),
-                _mm256_castsi256_si128(hi),
-            ),
-            _mm256_inserti128_si256::<1>(
-                _mm256_castsi128_si256(_mm256_extracti128_si256::<1>(lo)),
-                _mm256_extracti128_si256::<1>(hi),
-            ),
-        )
-    }
+    let lo = _mm256_madd_epi16(_mm256_unpacklo_epi16(a, b), coeff);
+    let hi = _mm256_madd_epi16(_mm256_unpackhi_epi16(a, b), coeff);
+    (
+        _mm256_inserti128_si256::<1>(
+            _mm256_castsi128_si256(_mm256_castsi256_si128(lo)),
+            _mm256_castsi256_si128(hi),
+        ),
+        _mm256_inserti128_si256::<1>(
+            _mm256_castsi128_si256(_mm256_extracti128_si256::<1>(lo)),
+            _mm256_extracti128_si256::<1>(hi),
+        ),
+    )
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
 fn madd_i16x16(a: __m256i, b: __m256i, w1: __m256i, w2: __m256i) -> (__m256i, __m256i) {
-    unsafe {
-        let lo = _mm256_madd_epi16(_mm256_unpacklo_epi16(a, b), _mm256_unpacklo_epi16(w1, w2));
-        let hi = _mm256_madd_epi16(_mm256_unpackhi_epi16(a, b), _mm256_unpackhi_epi16(w1, w2));
-        (
-            _mm256_inserti128_si256::<1>(
-                _mm256_castsi128_si256(_mm256_castsi256_si128(lo)),
-                _mm256_castsi256_si128(hi),
-            ),
-            _mm256_inserti128_si256::<1>(
-                _mm256_castsi128_si256(_mm256_extracti128_si256::<1>(lo)),
-                _mm256_extracti128_si256::<1>(hi),
-            ),
-        )
-    }
+    let lo = _mm256_madd_epi16(_mm256_unpacklo_epi16(a, b), _mm256_unpacklo_epi16(w1, w2));
+    let hi = _mm256_madd_epi16(_mm256_unpackhi_epi16(a, b), _mm256_unpackhi_epi16(w1, w2));
+    (
+        _mm256_inserti128_si256::<1>(
+            _mm256_castsi128_si256(_mm256_castsi256_si128(lo)),
+            _mm256_castsi256_si128(hi),
+        ),
+        _mm256_inserti128_si256::<1>(
+            _mm256_castsi128_si256(_mm256_extracti128_si256::<1>(lo)),
+            _mm256_extracti128_si256::<1>(hi),
+        ),
+    )
 }
 
 #[inline]
@@ -113,41 +109,35 @@ fn load_u8x8_i16(a: &[u8; 8]) -> __m128i {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn madd_i16x8_const(a: __m128i, b: __m128i, coeff: __m128i) -> (__m128i, __m128i) {
-    unsafe {
-        (
-            _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff),
-            _mm_madd_epi16(_mm_unpackhi_epi16(a, b), coeff),
-        )
-    }
+    (
+        _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff),
+        _mm_madd_epi16(_mm_unpackhi_epi16(a, b), coeff),
+    )
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
 fn madd_i16x8(a: __m128i, b: __m128i, w1: __m128i, w2: __m128i) -> (__m128i, __m128i) {
-    unsafe {
-        (
-            _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2)),
-            _mm_madd_epi16(_mm_unpackhi_epi16(a, b), _mm_unpackhi_epi16(w1, w2)),
-        )
-    }
+    (
+        _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2)),
+        _mm_madd_epi16(_mm_unpackhi_epi16(a, b), _mm_unpackhi_epi16(w1, w2)),
+    )
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
 fn combine_i32x4x2(lo: __m128i, hi: __m128i) -> __m256i {
-    unsafe { _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi) }
+    _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi)
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
 fn load_i16x16_i32x2(a: &[i16; 16]) -> (__m256i, __m256i) {
-    unsafe {
-        let v = _mm256_loadu_si256(a.as_ptr().cast());
-        (
-            _mm256_cvtepi16_epi32(_mm256_castsi256_si128(v)),
-            _mm256_cvtepi16_epi32(_mm256_extracti128_si256::<1>(v)),
-        )
-    }
+    let v = unsafe { _mm256_loadu_si256(a.as_ptr().cast()) };
+    (
+        _mm256_cvtepi16_epi32(_mm256_castsi256_si128(v)),
+        _mm256_cvtepi16_epi32(_mm256_extracti128_si256::<1>(v)),
+    )
 }
 
 #[inline]
@@ -177,29 +167,25 @@ fn load_u8x16_i32x2(a: &[u8; 16]) -> (__m256i, __m256i) {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn load_u8x32_i32x4(a: &[u8; 32]) -> (__m256i, __m256i, __m256i, __m256i) {
-    unsafe {
-        let v = load_u8x32(a);
-        let lo = _mm256_castsi256_si128(v);
-        let hi = _mm256_extracti128_si256::<1>(v);
-        (
-            _mm256_cvtepu8_epi32(lo),
-            _mm256_cvtepu8_epi32(_mm_srli_si128(lo, 8)),
-            _mm256_cvtepu8_epi32(hi),
-            _mm256_cvtepu8_epi32(_mm_srli_si128(hi, 8)),
-        )
-    }
+    let v = load_u8x32(a);
+    let lo = _mm256_castsi256_si128(v);
+    let hi = _mm256_extracti128_si256::<1>(v);
+    (
+        _mm256_cvtepu8_epi32(lo),
+        _mm256_cvtepu8_epi32(_mm_srli_si128(lo, 8)),
+        _mm256_cvtepu8_epi32(hi),
+        _mm256_cvtepu8_epi32(_mm_srli_si128(hi, 8)),
+    )
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
 fn load_u8x32_i16x2(a: &[u8; 32]) -> (__m256i, __m256i) {
-    unsafe {
-        let v = load_u8x32(a);
-        (
-            _mm256_cvtepu8_epi16(_mm256_castsi256_si128(v)),
-            _mm256_cvtepu8_epi16(_mm256_extracti128_si256::<1>(v)),
-        )
-    }
+    let v = load_u8x32(a);
+    (
+        _mm256_cvtepu8_epi16(_mm256_castsi256_si128(v)),
+        _mm256_cvtepu8_epi16(_mm256_extracti128_si256::<1>(v)),
+    )
 }
 
 #[inline]
@@ -225,14 +211,12 @@ fn store_i32x8_u8(a: &mut [u8; 8], v: __m256i) {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn pack_i32x16_u8(lo: __m256i, hi: __m256i) -> __m128i {
-    unsafe {
-        let p16 = _mm256_permute4x64_epi64::<0xd8>(_mm256_packs_epi32(lo, hi));
-        let p8 = _mm256_packus_epi16(p16, p16);
-        _mm_unpacklo_epi64(
-            _mm256_castsi256_si128(p8),
-            _mm256_extracti128_si256::<1>(p8),
-        )
-    }
+    let p16 = _mm256_permute4x64_epi64::<0xd8>(_mm256_packs_epi32(lo, hi));
+    let p8 = _mm256_packus_epi16(p16, p16);
+    _mm_unpacklo_epi64(
+        _mm256_castsi256_si128(p8),
+        _mm256_extracti128_si256::<1>(p8),
+    )
 }
 
 #[inline]
@@ -255,13 +239,11 @@ fn store_i32x32_u8(a: &mut [u8; 32], v0: __m256i, v1: __m256i, v2: __m256i, v3: 
 #[inline]
 #[target_feature(enable = "avx2")]
 fn pack_i16x16_u8(v: __m256i) -> __m128i {
-    unsafe {
-        let p8 = _mm256_packus_epi16(v, v);
-        _mm_unpacklo_epi64(
-            _mm256_castsi256_si128(p8),
-            _mm256_extracti128_si256::<1>(p8),
-        )
-    }
+    let p8 = _mm256_packus_epi16(v, v);
+    _mm_unpacklo_epi64(
+        _mm256_castsi256_si128(p8),
+        _mm256_extracti128_si256::<1>(p8),
+    )
 }
 
 #[inline]

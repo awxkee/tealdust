@@ -86,42 +86,39 @@ fn madd_i16x16_const(a: __m256i, b: __m256i, coeff: __m256i) -> (__m256i, __m256
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn madd_i16x16(a: __m256i, b: __m256i, w1: __m256i, w2: __m256i) -> (__m256i, __m256i) {
-    unsafe {
-        let lo = _mm256_madd_epi16(_mm256_unpacklo_epi16(a, b), _mm256_unpacklo_epi16(w1, w2));
-        let hi = _mm256_madd_epi16(_mm256_unpackhi_epi16(a, b), _mm256_unpackhi_epi16(w1, w2));
-        (
-            _mm256_inserti128_si256::<1>(
-                _mm256_castsi128_si256(_mm256_castsi256_si128(lo)),
-                _mm256_castsi256_si128(hi),
-            ),
-            _mm256_inserti128_si256::<1>(
-                _mm256_castsi128_si256(_mm256_extracti128_si256::<1>(lo)),
-                _mm256_extracti128_si256::<1>(hi),
-            ),
-        )
-    }
+    let lo = _mm256_madd_epi16(_mm256_unpacklo_epi16(a, b), _mm256_unpacklo_epi16(w1, w2));
+    let hi = _mm256_madd_epi16(_mm256_unpackhi_epi16(a, b), _mm256_unpackhi_epi16(w1, w2));
+    (
+        _mm256_inserti128_si256::<1>(
+            _mm256_castsi128_si256(_mm256_castsi256_si128(lo)),
+            _mm256_castsi256_si128(hi),
+        ),
+        _mm256_inserti128_si256::<1>(
+            _mm256_castsi128_si256(_mm256_extracti128_si256::<1>(lo)),
+            _mm256_extracti128_si256::<1>(hi),
+        ),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn madd_i16x8_const(a: __m128i, b: __m128i, coeff: __m128i) -> (__m128i, __m128i) {
-    unsafe {
-        (
-            _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff),
-            _mm_madd_epi16(_mm_unpackhi_epi16(a, b), coeff),
-        )
-    }
+    (
+        _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff),
+        _mm_madd_epi16(_mm_unpackhi_epi16(a, b), coeff),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn madd_i16x8(a: __m128i, b: __m128i, w1: __m128i, w2: __m128i) -> (__m128i, __m128i) {
-    unsafe {
-        (
-            _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2)),
-            _mm_madd_epi16(_mm_unpackhi_epi16(a, b), _mm_unpackhi_epi16(w1, w2)),
-        )
-    }
+    (
+        _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2)),
+        _mm_madd_epi16(_mm_unpackhi_epi16(a, b), _mm_unpackhi_epi16(w1, w2)),
+    )
 }
 
 #[inline(always)]
@@ -152,22 +149,6 @@ fn load_u16x16_i32x2(a: &[u16; 16]) -> (__m256i, __m256i) {
         (
             _mm256_cvtepu16_epi32(_mm256_castsi256_si128(v)),
             _mm256_cvtepu16_epi32(_mm256_extracti128_si256::<1>(v)),
-        )
-    }
-}
-
-#[inline(always)]
-fn load_u8x8_i32(a: &[u8; 8]) -> __m256i {
-    unsafe { _mm256_cvtepu8_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
-}
-
-#[inline(always)]
-fn load_u8x16_i32x2(a: &[u8; 16]) -> (__m256i, __m256i) {
-    unsafe {
-        let v = _mm_loadu_si128(a.as_ptr().cast());
-        (
-            _mm256_cvtepu8_epi32(v),
-            _mm256_cvtepu8_epi32(_mm_srli_si128(v, 8)),
         )
     }
 }

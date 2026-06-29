@@ -956,6 +956,8 @@ pub struct ReconScratch {
     /// mutably by the prediction helpers.
     compound_tmp0: Vec<i16>,
     compound_tmp1: Vec<i16>,
+    /// Reusable inter MC mid-plane scratch for two-pass bilinear/8tap SIMD.
+    inter_mc_tmp: Vec<i16>,
     /// Reusable 128x128 mask buffer for SEG/BACP compound blending.
     compound_seg_mask: Vec<u8>,
 }
@@ -990,6 +992,7 @@ impl Default for ReconScratch {
             itx_tmp: Box::new([0i32; crate::itx_2d::ITX_TMP_PIXELS]),
             compound_tmp0: Vec::new(),
             compound_tmp1: Vec::new(),
+            inter_mc_tmp: Vec::new(),
             compound_seg_mask: Vec::new(),
         }
     }
@@ -1055,6 +1058,10 @@ impl ReconScratch {
             &mut self.compound_tmp1,
             128 * 128 * core::mem::size_of::<i16>(),
         );
+        drop_vec_if_capacity_gt(
+            &mut self.inter_mc_tmp,
+            128 * (128 + 7) * core::mem::size_of::<i16>(),
+        );
         drop_vec_if_capacity_gt(&mut self.compound_seg_mask, 128 * 128);
     }
 
@@ -1089,6 +1096,10 @@ impl ReconScratch {
     }
 
     #[inline]
+    pub(crate) fn inter_mc_tmp_mut(&mut self) -> &mut Vec<i16> {
+        &mut self.inter_mc_tmp
+    }
+
     pub(crate) fn take_compound_tmp(&mut self, len: usize) -> [Vec<i16>; 2] {
         let mut tmp = [
             core::mem::take(&mut self.compound_tmp0),

@@ -133,84 +133,78 @@ pub(crate) fn put_bilin_8bpc_avx2(
     h: usize,
     mx: i32,
     my: i32,
+    mid_scratch: &mut [i16],
 ) {
     if mx != 0 && my != 0 {
         let mid_stride = w.next_multiple_of(16).max(64);
-        let mut mid = vec![0i16; mid_stride * (h + 1)];
-        for y in 0..h + 1 {
-            let mut x = 0usize;
-            while x + 16 <= w {
-                store_i16x16(
-                    unsafe { mid.get_unchecked_mut(y * mid_stride + x..) },
-                    bilin_u8x16_i16(src, y * src_stride + x, 1, mx),
-                );
-                x += 16;
+        let mid = &mut mid_scratch[..mid_stride * (h + 1)];
+        for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(h + 1).enumerate() {
+            let src_row = unsafe { src.get_unchecked(y * src_stride..) };
+            let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<16>();
+            for (chunk_idx, mid_chunk) in mid_chunks.iter_mut().enumerate() {
+                let x = chunk_idx * 16;
+                store_i16x16(mid_chunk, bilin_u8x16_i16(src_row, x, 1, mx));
             }
-            while x < w {
-                let si = y * src_stride + x;
-                mid[y * mid_stride + x] =
-                    bilin_scalar(src[si] as i32, src[si + 1] as i32, mx) as i16;
-                x += 1;
+            let processed = mid_chunks.len() * 16;
+            for (x, mid_px) in (processed..w).zip(mid_rem.iter_mut()) {
+                let si = x;
+                *mid_px = bilin_scalar(src_row[si] as i32, src_row[si + 1] as i32, mx) as i16;
             }
         }
-        for y in 0..h {
-            let mut x = 0usize;
-            while x + 8 <= w {
-                let a = load_i16x8(unsafe { mid.get_unchecked(y * mid_stride + x..) });
-                let b = load_i16x8(unsafe { mid.get_unchecked((y + 1) * mid_stride + x..) });
-                store_u8x8_round8_from_i32(
-                    unsafe { dst.get_unchecked_mut(y * dst_stride + x..) },
-                    bilin_i16x8_i32(a, b, my),
-                );
-                x += 8;
+        for (y, dst_row) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+            let mid_row = unsafe { mid.get_unchecked(y * mid_stride..) };
+            let mid_next_row = unsafe { mid.get_unchecked((y + 1) * mid_stride..) };
+            let (dst_chunks, dst_rem) = dst_row[..w].as_chunks_mut::<8>();
+            for (chunk_idx, dst_chunk) in dst_chunks.iter_mut().enumerate() {
+                let x = chunk_idx * 8;
+                let a = load_i16x8(unsafe { mid_row.get_unchecked(x..) });
+                let b = load_i16x8(unsafe { mid_next_row.get_unchecked(x..) });
+                store_u8x8_round8_from_i32(dst_chunk, bilin_i16x8_i32(a, b, my));
             }
-            while x < w {
-                let mi = y * mid_stride + x;
-                dst[y * dst_stride + x] =
-                    ((bilin_scalar(mid[mi] as i32, mid[mi + mid_stride] as i32, my) + 128) >> 8)
-                        .clamp(0, 255) as u8;
-                x += 1;
+            let processed = dst_chunks.len() * 8;
+            for (x, dst_px) in (processed..w).zip(dst_rem.iter_mut()) {
+                *dst_px = ((bilin_scalar(mid_row[x] as i32, mid_next_row[x] as i32, my) + 128) >> 8)
+                    .clamp(0, 255) as u8;
             }
         }
     } else if mx != 0 {
-        for y in 0..h {
-            let mut x = 0usize;
-            while x + 16 <= w {
-                store_u8x16_round4_from_i16(
-                    unsafe { dst.get_unchecked_mut(y * dst_stride + x..) },
-                    bilin_u8x16_i16(src, y * src_stride + x, 1, mx),
-                );
-                x += 16;
+        for (y, dst_row) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+            let src_row = unsafe { src.get_unchecked(y * src_stride..) };
+            let (dst_chunks, dst_rem) = dst_row[..w].as_chunks_mut::<16>();
+            for (chunk_idx, dst_chunk) in dst_chunks.iter_mut().enumerate() {
+                let x = chunk_idx * 16;
+                store_u8x16_round4_from_i16(dst_chunk, bilin_u8x16_i16(src_row, x, 1, mx));
             }
-            while x < w {
-                let si = y * src_stride + x;
-                dst[y * dst_stride + x] =
-                    ((bilin_scalar(src[si] as i32, src[si + 1] as i32, mx) + 8) >> 4) as u8;
-                x += 1;
+            let processed = dst_chunks.len() * 16;
+            for (x, dst_px) in (processed..w).zip(dst_rem.iter_mut()) {
+                let si = x;
+                *dst_px =
+                    ((bilin_scalar(src_row[si] as i32, src_row[si + 1] as i32, mx) + 8) >> 4) as u8;
             }
         }
     } else if my != 0 {
-        for y in 0..h {
-            let mut x = 0usize;
-            while x + 16 <= w {
-                store_u8x16_round4_from_i16(
-                    unsafe { dst.get_unchecked_mut(y * dst_stride + x..) },
-                    bilin_u8x16_i16(src, y * src_stride + x, src_stride, my),
-                );
-                x += 16;
+        for (y, dst_row) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+            let src_row = unsafe { src.get_unchecked(y * src_stride..) };
+            let (dst_chunks, dst_rem) = dst_row[..w].as_chunks_mut::<16>();
+            for (chunk_idx, dst_chunk) in dst_chunks.iter_mut().enumerate() {
+                let x = chunk_idx * 16;
+                store_u8x16_round4_from_i16(dst_chunk, bilin_u8x16_i16(src_row, x, src_stride, my));
             }
-            while x < w {
-                let si = y * src_stride + x;
-                dst[y * dst_stride + x] =
-                    ((bilin_scalar(src[si] as i32, src[si + src_stride] as i32, my) + 8) >> 4)
-                        as u8;
-                x += 1;
+            let processed = dst_chunks.len() * 16;
+            for (x, dst_px) in (processed..w).zip(dst_rem.iter_mut()) {
+                let si = x;
+                *dst_px = ((bilin_scalar(src_row[si] as i32, src_row[si + src_stride] as i32, my)
+                    + 8)
+                    >> 4) as u8;
             }
         }
     } else {
-        for y in 0..h {
-            dst[y * dst_stride..y * dst_stride + w]
-                .copy_from_slice(&src[y * src_stride..y * src_stride + w]);
+        for (src_row, dst_row) in src
+            .chunks_exact(src_stride)
+            .zip(dst.chunks_exact_mut(dst_stride))
+            .take(h)
+        {
+            dst_row[..w].copy_from_slice(&src_row[..w]);
         }
     }
 }
@@ -226,92 +220,82 @@ pub(crate) fn prep_bilin_8bpc_avx2(
     h: usize,
     mx: i32,
     my: i32,
+    mid_scratch: &mut [i16],
 ) {
     if mx != 0 && my != 0 {
         let mid_stride = w.next_multiple_of(16).max(64);
-        let mut mid = vec![0i16; mid_stride * (h + 1)];
-        for y in 0..h + 1 {
-            let mut x = 0usize;
-            while x + 16 <= w {
-                store_i16x16(
-                    unsafe { mid.get_unchecked_mut(y * mid_stride + x..) },
-                    bilin_u8x16_i16(src, y * src_stride + x, 1, mx),
-                );
-                x += 16;
+        let mid = &mut mid_scratch[..mid_stride * (h + 1)];
+        for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(h + 1).enumerate() {
+            let src_row = unsafe { src.get_unchecked(y * src_stride..) };
+            let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<16>();
+            for (chunk_idx, mid_chunk) in mid_chunks.iter_mut().enumerate() {
+                let x = chunk_idx * 16;
+                store_i16x16(mid_chunk, bilin_u8x16_i16(src_row, x, 1, mx));
             }
-            while x < w {
-                let si = y * src_stride + x;
-                mid[y * mid_stride + x] =
-                    bilin_scalar(src[si] as i32, src[si + 1] as i32, mx) as i16;
-                x += 1;
+            let processed = mid_chunks.len() * 16;
+            for (x, mid_px) in (processed..w).zip(mid_rem.iter_mut()) {
+                let si = x;
+                *mid_px = bilin_scalar(src_row[si] as i32, src_row[si + 1] as i32, mx) as i16;
             }
         }
-        for y in 0..h {
-            let mut x = 0usize;
-            while x + 8 <= w {
-                let a = load_i16x8(unsafe { mid.get_unchecked(y * mid_stride + x..) });
-                let b = load_i16x8(unsafe { mid.get_unchecked((y + 1) * mid_stride + x..) });
-                store_i16x8_round4_from_i32(
-                    unsafe { tmp.get_unchecked_mut(y * tmp_stride + x..) },
-                    bilin_i16x8_i32(a, b, my),
-                );
-                x += 8;
+        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            let mid_row = unsafe { mid.get_unchecked(y * mid_stride..) };
+            let mid_next_row = unsafe { mid.get_unchecked((y + 1) * mid_stride..) };
+            let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<8>();
+            for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
+                let x = chunk_idx * 8;
+                let a = load_i16x8(unsafe { mid_row.get_unchecked(x..) });
+                let b = load_i16x8(unsafe { mid_next_row.get_unchecked(x..) });
+                store_i16x8_round4_from_i32(tmp_chunk, bilin_i16x8_i32(a, b, my));
             }
-            while x < w {
-                let mi = y * mid_stride + x;
-                tmp[y * tmp_stride + x] =
-                    ((bilin_scalar(mid[mi] as i32, mid[mi + mid_stride] as i32, my) + 8) >> 4)
-                        as i16;
-                x += 1;
+            let processed = tmp_chunks.len() * 8;
+            for (x, tmp_px) in (processed..w).zip(tmp_rem.iter_mut()) {
+                *tmp_px =
+                    ((bilin_scalar(mid_row[x] as i32, mid_next_row[x] as i32, my) + 8) >> 4) as i16;
             }
         }
     } else if mx != 0 {
-        for y in 0..h {
-            let mut x = 0usize;
-            while x + 16 <= w {
-                store_i16x16(
-                    unsafe { tmp.get_unchecked_mut(y * tmp_stride + x..) },
-                    bilin_u8x16_i16(src, y * src_stride + x, 1, mx),
-                );
-                x += 16;
+        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            let src_row = unsafe { src.get_unchecked(y * src_stride..) };
+            let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
+            for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
+                let x = chunk_idx * 16;
+                store_i16x16(tmp_chunk, bilin_u8x16_i16(src_row, x, 1, mx));
             }
-            while x < w {
-                let si = y * src_stride + x;
-                tmp[y * tmp_stride + x] =
-                    bilin_scalar(src[si] as i32, src[si + 1] as i32, mx) as i16;
-                x += 1;
+            let processed = tmp_chunks.len() * 16;
+            for (x, tmp_px) in (processed..w).zip(tmp_rem.iter_mut()) {
+                let si = x;
+                *tmp_px = bilin_scalar(src_row[si] as i32, src_row[si + 1] as i32, mx) as i16;
             }
         }
     } else if my != 0 {
-        for y in 0..h {
-            let mut x = 0usize;
-            while x + 16 <= w {
-                store_i16x16(
-                    unsafe { tmp.get_unchecked_mut(y * tmp_stride + x..) },
-                    bilin_u8x16_i16(src, y * src_stride + x, src_stride, my),
-                );
-                x += 16;
+        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            let src_row = unsafe { src.get_unchecked(y * src_stride..) };
+            let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
+            for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
+                let x = chunk_idx * 16;
+                store_i16x16(tmp_chunk, bilin_u8x16_i16(src_row, x, src_stride, my));
             }
-            while x < w {
-                let si = y * src_stride + x;
-                tmp[y * tmp_stride + x] =
-                    bilin_scalar(src[si] as i32, src[si + src_stride] as i32, my) as i16;
-                x += 1;
+            let processed = tmp_chunks.len() * 16;
+            for (x, tmp_px) in (processed..w).zip(tmp_rem.iter_mut()) {
+                let si = x;
+                *tmp_px =
+                    bilin_scalar(src_row[si] as i32, src_row[si + src_stride] as i32, my) as i16;
             }
         }
     } else {
-        for y in 0..h {
-            let mut x = 0usize;
-            while x + 16 <= w {
-                let v = _mm256_slli_epi16::<4>(load_u8x16_i16(unsafe {
-                    src.get_unchecked(y * src_stride + x..)
-                }));
-                store_i16x16(unsafe { tmp.get_unchecked_mut(y * tmp_stride + x..) }, v);
-                x += 16;
+        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            let src_row = unsafe { src.get_unchecked(y * src_stride..) };
+            let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
+            for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
+                let x = chunk_idx * 16;
+                let v =
+                    _mm256_slli_epi16::<4>(load_u8x16_i16(unsafe { src_row.get_unchecked(x..) }));
+                store_i16x16(tmp_chunk, v);
             }
-            while x < w {
-                tmp[y * tmp_stride + x] = (src[y * src_stride + x] as i16) << 4;
-                x += 1;
+            let processed = tmp_chunks.len() * 16;
+            for (x, tmp_px) in (processed..w).zip(tmp_rem.iter_mut()) {
+                *tmp_px = (src_row[x] as i16) << 4;
             }
         }
     }
@@ -437,6 +421,7 @@ pub(crate) fn put_8tap_8bpc_avx2(
     mx: i32,
     my: i32,
     filter_type: i32,
+    mid_scratch: &mut [i16],
 ) {
     let bits = 6 + (filter_type < 0) as i32;
     let intermediate_rnd = ((1 << bits) >> 1) + ((1 << (bits - 4)) >> 1);
@@ -446,104 +431,100 @@ pub(crate) fn put_8tap_8bpc_avx2(
         (Some(fh), Some(fv)) => {
             let tmp_h = h + 7;
             let mid_stride = w.next_multiple_of(8).max(64);
-            let mut mid = vec![0i16; mid_stride * tmp_h];
+            let mid = &mut mid_scratch[..mid_stride * tmp_h];
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for y in 0..tmp_h {
+            for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(tmp_h).enumerate() {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
-                let mut x = 0usize;
-                while x + 8 <= w {
-                    store_i16x8_shift(
-                        unsafe { mid.get_unchecked_mut(y * mid_stride + x..) },
-                        filter_u8x8(src, base + x, 1, &fh),
-                        rnd0,
-                        sh0,
-                    );
-                    x += 8;
+                let src_row = unsafe { src.get_unchecked(base..) };
+                let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<8>();
+                for (chunk_idx, mid_chunk) in mid_chunks.iter_mut().enumerate() {
+                    let x = chunk_idx * 8;
+                    store_i16x8_shift(mid_chunk, filter_u8x8(src_row, x, 1, &fh), rnd0, sh0);
                 }
-                while x < w {
-                    mid[y * mid_stride + x] =
-                        round_scalar(filter_u8_scalar(src, base + x, 1, &fh), rnd0, sh0) as i16;
-                    x += 1;
+                let processed = mid_chunks.len() * 8;
+                for (x, mid_px) in (processed..w).zip(mid_rem.iter_mut()) {
+                    *mid_px = round_scalar(filter_u8_scalar(src_row, x, 1, &fh), rnd0, sh0) as i16;
                 }
             }
             let sh1 = bits + 4;
             let rnd1 = (1 << sh1) >> 1;
-            for y in 0..h {
-                let mut x = 0usize;
-                while x + 8 <= w {
+            for (y, dst_row) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+                let (dst_chunks, dst_rem) = dst_row[..w].as_chunks_mut::<8>();
+                for (chunk_idx, dst_chunk) in dst_chunks.iter_mut().enumerate() {
+                    let x = chunk_idx * 8;
                     store_u8x8_clip_shift(
-                        unsafe { dst.get_unchecked_mut(y * dst_stride + x..) },
+                        dst_chunk,
                         filter_i16x8_8tap(&mid, (y + 3) * mid_stride + x, mid_stride as isize, &fv),
                         rnd1,
                         sh1,
                     );
-                    x += 8;
                 }
-                while x < w {
-                    dst[y * dst_stride + x] = round_scalar(
+                let processed = dst_chunks.len() * 8;
+                for (x, dst_px) in (processed..w).zip(dst_rem.iter_mut()) {
+                    *dst_px = round_scalar(
                         filter_i16_scalar(&mid, (y + 3) * mid_stride + x, mid_stride as isize, &fv),
                         rnd1,
                         sh1,
                     )
                     .clamp(0, 255) as u8;
-                    x += 1;
                 }
             }
         }
         (Some(fh), None) => {
-            for y in 0..h {
+            for (y, dst_row) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
-                let mut x = 0usize;
-                while x + 8 <= w {
+                let src_row = unsafe { src.get_unchecked(base..) };
+                let (dst_chunks, dst_rem) = dst_row[..w].as_chunks_mut::<8>();
+                for (chunk_idx, dst_chunk) in dst_chunks.iter_mut().enumerate() {
+                    let x = chunk_idx * 8;
                     store_u8x8_clip_shift(
-                        unsafe { dst.get_unchecked_mut(y * dst_stride + x..) },
-                        filter_u8x8(src, base + x, 1, &fh),
+                        dst_chunk,
+                        filter_u8x8(src_row, x, 1, &fh),
                         intermediate_rnd,
                         bits,
                     );
-                    x += 8;
                 }
-                while x < w {
-                    dst[y * dst_stride + x] = round_scalar(
-                        filter_u8_scalar(src, base + x, 1, &fh),
-                        intermediate_rnd,
-                        bits,
-                    )
-                    .clamp(0, 255) as u8;
-                    x += 1;
+                let processed = dst_chunks.len() * 8;
+                for (x, dst_px) in (processed..w).zip(dst_rem.iter_mut()) {
+                    *dst_px =
+                        round_scalar(filter_u8_scalar(src_row, x, 1, &fh), intermediate_rnd, bits)
+                            .clamp(0, 255) as u8;
                 }
             }
         }
         (None, Some(fv)) => {
             let ss = src_stride as isize;
-            for y in 0..h {
+            for (y, dst_row) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
-                let mut x = 0usize;
-                while x + 8 <= w {
+                let (dst_chunks, dst_rem) = dst_row[..w].as_chunks_mut::<8>();
+                for (chunk_idx, dst_chunk) in dst_chunks.iter_mut().enumerate() {
+                    let x = chunk_idx * 8;
                     store_u8x8_clip_shift(
-                        unsafe { dst.get_unchecked_mut(y * dst_stride + x..) },
+                        dst_chunk,
                         filter_u8x8(src, base + x, ss, &fv),
                         (1 << bits) >> 1,
                         bits,
                     );
-                    x += 8;
                 }
-                while x < w {
-                    dst[y * dst_stride + x] = round_scalar(
+                let processed = dst_chunks.len() * 8;
+                for (x, dst_px) in (processed..w).zip(dst_rem.iter_mut()) {
+                    *dst_px = round_scalar(
                         filter_u8_scalar(src, base + x, ss, &fv),
                         (1 << bits) >> 1,
                         bits,
                     )
                     .clamp(0, 255) as u8;
-                    x += 1;
                 }
             }
         }
         (None, None) => {
-            for y in 0..h {
-                dst[y * dst_stride..y * dst_stride + w]
-                    .copy_from_slice(&src[src_off + y * src_stride..src_off + y * src_stride + w]);
+            for (src_row, dst_row) in src[src_off..]
+                .chunks_exact(src_stride)
+                .zip(dst.chunks_exact_mut(dst_stride))
+                .take(h)
+            {
+                dst_row[..w].copy_from_slice(&src_row[..w]);
             }
         }
     }
@@ -562,6 +543,7 @@ pub(crate) fn prep_8tap_8bpc_avx2(
     mx: i32,
     my: i32,
     filter_type: i32,
+    mid_scratch: &mut [i16],
 ) {
     let bits = 6 + (filter_type < 0) as i32;
     let fh = crate::mc::get_h_filter(mx, filter_type, w);
@@ -570,68 +552,58 @@ pub(crate) fn prep_8tap_8bpc_avx2(
         (Some(fh), Some(fv)) => {
             let tmp_h = h + 7;
             let mid_stride = w.next_multiple_of(8).max(64);
-            let mut mid = vec![0i16; mid_stride * tmp_h];
+            let mid = &mut mid_scratch[..mid_stride * tmp_h];
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for y in 0..tmp_h {
+            for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(tmp_h).enumerate() {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
-                let mut x = 0usize;
-                while x + 8 <= w {
-                    store_i16x8_shift(
-                        unsafe { mid.get_unchecked_mut(y * mid_stride + x..) },
-                        filter_u8x8(src, base + x, 1, &fh),
-                        rnd0,
-                        sh0,
-                    );
-                    x += 8;
+                let src_row = unsafe { src.get_unchecked(base..) };
+                let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<8>();
+                for (chunk_idx, mid_chunk) in mid_chunks.iter_mut().enumerate() {
+                    let x = chunk_idx * 8;
+                    store_i16x8_shift(mid_chunk, filter_u8x8(src_row, x, 1, &fh), rnd0, sh0);
                 }
-                while x < w {
-                    mid[y * mid_stride + x] =
-                        round_scalar(filter_u8_scalar(src, base + x, 1, &fh), rnd0, sh0) as i16;
-                    x += 1;
+                let processed = mid_chunks.len() * 8;
+                for (x, mid_px) in (processed..w).zip(mid_rem.iter_mut()) {
+                    *mid_px = round_scalar(filter_u8_scalar(src_row, x, 1, &fh), rnd0, sh0) as i16;
                 }
             }
             let rnd1 = (1 << bits) >> 1;
-            for y in 0..h {
-                let mut x = 0usize;
-                while x + 8 <= w {
+            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+                let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<8>();
+                for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
+                    let x = chunk_idx * 8;
                     store_i16x8_shift(
-                        unsafe { tmp.get_unchecked_mut(y * tmp_stride + x..) },
+                        tmp_chunk,
                         filter_i16x8_8tap(&mid, (y + 3) * mid_stride + x, mid_stride as isize, &fv),
                         rnd1,
                         bits,
                     );
-                    x += 8;
                 }
-                while x < w {
-                    tmp[y * tmp_stride + x] = round_scalar(
+                let processed = tmp_chunks.len() * 8;
+                for (x, tmp_px) in (processed..w).zip(tmp_rem.iter_mut()) {
+                    *tmp_px = round_scalar(
                         filter_i16_scalar(&mid, (y + 3) * mid_stride + x, mid_stride as isize, &fv),
                         rnd1,
                         bits,
                     ) as i16;
-                    x += 1;
                 }
             }
         }
         (Some(fh), None) => {
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for y in 0..h {
+            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
-                let mut x = 0usize;
-                while x + 8 <= w {
-                    store_i16x8_shift(
-                        unsafe { tmp.get_unchecked_mut(y * tmp_stride + x..) },
-                        filter_u8x8(src, base + x, 1, &fh),
-                        rnd0,
-                        sh0,
-                    );
-                    x += 8;
+                let src_row = unsafe { src.get_unchecked(base..) };
+                let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<8>();
+                for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
+                    let x = chunk_idx * 8;
+                    store_i16x8_shift(tmp_chunk, filter_u8x8(src_row, x, 1, &fh), rnd0, sh0);
                 }
-                while x < w {
-                    tmp[y * tmp_stride + x] =
-                        round_scalar(filter_u8_scalar(src, base + x, 1, &fh), rnd0, sh0) as i16;
-                    x += 1;
+                let processed = tmp_chunks.len() * 8;
+                for (x, tmp_px) in (processed..w).zip(tmp_rem.iter_mut()) {
+                    *tmp_px = round_scalar(filter_u8_scalar(src_row, x, 1, &fh), rnd0, sh0) as i16;
                 }
             }
         }
@@ -639,38 +611,35 @@ pub(crate) fn prep_8tap_8bpc_avx2(
             let ss = src_stride as isize;
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for y in 0..h {
+            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
-                let mut x = 0usize;
-                while x + 8 <= w {
-                    store_i16x8_shift(
-                        unsafe { tmp.get_unchecked_mut(y * tmp_stride + x..) },
-                        filter_u8x8(src, base + x, ss, &fv),
-                        rnd0,
-                        sh0,
-                    );
-                    x += 8;
+                let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<8>();
+                for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
+                    let x = chunk_idx * 8;
+                    store_i16x8_shift(tmp_chunk, filter_u8x8(src, base + x, ss, &fv), rnd0, sh0);
                 }
-                while x < w {
-                    tmp[y * tmp_stride + x] =
+                let processed = tmp_chunks.len() * 8;
+                for (x, tmp_px) in (processed..w).zip(tmp_rem.iter_mut()) {
+                    *tmp_px =
                         round_scalar(filter_u8_scalar(src, base + x, ss, &fv), rnd0, sh0) as i16;
-                    x += 1;
                 }
             }
         }
         (None, None) => {
-            for y in 0..h {
-                let mut x = 0usize;
-                while x + 16 <= w {
+            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+                let base = src_off + y * src_stride;
+                let src_row = unsafe { src.get_unchecked(base..) };
+                let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
+                for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
+                    let x = chunk_idx * 16;
                     let v = _mm256_slli_epi16::<4>(load_u8x16_i16(unsafe {
-                        src.get_unchecked(src_off + y * src_stride + x..)
+                        src_row.get_unchecked(x..)
                     }));
-                    store_i16x16(unsafe { tmp.get_unchecked_mut(y * tmp_stride + x..) }, v);
-                    x += 16;
+                    store_i16x16(tmp_chunk, v);
                 }
-                while x < w {
-                    tmp[y * tmp_stride + x] = (src[src_off + y * src_stride + x] as i16) << 4;
-                    x += 1;
+                let processed = tmp_chunks.len() * 16;
+                for (x, tmp_px) in (processed..w).zip(tmp_rem.iter_mut()) {
+                    *tmp_px = (src_row[x] as i16) << 4;
                 }
             }
         }

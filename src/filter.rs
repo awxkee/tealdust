@@ -817,4 +817,253 @@ mod wiener_scalar_proof {
             assert_eq!(d_ref, d_dsp, "pc dispatch mismatch n={} taps={}", n, n_taps);
         }
     }
+    fn u16_buf(rng: &mut Rng, len: usize, max: u16) -> Vec<u16> {
+        (0..len).map(|_| rng.range(0, max as i32) as u16).collect()
+    }
+
+    #[test]
+    fn ns_wiener_uv_dispatch_matches_scalar() {
+        let mut rng = Rng(0xD15C);
+        let f = ns_wiener_uv_fir_run();
+        for _ in 0..400 {
+            let len = 320usize;
+            let c_center = buf(&mut rng, len);
+            let l_center = buf(&mut rng, len);
+            let lstep = if rng.range(0, 1) == 0 { 1usize } else { 2usize };
+            let n_taps = rng.range(1, 8) as usize;
+            let c_rows: Vec<(Vec<u8>, Vec<u8>, i32, i32)> = (0..n_taps)
+                .map(|_| {
+                    (
+                        buf(&mut rng, len),
+                        buf(&mut rng, len),
+                        rng.range(-4, 4),
+                        rng.range(-64, 64),
+                    )
+                })
+                .collect();
+            let ctaps: Vec<WienerTap> = c_rows
+                .iter()
+                .map(|(p, m, dx, coef)| WienerTap {
+                    row_p: p,
+                    row_m: m,
+                    dx: *dx,
+                    coef: *coef,
+                })
+                .collect();
+            let n_luma_taps = rng.range(1, 12) as usize;
+            let l_rows: Vec<(Vec<u8>, i32, i32)> = (0..n_luma_taps)
+                .map(|_| {
+                    (
+                        buf(&mut rng, len),
+                        rng.range(-4, 4) * lstep as i32,
+                        rng.range(-64, 64),
+                    )
+                })
+                .collect();
+            let ltaps: Vec<UvLumaTap> = l_rows
+                .iter()
+                .map(|(row, ldx, coef)| UvLumaTap {
+                    row,
+                    ldx: *ldx,
+                    coef: *coef,
+                })
+                .collect();
+            let co = 64usize;
+            let lo = 32usize;
+            let n = rng.range(1, 96) as usize;
+            let mut d_ref = vec![0u8; n];
+            let mut d_dsp = vec![0u8; n];
+            ns_wiener_uv_fir_run_scalar(
+                &mut d_ref, &c_center, co, &ctaps, &l_center, lo, &ltaps, lstep, n,
+            );
+            // SAFETY: resolver selected this function after runtime CPU feature detection.
+            unsafe {
+                f(
+                    &mut d_dsp, &c_center, co, &ctaps, &l_center, lo, &ltaps, lstep, n,
+                )
+            };
+            assert_eq!(
+                d_ref, d_dsp,
+                "uv dispatch mismatch n={} ctaps={} ltaps={} lstep={}",
+                n, n_taps, n_luma_taps, lstep
+            );
+        }
+    }
+
+    #[test]
+    fn ns_wiener_hbd_dispatch_matches_scalar() {
+        let mut rng = Rng(0xD15D);
+        let f = ns_wiener_fir_run_hbd();
+        for _ in 0..400 {
+            let max = if rng.range(0, 1) == 0 {
+                1023u16
+            } else {
+                4095u16
+            };
+            let len = 320usize;
+            let center = u16_buf(&mut rng, len, max);
+            let n_taps = rng.range(1, 8) as usize;
+            let rows: Vec<(Vec<u16>, Vec<u16>, i32, i32)> = (0..n_taps)
+                .map(|_| {
+                    (
+                        u16_buf(&mut rng, len, max),
+                        u16_buf(&mut rng, len, max),
+                        rng.range(-4, 4),
+                        rng.range(-64, 64),
+                    )
+                })
+                .collect();
+            let taps: Vec<WienerTapHbd> = rows
+                .iter()
+                .map(|(p, m, dx, coef)| WienerTapHbd {
+                    row_p: p,
+                    row_m: m,
+                    dx: *dx,
+                    coef: *coef,
+                })
+                .collect();
+            let col0 = 64usize;
+            let n = rng.range(1, 128) as usize;
+            let mut d_ref = vec![0u16; n];
+            let mut d_dsp = vec![0u16; n];
+            ns_wiener_fir_run_hbd_scalar(&mut d_ref, &center, col0, &taps, n, max as i32);
+            // SAFETY: resolver selected this function after runtime CPU feature detection.
+            unsafe { f(&mut d_dsp, &center, col0, &taps, n, max as i32) };
+            assert_eq!(
+                d_ref, d_dsp,
+                "hbd ns dispatch mismatch n={} taps={}",
+                n, n_taps
+            );
+        }
+    }
+
+    #[test]
+    fn pc_wiener_hbd_dispatch_matches_scalar() {
+        let mut rng = Rng(0xD15E);
+        let f = pc_wiener_fir_run_hbd();
+        for _ in 0..400 {
+            let max = if rng.range(0, 1) == 0 {
+                1023u16
+            } else {
+                4095u16
+            };
+            let len = 320usize;
+            let center = u16_buf(&mut rng, len, max);
+            let center_coef = rng.range(-256, 256);
+            let n_taps = rng.range(1, 12) as usize;
+            let rows: Vec<(Vec<u16>, Vec<u16>, i32, i32)> = (0..n_taps)
+                .map(|_| {
+                    (
+                        u16_buf(&mut rng, len, max),
+                        u16_buf(&mut rng, len, max),
+                        rng.range(-4, 4),
+                        rng.range(-64, 64),
+                    )
+                })
+                .collect();
+            let taps: Vec<WienerTapHbd> = rows
+                .iter()
+                .map(|(p, m, dx, coef)| WienerTapHbd {
+                    row_p: p,
+                    row_m: m,
+                    dx: *dx,
+                    coef: *coef,
+                })
+                .collect();
+            let col0 = 64usize;
+            let n = rng.range(1, 128) as usize;
+            let mut d_ref = vec![0u16; n];
+            let mut d_dsp = vec![0u16; n];
+            pc_wiener_fir_run_hbd_scalar(
+                &mut d_ref,
+                &center,
+                center_coef,
+                col0,
+                &taps,
+                n,
+                max as i32,
+            );
+            // SAFETY: resolver selected this function after runtime CPU feature detection.
+            unsafe { f(&mut d_dsp, &center, center_coef, col0, &taps, n, max as i32) };
+            assert_eq!(
+                d_ref, d_dsp,
+                "hbd pc dispatch mismatch n={} taps={}",
+                n, n_taps
+            );
+        }
+    }
+
+    #[test]
+    fn ns_wiener_uv_hbd_dispatch_matches_scalar() {
+        let mut rng = Rng(0xD15F);
+        let f = ns_wiener_uv_fir_run_hbd();
+        for _ in 0..400 {
+            let max = if rng.range(0, 1) == 0 {
+                1023u16
+            } else {
+                4095u16
+            };
+            let len = 360usize;
+            let c_center = u16_buf(&mut rng, len, max);
+            let l_center = u16_buf(&mut rng, len, max);
+            let lstep = if rng.range(0, 1) == 0 { 1usize } else { 2usize };
+            let n_taps = rng.range(1, 8) as usize;
+            let c_rows: Vec<(Vec<u16>, Vec<u16>, i32, i32)> = (0..n_taps)
+                .map(|_| {
+                    (
+                        u16_buf(&mut rng, len, max),
+                        u16_buf(&mut rng, len, max),
+                        rng.range(-4, 4),
+                        rng.range(-64, 64),
+                    )
+                })
+                .collect();
+            let ctaps: Vec<WienerTapHbd> = c_rows
+                .iter()
+                .map(|(p, m, dx, coef)| WienerTapHbd {
+                    row_p: p,
+                    row_m: m,
+                    dx: *dx,
+                    coef: *coef,
+                })
+                .collect();
+            let n_luma_taps = rng.range(1, 12) as usize;
+            let l_rows: Vec<(Vec<u16>, i32, i32)> = (0..n_luma_taps)
+                .map(|_| {
+                    (
+                        u16_buf(&mut rng, len, max),
+                        rng.range(-4, 4) * lstep as i32,
+                        rng.range(-64, 64),
+                    )
+                })
+                .collect();
+            let ltaps: Vec<UvLumaTapHbd> = l_rows
+                .iter()
+                .map(|(row, ldx, coef)| UvLumaTapHbd {
+                    row,
+                    ldx: *ldx,
+                    coef: *coef,
+                })
+                .collect();
+            let co = 64usize;
+            let lo = 32usize;
+            let n = rng.range(1, 128) as usize;
+            let mut d_ref = vec![0u16; n];
+            let mut d_dsp = vec![0u16; n];
+            ns_wiener_uv_fir_run_hbd_scalar(
+                &mut d_ref, &c_center, co, &ctaps, &l_center, lo, &ltaps, lstep, n, max as i32,
+            );
+            // SAFETY: resolver selected this function after runtime CPU feature detection.
+            unsafe {
+                f(
+                    &mut d_dsp, &c_center, co, &ctaps, &l_center, lo, &ltaps, lstep, n, max as i32,
+                )
+            };
+            assert_eq!(
+                d_ref, d_dsp,
+                "hbd uv dispatch mismatch n={} ctaps={} ltaps={} lstep={}",
+                n, n_taps, n_luma_taps, lstep
+            );
+        }
+    }
 }

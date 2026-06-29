@@ -194,21 +194,6 @@ fn load_u8x16_i16x2(a: &[u8; 16]) -> (int16x8_t, int16x8_t) {
     )
 }
 
-#[inline(always)]
-fn store_i16x8_u8(a: &mut [u8; 8], v: int16x8_t) {
-    unsafe { vst1_u8(a.as_mut_ptr(), vqmovun_s16(v)) };
-}
-
-#[inline(always)]
-fn store_i16x8x2_u8(a: &mut [u8; 16], lo: int16x8_t, hi: int16x8_t) {
-    unsafe {
-        vst1q_u8(
-            a.as_mut_ptr(),
-            vcombine_u8(vqmovun_s16(lo), vqmovun_s16(hi)),
-        )
-    };
-}
-
 #[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn residual_add_row_8bpc_neon(
@@ -224,7 +209,7 @@ pub(crate) fn residual_add_row_8bpc_neon(
     let (d16, r16) = dst[..n].as_chunks_mut::<16>();
     let (cc16, _) = c[..n].as_chunks::<16>();
     for (d, cv) in d16.iter_mut().zip(cc16) {
-        let c0 = f(load_i32x4((&cv[0..4]).try_into().unwrap()));
+        let c0 = f(load_i32x4((&cv[..4]).try_into().unwrap()));
         let c1 = f(load_i32x4((&cv[4..8]).try_into().unwrap()));
         let c2 = f(load_i32x4((&cv[8..12]).try_into().unwrap()));
         let c3 = f(load_i32x4((&cv[12..16]).try_into().unwrap()));

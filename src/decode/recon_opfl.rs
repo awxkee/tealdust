@@ -60,6 +60,7 @@ fn prep_opfl_prefetch_rect_8bpc<BD: BitDepth>(
     right: i32,
     top: i32,
     bottom: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     let ref_stride = ref_pic.stride[0].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
     let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(0) {
@@ -108,7 +109,7 @@ fn prep_opfl_prefetch_rect_8bpc<BD: BitDepth>(
     if BD::BPC == 8 {
         let p8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(p);
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-        crate::mc_dispatch::put_bilin_8bpc(
+        crate::mc_dispatch::put_bilin_8bpc_with_scratch(
             p8,
             p_stride,
             &src8[src_off..],
@@ -117,6 +118,7 @@ fn prep_opfl_prefetch_rect_8bpc<BD: BitDepth>(
             dhu,
             mx << 1,
             my << 1,
+            inter_scratch,
         );
     } else {
         crate::mc::put_bilin(
@@ -238,6 +240,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                         iclip(left[n] + 4 * sw4 + 7, 1, w),
                         iclip(top[n], 0, h - 1),
                         iclip(top[n] + 4 * sh4 + 7, 1, h),
+                        recon.scratch.inter_mc_tmp_mut(),
                     );
                 }
                 let (dx, dy) = crate::mc::sad_refine_mv::<BD::Pixel>(
@@ -310,6 +313,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                                     iclip(left[i] + sw4 * 4 + 7, 1, w),
                                     iclip(top[i], 0, h - 1),
                                     iclip(top[i] + sh4 * 4 + 7, 1, h),
+                                    recon.scratch.inter_mc_tmp_mut(),
                                 );
                             }
                             let dmv = [
@@ -396,6 +400,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                             iclip(left[i] + sw4 * 4 + 7, 1, w),
                             iclip(top[i], 0, h - 1),
                             iclip(top[i] + sh4 * 4 + 7, 1, h),
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                         let _ = off;
                     }
@@ -441,6 +446,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                     w,
                     0,
                     h,
+                    recon.scratch.inter_mc_tmp_mut(),
                 );
             }
             // res[bs-block grid]: rows = sh4/bs, cols = bw4/bs.
@@ -508,6 +514,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                             iclip(left[i] + bxi * 4 + 7 + 8, 1, w),
                             iclip(top[i] + byi * 4, 0, h - 1),
                             iclip(top[i] + byi * 4 + 7 + 8, 1, h),
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
                     if bs > 1 {
@@ -841,7 +848,7 @@ where
     // SB-local projected-MV grid (`t->rt.rp_proj`).
     let rp_proj_off = recon.rt.rp_proj_off;
 
-    let mut seg_mask = vec![0u8; 128 * 128];
+    let mut seg_mask = recon.scratch.take_compound_seg_mask();
     let mut luma_bacp = false;
     if has_luma {
         let bw4 = bw4_full;
@@ -854,7 +861,7 @@ where
         let dst_off = 4 * (by as usize * y_stride + bx as usize);
 
         let _len = crate::mc_dispatch::compound_tmp_len(yw, yh);
-        let mut tmp = [vec![0i16; _len], vec![0i16; _len]];
+        let mut tmp = recon.scratch.take_compound_tmp(_len);
         if bacp {
             for m in seg_mask.iter_mut() {
                 *m = 0x20;
@@ -924,6 +931,7 @@ where
                             iclip(left[i] + 7 + step * 4, 1, w),
                             iclip(top[i], 0, h - 1),
                             iclip(top[i] + 7 + step * 4, 1, h),
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
                     let (mut dy, mut dx) = (0i32, 0i32);
@@ -1003,6 +1011,7 @@ where
                             iclip(left[i] + 7 + step * 4, 1, w),
                             iclip(top[i], 0, h - 1),
                             iclip(top[i] + 7 + step * 4, 1, h),
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
                     let dmv = [
@@ -1071,6 +1080,7 @@ where
                             ss_ver,
                             fi.bw,
                             fi.bh,
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
                     update_temporal_grid(
@@ -1169,6 +1179,7 @@ where
                 yh,
             );
         }
+        recon.scratch.put_compound_tmp(tmp);
 
         // luma residual.
         let seg_id = b.seg_id as usize;
@@ -1235,7 +1246,7 @@ where
         for plane in (0..2usize).filter(|_| do_chroma_mc) {
             let dst_off = 4 * ((cby >> ss_ver) as usize * uv_stride + (cbx >> ss_hor) as usize);
             let _len = crate::mc_dispatch::compound_tmp_len(cw, ch);
-            let mut tmp = [vec![0i16; _len], vec![0i16; _len]];
+            let mut tmp = recon.scratch.take_compound_tmp(_len);
             let pl_bacp = rmv_uvpred(
                 recon,
                 b,
@@ -1269,6 +1280,7 @@ where
             } else {
                 mc_avg(bd, dst, uv_stride, &tmp0[0], &tmp1[0], cw, ch);
             }
+            recon.scratch.put_compound_tmp(tmp);
         }
 
         // chroma residual.
@@ -1303,6 +1315,7 @@ where
             fi,
         )?;
     }
+    recon.scratch.put_compound_seg_mask(seg_mask);
     Ok(())
 }
 
@@ -1311,7 +1324,7 @@ where
 /// (i16 prep, stride `bw4*4>>ss_hor`) via `mc_opfl`. Returns BACP for plane 0.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
-    recon: &ReconCtx<BD>,
+    recon: &mut ReconCtx<BD>,
     b: &Av2Block,
     tmp: &mut [Vec<i16>; 2],
     plane: usize,
@@ -1423,6 +1436,7 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
                             right[i],
                             top[i],
                             bottom[i],
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
                     if bacp {
@@ -1473,6 +1487,7 @@ fn prep_opfl_prefetch_8bpc<BD: crate::pixel::BitDepth>(
     right: i32,
     top: i32,
     bottom: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     let ref_stride = ref_pic.stride[0].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
     let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(0) {
@@ -1522,7 +1537,7 @@ fn prep_opfl_prefetch_8bpc<BD: crate::pixel::BitDepth>(
     if BD::BPC == 8 {
         let p8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(p);
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-        crate::mc_dispatch::put_bilin_8bpc(
+        crate::mc_dispatch::put_bilin_8bpc_with_scratch(
             p8,
             p_stride,
             &src8[src_off..],
@@ -1531,6 +1546,7 @@ fn prep_opfl_prefetch_8bpc<BD: crate::pixel::BitDepth>(
             dimu,
             mx << 1,
             my << 1,
+            inter_scratch,
         );
     } else {
         crate::mc::put_bilin(
@@ -1626,6 +1642,7 @@ fn inter_mc_plane_prep_at_8bpc<BD: crate::pixel::BitDepth>(
     ss_ver: i32,
     cur_bw: i32,
     cur_bh: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     mc_prep_bounds_8bpc(
         bd,
@@ -1646,6 +1663,7 @@ fn inter_mc_plane_prep_at_8bpc<BD: crate::pixel::BitDepth>(
         cur_bw * 4 >> if pl != 0 { ss_hor } else { 0 },
         0,
         cur_bh * 4 >> if pl != 0 { ss_ver } else { 0 },
+        inter_scratch,
     );
 }
 
@@ -1681,6 +1699,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
     right: i32,
     top: i32,
     bottom: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
@@ -1742,7 +1761,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8.
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_dispatch::prep_bilin_8bpc(
+            crate::mc_dispatch::prep_bilin_8bpc_with_scratch(
                 tmp,
                 tmp_stride,
                 &src8[src_off..],
@@ -1751,9 +1770,10 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
                 h,
                 mxf,
                 myf,
+                inter_scratch,
             );
         } else {
-            crate::mc_dispatch::prep_8tap_8bpc(
+            crate::mc_dispatch::prep_8tap_8bpc_with_scratch(
                 tmp,
                 tmp_stride,
                 src8,
@@ -1764,6 +1784,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
                 mxf,
                 myf,
                 filter as i32,
+                inter_scratch,
             );
         }
     } else if is_bilin {
@@ -1817,6 +1838,7 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
     right: i32,
     top: i32,
     bottom: i32,
+    inter_scratch: &mut Vec<i16>,
 ) {
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
@@ -1870,7 +1892,7 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8.
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_dispatch::prep_bilin_8bpc(
+            crate::mc_dispatch::prep_bilin_8bpc_with_scratch(
                 &mut dst16[dst_off..],
                 dst_stride,
                 &src8[src_off..],
@@ -1879,9 +1901,10 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
                 h,
                 mx,
                 my,
+                inter_scratch,
             );
         } else {
-            crate::mc_dispatch::prep_8tap_8bpc(
+            crate::mc_dispatch::prep_8tap_8bpc_with_scratch(
                 &mut dst16[dst_off..],
                 dst_stride,
                 src8,
@@ -1892,6 +1915,7 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
                 mx,
                 my,
                 filter as i32,
+                inter_scratch,
             );
         }
     } else if is_bilin {
@@ -2110,6 +2134,7 @@ where
                     ss_ver,
                     fi.bw,
                     fi.bh,
+                    recon.scratch.inter_mc_tmp_mut(),
                 );
             }
         } else {
@@ -2130,6 +2155,7 @@ where
                 ss_ver,
                 fi.bw,
                 fi.bh,
+                recon.scratch.inter_mc_tmp_mut(),
             );
         }
 
@@ -2275,8 +2301,23 @@ where
                             &mut recon.dst_v[dst_off..]
                         };
                         inter_mc_plane_8bpc(
-                            bd, dst, uv_stride, &s_refp, pl, s_cbx, s_cby, s_bw4, s_bh4, s_mv.x,
-                            s_mv.y, s_filter, ss_hor, ss_ver, fi.bw, fi.bh,
+                            bd,
+                            dst,
+                            uv_stride,
+                            &s_refp,
+                            pl,
+                            s_cbx,
+                            s_cby,
+                            s_bw4,
+                            s_bh4,
+                            s_mv.x,
+                            s_mv.y,
+                            s_filter,
+                            ss_hor,
+                            ss_ver,
+                            fi.bw,
+                            fi.bh,
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
                 }
@@ -2305,14 +2346,41 @@ where
                     );
                 } else {
                     ext_warp_plane_8bpc(
-                        bd, dst, uv_stride, &refp, pl, cbx, cby, cb_dim, &c_wmp, ss_hor, ss_ver,
-                        fi.bw, fi.bh,
+                        bd,
+                        dst,
+                        uv_stride,
+                        &refp,
+                        pl,
+                        cbx,
+                        cby,
+                        cb_dim,
+                        &c_wmp,
+                        ss_hor,
+                        ss_ver,
+                        fi.bw,
+                        fi.bh,
+                        recon.scratch.inter_mc_tmp_mut(),
                     );
                 }
             } else {
                 inter_mc_plane_8bpc(
-                    bd, dst, uv_stride, &refp, pl, cbx, cby, cbw4, cbh4, mv.x, mv.y, filter,
-                    ss_hor, ss_ver, fi.bw, fi.bh,
+                    bd,
+                    dst,
+                    uv_stride,
+                    &refp,
+                    pl,
+                    cbx,
+                    cby,
+                    cbw4,
+                    cbh4,
+                    mv.x,
+                    mv.y,
+                    filter,
+                    ss_hor,
+                    ss_ver,
+                    fi.bw,
+                    fi.bh,
+                    recon.scratch.inter_mc_tmp_mut(),
                 );
             }
         }

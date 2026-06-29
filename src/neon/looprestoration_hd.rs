@@ -28,6 +28,10 @@
  */
 
 use crate::filter::{UvLumaTapHbd, WienerTapHbd};
+
+// Precision note: HBD LR keeps the full signed i32 accumulator until the final
+// `+64 >> 7` and bitdepth clamp, matching AVM/dav2d C.  Do not narrow the
+// per-tap products or the running sum to i16.
 use std::arch::aarch64::*;
 
 #[inline]

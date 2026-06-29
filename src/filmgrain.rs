@@ -49,6 +49,26 @@ pub(crate) fn round2(x: i32, shift: u32) -> i32 {
 }
 
 #[inline]
+fn avg_chroma_luma<T: Copy + Into<i32>>(
+    luma: &[T],
+    luma_width: usize,
+    lx: usize,
+    sx: usize,
+) -> i32 {
+    let l0 = luma[lx].into();
+    if sx != 0 {
+        let l1 = if lx + 1 < luma_width {
+            luma[lx + 1].into()
+        } else {
+            l0
+        };
+        (l0 + l1 + 1) >> 1
+    } else {
+        l0
+    }
+}
+
+#[inline]
 fn scaled_gaussian_table(shift: i32) -> [i16; 2048] {
     debug_assert!(shift >= 0);
     let shift = shift as u32;
@@ -341,7 +361,7 @@ fn blend_top_grain_row_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            return crate::neon::blend_top_grain_row_neon;
+            crate::neon::blend_top_grain_row_neon
         }
         #[cfg(not(target_arch = "aarch64"))]
         {
@@ -506,6 +526,7 @@ type FguvRow8Fn = unsafe fn(
     &[u8],
     usize,
     usize,
+    usize,
     &[u8],
     i32,
     i32,
@@ -520,6 +541,7 @@ type FguvRowHbdFn = unsafe fn(
     &[u16],
     &[i16],
     &[u16],
+    usize,
     usize,
     usize,
     &[u8],
@@ -582,6 +604,7 @@ fn fguv_row_8bpc_scalar(
     grain: &[i16],
     luma: &[u8],
     cx_base: usize,
+    luma_width: usize,
     sx: usize,
     scaling: &[u8],
     scaling_shift: i32,
@@ -600,12 +623,7 @@ fn fguv_row_8bpc_scalar(
         .enumerate()
     {
         let lx = (cx_base + x) << sx;
-        let luma0 = luma[lx] as i32;
-        let avg = if sx != 0 {
-            (luma0 + luma[lx + 1] as i32 + 1) >> 1
-        } else {
-            luma0
-        };
+        let avg = avg_chroma_luma(luma, luma_width, lx, sx);
         let s = s as i32;
         let val = if !chroma_scaling_from_luma {
             iclip(
@@ -628,6 +646,7 @@ fn fguv_row_hbd_scalar(
     grain: &[i16],
     luma: &[u16],
     cx_base: usize,
+    luma_width: usize,
     sx: usize,
     scaling: &[u8],
     scaling_shift: i32,
@@ -647,12 +666,7 @@ fn fguv_row_hbd_scalar(
         .enumerate()
     {
         let lx = (cx_base + x) << sx;
-        let luma0 = luma[lx] as i32;
-        let avg = if sx != 0 {
-            (luma0 + luma[lx + 1] as i32 + 1) >> 1
-        } else {
-            luma0
-        };
+        let avg = avg_chroma_luma(luma, luma_width, lx, sx);
         let s = s as i32;
         let val = if !chroma_scaling_from_luma {
             iclip(
@@ -688,7 +702,7 @@ fn fgy_row_8bpc_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            return crate::neon::fgy_row_8bpc_neon;
+            crate::neon::fgy_row_8bpc_neon
         }
         #[cfg(not(target_arch = "aarch64"))]
         {
@@ -755,6 +769,7 @@ fn fguv_row_8bpc_dispatch(
     grain: &[i16],
     luma: &[u8],
     cx_base: usize,
+    luma_width: usize,
     sx: usize,
     scaling: &[u8],
     scaling_shift: i32,
@@ -775,11 +790,11 @@ fn fguv_row_8bpc_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            return crate::neon::fguv_row_8bpc_neon;
+            crate::neon::fguv_row_8bpc_neon
         }
         #[cfg(not(target_arch = "aarch64"))]
         {
-            crate::filmgrain::fguv_row_8bpc_scalar
+            fguv_row_8bpc_scalar
         }
     });
     unsafe {
@@ -789,6 +804,7 @@ fn fguv_row_8bpc_dispatch(
             grain,
             luma,
             cx_base,
+            luma_width,
             sx,
             scaling,
             scaling_shift,
@@ -809,6 +825,7 @@ fn fguv_row_hbd_dispatch(
     grain: &[i16],
     luma: &[u16],
     cx_base: usize,
+    luma_width: usize,
     sx: usize,
     scaling: &[u8],
     scaling_shift: i32,
@@ -844,6 +861,7 @@ fn fguv_row_hbd_dispatch(
             grain,
             luma,
             cx_base,
+            luma_width,
             sx,
             scaling,
             scaling_shift,
@@ -1057,6 +1075,7 @@ pub(crate) fn fguv_32x32xn_8bpc(
     row_num: i32,
     luma_row: &[u8],
     luma_stride: usize,
+    luma_width: usize,
     uv: usize,
     is_id: bool,
     sx: usize,
@@ -1140,6 +1159,7 @@ pub(crate) fn fguv_32x32xn_8bpc(
                     grain,
                     &luma_row[ly * luma_stride..],
                     bx + xstart as usize,
+                    luma_width,
                     sx,
                     scaling,
                     data.scaling_shift,
@@ -1175,6 +1195,7 @@ pub(crate) fn fguv_32x32xn_8bpc(
                     grain,
                     &luma_row[ly * luma_stride..],
                     bx,
+                    luma_width,
                     sx,
                     scaling,
                     data.scaling_shift,
@@ -1215,6 +1236,7 @@ pub(crate) fn fguv_32x32xn_8bpc(
                     grain,
                     &luma_row[ly * luma_stride..],
                     bx + xstart as usize,
+                    luma_width,
                     sx,
                     scaling,
                     data.scaling_shift,
@@ -1251,6 +1273,7 @@ pub(crate) fn fguv_32x32xn_8bpc(
                     grain,
                     &luma_row[ly * luma_stride..],
                     bx,
+                    luma_width,
                     sx,
                     scaling,
                     data.scaling_shift,
@@ -1592,6 +1615,7 @@ pub(crate) fn fguv_32x32xn_hbd(
     row_num: i32,
     luma_row: &[u16],
     luma_stride: usize,
+    luma_width: usize,
     uv: usize,
     is_id: bool,
     sx: usize,
@@ -1681,6 +1705,7 @@ pub(crate) fn fguv_32x32xn_hbd(
                     grain,
                     &luma_row[ly * luma_stride..],
                     bx + xstart as usize,
+                    luma_width,
                     sx,
                     scaling,
                     data.scaling_shift,
@@ -1717,6 +1742,7 @@ pub(crate) fn fguv_32x32xn_hbd(
                     grain,
                     &luma_row[ly * luma_stride..],
                     bx,
+                    luma_width,
                     sx,
                     scaling,
                     data.scaling_shift,
@@ -1758,6 +1784,7 @@ pub(crate) fn fguv_32x32xn_hbd(
                     grain,
                     &luma_row[ly * luma_stride..],
                     bx + xstart as usize,
+                    luma_width,
                     sx,
                     scaling,
                     data.scaling_shift,
@@ -1795,6 +1822,7 @@ pub(crate) fn fguv_32x32xn_hbd(
                     grain,
                     &luma_row[ly * luma_stride..],
                     bx,
+                    luma_width,
                     sx,
                     scaling,
                     data.scaling_shift,
@@ -2016,6 +2044,7 @@ pub(crate) fn apply_grain_row_hbd(
             row as i32,
             &src_y[luma_off..],
             y_stride,
+            w,
             0,
             fgd.mc_identity,
             ss_x as usize,
@@ -2038,6 +2067,7 @@ pub(crate) fn apply_grain_row_hbd(
             row as i32,
             &src_y[luma_off..],
             y_stride,
+            w,
             1,
             fgd.mc_identity,
             ss_x as usize,
@@ -2193,6 +2223,7 @@ pub(crate) fn apply_grain_row_8bpc(
             row as i32,
             &src_y[luma_off..],
             y_stride.unsigned_abs(),
+            w,
             0,
             fgd.mc_identity,
             ss_x as usize,
@@ -2215,6 +2246,7 @@ pub(crate) fn apply_grain_row_8bpc(
             row as i32,
             &src_y[luma_off..],
             y_stride.unsigned_abs(),
+            w,
             1,
             fgd.mc_identity,
             ss_x as usize,

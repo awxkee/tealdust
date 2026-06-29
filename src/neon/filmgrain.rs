@@ -40,6 +40,26 @@ fn iclip_scalar(v: i32, min_value: i32, max_value: i32) -> i32 {
 }
 
 #[inline]
+fn avg_chroma_luma<T: Copy + Into<i32>>(
+    luma: &[T],
+    luma_width: usize,
+    lx: usize,
+    sx: usize,
+) -> i32 {
+    let l0 = luma[lx].into();
+    if sx != 0 {
+        let l1 = if lx + 1 < luma_width {
+            luma[lx + 1].into()
+        } else {
+            l0
+        };
+        (l0 + l1 + 1) >> 1
+    } else {
+        l0
+    }
+}
+
+#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn blend_top_grain_row_neon(
     dst: &mut [i16],
@@ -51,9 +71,9 @@ pub(crate) fn blend_top_grain_row_neon(
     new_w: i32,
 ) {
     let n = dst.len().min(old.len()).min(grain.len());
-    let old_w_v = vdupq_n_s16(old_w as i16);
-    let new_w_v = vdupq_n_s16(new_w as i16);
-    let round = vdupq_n_s16(16);
+    let old_w_v = vdupq_n_s32(old_w);
+    let new_w_v = vdupq_n_s32(new_w);
+    let round = vdupq_n_s32(16);
     let minv = vdupq_n_s16(grain_min as i16);
     let maxv = vdupq_n_s16(grain_max as i16);
     let (dst_chunks, dst_tail) = dst[..n].as_chunks_mut::<8>();
@@ -62,9 +82,22 @@ pub(crate) fn blend_top_grain_row_neon(
     for ((d, o), g) in dst_chunks.iter_mut().zip(old_chunks).zip(grain_chunks) {
         let o = unsafe { vld1q_s16(o.as_ptr()) };
         let g = unsafe { vld1q_s16(g.as_ptr()) };
-        let sum = vaddq_s16(vmulq_s16(o, old_w_v), vmulq_s16(g, new_w_v));
+        let lo = vshrq_n_s32::<5>(vaddq_s32(
+            vaddq_s32(
+                vmulq_s32(vmovl_s16(vget_low_s16(o)), old_w_v),
+                vmulq_s32(vmovl_s16(vget_low_s16(g)), new_w_v),
+            ),
+            round,
+        ));
+        let hi = vshrq_n_s32::<5>(vaddq_s32(
+            vaddq_s32(
+                vmulq_s32(vmovl_s16(vget_high_s16(o)), old_w_v),
+                vmulq_s32(vmovl_s16(vget_high_s16(g)), new_w_v),
+            ),
+            round,
+        ));
         let out = vminq_s16(
-            vmaxq_s16(vshrq_n_s16::<5>(vaddq_s16(sum, round)), minv),
+            vmaxq_s16(vcombine_s16(vqmovn_s32(lo), vqmovn_s32(hi)), minv),
             maxv,
         );
         unsafe { vst1q_s16(d.as_mut_ptr(), out) };
@@ -278,6 +311,7 @@ pub(crate) fn fguv_row_8bpc_neon(
     grain: &[i16],
     luma: &[u8],
     cx_base: usize,
+    luma_width: usize,
     sx: usize,
     scaling: &[u8],
     scaling_shift: i32,
@@ -302,12 +336,7 @@ pub(crate) fn fguv_row_8bpc_neon(
         let mut scale = [0i16; 16];
         for (i, (scale, &src_px)) in scale.iter_mut().zip(s.iter()).enumerate() {
             let lx = (cx_base + base_x + i) << sx;
-            let l = luma[lx] as i32;
-            let avg = if sx != 0 {
-                (l + luma[lx + 1] as i32 + 1) >> 1
-            } else {
-                l
-            };
+            let avg = avg_chroma_luma(luma, luma_width, lx, sx);
             let val = if !chroma_scaling_from_luma {
                 iclip_scalar(
                     ((avg * uv_luma_mult + src_px as i32 * uv_mult) >> 6) + uv_offset,
@@ -338,12 +367,7 @@ pub(crate) fn fguv_row_8bpc_neon(
     {
         let x = tail_base + i;
         let lx = (cx_base + x) << sx;
-        let l = luma[lx] as i32;
-        let avg = if sx != 0 {
-            (l + luma[lx + 1] as i32 + 1) >> 1
-        } else {
-            l
-        };
+        let avg = avg_chroma_luma(luma, luma_width, lx, sx);
         let val = if !chroma_scaling_from_luma {
             iclip_scalar(
                 ((avg * uv_luma_mult + s as i32 * uv_mult) >> 6) + uv_offset,
@@ -366,6 +390,7 @@ pub(crate) fn fguv_row_hbd_neon(
     grain: &[i16],
     luma: &[u16],
     cx_base: usize,
+    luma_width: usize,
     sx: usize,
     scaling: &[u8],
     scaling_shift: i32,
@@ -386,12 +411,7 @@ pub(crate) fn fguv_row_hbd_neon(
         let mut scale = [0i32; 8];
         for (i, (scale, &src_px)) in scale.iter_mut().zip(s.iter()).enumerate() {
             let lx = (cx_base + base_x + i) << sx;
-            let l = luma[lx] as i32;
-            let avg = if sx != 0 {
-                (l + luma[lx + 1] as i32 + 1) >> 1
-            } else {
-                l
-            };
+            let avg = avg_chroma_luma(luma, luma_width, lx, sx);
             let val = if !chroma_scaling_from_luma {
                 iclip_scalar(
                     ((avg * uv_luma_mult + src_px as i32 * uv_mult) >> 6) + uv_offset_scaled,
@@ -422,12 +442,7 @@ pub(crate) fn fguv_row_hbd_neon(
         let mut scale = [0i32; 4];
         for (i, (scale, &src_px)) in scale.iter_mut().zip(s.iter()).enumerate() {
             let lx = (cx_base + base_x + i) << sx;
-            let l = luma[lx] as i32;
-            let avg = if sx != 0 {
-                (l + luma[lx + 1] as i32 + 1) >> 1
-            } else {
-                l
-            };
+            let avg = avg_chroma_luma(luma, luma_width, lx, sx);
             let val = if !chroma_scaling_from_luma {
                 iclip_scalar(
                     ((avg * uv_luma_mult + src_px as i32 * uv_mult) >> 6) + uv_offset_scaled,
@@ -458,12 +473,7 @@ pub(crate) fn fguv_row_hbd_neon(
     {
         let x = tail_base + i;
         let lx = (cx_base + x) << sx;
-        let l = luma[lx] as i32;
-        let avg = if sx != 0 {
-            (l + luma[lx + 1] as i32 + 1) >> 1
-        } else {
-            l
-        };
+        let avg = avg_chroma_luma(luma, luma_width, lx, sx);
         let val = if !chroma_scaling_from_luma {
             iclip_scalar(
                 ((avg * uv_luma_mult + s as i32 * uv_mult) >> 6) + uv_offset_scaled,
