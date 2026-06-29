@@ -2337,6 +2337,392 @@ pub(crate) fn deblock_v_sb64uv_8bpc_avx2(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+fn deblock_sb64_hbd_avx2_mask<
+    const MAX_WIDTH_NEG: i32,
+    const MAX_WIDTH_POS: i32,
+    const HORIZONTAL: bool,
+>(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    mut vm: u32,
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    bitdepth_max: i32,
+) {
+    debug_assert!(MAX_WIDTH_NEG <= MAX_WIDTH_POS);
+
+    while vm != 0 {
+        let qi = vm.trailing_zeros() as usize;
+        let bit = 1u32 << qi;
+        let q = q_thr[qi] as u32;
+        if q != 0 {
+            let pos_ll = (ll_mask[1] as u32 & bit) != 0;
+            let neg_ll = (ll_mask[0] as u32 & bit) != 0;
+            if !(pos_ll && neg_ll) {
+                let off = if HORIZONTAL {
+                    (dst_off + qi * 4 * stride) as isize
+                } else {
+                    (dst_off + qi * 4) as isize
+                };
+                let stridea = if HORIZONTAL { stride as isize } else { 1 };
+                let strideb = if HORIZONTAL { 1 } else { stride as isize };
+                crate::deblock_dispatch::deblock_hbd_edge_with(
+                    dst,
+                    off,
+                    q,
+                    side_thr[qi] as u32,
+                    stridea,
+                    strideb,
+                    MAX_WIDTH_POS,
+                    MAX_WIDTH_NEG,
+                    pos_ll,
+                    neg_ll,
+                    bitdepth_max,
+                    deblock_apply_hbd_avx2,
+                );
+            }
+        }
+        vm &= vm - 1;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) fn deblock_h_sb64y_hbd_avx2(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+    bitdepth_max: i32,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m3 = deblock_mask_class_bits(vmask[3], 0, both_lossless);
+    let m2 = deblock_mask_class_bits(vmask[2], vmask[3], both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2] | vmask[3], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2] | vmask[3], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_hbd_avx2_mask::<1, 1, true>(
+            dst,
+            dst_off,
+            stride,
+            m0,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m1 != 0 {
+        deblock_sb64_hbd_avx2_mask::<3, 3, true>(
+            dst,
+            dst_off,
+            stride,
+            m1,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m2 != 0 {
+        deblock_sb64_hbd_avx2_mask::<6, 6, true>(
+            dst,
+            dst_off,
+            stride,
+            m2,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m3 != 0 {
+        if edge {
+            deblock_sb64_hbd_avx2_mask::<6, 8, true>(
+                dst,
+                dst_off,
+                stride,
+                m3,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_avx2_mask::<8, 8, true>(
+                dst,
+                dst_off,
+                stride,
+                m3,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) fn deblock_v_sb64y_hbd_avx2(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+    bitdepth_max: i32,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m3 = deblock_mask_class_bits(vmask[3], 0, both_lossless);
+    let m2 = deblock_mask_class_bits(vmask[2], vmask[3], both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2] | vmask[3], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2] | vmask[3], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_hbd_avx2_mask::<1, 1, false>(
+            dst,
+            dst_off,
+            stride,
+            m0,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m1 != 0 {
+        deblock_sb64_hbd_avx2_mask::<3, 3, false>(
+            dst,
+            dst_off,
+            stride,
+            m1,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m2 != 0 {
+        deblock_sb64_hbd_avx2_mask::<6, 6, false>(
+            dst,
+            dst_off,
+            stride,
+            m2,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m3 != 0 {
+        if edge {
+            deblock_sb64_hbd_avx2_mask::<6, 8, false>(
+                dst,
+                dst_off,
+                stride,
+                m3,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_avx2_mask::<8, 8, false>(
+                dst,
+                dst_off,
+                stride,
+                m3,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) fn deblock_h_sb64uv_hbd_avx2(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+    bitdepth_max: i32,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m2 = deblock_mask_class_bits(vmask[2], 0, both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_hbd_avx2_mask::<1, 1, true>(
+            dst,
+            dst_off,
+            stride,
+            m0,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m1 != 0 {
+        if edge {
+            deblock_sb64_hbd_avx2_mask::<2, 3, true>(
+                dst,
+                dst_off,
+                stride,
+                m1,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_avx2_mask::<3, 3, true>(
+                dst,
+                dst_off,
+                stride,
+                m1,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+    if m2 != 0 {
+        if edge {
+            deblock_sb64_hbd_avx2_mask::<2, 4, true>(
+                dst,
+                dst_off,
+                stride,
+                m2,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_avx2_mask::<4, 4, true>(
+                dst,
+                dst_off,
+                stride,
+                m2,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) fn deblock_v_sb64uv_hbd_avx2(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+    bitdepth_max: i32,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m2 = deblock_mask_class_bits(vmask[2], 0, both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_hbd_avx2_mask::<1, 1, false>(
+            dst,
+            dst_off,
+            stride,
+            m0,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m1 != 0 {
+        if edge {
+            deblock_sb64_hbd_avx2_mask::<2, 3, false>(
+                dst,
+                dst_off,
+                stride,
+                m1,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_avx2_mask::<3, 3, false>(
+                dst,
+                dst_off,
+                stride,
+                m1,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+    if m2 != 0 {
+        if edge {
+            deblock_sb64_hbd_avx2_mask::<2, 4, false>(
+                dst,
+                dst_off,
+                stride,
+                m2,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_avx2_mask::<4, 4, false>(
+                dst,
+                dst_off,
+                stride,
+                m2,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::deblock_dispatch::{deblock_apply_8bpc_scalar, deblock_apply_hbd_scalar};

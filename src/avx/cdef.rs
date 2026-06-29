@@ -396,11 +396,29 @@ fn add_shifted_i16x8(lo: &mut __m128i, hi: &mut __m128i, v: __m128i, n: usize) {
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn store_i32x4_prefix(dst: &mut [i32], v: __m128i, n: usize) {
+    match n {
+        0 => {}
+        1 => unsafe { _mm_store_ss(dst.as_mut_ptr().cast(), _mm_castsi128_ps(v)) },
+        2 => unsafe { _mm_storel_epi64(dst.as_mut_ptr().cast(), v) },
+        3 => {
+            unsafe { _mm_storel_epi64(dst.as_mut_ptr().cast(), v) };
+            dst[2] = _mm_extract_epi32::<2>(v);
+        }
+        _ => unsafe { _mm_storeu_si128(dst.as_mut_ptr().cast(), v) },
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn store_i16x8_to_i32(dst: &mut [i32], v: __m128i, n: usize) {
-    let mut tmp = [0i16; 8];
-    unsafe { _mm_storeu_si128(tmp.as_mut_ptr().cast(), v) };
-    for i in 0..n {
-        dst[i] = tmp[i] as i32;
+    let lo = _mm_cvtepi16_epi32(v);
+    let hi = _mm_cvtepi16_epi32(_mm_srli_si128::<8>(v));
+    let lo_n = n.min(4);
+
+    store_i32x4_prefix(dst, lo, lo_n);
+    if n > 4 {
+        store_i32x4_prefix(&mut dst[4..], hi, n - 4);
     }
 }
 
@@ -450,11 +468,7 @@ pub(super) fn cdef_find_dir_from_rows_avx2(rows: &[__m128i; 8], var: &mut u32) -
         add_shifted_i16x8(&mut alt3_lo, &mut alt3_hi, row, half_y);
     }
 
-    let mut cols = [0i16; 8];
-    unsafe { _mm_storeu_si128(cols.as_mut_ptr().cast(), col_sum) };
-    for x in 0..8usize {
-        partial_sum_hv[1][x] = cols[x] as i32;
-    }
+    store_i16x8_to_i32(&mut partial_sum_hv[1], col_sum, 8);
 
     store_i16x8_to_i32(&mut partial_sum_diag[0][..8], diag0_lo, 8);
     store_i16x8_to_i32(&mut partial_sum_diag[0][8..], diag0_hi, 7);
@@ -800,6 +814,39 @@ pub(crate) fn cdef_filter_block_8x8_8bpc_avx2(
     dir: usize,
 ) {
     cdef_filter_block_8bpc_avx2_shape_dispatch::<8, 8>(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+pub(crate) fn cdef_filter_block_8x4_8bpc_avx2(
+    dst: &mut [u8],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_8bpc_avx2_shape_dispatch::<8, 4>(
         dst,
         dst_stride,
         dst_off,

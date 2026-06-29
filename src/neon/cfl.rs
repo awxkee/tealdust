@@ -71,9 +71,7 @@ fn store_u8x8(a: &mut [u8; 8], v: uint8x8_t) {
 #[inline(always)]
 fn store_u8x4(a: &mut [u8], v: uint8x8_t) {
     debug_assert!(a.len() >= 4);
-    let mut tmp = [0u8; 8];
-    unsafe { vst1_u8(tmp.as_mut_ptr(), v) };
-    a[..4].copy_from_slice(&tmp[..4]);
+    unsafe { vst1_lane_u32::<0>(a.as_mut_ptr().cast(), vreinterpret_u32_u8(v)) };
 }
 
 #[inline(always)]

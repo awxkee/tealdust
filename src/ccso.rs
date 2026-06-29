@@ -515,6 +515,49 @@ pub(crate) fn ccso_prep<BD: BitDepth>(bd: BD, ctx: CcsoPrepCtx<'_, BD::Pixel>) {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn ccso_add_8bpc_scalar_range(
+    dst: &mut [u8],
+    dst_stride: usize,
+    idx_buf: &[u8],
+    idx_stride: usize,
+    offset_map: &[i8; 256],
+    x0: usize,
+    x1: usize,
+    h: usize,
+    ll_mask: &[[u16; 4]],
+) {
+    debug_assert!(x0 <= x1);
+
+    let n_blocks = (h + 3) >> 2;
+    for (by, mask) in (0..h).step_by(4).zip(ll_mask[..n_blocks].iter()) {
+        let block_h = (h - by).min(4);
+        // `dst` may already start at an x-offset inside the picture row, so
+        // chunking it by `dst_stride` would mix row tails with the next row.
+        let dst_rows = &mut dst[by * dst_stride..];
+        let idx_row_start = by * idx_stride;
+        let idx_rows = &idx_buf[idx_row_start..idx_row_start + block_h * idx_stride];
+        let row_mask = mask[0];
+
+        for xx in (x0..x1).step_by(4) {
+            let bx = xx >> 2;
+            if row_mask & (1 << bx) != 0 {
+                continue;
+            }
+
+            let x_end = (xx + 4).min(x1);
+            for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+                let dst_row = &mut dst_rows[yy * dst_stride..];
+                for (dst, &idx) in dst_row[xx..x_end].iter_mut().zip(idx_row[xx..x_end].iter()) {
+                    let off = offset_map[idx as usize] as i32;
+                    let cur = *dst as i32;
+                    *dst = (cur + off).clamp(0, 255) as u8;
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn ccso_add_8bpc_scalar(
     dst: &mut [u8],
     dst_stride: usize,
@@ -527,6 +570,65 @@ pub(crate) fn ccso_add_8bpc_scalar(
     ll_mask: &[[u16; 4]],
 ) {
     let offset_map = ccso_build_offset_map(offset_idxs, offset_lut);
+    ccso_add_8bpc_scalar_range(
+        dst,
+        dst_stride,
+        idx_buf,
+        idx_stride,
+        &offset_map,
+        0,
+        w,
+        h,
+        ll_mask,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ccso_add_8bpc_tail_scalar(
+    dst: &mut [u8],
+    dst_stride: usize,
+    idx_buf: &[u8],
+    idx_stride: usize,
+    offset_idxs: &[u8],
+    offset_lut: &[i8],
+    x0: usize,
+    w: usize,
+    h: usize,
+    ll_mask: &[[u16; 4]],
+) {
+    if x0 >= w {
+        return;
+    }
+
+    let offset_map = ccso_build_offset_map(offset_idxs, offset_lut);
+    ccso_add_8bpc_scalar_range(
+        dst,
+        dst_stride,
+        idx_buf,
+        idx_stride,
+        &offset_map,
+        x0,
+        w,
+        h,
+        ll_mask,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ccso_add_hbd_scalar_range(
+    dst: &mut [u16],
+    dst_stride: usize,
+    idx_buf: &[u8],
+    idx_stride: usize,
+    offset_map: &[i8; 256],
+    x0: usize,
+    x1: usize,
+    h: usize,
+    ll_mask: &[[u16; 4]],
+    bitdepth_max: i32,
+) {
+    debug_assert!(x0 <= x1);
+
     let n_blocks = (h + 3) >> 2;
     for (by, mask) in (0..h).step_by(4).zip(ll_mask[..n_blocks].iter()) {
         let block_h = (h - by).min(4);
@@ -536,17 +638,20 @@ pub(crate) fn ccso_add_8bpc_scalar(
         let idx_row_start = by * idx_stride;
         let idx_rows = &idx_buf[idx_row_start..idx_row_start + block_h * idx_stride];
         let row_mask = mask[0];
-        for (bx, xx) in (0..w).step_by(4).enumerate() {
-            if row_mask & (1 << bx) == 0 {
-                let x_end = (xx + 4).min(w);
-                for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
-                    let dst_row = &mut dst_rows[yy * dst_stride..];
-                    for (dst, &idx) in dst_row[xx..x_end].iter_mut().zip(idx_row[xx..x_end].iter())
-                    {
-                        let off = offset_map[idx as usize];
-                        let cur = *dst as i32;
-                        *dst = (cur + off as i32).clamp(0, 255) as u8;
-                    }
+
+        for xx in (x0..x1).step_by(4) {
+            let bx = xx >> 2;
+            if row_mask & (1 << bx) != 0 {
+                continue;
+            }
+
+            let x_end = (xx + 4).min(x1);
+            for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+                let dst_row = &mut dst_rows[yy * dst_stride..];
+                for (dst, &idx) in dst_row[xx..x_end].iter_mut().zip(idx_row[xx..x_end].iter()) {
+                    let off = offset_map[idx as usize] as i32;
+                    let cur = *dst as i32;
+                    *dst = (cur + off).clamp(0, bitdepth_max) as u16;
                 }
             }
         }
@@ -567,30 +672,51 @@ pub(crate) fn ccso_add_hbd_scalar(
     bitdepth_max: i32,
 ) {
     let offset_map = ccso_build_offset_map(offset_idxs, offset_lut);
-    let n_blocks = (h + 3) >> 2;
-    for (by, mask) in (0..h).step_by(4).zip(ll_mask[..n_blocks].iter()) {
-        let block_h = (h - by).min(4);
-        // `dst` may already start at an x-offset inside the picture row, so
-        // chunking it by `dst_stride` would mix row tails with the next row.
-        let dst_rows = &mut dst[by * dst_stride..];
-        let idx_row_start = by * idx_stride;
-        let idx_rows = &idx_buf[idx_row_start..idx_row_start + block_h * idx_stride];
-        let row_mask = mask[0];
-        for (bx, xx) in (0..w).step_by(4).enumerate() {
-            if row_mask & (1 << bx) == 0 {
-                let x_end = (xx + 4).min(w);
-                for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
-                    let dst_row = &mut dst_rows[yy * dst_stride..];
-                    for (dst, &idx) in dst_row[xx..x_end].iter_mut().zip(idx_row[xx..x_end].iter())
-                    {
-                        let off = offset_map[idx as usize];
-                        let cur = *dst as i32;
-                        *dst = (cur + off as i32).clamp(0, bitdepth_max) as u16;
-                    }
-                }
-            }
-        }
+    ccso_add_hbd_scalar_range(
+        dst,
+        dst_stride,
+        idx_buf,
+        idx_stride,
+        &offset_map,
+        0,
+        w,
+        h,
+        ll_mask,
+        bitdepth_max,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ccso_add_hbd_tail_scalar(
+    dst: &mut [u16],
+    dst_stride: usize,
+    idx_buf: &[u8],
+    idx_stride: usize,
+    offset_idxs: &[u8],
+    offset_lut: &[i8],
+    x0: usize,
+    w: usize,
+    h: usize,
+    ll_mask: &[[u16; 4]],
+    bitdepth_max: i32,
+) {
+    if x0 >= w {
+        return;
     }
+
+    let offset_map = ccso_build_offset_map(offset_idxs, offset_lut);
+    ccso_add_hbd_scalar_range(
+        dst,
+        dst_stride,
+        idx_buf,
+        idx_stride,
+        &offset_map,
+        x0,
+        w,
+        h,
+        ll_mask,
+        bitdepth_max,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -607,23 +733,11 @@ pub(crate) fn ccso_add<BD: BitDepth>(
     ll_mask: &[[u16; 4]],
 ) {
     if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-        // The arch kernels operate on 4-pixel CCSO sub-blocks.  At frame edges,
-        // especially chroma in 4:2:2/4:2:0, the visible block width may be 1..3
-        // pixels past the last complete sub-block.  Match AVM's x_end=min(...)
-        // behavior by using the tail-safe scalar path for those edge units.
-        if (w & 3) != 0 {
-            ccso_add_8bpc_scalar(
-                d8,
-                dst_stride,
-                idx_buf,
-                idx_stride,
-                offset_idxs,
-                offset_lut,
-                w,
-                h,
-                ll_mask,
-            );
-        } else {
+        // The arch kernels operate on complete 4-pixel CCSO sub-blocks.  Frame-edge
+        // chroma units can expose a 1..3 pixel tail; keep the vectorized prefix and
+        // use AVM's x_end=min(...) behavior only for that final partial sub-block.
+        let vector_w = w & !3;
+        if vector_w != 0 {
             // SAFETY: dispatch is guarded by runtime feature detection; scalar default is sound.
             unsafe {
                 resolve_ccso_add_8bpc()(
@@ -633,29 +747,30 @@ pub(crate) fn ccso_add<BD: BitDepth>(
                     idx_stride,
                     offset_idxs,
                     offset_lut,
-                    w,
+                    vector_w,
                     h,
                     ll_mask,
                 )
             };
         }
+        ccso_add_8bpc_tail_scalar(
+            d8,
+            dst_stride,
+            idx_buf,
+            idx_stride,
+            offset_idxs,
+            offset_lut,
+            vector_w,
+            w,
+            h,
+            ll_mask,
+        );
         return;
     }
     if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-        if (w & 3) != 0 {
-            ccso_add_hbd_scalar(
-                d16,
-                dst_stride,
-                idx_buf,
-                idx_stride,
-                offset_idxs,
-                offset_lut,
-                w,
-                h,
-                ll_mask,
-                bd.bitdepth_max(),
-            );
-        } else {
+        let vector_w = w & !3;
+        let bitdepth_max = bd.bitdepth_max();
+        if vector_w != 0 {
             // SAFETY: dispatch is guarded by runtime feature detection; scalar default is sound.
             unsafe {
                 resolve_ccso_add_hbd()(
@@ -665,13 +780,26 @@ pub(crate) fn ccso_add<BD: BitDepth>(
                     idx_stride,
                     offset_idxs,
                     offset_lut,
-                    w,
+                    vector_w,
                     h,
                     ll_mask,
-                    bd.bitdepth_max(),
+                    bitdepth_max,
                 )
             };
         }
+        ccso_add_hbd_tail_scalar(
+            d16,
+            dst_stride,
+            idx_buf,
+            idx_stride,
+            offset_idxs,
+            offset_lut,
+            vector_w,
+            w,
+            h,
+            ll_mask,
+            bitdepth_max,
+        );
         return;
     }
 

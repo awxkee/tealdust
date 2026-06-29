@@ -195,12 +195,91 @@ fn splat_row_u8_avx2(row: &mut [u8], v: u8) {
     for c in c32.iter_mut() {
         store_u8x32_fixed(c, vv);
     }
-    let (c16, rem) = r32.as_chunks_mut::<16>();
+    let (c16, rem16) = r32.as_chunks_mut::<16>();
     let vv16 = _mm_set1_epi8(v as i8);
     for c in c16.iter_mut() {
         store_u8x16_fixed(c, vv16);
     }
+    let (c8, rem) = rem16.as_chunks_mut::<8>();
+    for c in c8.iter_mut() {
+        store_u8x8_fixed(c, vv16);
+    }
     rem.fill(v);
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn splat_h_rows4_u8_avx2(dst: &mut [u8], stride: usize, off: usize, w: usize, v: [u8; 4]) {
+    let block = &mut dst[off..off + 3 * stride + w];
+    let (row0, rest) = block.split_at_mut(stride);
+    let (row1, rest) = rest.split_at_mut(stride);
+    let (row2, row3) = rest.split_at_mut(stride);
+    let row0 = &mut row0[..w];
+    let row1 = &mut row1[..w];
+    let row2 = &mut row2[..w];
+    let row3 = &mut row3[..w];
+
+    let v0 = _mm256_set1_epi8(v[0] as i8);
+    let v1 = _mm256_set1_epi8(v[1] as i8);
+    let v2 = _mm256_set1_epi8(v[2] as i8);
+    let v3 = _mm256_set1_epi8(v[3] as i8);
+
+    let (r0_32, r0_rem32) = row0.as_chunks_mut::<32>();
+    let (r1_32, r1_rem32) = row1.as_chunks_mut::<32>();
+    let (r2_32, r2_rem32) = row2.as_chunks_mut::<32>();
+    let (r3_32, r3_rem32) = row3.as_chunks_mut::<32>();
+    for (((r0, r1), r2), r3) in r0_32
+        .iter_mut()
+        .zip(r1_32.iter_mut())
+        .zip(r2_32.iter_mut())
+        .zip(r3_32.iter_mut())
+    {
+        store_u8x32_fixed(r0, v0);
+        store_u8x32_fixed(r1, v1);
+        store_u8x32_fixed(r2, v2);
+        store_u8x32_fixed(r3, v3);
+    }
+
+    let v0_16 = _mm_set1_epi8(v[0] as i8);
+    let v1_16 = _mm_set1_epi8(v[1] as i8);
+    let v2_16 = _mm_set1_epi8(v[2] as i8);
+    let v3_16 = _mm_set1_epi8(v[3] as i8);
+    let (r0_16, r0_rem16) = r0_rem32.as_chunks_mut::<16>();
+    let (r1_16, r1_rem16) = r1_rem32.as_chunks_mut::<16>();
+    let (r2_16, r2_rem16) = r2_rem32.as_chunks_mut::<16>();
+    let (r3_16, r3_rem16) = r3_rem32.as_chunks_mut::<16>();
+    for (((r0, r1), r2), r3) in r0_16
+        .iter_mut()
+        .zip(r1_16.iter_mut())
+        .zip(r2_16.iter_mut())
+        .zip(r3_16.iter_mut())
+    {
+        store_u8x16_fixed(r0, v0_16);
+        store_u8x16_fixed(r1, v1_16);
+        store_u8x16_fixed(r2, v2_16);
+        store_u8x16_fixed(r3, v3_16);
+    }
+
+    let (r0_8, r0_rem) = r0_rem16.as_chunks_mut::<8>();
+    let (r1_8, r1_rem) = r1_rem16.as_chunks_mut::<8>();
+    let (r2_8, r2_rem) = r2_rem16.as_chunks_mut::<8>();
+    let (r3_8, r3_rem) = r3_rem16.as_chunks_mut::<8>();
+    for (((r0, r1), r2), r3) in r0_8
+        .iter_mut()
+        .zip(r1_8.iter_mut())
+        .zip(r2_8.iter_mut())
+        .zip(r3_8.iter_mut())
+    {
+        store_u8x8_fixed(r0, v0_16);
+        store_u8x8_fixed(r1, v1_16);
+        store_u8x8_fixed(r2, v2_16);
+        store_u8x8_fixed(r3, v3_16);
+    }
+
+    r0_rem.fill(v[0]);
+    r1_rem.fill(v[1]);
+    r2_rem.fill(v[2]);
+    r3_rem.fill(v[3]);
 }
 
 #[target_feature(enable = "avx2")]
@@ -260,6 +339,17 @@ pub(crate) fn ipred_v_8bpc_avx2(
     }
 }
 
+#[inline]
+fn h_left_u8(tl: &[u8], o: usize, e_stride: usize, y: usize, mrl: bool) -> u8 {
+    if mrl {
+        let left = tl[o - 1 - y] as u16;
+        let left2 = tl[o + e_stride - 1 - y] as u16;
+        ((left + left2 + 1) >> 1) as u8
+    } else {
+        tl[o - 1 - y]
+    }
+}
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn ipred_h_8bpc_avx2(
     dst: &mut [u8],
@@ -270,23 +360,32 @@ pub(crate) fn ipred_h_8bpc_avx2(
     height: usize,
     angle: i32,
 ) {
-    if width < 16 {
+    if width < 8 {
         crate::ipred_dispatch::ipred_h_scalar(dst, stride, tl, o, width, height, angle);
         return;
     }
 
     let e_stride = (width + height) * 2 + 1;
     let mrl = angle & ANGLE_MULTI_MRL_FLAG != 0;
+    let mut y = 0usize;
     let mut off = 0usize;
-    for y in 0..height {
-        let v = if mrl {
-            let left = tl[o - 1 - y] as u16;
-            let left2 = tl[o + e_stride - 1 - y] as u16;
-            ((left + left2 + 1) >> 1) as u8
-        } else {
-            tl[o - 1 - y]
-        };
+
+    while y + 3 < height {
+        let v = [
+            h_left_u8(tl, o, e_stride, y, mrl),
+            h_left_u8(tl, o, e_stride, y + 1, mrl),
+            h_left_u8(tl, o, e_stride, y + 2, mrl),
+            h_left_u8(tl, o, e_stride, y + 3, mrl),
+        ];
+        splat_h_rows4_u8_avx2(dst, stride, off, width, v);
+        y += 4;
+        off += stride * 4;
+    }
+
+    while y < height {
+        let v = h_left_u8(tl, o, e_stride, y, mrl);
         splat_row_u8_avx2(&mut dst[off..off + width], v);
+        y += 1;
         off += stride;
     }
 }
@@ -1032,6 +1131,11 @@ fn store_u8x16_fixed(a: &mut [u8; 16], v: __m128i) {
     unsafe { _mm_storeu_si128(a.as_mut_ptr().cast(), v) };
 }
 
+#[inline(always)]
+fn store_u8x8_fixed(a: &mut [u8; 8], v: __m128i) {
+    unsafe { _mm_storel_epi64(a.as_mut_ptr().cast(), v) };
+}
+
 /// Horizontal sum of all bytes in `s` (each lane widened to u32).
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -1527,6 +1631,32 @@ fn z1_chroma_row_avx2(
     fill_tail.fill(fill);
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn z1_row_8bpc_avx2(
+    filt: &[u8],
+    top_off: usize,
+    max_base_x: i32,
+    is_luma: bool,
+    ypos: i32,
+    dst_row: &mut [u8],
+    w: usize,
+) -> Option<u8> {
+    let base0 = ypos >> 6;
+    let fill = filt[top_off + max_base_x as usize];
+    if base0 > max_base_x {
+        return Some(fill);
+    }
+    let shift = ((ypos & 0x3F) >> 1) as usize;
+    if is_luma {
+        let f = &crate::ipred::DR_INTERP_FILTER[shift];
+        z1_luma_row_avx2(filt, top_off, base0, max_base_x, fill, f, dst_row, w);
+    } else {
+        z1_chroma_row_avx2(filt, top_off, base0, max_base_x, fill, shift, dst_row, w);
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
 pub(crate) fn ipred_z1_8bpc_avx2(
@@ -1650,25 +1780,40 @@ pub(crate) fn ipred_z1_8bpc_avx2(
     filt[sz + 1] = filt[sz];
     filt[sz + 2] = filt[sz + 1];
 
+    let mut y = 0usize;
     let mut ypos = dx * (1 + mrl_idx as i32);
-    for y in 0..h {
-        let base0 = ypos >> 6;
-        let fill = filt[top_off + max_base_x as usize];
-        if base0 > max_base_x {
-            for row in dst.chunks_mut(stride).take(h).skip(y) {
+    while y + 1 < h {
+        let rows = &mut dst[y * stride..];
+        let (row0, rest) = rows.split_at_mut(stride);
+        if let Some(fill) =
+            z1_row_8bpc_avx2(&filt, top_off, max_base_x, is_luma, ypos, &mut row0[..w], w)
+        {
+            row0[..w].fill(fill);
+            for row in rest.chunks_mut(stride).take(h - y - 1) {
                 row[..w].fill(fill);
             }
-            break;
-        }
-        let shift = ((ypos & 0x3F) >> 1) as usize;
-        let dst_row = &mut dst[y * stride..y * stride + w];
-        if is_luma {
-            let f = &crate::ipred::DR_INTERP_FILTER[shift];
-            z1_luma_row_avx2(&filt, top_off, base0, max_base_x, fill, f, dst_row, w);
-        } else {
-            z1_chroma_row_avx2(&filt, top_off, base0, max_base_x, fill, shift, dst_row, w);
+            return;
         }
         ypos += dx;
+        let (row1, tail) = rest.split_at_mut(stride);
+        if let Some(fill) =
+            z1_row_8bpc_avx2(&filt, top_off, max_base_x, is_luma, ypos, &mut row1[..w], w)
+        {
+            row1[..w].fill(fill);
+            for row in tail.chunks_mut(stride).take(h - y - 2) {
+                row[..w].fill(fill);
+            }
+            return;
+        }
+        ypos += dx;
+        y += 2;
+    }
+    if y < h {
+        let dst_row = &mut dst[y * stride..y * stride + w];
+        if let Some(fill) = z1_row_8bpc_avx2(&filt, top_off, max_base_x, is_luma, ypos, dst_row, w)
+        {
+            dst_row.fill(fill);
+        }
     }
 }
 
@@ -1817,6 +1962,33 @@ fn z3_chroma_col_avx2(
         *d = ((v + 16) >> 5).clamp(0, 255) as u8;
     }
     fill_tail.fill(fill);
+}
+
+#[inline]
+fn store_z3_cols4_u8(dst: &mut [u8], stride: usize, x: usize, h: usize, cols: &[[u8; 128]; 4]) {
+    for y in 0..h {
+        let row_off = y * stride + x;
+        dst[row_off] = cols[0][y];
+        dst[row_off + 1] = cols[1][y];
+        dst[row_off + 2] = cols[2][y];
+        dst[row_off + 3] = cols[3][y];
+    }
+}
+
+#[inline]
+fn store_z3_cols2_u8(dst: &mut [u8], stride: usize, x: usize, h: usize, cols: &[[u8; 128]; 2]) {
+    for y in 0..h {
+        let row_off = y * stride + x;
+        dst[row_off] = cols[0][y];
+        dst[row_off + 1] = cols[1][y];
+    }
+}
+
+#[inline]
+fn store_z3_col_u8(dst: &mut [u8], stride: usize, x: usize, h: usize, col: &[u8; 128]) {
+    for y in 0..h {
+        dst[y * stride + x] = col[y];
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1970,9 +2142,44 @@ pub(crate) fn ipred_z3_8bpc_avx2(
     filt[1] = filt[2];
     filt[sz + 2] = filt[sz + 1];
 
+    let mut cols4 = [[0u8; 128]; 4];
+    let mut cols2 = [[0u8; 128]; 2];
     let mut col = [0u8; 128];
     let mut ypos = dy * (1 + mrl_idx as i32);
-    for x in 0..w {
+    let mut x = 0usize;
+    while x + 4 <= w {
+        for col in &mut cols4 {
+            let shift = ((ypos & 0x3F) >> 1) as usize;
+            let base0 = ypos >> 6;
+            let fill = filt[left_off - max_base_y as usize];
+            if is_luma {
+                let f = &crate::ipred::DR_INTERP_FILTER[shift];
+                z3_luma_col_avx2(&filt, left_off, base0, max_base_y, fill, f, col, h);
+            } else {
+                z3_chroma_col_avx2(&filt, left_off, base0, max_base_y, fill, shift, col, h);
+            }
+            ypos += dy;
+        }
+        store_z3_cols4_u8(dst, stride, x, h, &cols4);
+        x += 4;
+    }
+    if x + 2 <= w {
+        for col in &mut cols2 {
+            let shift = ((ypos & 0x3F) >> 1) as usize;
+            let base0 = ypos >> 6;
+            let fill = filt[left_off - max_base_y as usize];
+            if is_luma {
+                let f = &crate::ipred::DR_INTERP_FILTER[shift];
+                z3_luma_col_avx2(&filt, left_off, base0, max_base_y, fill, f, col, h);
+            } else {
+                z3_chroma_col_avx2(&filt, left_off, base0, max_base_y, fill, shift, col, h);
+            }
+            ypos += dy;
+        }
+        store_z3_cols2_u8(dst, stride, x, h, &cols2);
+        x += 2;
+    }
+    while x < w {
         let shift = ((ypos & 0x3F) >> 1) as usize;
         let base0 = ypos >> 6;
         let fill = filt[left_off - max_base_y as usize];
@@ -1982,10 +2189,9 @@ pub(crate) fn ipred_z3_8bpc_avx2(
         } else {
             z3_chroma_col_avx2(&filt, left_off, base0, max_base_y, fill, shift, &mut col, h);
         }
-        for (y, &c) in col[..h].iter().enumerate() {
-            dst[y * stride + x] = c;
-        }
+        store_z3_col_u8(dst, stride, x, h, &col);
         ypos += dy;
+        x += 1;
     }
 }
 

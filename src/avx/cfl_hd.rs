@@ -126,13 +126,12 @@ fn store_i32x1_u16_clip(a: &mut u16, v: __m256i, max_v: __m256i) {
     }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn load_u16x2_422_tail(src: &[u16]) -> __m256i {
     debug_assert!(src.len() >= 2);
-    let mut tmp = [0u16; 16];
-    tmp[0] = src[0];
-    tmp[1] = src[1];
-    unsafe { load_u16x16(&tmp) }
+    let lo = unsafe { _mm_castps_si128(_mm_load_ss(src.as_ptr().cast())) };
+    _mm256_inserti128_si256::<0>(_mm256_setzero_si256(), lo)
 }
 
 #[inline]

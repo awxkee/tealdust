@@ -35,6 +35,8 @@ pub(crate) type DeblockApplyHbdFn =
     unsafe fn(&mut [u16], isize, isize, isize, i32, i32, i32, bool, bool, i32);
 pub(crate) type DeblockSb64Fn =
     unsafe fn(&mut [u8], usize, usize, &[u16], &[u16], &[u8], &[u8], bool);
+pub(crate) type DeblockSb64HbdFn =
+    unsafe fn(&mut [u16], usize, usize, &[u16], &[u16], &[u8], &[u8], bool, i32);
 
 pub(crate) type DeblockSetupColsSeg8bpcFn = unsafe fn(
     &mut [u8; 256],
@@ -718,12 +720,605 @@ pub(crate) fn deblock_apply_hbd_scalar(
     }
 }
 
+#[inline(always)]
+fn avg_abs2_i32(a: i32, b: i32) -> u32 {
+    ((a.unsigned_abs() + b.unsigned_abs() + 1) >> 1) as u32
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn filter_choice_hbd(
+    buf: &[u16],
+    s: isize,
+    t: isize,
+    stride: isize,
+    max_width_neg: i32,
+    max_width_pos: i32,
+    q_thr: u32,
+    side_thr: u32,
+) -> i32 {
+    let at = |off: isize| -> i32 { buf[off as usize] as i32 };
+
+    let second_deriv = |base: isize, dist: i32| -> i32 {
+        let d = dist as isize;
+        at(base + (d - 1) * stride) - 2 * at(base + d * stride) + at(base + (d + 1) * stride)
+    };
+
+    let sd_m2 = avg_abs2_i32(second_deriv(s, -2), second_deriv(t, -2));
+    let sd_m1 = avg_abs2_i32(second_deriv(s, -1), second_deriv(t, -1));
+    let sd_0 = avg_abs2_i32(second_deriv(s, 0), second_deriv(t, 0));
+    let sd_1 = avg_abs2_i32(second_deriv(s, 1), second_deriv(t, 1));
+
+    let high_deriv = sd_m2.max(sd_1);
+    if high_deriv > side_thr {
+        return 0;
+    }
+    if max_width_pos == 1 {
+        return 1;
+    }
+
+    let transition = sd_m1 + sd_0;
+    if high_deriv > (side_thr >> 2) || transition > q_thr * 4 {
+        return 1;
+    }
+
+    if high_deriv > (side_thr >> 3) || transition > q_thr * 3 {
+        return 2;
+    }
+
+    let end_thr = (side_thr * 3) >> 4;
+    if max_width_neg >= 3 {
+        let ds = (at(s - stride) - at(s - 4 * stride) - 3 * (at(s - stride) - at(s - 2 * stride)))
+            .unsigned_abs();
+        let dt = (at(t - stride) - at(t - 4 * stride) - 3 * (at(t - stride) - at(t - 2 * stride)))
+            .unsigned_abs();
+        if ((ds + dt + 1) >> 1) > end_thr {
+            return 2;
+        }
+    }
+
+    let ds = (at(s) - at(s + 3 * stride) - 3 * (at(s) - at(s + stride))).unsigned_abs();
+    let dt = (at(t) - at(t + 3 * stride) - 3 * (at(t) - at(t + stride))).unsigned_abs();
+    if ((ds + dt + 1) >> 1) > end_thr {
+        return 2;
+    }
+    if max_width_pos == 3 {
+        return 3;
+    }
+
+    let transition = transition << 4;
+    let mut prev_dist = 3i32;
+    let mut dist = 4i32;
+    while dist <= max_width_pos {
+        if transition > q_thr * crate::deblock::Q_FIRST[((dist - 4) >> 1) as usize] as u32 {
+            return prev_dist;
+        }
+
+        let dist2 = dist.min(7);
+        let end_thr = (side_thr * dist as u32) >> 4;
+        if max_width_neg >= dist2 {
+            let ds = (at(s - stride)
+                - at(s + (-dist2 as isize - 1) * stride)
+                - dist2 * (at(s - stride) - at(s - 2 * stride)))
+            .unsigned_abs();
+            let dt = (at(t - stride)
+                - at(t + (-dist2 as isize - 1) * stride)
+                - dist2 * (at(t - stride) - at(t - 2 * stride)))
+            .unsigned_abs();
+            if ((ds + dt + 1) >> 1) > end_thr {
+                return prev_dist;
+            }
+        }
+
+        let ds = (at(s) - at(s + dist2 as isize * stride) - dist2 * (at(s) - at(s + stride)))
+            .unsigned_abs();
+        let dt = (at(t) - at(t + dist2 as isize * stride) - dist2 * (at(t) - at(t + stride)))
+            .unsigned_abs();
+        if ((ds + dt + 1) >> 1) > end_thr {
+            return prev_dist;
+        }
+
+        prev_dist = dist;
+        dist += 2;
+    }
+
+    max_width_pos
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn deblock_hbd_edge(
+    dst: &mut [u16],
+    off: isize,
+    q_thr: u32,
+    side_thr: u32,
+    stridea: isize,
+    strideb: isize,
+    max_width_pos: i32,
+    max_width_neg: i32,
+    pos_lossless: bool,
+    neg_lossless: bool,
+    bitdepth_max: i32,
+) {
+    let width = filter_choice_hbd(
+        dst,
+        off,
+        off + 3 * stridea,
+        strideb,
+        max_width_neg,
+        max_width_pos,
+        q_thr,
+        side_thr,
+    );
+    if width < 1 || (neg_lossless && pos_lossless) {
+        return;
+    }
+
+    let q_thr_clamp = q_thr as i32 * crate::deblock::Q_THRESH_MULTS[(width - 1) as usize] as i32;
+    if q_thr_clamp <= 0 {
+        return;
+    }
+
+    deblock_apply_hbd(
+        dst,
+        off,
+        stridea,
+        strideb,
+        width.min(max_width_neg),
+        width,
+        q_thr_clamp,
+        neg_lossless,
+        pos_lossless,
+        bitdepth_max,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(crate) fn deblock_hbd_edge_with(
+    dst: &mut [u16],
+    off: isize,
+    q_thr: u32,
+    side_thr: u32,
+    stridea: isize,
+    strideb: isize,
+    max_width_pos: i32,
+    max_width_neg: i32,
+    pos_lossless: bool,
+    neg_lossless: bool,
+    bitdepth_max: i32,
+    apply: DeblockApplyHbdFn,
+) {
+    let width = filter_choice_hbd(
+        dst,
+        off,
+        off + 3 * stridea,
+        strideb,
+        max_width_neg,
+        max_width_pos,
+        q_thr,
+        side_thr,
+    );
+    if width < 1 || (neg_lossless && pos_lossless) {
+        return;
+    }
+
+    let q_thr_clamp = q_thr as i32 * crate::deblock::Q_THRESH_MULTS[(width - 1) as usize] as i32;
+    if q_thr_clamp <= 0 {
+        return;
+    }
+
+    unsafe {
+        apply(
+            dst,
+            off,
+            stridea,
+            strideb,
+            width.min(max_width_neg),
+            width,
+            q_thr_clamp,
+            neg_lossless,
+            pos_lossless,
+            bitdepth_max,
+        );
+    }
+}
+
+#[inline(always)]
+fn deblock_mask_class_bits(mask: u16, higher: u16, both_lossless: u16) -> u32 {
+    (mask & !higher & !both_lossless) as u32
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn deblock_sb64_hbd_mask<
+    const MAX_WIDTH_NEG: i32,
+    const MAX_WIDTH_POS: i32,
+    const HORIZONTAL: bool,
+>(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    mut vm: u32,
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    bitdepth_max: i32,
+) {
+    debug_assert!(MAX_WIDTH_NEG <= MAX_WIDTH_POS);
+
+    while vm != 0 {
+        let qi = vm.trailing_zeros() as usize;
+        let bit = 1u32 << qi;
+        let q = q_thr[qi] as u32;
+        if q != 0 {
+            let pos_ll = (ll_mask[1] as u32 & bit) != 0;
+            let neg_ll = (ll_mask[0] as u32 & bit) != 0;
+            if !(pos_ll && neg_ll) {
+                let off = if HORIZONTAL {
+                    (dst_off + qi * 4 * stride) as isize
+                } else {
+                    (dst_off + qi * 4) as isize
+                };
+                let stridea = if HORIZONTAL { stride as isize } else { 1 };
+                let strideb = if HORIZONTAL { 1 } else { stride as isize };
+                deblock_hbd_edge(
+                    dst,
+                    off,
+                    q,
+                    side_thr[qi] as u32,
+                    stridea,
+                    strideb,
+                    MAX_WIDTH_POS,
+                    MAX_WIDTH_NEG,
+                    pos_ll,
+                    neg_ll,
+                    bitdepth_max,
+                );
+            }
+        }
+        vm &= vm - 1;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn deblock_h_sb64y_hbd_fast(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+    bitdepth_max: i32,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m3 = deblock_mask_class_bits(vmask[3], 0, both_lossless);
+    let m2 = deblock_mask_class_bits(vmask[2], vmask[3], both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2] | vmask[3], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2] | vmask[3], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_hbd_mask::<1, 1, true>(
+            dst,
+            dst_off,
+            stride,
+            m0,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m1 != 0 {
+        deblock_sb64_hbd_mask::<3, 3, true>(
+            dst,
+            dst_off,
+            stride,
+            m1,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m2 != 0 {
+        deblock_sb64_hbd_mask::<6, 6, true>(
+            dst,
+            dst_off,
+            stride,
+            m2,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m3 != 0 {
+        if edge {
+            deblock_sb64_hbd_mask::<6, 8, true>(
+                dst,
+                dst_off,
+                stride,
+                m3,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_mask::<8, 8, true>(
+                dst,
+                dst_off,
+                stride,
+                m3,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn deblock_v_sb64y_hbd_fast(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+    bitdepth_max: i32,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m3 = deblock_mask_class_bits(vmask[3], 0, both_lossless);
+    let m2 = deblock_mask_class_bits(vmask[2], vmask[3], both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2] | vmask[3], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2] | vmask[3], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_hbd_mask::<1, 1, false>(
+            dst,
+            dst_off,
+            stride,
+            m0,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m1 != 0 {
+        deblock_sb64_hbd_mask::<3, 3, false>(
+            dst,
+            dst_off,
+            stride,
+            m1,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m2 != 0 {
+        deblock_sb64_hbd_mask::<6, 6, false>(
+            dst,
+            dst_off,
+            stride,
+            m2,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m3 != 0 {
+        if edge {
+            deblock_sb64_hbd_mask::<6, 8, false>(
+                dst,
+                dst_off,
+                stride,
+                m3,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_mask::<8, 8, false>(
+                dst,
+                dst_off,
+                stride,
+                m3,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn deblock_h_sb64uv_hbd_fast(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+    bitdepth_max: i32,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m2 = deblock_mask_class_bits(vmask[2], 0, both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_hbd_mask::<1, 1, true>(
+            dst,
+            dst_off,
+            stride,
+            m0,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m1 != 0 {
+        if edge {
+            deblock_sb64_hbd_mask::<2, 3, true>(
+                dst,
+                dst_off,
+                stride,
+                m1,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_mask::<3, 3, true>(
+                dst,
+                dst_off,
+                stride,
+                m1,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+    if m2 != 0 {
+        if edge {
+            deblock_sb64_hbd_mask::<2, 4, true>(
+                dst,
+                dst_off,
+                stride,
+                m2,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_mask::<4, 4, true>(
+                dst,
+                dst_off,
+                stride,
+                m2,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn deblock_v_sb64uv_hbd_fast(
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    vmask: &[u16],
+    ll_mask: &[u16],
+    q_thr: &[u8],
+    side_thr: &[u8],
+    edge: bool,
+    bitdepth_max: i32,
+) {
+    let both_lossless = ll_mask[0] & ll_mask[1];
+    let m2 = deblock_mask_class_bits(vmask[2], 0, both_lossless);
+    let m1 = deblock_mask_class_bits(vmask[1], vmask[2], both_lossless);
+    let m0 = deblock_mask_class_bits(vmask[0], vmask[1] | vmask[2], both_lossless);
+
+    if m0 != 0 {
+        deblock_sb64_hbd_mask::<1, 1, false>(
+            dst,
+            dst_off,
+            stride,
+            m0,
+            ll_mask,
+            q_thr,
+            side_thr,
+            bitdepth_max,
+        );
+    }
+    if m1 != 0 {
+        if edge {
+            deblock_sb64_hbd_mask::<2, 3, false>(
+                dst,
+                dst_off,
+                stride,
+                m1,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_mask::<3, 3, false>(
+                dst,
+                dst_off,
+                stride,
+                m1,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+    if m2 != 0 {
+        if edge {
+            deblock_sb64_hbd_mask::<2, 4, false>(
+                dst,
+                dst_off,
+                stride,
+                m2,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        } else {
+            deblock_sb64_hbd_mask::<4, 4, false>(
+                dst,
+                dst_off,
+                stride,
+                m2,
+                ll_mask,
+                q_thr,
+                side_thr,
+                bitdepth_max,
+            );
+        }
+    }
+}
+
 static DEBLOCK_APPLY_8BPC: OnceLock<DeblockApply8bpcFn> = OnceLock::new();
 static DEBLOCK_APPLY_HBD: OnceLock<DeblockApplyHbdFn> = OnceLock::new();
 static DEBLOCK_H_SB64Y_8BPC: OnceLock<Option<DeblockSb64Fn>> = OnceLock::new();
 static DEBLOCK_V_SB64Y_8BPC: OnceLock<Option<DeblockSb64Fn>> = OnceLock::new();
 static DEBLOCK_H_SB64UV_8BPC: OnceLock<Option<DeblockSb64Fn>> = OnceLock::new();
 static DEBLOCK_V_SB64UV_8BPC: OnceLock<Option<DeblockSb64Fn>> = OnceLock::new();
+static DEBLOCK_H_SB64Y_HBD: OnceLock<Option<DeblockSb64HbdFn>> = OnceLock::new();
+static DEBLOCK_V_SB64Y_HBD: OnceLock<Option<DeblockSb64HbdFn>> = OnceLock::new();
+static DEBLOCK_H_SB64UV_HBD: OnceLock<Option<DeblockSb64HbdFn>> = OnceLock::new();
+static DEBLOCK_V_SB64UV_HBD: OnceLock<Option<DeblockSb64HbdFn>> = OnceLock::new();
 
 static SETUP_THR_COLS_SEG_8BPC: OnceLock<Option<DeblockSetupColsSeg8bpcFn>> = OnceLock::new();
 static SETUP_THR_ROWS_SEG_8BPC: OnceLock<Option<DeblockSetupRowsSeg8bpcFn>> = OnceLock::new();
@@ -866,6 +1461,86 @@ fn resolve_deblock_v_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
     })
 }
 
+#[inline]
+fn resolve_deblock_h_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
+    *DEBLOCK_H_SB64Y_HBD.get_or_init(|| {
+        let mut _f: Option<DeblockSb64HbdFn> = None;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
+                _f = Some(crate::neon::deblock_h_sb64y_hbd_neon as DeblockSb64HbdFn);
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = Some(crate::avx::deblock_h_sb64y_hbd_avx2 as DeblockSb64HbdFn);
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+fn resolve_deblock_v_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
+    *DEBLOCK_V_SB64Y_HBD.get_or_init(|| {
+        let mut _f: Option<DeblockSb64HbdFn> = None;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
+                _f = Some(crate::neon::deblock_v_sb64y_hbd_neon as DeblockSb64HbdFn);
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = Some(crate::avx::deblock_v_sb64y_hbd_avx2 as DeblockSb64HbdFn);
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+fn resolve_deblock_h_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
+    *DEBLOCK_H_SB64UV_HBD.get_or_init(|| {
+        let mut _f: Option<DeblockSb64HbdFn> = None;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
+                _f = Some(crate::neon::deblock_h_sb64uv_hbd_neon as DeblockSb64HbdFn);
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = Some(crate::avx::deblock_h_sb64uv_hbd_avx2 as DeblockSb64HbdFn);
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+fn resolve_deblock_v_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
+    *DEBLOCK_V_SB64UV_HBD.get_or_init(|| {
+        let mut _f: Option<DeblockSb64HbdFn> = None;
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("rdm") {
+                _f = Some(crate::neon::deblock_v_sb64uv_hbd_neon as DeblockSb64HbdFn);
+            }
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = Some(crate::avx::deblock_v_sb64uv_hbd_avx2 as DeblockSb64HbdFn);
+            }
+        }
+        _f
+    })
+}
+
 macro_rules! define_try_deblock_sb64_8bpc {
     ($name:ident, $resolver:ident) => {
         #[allow(clippy::too_many_arguments)]
@@ -896,6 +1571,47 @@ define_try_deblock_sb64_8bpc!(try_deblock_h_sb64y_8bpc, resolve_deblock_h_sb64y_
 define_try_deblock_sb64_8bpc!(try_deblock_v_sb64y_8bpc, resolve_deblock_v_sb64y_8bpc);
 define_try_deblock_sb64_8bpc!(try_deblock_h_sb64uv_8bpc, resolve_deblock_h_sb64uv_8bpc);
 define_try_deblock_sb64_8bpc!(try_deblock_v_sb64uv_8bpc, resolve_deblock_v_sb64uv_8bpc);
+
+macro_rules! define_try_deblock_sb64_hbd {
+    ($name:ident, $resolve:ident) => {
+        #[allow(clippy::too_many_arguments)]
+        #[inline]
+        pub(crate) fn $name(
+            dst: &mut [u16],
+            dst_off: usize,
+            stride: usize,
+            vmask: &[u16],
+            ll_mask: &[u16],
+            q_thr: &[u8],
+            side_thr: &[u8],
+            edge: bool,
+            bitdepth_max: i32,
+        ) -> bool {
+            let Some(f) = $resolve() else {
+                return false;
+            };
+            unsafe {
+                f(
+                    dst,
+                    dst_off,
+                    stride,
+                    vmask,
+                    ll_mask,
+                    q_thr,
+                    side_thr,
+                    edge,
+                    bitdepth_max,
+                )
+            };
+            true
+        }
+    };
+}
+
+define_try_deblock_sb64_hbd!(try_deblock_h_sb64y_hbd, resolve_deblock_h_sb64y_hbd);
+define_try_deblock_sb64_hbd!(try_deblock_v_sb64y_hbd, resolve_deblock_v_sb64y_hbd);
+define_try_deblock_sb64_hbd!(try_deblock_h_sb64uv_hbd, resolve_deblock_h_sb64uv_hbd);
+define_try_deblock_sb64_hbd!(try_deblock_v_sb64uv_hbd, resolve_deblock_v_sb64uv_hbd);
 
 #[inline]
 fn resolve_setup_thr_cols_seg_8bpc() -> Option<DeblockSetupColsSeg8bpcFn> {

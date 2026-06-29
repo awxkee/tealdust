@@ -742,6 +742,39 @@ pub(crate) fn cdef_filter_block_8x8_hbd_neon(
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
+pub(crate) fn cdef_filter_block_8x4_hbd_neon(
+    dst: &mut [u16],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    pri_shift: i32,
+    sec_shift: i32,
+    pri_tap: i32,
+    dir: usize,
+) {
+    cdef_filter_block_8w_hbd_neon_shape_dispatch::<4>(
+        dst,
+        dst_stride,
+        dst_off,
+        tmp,
+        tmp_stride,
+        o,
+        pri_strength,
+        sec_strength,
+        pri_shift,
+        sec_shift,
+        pri_tap,
+        dir,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "neon")]
 pub(crate) fn cdef_filter_block_4x8_hbd_neon(
     dst: &mut [u16],
     dst_stride: usize,

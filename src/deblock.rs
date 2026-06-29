@@ -319,6 +319,32 @@ pub(crate) fn deblock_h_sb64y_bd<BD: BitDepth>(
                 return;
             }
         }
+    } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+        if crate::deblock_dispatch::try_deblock_h_sb64y_hbd(
+            d16,
+            dst_off,
+            stride,
+            vmask,
+            ll_mask,
+            q_thr,
+            side_thr,
+            edge,
+            bd.bitdepth_max(),
+        ) {
+            return;
+        }
+        crate::deblock_dispatch::deblock_h_sb64y_hbd_fast(
+            d16,
+            dst_off,
+            stride,
+            vmask,
+            ll_mask,
+            q_thr,
+            side_thr,
+            edge,
+            bd.bitdepth_max(),
+        );
+        return;
     }
 
     let mut vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32 | vmask[3] as u32;
@@ -376,6 +402,32 @@ pub(crate) fn deblock_v_sb64y_bd<BD: BitDepth>(
                 return;
             }
         }
+    } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+        if crate::deblock_dispatch::try_deblock_v_sb64y_hbd(
+            d16,
+            dst_off,
+            stride,
+            vmask,
+            ll_mask,
+            q_thr,
+            side_thr,
+            edge,
+            bd.bitdepth_max(),
+        ) {
+            return;
+        }
+        crate::deblock_dispatch::deblock_v_sb64y_hbd_fast(
+            d16,
+            dst_off,
+            stride,
+            vmask,
+            ll_mask,
+            q_thr,
+            side_thr,
+            edge,
+            bd.bitdepth_max(),
+        );
+        return;
     }
 
     let mut vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32 | vmask[3] as u32;
@@ -433,6 +485,32 @@ pub(crate) fn deblock_h_sb64uv_bd<BD: BitDepth>(
                 return;
             }
         }
+    } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+        if crate::deblock_dispatch::try_deblock_h_sb64uv_hbd(
+            d16,
+            dst_off,
+            stride,
+            vmask,
+            ll_mask,
+            q_thr,
+            side_thr,
+            edge,
+            bd.bitdepth_max(),
+        ) {
+            return;
+        }
+        crate::deblock_dispatch::deblock_h_sb64uv_hbd_fast(
+            d16,
+            dst_off,
+            stride,
+            vmask,
+            ll_mask,
+            q_thr,
+            side_thr,
+            edge,
+            bd.bitdepth_max(),
+        );
+        return;
     }
 
     let mut vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32;
@@ -488,6 +566,32 @@ pub(crate) fn deblock_v_sb64uv_bd<BD: BitDepth>(
                 return;
             }
         }
+    } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+        if crate::deblock_dispatch::try_deblock_v_sb64uv_hbd(
+            d16,
+            dst_off,
+            stride,
+            vmask,
+            ll_mask,
+            q_thr,
+            side_thr,
+            edge,
+            bd.bitdepth_max(),
+        ) {
+            return;
+        }
+        crate::deblock_dispatch::deblock_v_sb64uv_hbd_fast(
+            d16,
+            dst_off,
+            stride,
+            vmask,
+            ll_mask,
+            q_thr,
+            side_thr,
+            edge,
+            bd.bitdepth_max(),
+        );
+        return;
     }
 
     let mut vm = vmask[0] as u32 | vmask[1] as u32 | vmask[2] as u32;

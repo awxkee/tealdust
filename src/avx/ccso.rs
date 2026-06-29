@@ -387,6 +387,13 @@ fn fill_offsets_16(out: &mut [i8; 16], idx: &[u8; 16], offset_map: &[i8; 256]) {
 }
 
 #[inline(always)]
+fn fill_offsets_32(out: &mut [i8; 32], idx: &[u8; 32], offset_map: &[i8; 256]) {
+    for (out, &idx) in out.iter_mut().zip(idx.iter()) {
+        *out = offset_map[idx as usize];
+    }
+}
+
+#[inline(always)]
 fn fill_offsets_4_i16(out: &mut [i16; 8], idx: &[u8; 4], offset_map: &[i8; 256]) {
     for (out, &idx) in out[..4].iter_mut().zip(idx.iter()) {
         *out = offset_map[idx as usize] as i16;
@@ -439,8 +446,10 @@ pub(crate) fn ccso_add_8bpc_avx2(
     ll_mask: &[[u16; 4]],
 ) {
     let zero = _mm_setzero_si128();
+    let zero256 = _mm256_setzero_si256();
     let offset_map = crate::ccso::ccso_build_offset_map(offset_idxs, offset_lut);
-    let mut off_tmp = [0i8; 16];
+    let mut off_tmp = [0i8; 32];
+    let mut off_tmp16 = [0i8; 16];
     let n_blocks = (h + 3) >> 2;
     for (by, mask) in (0..h).step_by(4).zip(ll_mask[..n_blocks].iter()) {
         let block_h = (h - by).min(4);
@@ -451,14 +460,48 @@ pub(crate) fn ccso_add_8bpc_avx2(
         let idx_rows = &idx_buf[idx_row_start..idx_row_start + block_h * idx_stride];
         let row_mask = mask[0];
         let mut xx = 0usize;
+        while xx + 32 <= w {
+            let bx = xx >> 2;
+            if ((row_mask >> bx) & 0xff) != 0 {
+                break;
+            }
+
+            for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+                let dst_row = &mut dst_rows[yy * dst_stride..];
+                let idx32 = &idx_row[xx..xx + 32].as_chunks::<32>().0[0];
+                fill_offsets_32(&mut off_tmp, idx32, &offset_map);
+
+                let off = unsafe { _mm256_loadu_si256(off_tmp.as_ptr().cast()) };
+                let off0 = _mm256_castsi256_si128(off);
+                let off1 = _mm256_extracti128_si256::<1>(off);
+                let off_lo = _mm256_inserti128_si256::<1>(
+                    _mm256_castsi128_si256(_mm_cvtepi8_epi16(off0)),
+                    _mm_cvtepi8_epi16(off1),
+                );
+                let off_hi = _mm256_inserti128_si256::<1>(
+                    _mm256_castsi128_si256(_mm_cvtepi8_epi16(_mm_srli_si128(off0, 8))),
+                    _mm_cvtepi8_epi16(_mm_srli_si128(off1, 8)),
+                );
+                let dst32 = &mut dst_row[xx..xx + 32].as_chunks_mut::<32>().0[0];
+                let cur = unsafe { _mm256_loadu_si256(dst32.as_ptr().cast()) };
+                let cur_lo = _mm256_unpacklo_epi8(cur, zero256);
+                let cur_hi = _mm256_unpackhi_epi8(cur, zero256);
+                let out = _mm256_packus_epi16(
+                    _mm256_add_epi16(cur_lo, off_lo),
+                    _mm256_add_epi16(cur_hi, off_hi),
+                );
+                unsafe { _mm256_storeu_si256(dst32.as_mut_ptr().cast(), out) };
+            }
+            xx += 32;
+        }
         while xx + 16 <= w {
             let bx = xx >> 2;
             if ((row_mask >> bx) & 0x0f) == 0 {
                 for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
                     let dst_row = &mut dst_rows[yy * dst_stride..];
                     let idx16 = &idx_row[xx..xx + 16].as_chunks::<16>().0[0];
-                    fill_offsets_16(&mut off_tmp, idx16, &offset_map);
-                    let off = unsafe { _mm_loadu_si128(off_tmp.as_ptr() as *const __m128i) };
+                    fill_offsets_16(&mut off_tmp16, idx16, &offset_map);
+                    let off = unsafe { _mm_loadu_si128(off_tmp16.as_ptr() as *const __m128i) };
                     let off_lo = _mm_cvtepi8_epi16(off);
                     let off_hi = _mm_cvtepi8_epi16(_mm_srli_si128(off, 8));
                     let dst16 = &mut dst_row[xx..xx + 16].as_chunks_mut::<16>().0[0];

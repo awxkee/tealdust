@@ -51,11 +51,13 @@ pub(crate) use ccso::{ccso_add_8bpc_neon, ccso_prep_lut_8bpc_neon};
 pub(crate) use ccso_hd::{ccso_add_hbd_neon, ccso_prep_lut_hbd_neon};
 pub(crate) use cdef::{
     cdef_filter_block_4x4_8bpc_neon, cdef_filter_block_4x8_8bpc_neon, cdef_filter_block_8bpc_neon,
-    cdef_filter_block_8x8_8bpc_neon, cdef_find_dir_8bpc_neon, cdef_padding_8bpc_neon,
+    cdef_filter_block_8x4_8bpc_neon, cdef_filter_block_8x8_8bpc_neon, cdef_find_dir_8bpc_neon,
+    cdef_padding_8bpc_neon,
 };
 pub(crate) use cdef_hd::{
-    cdef_filter_block_4x4_hbd_neon, cdef_filter_block_4x8_hbd_neon, cdef_filter_block_8x8_hbd_neon,
-    cdef_filter_block_hbd_neon, cdef_find_dir_hbd_neon, cdef_padding_hbd_neon,
+    cdef_filter_block_4x4_hbd_neon, cdef_filter_block_4x8_hbd_neon, cdef_filter_block_8x4_hbd_neon,
+    cdef_filter_block_8x8_hbd_neon, cdef_filter_block_hbd_neon, cdef_find_dir_hbd_neon,
+    cdef_padding_hbd_neon,
 };
 pub(crate) use cfl::{
     cfl_alpha_accum_8bpc_neon, cfl_apply_420_8bpc_neon, cfl_apply_420_8bpc_neon_rdm,
@@ -69,9 +71,11 @@ pub(crate) use cfl_hd::{
 };
 pub(crate) use deblocking::{
     deblock_apply_8bpc_neon, deblock_apply_hbd_neon, deblock_h_sb64uv_8bpc_neon,
-    deblock_h_sb64y_8bpc_neon, deblock_v_sb64uv_8bpc_neon, deblock_v_sb64y_8bpc_neon,
-    setup_thr_cols_dq_8bpc_neon, setup_thr_cols_seg_8bpc_neon, setup_thr_cols_simple_8bpc_neon,
-    setup_thr_rows_dq_8bpc_neon, setup_thr_rows_seg_8bpc_neon, setup_thr_rows_simple_8bpc_neon,
+    deblock_h_sb64uv_hbd_neon, deblock_h_sb64y_8bpc_neon, deblock_h_sb64y_hbd_neon,
+    deblock_v_sb64uv_8bpc_neon, deblock_v_sb64uv_hbd_neon, deblock_v_sb64y_8bpc_neon,
+    deblock_v_sb64y_hbd_neon, setup_thr_cols_dq_8bpc_neon, setup_thr_cols_seg_8bpc_neon,
+    setup_thr_cols_simple_8bpc_neon, setup_thr_rows_dq_8bpc_neon, setup_thr_rows_seg_8bpc_neon,
+    setup_thr_rows_simple_8bpc_neon,
 };
 pub(crate) use filmgrain::{
     blend_top_grain_row_neon, fguv_row_8bpc_neon, fguv_row_hbd_neon, fgy_row_8bpc_neon,

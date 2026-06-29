@@ -43,6 +43,86 @@ fn store_u16x16(a: &mut [u16; 16], v: __m256i) {
     unsafe { _mm256_storeu_si256(a.as_mut_ptr() as *mut __m256i, v) };
 }
 
+#[inline(always)]
+fn store_u16x8(a: &mut [u16; 8], v: __m128i) {
+    unsafe { _mm_storeu_si128(a.as_mut_ptr().cast(), v) };
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn splat_row_u16_avx2(row: &mut [u16], v: u16) {
+    let vv = _mm256_set1_epi16(v as i16);
+    let (chunks, rem16) = row.as_chunks_mut::<16>();
+    for c in chunks.iter_mut() {
+        store_u16x16(c, vv);
+    }
+    let (chunks8, rem) = rem16.as_chunks_mut::<8>();
+    let vv8 = _mm256_castsi256_si128(vv);
+    for c in chunks8.iter_mut() {
+        store_u16x8(c, vv8);
+    }
+    rem.fill(v);
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn splat_h_rows4_u16_avx2(dst: &mut [u16], stride: usize, off: usize, w: usize, v: [u16; 4]) {
+    let block = &mut dst[off..off + 3 * stride + w];
+    let (row0, rest) = block.split_at_mut(stride);
+    let (row1, rest) = rest.split_at_mut(stride);
+    let (row2, row3) = rest.split_at_mut(stride);
+    let row0 = &mut row0[..w];
+    let row1 = &mut row1[..w];
+    let row2 = &mut row2[..w];
+    let row3 = &mut row3[..w];
+
+    let v0 = _mm256_set1_epi16(v[0] as i16);
+    let v1 = _mm256_set1_epi16(v[1] as i16);
+    let v2 = _mm256_set1_epi16(v[2] as i16);
+    let v3 = _mm256_set1_epi16(v[3] as i16);
+
+    let (r0_16, r0_rem16) = row0.as_chunks_mut::<16>();
+    let (r1_16, r1_rem16) = row1.as_chunks_mut::<16>();
+    let (r2_16, r2_rem16) = row2.as_chunks_mut::<16>();
+    let (r3_16, r3_rem16) = row3.as_chunks_mut::<16>();
+    for (((r0, r1), r2), r3) in r0_16
+        .iter_mut()
+        .zip(r1_16.iter_mut())
+        .zip(r2_16.iter_mut())
+        .zip(r3_16.iter_mut())
+    {
+        store_u16x16(r0, v0);
+        store_u16x16(r1, v1);
+        store_u16x16(r2, v2);
+        store_u16x16(r3, v3);
+    }
+
+    let v0_8 = _mm256_castsi256_si128(v0);
+    let v1_8 = _mm256_castsi256_si128(v1);
+    let v2_8 = _mm256_castsi256_si128(v2);
+    let v3_8 = _mm256_castsi256_si128(v3);
+    let (r0_8, r0_rem) = r0_rem16.as_chunks_mut::<8>();
+    let (r1_8, r1_rem) = r1_rem16.as_chunks_mut::<8>();
+    let (r2_8, r2_rem) = r2_rem16.as_chunks_mut::<8>();
+    let (r3_8, r3_rem) = r3_rem16.as_chunks_mut::<8>();
+    for (((r0, r1), r2), r3) in r0_8
+        .iter_mut()
+        .zip(r1_8.iter_mut())
+        .zip(r2_8.iter_mut())
+        .zip(r3_8.iter_mut())
+    {
+        store_u16x8(r0, v0_8);
+        store_u16x8(r1, v1_8);
+        store_u16x8(r2, v2_8);
+        store_u16x8(r3, v3_8);
+    }
+
+    r0_rem.fill(v[0]);
+    r1_rem.fill(v[1]);
+    r2_rem.fill(v[2]);
+    r3_rem.fill(v[3]);
+}
+
 #[inline]
 #[target_feature(enable = "avx2")]
 fn avg_pred_hbd_avx2(dst: &mut [u16], stride: usize, tmp: &[u16], w: usize, h: usize) {
@@ -341,6 +421,15 @@ pub(crate) fn ipred_v_hbd_avx2(
     }
 }
 
+#[inline]
+fn h_left_u16(tl: &[u16], o: usize, e_stride: usize, y: usize, mrl: bool) -> u16 {
+    if mrl {
+        ((tl[o - 1 - y] as u32 + tl[o + e_stride - 1 - y] as u32 + 1) >> 1) as u16
+    } else {
+        tl[o - 1 - y]
+    }
+}
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn ipred_h_hbd_avx2(
     dst: &mut [u16],
@@ -352,26 +441,31 @@ pub(crate) fn ipred_h_hbd_avx2(
     angle: i32,
     bitdepth_max: u16,
 ) {
-    if w < 16 {
+    if w < 8 {
         crate::sse::ipred_h_hbd_sse41(dst, stride, tl, o, w, h, angle, bitdepth_max);
         return;
     }
     let e_stride = (w + h) * 2 + 1;
     let mrl = angle & ANGLE_MULTI_MRL_FLAG != 0;
+    let mut y = 0usize;
     let mut off = 0usize;
-    for y in 0..h {
-        let v = if mrl {
-            ((tl[o - 1 - y] as u32 + tl[o + e_stride - 1 - y] as u32 + 1) >> 1) as u16
-        } else {
-            tl[o - 1 - y]
-        };
-        let vv = _mm256_set1_epi16(v as i16);
-        let row = &mut dst[off..off + w];
-        let (chunks, rem) = row.as_chunks_mut::<16>();
-        for c in chunks.iter_mut() {
-            store_u16x16(c, vv);
-        }
-        rem.fill(v);
+
+    while y + 3 < h {
+        let v = [
+            h_left_u16(tl, o, e_stride, y, mrl),
+            h_left_u16(tl, o, e_stride, y + 1, mrl),
+            h_left_u16(tl, o, e_stride, y + 2, mrl),
+            h_left_u16(tl, o, e_stride, y + 3, mrl),
+        ];
+        splat_h_rows4_u16_avx2(dst, stride, off, w, v);
+        y += 4;
+        off += stride * 4;
+    }
+
+    while y < h {
+        let v = h_left_u16(tl, o, e_stride, y, mrl);
+        splat_row_u16_avx2(&mut dst[off..off + w], v);
+        y += 1;
         off += stride;
     }
 }
@@ -1189,6 +1283,32 @@ fn z1_luma_row_hbd_avx2(
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn z_chroma_hbd8_avx2(a: &[u16], b: &[u16], weights: __m256i, rnd: __m256i) -> __m256i {
+    debug_assert!(a.len() >= 8);
+    debug_assert!(b.len() >= 8);
+    let a = unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) };
+    let b = unsafe { _mm_loadu_si128(b.as_ptr() as *const __m128i) };
+    let lo = _mm_unpacklo_epi16(a, b);
+    let hi = _mm_unpackhi_epi16(a, b);
+    let pairs = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi);
+    _mm256_srai_epi32::<5>(_mm256_add_epi32(_mm256_madd_epi16(pairs, weights), rnd))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn z3_chroma_hbd8_avx2(filt: &[u16], bi: i32, weights: __m256i, rnd: __m256i) -> __m256i {
+    let mut pairs = [0i16; 16];
+    for lane in 0..8 {
+        let idx = (bi - lane as i32) as usize;
+        pairs[lane * 2] = filt[idx] as i16;
+        pairs[lane * 2 + 1] = filt[idx - 1] as i16;
+    }
+    let samples = unsafe { _mm256_loadu_si256(pairs.as_ptr() as *const __m256i) };
+    _mm256_srai_epi32::<5>(_mm256_add_epi32(_mm256_madd_epi16(samples, weights), rnd))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn z1_chroma_row_hbd_avx2(
     filt: &[u16],
     top_off: usize,
@@ -1201,19 +1321,13 @@ fn z1_chroma_row_hbd_avx2(
     bitdepth_max: u16,
 ) {
     let n_filter = ((max_base_x - base0 + 1).max(0) as usize).min(w);
-    let iw = _mm256_set1_epi32((32 - shift) as i32);
-    let sw = _mm256_set1_epi32(shift as i32);
+    let weights = _mm256_set1_epi32((((shift as u32) << 16) | ((32 - shift) as u32)) as i32);
     let rnd = _mm256_set1_epi32(16);
     let base_const = (top_off as i32 + base0) as usize;
     let mut x = 0usize;
     while x + 8 <= n_filter {
         let bi = base_const + x;
-        let a = load_u16x8_i32_slice(&filt[bi..]);
-        let b = load_u16x8_i32_slice(&filt[bi + 1..]);
-        let v = _mm256_srli_epi32::<5>(_mm256_add_epi32(
-            _mm256_add_epi32(_mm256_mullo_epi32(a, iw), _mm256_mullo_epi32(b, sw)),
-            rnd,
-        ));
+        let v = z_chroma_hbd8_avx2(&filt[bi..], &filt[bi + 1..], weights, rnd);
         store_i32x8_u16_max(&mut dst_row[x..], v, bitdepth_max);
         x += 8;
     }
@@ -1224,6 +1338,53 @@ fn z1_chroma_row_hbd_avx2(
         x += 1;
     }
     dst_row[n_filter..w].fill(fill);
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn z1_row_hbd_avx2(
+    filt: &[u16],
+    top_off: usize,
+    max_base_x: i32,
+    is_luma: bool,
+    ypos: i32,
+    dst_row: &mut [u16],
+    w: usize,
+    bitdepth_max: u16,
+) -> Option<u16> {
+    let base0 = ypos >> 6;
+    let fill = filt[top_off + max_base_x as usize];
+    if base0 > max_base_x {
+        return Some(fill);
+    }
+    let shift = ((ypos & 0x3F) >> 1) as usize;
+    let f = &crate::ipred::DR_INTERP_FILTER[shift];
+    if is_luma {
+        z1_luma_row_hbd_avx2(
+            filt,
+            top_off,
+            base0,
+            max_base_x,
+            fill,
+            f,
+            dst_row,
+            w,
+            bitdepth_max,
+        );
+    } else {
+        z1_chroma_row_hbd_avx2(
+            filt,
+            top_off,
+            base0,
+            max_base_x,
+            fill,
+            shift,
+            dst_row,
+            w,
+            bitdepth_max,
+        );
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1354,45 +1515,62 @@ pub(crate) fn ipred_z1_hbd_avx2(
     filt[sz + 1] = filt[sz];
     filt[sz + 2] = filt[sz + 1];
 
+    let mut y = 0usize;
     let mut ypos = dx * (1 + mrl_idx as i32);
-    for y in 0..h {
-        let base0 = ypos >> 6;
-        let fill = filt[top_off + max_base_x as usize];
-        if base0 > max_base_x {
-            for row in dst.chunks_mut(stride).take(h).skip(y) {
+    while y + 1 < h {
+        let rows = &mut dst[y * stride..];
+        let (row0, rest) = rows.split_at_mut(stride);
+        if let Some(fill) = z1_row_hbd_avx2(
+            &filt,
+            top_off,
+            max_base_x,
+            is_luma,
+            ypos,
+            &mut row0[..w],
+            w,
+            bitdepth_max,
+        ) {
+            row0[..w].fill(fill);
+            for row in rest.chunks_mut(stride).take(h - y - 1) {
                 row[..w].fill(fill);
             }
-            break;
-        }
-        let shift = ((ypos & 0x3F) >> 1) as usize;
-        let f = &crate::ipred::DR_INTERP_FILTER[shift];
-        let dst_row = &mut dst[y * stride..y * stride + w];
-        if is_luma {
-            z1_luma_row_hbd_avx2(
-                &filt,
-                top_off,
-                base0,
-                max_base_x,
-                fill,
-                f,
-                dst_row,
-                w,
-                bitdepth_max,
-            );
-        } else {
-            z1_chroma_row_hbd_avx2(
-                &filt,
-                top_off,
-                base0,
-                max_base_x,
-                fill,
-                shift,
-                dst_row,
-                w,
-                bitdepth_max,
-            );
+            return;
         }
         ypos += dx;
+        let (row1, tail) = rest.split_at_mut(stride);
+        if let Some(fill) = z1_row_hbd_avx2(
+            &filt,
+            top_off,
+            max_base_x,
+            is_luma,
+            ypos,
+            &mut row1[..w],
+            w,
+            bitdepth_max,
+        ) {
+            row1[..w].fill(fill);
+            for row in tail.chunks_mut(stride).take(h - y - 2) {
+                row[..w].fill(fill);
+            }
+            return;
+        }
+        ypos += dx;
+        y += 2;
+    }
+    if y < h {
+        let dst_row = &mut dst[y * stride..y * stride + w];
+        if let Some(fill) = z1_row_hbd_avx2(
+            &filt,
+            top_off,
+            max_base_x,
+            is_luma,
+            ypos,
+            dst_row,
+            w,
+            bitdepth_max,
+        ) {
+            dst_row.fill(fill);
+        }
     }
 }
 
@@ -1492,37 +1670,13 @@ fn z3_chroma_col_hbd_avx2(
     bitdepth_max: u16,
 ) {
     let n_filter = ((max_base_y - base0 + 1).max(0) as usize).min(h);
-    let iw = _mm256_set1_epi32((32 - shift) as i32);
-    let sw = _mm256_set1_epi32(shift as i32);
+    let weights = _mm256_set1_epi32((((shift as u32) << 16) | ((32 - shift) as u32)) as i32);
     let rnd = _mm256_set1_epi32(16);
     let lob = left_off as i32 - base0;
     let mut y = 0usize;
     while y + 8 <= n_filter {
         let bi = lob - y as i32;
-        let a = setr_i32x8(
-            filt[bi as usize] as i32,
-            filt[(bi - 1) as usize] as i32,
-            filt[(bi - 2) as usize] as i32,
-            filt[(bi - 3) as usize] as i32,
-            filt[(bi - 4) as usize] as i32,
-            filt[(bi - 5) as usize] as i32,
-            filt[(bi - 6) as usize] as i32,
-            filt[(bi - 7) as usize] as i32,
-        );
-        let b = setr_i32x8(
-            filt[(bi - 1) as usize] as i32,
-            filt[(bi - 2) as usize] as i32,
-            filt[(bi - 3) as usize] as i32,
-            filt[(bi - 4) as usize] as i32,
-            filt[(bi - 5) as usize] as i32,
-            filt[(bi - 6) as usize] as i32,
-            filt[(bi - 7) as usize] as i32,
-            filt[(bi - 8) as usize] as i32,
-        );
-        let v = _mm256_srli_epi32::<5>(_mm256_add_epi32(
-            _mm256_add_epi32(_mm256_mullo_epi32(a, iw), _mm256_mullo_epi32(b, sw)),
-            rnd,
-        ));
+        let v = z3_chroma_hbd8_avx2(filt, bi, weights, rnd);
         store_i32x8_u16_max(&mut col[y..], v, bitdepth_max);
         y += 8;
     }
@@ -1533,6 +1687,33 @@ fn z3_chroma_col_hbd_avx2(
         y += 1;
     }
     col[n_filter..h].fill(fill);
+}
+
+#[inline]
+fn store_z3_cols4_u16(dst: &mut [u16], stride: usize, x: usize, h: usize, cols: &[[u16; 128]; 4]) {
+    for y in 0..h {
+        let row_off = y * stride + x;
+        dst[row_off] = cols[0][y];
+        dst[row_off + 1] = cols[1][y];
+        dst[row_off + 2] = cols[2][y];
+        dst[row_off + 3] = cols[3][y];
+    }
+}
+
+#[inline]
+fn store_z3_cols2_u16(dst: &mut [u16], stride: usize, x: usize, h: usize, cols: &[[u16; 128]; 2]) {
+    for y in 0..h {
+        let row_off = y * stride + x;
+        dst[row_off] = cols[0][y];
+        dst[row_off + 1] = cols[1][y];
+    }
+}
+
+#[inline]
+fn store_z3_col_u16(dst: &mut [u16], stride: usize, x: usize, h: usize, col: &[u16; 128]) {
+    for y in 0..h {
+        dst[y * stride + x] = col[y];
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1694,9 +1875,84 @@ pub(crate) fn ipred_z3_hbd_avx2(
     filt[1] = filt[2];
     filt[sz + 2] = filt[sz + 1];
 
+    let mut cols4 = [[0u16; 128]; 4];
+    let mut cols2 = [[0u16; 128]; 2];
     let mut col = [0u16; 128];
     let mut ypos = dy * (1 + mrl_idx as i32);
-    for x in 0..w {
+    let mut x = 0usize;
+    while x + 4 <= w {
+        for col in &mut cols4 {
+            let shift = ((ypos & 0x3F) >> 1) as usize;
+            let f = &crate::ipred::DR_INTERP_FILTER[shift];
+            let base0 = ypos >> 6;
+            let fill = filt[left_off - max_base_y as usize];
+            if is_luma {
+                z3_luma_col_hbd_avx2(
+                    &filt,
+                    left_off,
+                    base0,
+                    max_base_y,
+                    fill,
+                    f,
+                    col,
+                    h,
+                    bitdepth_max,
+                );
+            } else {
+                z3_chroma_col_hbd_avx2(
+                    &filt,
+                    left_off,
+                    base0,
+                    max_base_y,
+                    fill,
+                    shift,
+                    col,
+                    h,
+                    bitdepth_max,
+                );
+            }
+            ypos += dy;
+        }
+        store_z3_cols4_u16(dst, stride, x, h, &cols4);
+        x += 4;
+    }
+    if x + 2 <= w {
+        for col in &mut cols2 {
+            let shift = ((ypos & 0x3F) >> 1) as usize;
+            let f = &crate::ipred::DR_INTERP_FILTER[shift];
+            let base0 = ypos >> 6;
+            let fill = filt[left_off - max_base_y as usize];
+            if is_luma {
+                z3_luma_col_hbd_avx2(
+                    &filt,
+                    left_off,
+                    base0,
+                    max_base_y,
+                    fill,
+                    f,
+                    col,
+                    h,
+                    bitdepth_max,
+                );
+            } else {
+                z3_chroma_col_hbd_avx2(
+                    &filt,
+                    left_off,
+                    base0,
+                    max_base_y,
+                    fill,
+                    shift,
+                    col,
+                    h,
+                    bitdepth_max,
+                );
+            }
+            ypos += dy;
+        }
+        store_z3_cols2_u16(dst, stride, x, h, &cols2);
+        x += 2;
+    }
+    while x < w {
         let shift = ((ypos & 0x3F) >> 1) as usize;
         let f = &crate::ipred::DR_INTERP_FILTER[shift];
         let base0 = ypos >> 6;
@@ -1726,10 +1982,9 @@ pub(crate) fn ipred_z3_hbd_avx2(
                 bitdepth_max,
             );
         }
-        for (y, &c) in col[..h].iter().enumerate() {
-            dst[y * stride + x] = c;
-        }
+        store_z3_col_u16(dst, stride, x, h, &col);
         ypos += dy;
+        x += 1;
     }
 }
 

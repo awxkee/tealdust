@@ -56,25 +56,24 @@ fn load_u16x4(a: &[u16; 4]) -> uint16x4_t {
 #[inline(always)]
 fn load_u16x8_tail4(src: &[u16]) -> uint16x8_t {
     debug_assert!(src.len() >= 4);
-    let mut tmp = [0u16; 8];
-    tmp[..4].copy_from_slice(&src[..4]);
-    load_u16x8(&tmp)
+    unsafe { vreinterpretq_u16_u64(vld1q_lane_u64::<0>(src.as_ptr().cast(), vdupq_n_u64(0))) }
 }
 
 #[inline(always)]
 fn load_u16x8_tail2(src: &[u16]) -> uint16x8_t {
     debug_assert!(src.len() >= 2);
-    let mut tmp = [0u16; 8];
-    tmp[..2].copy_from_slice(&src[..2]);
-    load_u16x8(&tmp)
+    unsafe {
+        vreinterpretq_u16_u32(vcombine_u32(
+            vld1_lane_u32::<0>(src.as_ptr().cast(), vdup_n_u32(0)),
+            vdup_n_u32(0),
+        ))
+    }
 }
 
 #[inline(always)]
 fn load_u16x4_tail2(src: &[u16]) -> uint16x4_t {
     debug_assert!(src.len() >= 2);
-    let mut tmp = [0u16; 4];
-    tmp[..2].copy_from_slice(&src[..2]);
-    load_u16x4(&tmp)
+    unsafe { vreinterpret_u16_u32(vld1_lane_u32::<0>(src.as_ptr().cast(), vdup_n_u32(0))) }
 }
 
 #[inline(always)]
@@ -85,9 +84,7 @@ fn store_u16x4(a: &mut [u16; 4], v: uint16x4_t) {
 #[inline(always)]
 fn store_u16x2(a: &mut [u16], v: uint16x4_t) {
     debug_assert!(a.len() >= 2);
-    let mut tmp = [0u16; 4];
-    unsafe { vst1_u16(tmp.as_mut_ptr(), v) };
-    a[..2].copy_from_slice(&tmp[..2]);
+    unsafe { vst1_lane_u32::<0>(a.as_mut_ptr().cast(), vreinterpret_u32_u16(v)) };
 }
 
 #[inline(always)]
