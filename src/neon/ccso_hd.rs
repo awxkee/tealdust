@@ -385,7 +385,7 @@ fn ccso_add_4x4_hbd(
         let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
         fill_offsets_4_i16(&mut off_tmp, idx4, offset_map);
         let off = unsafe { vld1_s16(off_tmp.as_ptr()) };
-        let dst4 = &mut dst_row[xx..xx + 4].as_chunks_mut::<4>().0[0];
+        let dst4 = &mut dst_row[xx..xx + 4];
         let cur = unsafe { vreinterpret_s16_u16(vld1_u16(dst4.as_ptr())) };
         let out = vmin_s16(vmax_s16(vadd_s16(cur, off), zero), maxv);
         unsafe { vst1_u16(dst4.as_mut_ptr(), vreinterpret_u16_s16(out)) };
@@ -429,7 +429,7 @@ pub(crate) fn ccso_add_hbd_neon(
                     let idx8 = &idx_row[xx..xx + 8].as_chunks::<8>().0[0];
                     fill_offsets_8(&mut off_tmp, idx8, &offset_map);
                     let off = unsafe { vld1q_s16(off_tmp.as_ptr()) };
-                    let dst8 = &mut dst_row[xx..xx + 8].as_chunks_mut::<8>().0[0];
+                    let dst8 = &mut dst_row[xx..xx + 8];
                     let cur = unsafe { vreinterpretq_s16_u16(vld1q_u16(dst8.as_ptr())) };
                     let out = vminq_s16(vmaxq_s16(vaddq_s16(cur, off), zero), maxv);
                     unsafe { vst1q_u16(dst8.as_mut_ptr(), vreinterpretq_u16_s16(out)) };

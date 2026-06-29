@@ -60,12 +60,79 @@ fn load_i16x8_i32x2(a: &[i16; 8]) -> (int32x4_t, int32x4_t) {
 
 #[inline]
 #[target_feature(enable = "neon")]
+fn load_i16x8(a: &[i16; 8]) -> int16x8_t {
+    unsafe { vld1q_s16(a.as_ptr()) }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load_u8x8_i16(a: &[u8; 8]) -> int16x8_t {
+    unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(a.as_ptr()))) }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load_u8x8_u16(a: &[u8; 8]) -> uint16x8_t {
+    unsafe { vmovl_u8(vld1_u8(a.as_ptr())) }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn madd_i16x8_const(
+    a: int16x8_t,
+    b: int16x8_t,
+    w1: int16x4_t,
+    w2: int16x4_t,
+) -> (int32x4_t, int32x4_t) {
+    (
+        vmlal_s16(vmull_s16(vget_low_s16(a), w1), vget_low_s16(b), w2),
+        vmlal_s16(vmull_s16(vget_high_s16(a), w1), vget_high_s16(b), w2),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn madd_i16x8(a: int16x8_t, b: int16x8_t, w1: int16x8_t, w2: int16x8_t) -> (int32x4_t, int32x4_t) {
+    (
+        vmlal_s16(
+            vmull_s16(vget_low_s16(a), vget_low_s16(w1)),
+            vget_low_s16(b),
+            vget_low_s16(w2),
+        ),
+        vmlal_s16(
+            vmull_s16(vget_high_s16(a), vget_high_s16(w1)),
+            vget_high_s16(b),
+            vget_high_s16(w2),
+        ),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
 fn load_u16x8_i32x2(a: &[u16; 8]) -> (int32x4_t, int32x4_t) {
     let v = unsafe { vld1q_u16(a.as_ptr()) };
     (
         vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(v))),
         vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(v))),
     )
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load_u16x8(a: &[u16; 8]) -> uint16x8_t {
+    unsafe { vld1q_u16(a.as_ptr()) }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn load_u16x8_s16(a: &[u16; 8]) -> int16x8_t {
+    unsafe { vreinterpretq_s16_u16(vld1q_u16(a.as_ptr())) }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn store_u16x8(a: &mut [u16; 8], v: uint16x8_t) {
+    unsafe { vst1q_u16(a.as_mut_ptr(), v) };
 }
 
 #[inline]
@@ -194,31 +261,33 @@ pub(crate) fn w_avg_row_hbd_neon(
     sh: i32,
     bitdepth_max: i32,
 ) {
-    let w1 = vdupq_n_s32(weight);
-    let w2 = vdupq_n_s32(16 - weight);
+    let w1 = vdup_n_s16(weight as i16);
+    let w2 = vdup_n_s16((16 - weight) as i16);
     let rnd_v = vdupq_n_s32(rnd);
     let max_v = vdupq_n_s32(bitdepth_max);
-    let f = |a: int32x4_t, b: int32x4_t| {
-        shr(
-            vaddq_s32(vaddq_s32(vmulq_s32(a, w1), vmulq_s32(b, w2)), rnd_v),
-            sh,
-        )
-    };
+    let f = |s: int32x4_t| shr(vaddq_s32(s, rnd_v), sh);
 
     let (d8, r8) = dst[..n].as_chunks_mut::<8>();
     let (a8, _) = t1[..n].as_chunks::<8>();
     let (b8, _) = t2[..n].as_chunks::<8>();
     for ((d, a), b) in d8.iter_mut().zip(a8).zip(b8) {
-        let (a0, a1) = load_i16x8_i32x2(a);
-        let (b0, b1) = load_i16x8_i32x2(b);
-        store_i32x8_u16_clip(d, f(a0, b0), f(a1, b1), max_v);
+        let (s0, s1) = madd_i16x8_const(load_i16x8(a), load_i16x8(b), w1, w2);
+        store_i32x8_u16_clip(d, f(s0), f(s1), max_v);
     }
     let done = d8.len() * 8;
     let (d4, r4) = r8.as_chunks_mut::<4>();
     let (a4, ar) = t1[done..n].as_chunks::<4>();
     let (b4, br) = t2[done..n].as_chunks::<4>();
+    let w1_32 = vdupq_n_s32(weight);
+    let w2_32 = vdupq_n_s32(16 - weight);
+    let f4 = |a: int32x4_t, b: int32x4_t| {
+        shr(
+            vaddq_s32(vaddq_s32(vmulq_s32(a, w1_32), vmulq_s32(b, w2_32)), rnd_v),
+            sh,
+        )
+    };
     for ((d, a), b) in d4.iter_mut().zip(a4).zip(b4) {
-        store_i32x4_u16_clip(d, f(load_i16x4_i32(a), load_i16x4_i32(b)), max_v);
+        store_i32x4_u16_clip(d, f4(load_i16x4_i32(a), load_i16x4_i32(b)), max_v);
     }
     for ((d, &a), &b) in r4.iter_mut().zip(ar).zip(br) {
         *d = ((a as i32 * weight + b as i32 * (16 - weight) + rnd) >> sh).clamp(0, bitdepth_max)
@@ -239,9 +308,26 @@ pub(crate) unsafe fn mask_row_hbd_neon(
     bitdepth_max: i32,
 ) {
     let rnd_v = vdupq_n_s32(rnd);
-    let c64 = vdupq_n_s32(64);
+    let c64_16 = vdupq_n_s16(64);
     let max_v = vdupq_n_s32(bitdepth_max);
-    let f = |a: int32x4_t, b: int32x4_t, m: int32x4_t| {
+    let f = |s: int32x4_t| shr(vaddq_s32(s, rnd_v), sh);
+
+    let (d8, r8) = dst[..n].as_chunks_mut::<8>();
+    let (a8, _) = t1[..n].as_chunks::<8>();
+    let (b8, _) = t2[..n].as_chunks::<8>();
+    let (m8, _) = mask[..n].as_chunks::<8>();
+    for (((d, a), b), m) in d8.iter_mut().zip(a8).zip(b8).zip(m8) {
+        let mv = load_u8x8_i16(m);
+        let (s0, s1) = madd_i16x8(load_i16x8(a), load_i16x8(b), mv, vsubq_s16(c64_16, mv));
+        store_i32x8_u16_clip(d, f(s0), f(s1), max_v);
+    }
+    let done = d8.len() * 8;
+    let (d4, r4) = r8.as_chunks_mut::<4>();
+    let (a4, ar) = t1[done..n].as_chunks::<4>();
+    let (b4, br) = t2[done..n].as_chunks::<4>();
+    let (m4, mr) = mask[done..n].as_chunks::<4>();
+    let c64 = vdupq_n_s32(64);
+    let f4 = |a: int32x4_t, b: int32x4_t, m: int32x4_t| {
         shr(
             vaddq_s32(
                 vaddq_s32(vmulq_s32(a, m), vmulq_s32(b, vsubq_s32(c64, m))),
@@ -250,27 +336,10 @@ pub(crate) unsafe fn mask_row_hbd_neon(
             sh,
         )
     };
-
-    let (d8, r8) = dst[..n].as_chunks_mut::<8>();
-    let (a8, _) = t1[..n].as_chunks::<8>();
-    let (b8, _) = t2[..n].as_chunks::<8>();
-    let (m8, _) = mask[..n].as_chunks::<8>();
-    for (((d, a), b), m) in d8.iter_mut().zip(a8).zip(b8).zip(m8) {
-        let (a0, a1) = load_i16x8_i32x2(a);
-        let (b0, b1) = load_i16x8_i32x2(b);
-        let m0 = load_u8x4_i32((&m[..4]).try_into().unwrap());
-        let m1 = load_u8x4_i32((&m[4..]).try_into().unwrap());
-        store_i32x8_u16_clip(d, f(a0, b0, m0), f(a1, b1, m1), max_v);
-    }
-    let done = d8.len() * 8;
-    let (d4, r4) = r8.as_chunks_mut::<4>();
-    let (a4, ar) = t1[done..n].as_chunks::<4>();
-    let (b4, br) = t2[done..n].as_chunks::<4>();
-    let (m4, mr) = mask[done..n].as_chunks::<4>();
     for (((d, a), b), m) in d4.iter_mut().zip(a4).zip(b4).zip(m4) {
         store_i32x4_u16_clip(
             d,
-            f(load_i16x4_i32(a), load_i16x4_i32(b), load_u8x4_i32(m)),
+            f4(load_i16x4_i32(a), load_i16x4_i32(b), load_u8x4_i32(m)),
             max_v,
         );
     }
@@ -282,33 +351,45 @@ pub(crate) unsafe fn mask_row_hbd_neon(
 
 #[target_feature(enable = "neon")]
 pub(crate) unsafe fn blend_row_hbd_neon(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
-    let c64 = vdupq_n_s32(64);
-    let rnd_v = vdupq_n_s32(32);
-    let max_v = vdupq_n_s32(0xffff);
-    let f = |d: int32x4_t, t: int32x4_t, m: int32x4_t| {
-        vshrq_n_s32::<6>(vaddq_s32(
-            vaddq_s32(vmulq_s32(d, vsubq_s32(c64, m)), vmulq_s32(t, m)),
-            rnd_v,
-        ))
+    let c64 = vdupq_n_u16(64);
+    let f = |d: uint16x8_t, t: uint16x8_t, m: uint16x8_t| {
+        let inv_m = vsubq_u16(c64, m);
+        let lo = vmlal_u16(
+            vmull_u16(vget_low_u16(t), vget_low_u16(m)),
+            vget_low_u16(d),
+            vget_low_u16(inv_m),
+        );
+        let hi = vmlal_u16(
+            vmull_u16(vget_high_u16(t), vget_high_u16(m)),
+            vget_high_u16(d),
+            vget_high_u16(inv_m),
+        );
+        vcombine_u16(vrshrn_n_u32::<6>(lo), vrshrn_n_u32::<6>(hi))
     };
+
     let (d8, r8) = dst[..n].as_chunks_mut::<8>();
     let (t8, _) = tmp[..n].as_chunks::<8>();
     let (m8, _) = mask[..n].as_chunks::<8>();
     for ((d, t), m) in d8.iter_mut().zip(t8).zip(m8) {
-        let (d0, d1) = load_u16x8_i32x2(&*d);
-        let (t0, t1) = load_u16x8_i32x2(t);
-        let m0 = load_u8x4_i32((&m[..4]).try_into().unwrap());
-        let m1 = load_u8x4_i32((&m[4..]).try_into().unwrap());
-        store_i32x8_u16_clip(d, f(d0, t0, m0), f(d1, t1, m1), max_v);
+        store_u16x8(d, f(load_u16x8(&*d), load_u16x8(t), load_u8x8_u16(m)));
     }
     let done = d8.len() * 8;
     let (d4, r4) = r8.as_chunks_mut::<4>();
     let (t4, tr) = tmp[done..n].as_chunks::<4>();
     let (m4, mr) = mask[done..n].as_chunks::<4>();
+    let c64_32 = vdupq_n_s32(64);
+    let rnd_v = vdupq_n_s32(32);
+    let max_v = vdupq_n_s32(0xffff);
+    let f4 = |d: int32x4_t, t: int32x4_t, m: int32x4_t| {
+        vshrq_n_s32::<6>(vaddq_s32(
+            vaddq_s32(vmulq_s32(d, vsubq_s32(c64_32, m)), vmulq_s32(t, m)),
+            rnd_v,
+        ))
+    };
     for ((d, t), m) in d4.iter_mut().zip(t4).zip(m4) {
         store_i32x4_u16_clip(
             d,
-            f(load_u16x4_i32(&*d), load_u16x4_i32(t), load_u8x4_i32(m)),
+            f4(load_u16x4_i32(&*d), load_u16x4_i32(t), load_u8x4_i32(m)),
             max_v,
         );
     }
@@ -326,18 +407,35 @@ pub(crate) unsafe fn morph_row_hbd_neon(
     n: usize,
     bitdepth_max: i32,
 ) {
-    let a_v = vdupq_n_s32(alpha);
+    if !(i16::MIN as i32..=i16::MAX as i32).contains(&alpha) || bitdepth_max > i16::MAX as i32 {
+        for d in dst[..n].iter_mut() {
+            *d = ((alpha * (*d as i32) + beta) >> 8).clamp(0, bitdepth_max) as u16;
+        }
+        return;
+    }
+
+    let a_v = vdup_n_s16(alpha as i16);
     let b_v = vdupq_n_s32(beta);
     let max_v = vdupq_n_s32(bitdepth_max);
-    let f = |d: int32x4_t| vshrq_n_s32::<8>(vaddq_s32(vmulq_s32(d, a_v), b_v));
+    let f = |d: int16x8_t| {
+        (
+            vshrq_n_s32::<8>(vaddq_s32(vmull_s16(vget_low_s16(d), a_v), b_v)),
+            vshrq_n_s32::<8>(vaddq_s32(vmull_s16(vget_high_s16(d), a_v), b_v)),
+        )
+    };
+
     let (d8, r8) = dst[..n].as_chunks_mut::<8>();
     for d in d8.iter_mut() {
-        let (d0, d1) = load_u16x8_i32x2(&*d);
-        store_i32x8_u16_clip(d, f(d0), f(d1), max_v);
+        let (o0, o1) = f(load_u16x8_s16(&*d));
+        store_i32x8_u16_clip(d, o0, o1, max_v);
     }
     let (d4, r4) = r8.as_chunks_mut::<4>();
     for d in d4.iter_mut() {
-        store_i32x4_u16_clip(d, f(load_u16x4_i32(&*d)), max_v);
+        let r = vshrq_n_s32::<8>(vaddq_s32(
+            vmulq_s32(load_u16x4_i32(&*d), vdupq_n_s32(alpha)),
+            b_v,
+        ));
+        store_i32x4_u16_clip(d, r, max_v);
     }
     for d in r4.iter_mut() {
         *d = ((alpha * (*d as i32) + beta) >> 8).clamp(0, bitdepth_max) as u16;

@@ -2227,6 +2227,51 @@ pub(crate) fn cfl_mhccp_pred<BD: BitDepth>(
     }
 }
 
+#[inline(always)]
+fn cfl_implicit_sample_counts(
+    width: usize,
+    height: usize,
+    has_top: bool,
+    has_left: bool,
+) -> (usize, usize) {
+    const NUM_REF_SAM_CFL: usize = 8;
+    let (mut n_top, mut n_left) = if has_top && has_left {
+        if width > height * 2 {
+            (NUM_REF_SAM_CFL, 0)
+        } else if height > width * 2 {
+            (0, NUM_REF_SAM_CFL)
+        } else {
+            (NUM_REF_SAM_CFL >> 1, NUM_REF_SAM_CFL >> 1)
+        }
+    } else {
+        (
+            if has_top { NUM_REF_SAM_CFL } else { 0 },
+            if has_left { NUM_REF_SAM_CFL } else { 0 },
+        )
+    };
+    n_top = n_top.min(width);
+    n_left = n_left.min(height);
+    (n_top, n_left)
+}
+
+#[inline(always)]
+fn cfl_implicit_sample_start_step(dim: usize, n: usize) -> (usize, usize) {
+    debug_assert!(n != 0);
+    let step = (dim / n).max(1);
+    let start = if step == 1 { 0 } else { step >> 1 };
+    (start, step)
+}
+
+#[inline(always)]
+fn cfl_is_implicit_sample(pos: usize, start: usize, step: usize) -> bool {
+    pos >= start && (pos - start) % step == 0
+}
+
+#[inline(always)]
+fn cfl_i64_to_i32_saturating(v: i64) -> i32 {
+    v.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cfl_pred_raw<BD: BitDepth>(
     bd: BD,
@@ -2349,19 +2394,19 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
         let mut u_hi = usrc_off as i64 + (h as i64 - 1) * cstr + w as i64 - 1;
         let mut v_lo = vsrc_off as i64;
         let mut v_hi = vsrc_off as i64 + (h as i64 - 1) * cstr + w as i64 - 1;
-        if has_l {
-            // left column at usrc_off-1; the y>=ylim tail reads one column back,
-            // which for ylim==0 lands one stride before usrc_off-1.
-            let extra = if ylim == 0 { cstr } else { 0 };
-            u_lo = u_lo.min(usrc_off as i64 - 1 - extra);
-            v_lo = v_lo.min(vsrc_off as i64 - 1 - extra);
-            if ylim > 0 {
-                u_hi = u_hi.max(usrc_off as i64 - 1 + (ylim_i - 1) * cstr);
-                v_hi = v_hi.max(vsrc_off as i64 - 1 + (ylim_i - 1) * cstr);
-            }
+        if has_l && ylim > 0 {
+            // left column at usrc_off-1.  If the chroma block is completely
+            // below the visible picture, AVM fills the fetched left edge with
+            // mid-level samples instead of reading a previous row.
+            u_lo = u_lo.min(usrc_off as i64 - 1);
+            v_lo = v_lo.min(vsrc_off as i64 - 1);
+            u_hi = u_hi.max(usrc_off as i64 - 1 + (ylim_i - 1) * cstr);
+            v_hi = v_hi.max(vsrc_off as i64 - 1 + (ylim_i - 1) * cstr);
         }
-        if has_t {
-            // top row utop_off..utop_off+xlim-1; the xlim==0 tail reads utop_off-1.
+        if has_t && xlim > 0 {
+            // top row utop_off..utop_off+xlim-1.  If the chroma block is
+            // completely right of the visible picture, AVM fills the fetched
+            // top edge with mid-level samples instead of reading utop_off-1.
             let j = xlim_i - 1;
             u_lo = u_lo.min(utop_off as i64 + j.min(0));
             u_hi = u_hi.max(utop_off as i64 + j.max(0));
@@ -2376,7 +2421,7 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
     let mut dc = [0i32; 3];
     let mut n_top = 0usize;
     let mut n_left = 0usize;
-    let mut edge = [[BD::Pixel::default(); 8]; 3];
+    let mut edge = [[BD::Pixel::default(); 16]; 3];
     let mut edge_i = 0usize;
     let mut sum_x = 0i32;
     let mut sum_xx = 0i32;
@@ -2384,31 +2429,20 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
     let mut sum_xy = [0i32; 2];
 
     if implicit {
-        if has_t && has_l {
-            if w > h * 2 {
-                n_top = 8;
-            } else if h > w * 2 {
-                n_left = 8;
-            } else {
-                n_top = 4;
-                n_left = 4;
-            }
-        } else {
-            n_top = if has_t { imin(8, w as i32) as usize } else { 0 };
-            n_left = if has_l { imin(8, h as i32) as usize } else { 0 };
-        }
+        (n_top, n_left) = cfl_implicit_sample_counts(w, h, has_t, has_l);
     }
 
     if has_l {
         let mut yleft = add_off(ysrc_off, -((1 + ss_hor) as isize));
         let mut uleft = add_off(usrc_off, -1);
         let mut vleft = add_off(vsrc_off, -1);
-        let step = if n_left != 0 {
-            h >> (n_left as u32).trailing_zeros()
+        let (sample_start, sample_step) = if n_left != 0 {
+            cfl_implicit_sample_start_step(h, n_left)
         } else {
-            0
+            (0, 1)
         };
-        let mut l = 0i32;
+        let edge_mid = ((bd.bitdepth_max() + 1) >> 1) as i32;
+        let mut l = 4 << bd.bitdepth();
         for y in 0..ylim {
             l = if (ss_hor | ss_ver) == 0 {
                 rp(y_plane, yleft, 0) << 3
@@ -2446,7 +2480,7 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
                 dc[1] += u_plane[uleft].into();
                 dc[2] += v_plane[vleft].into();
             }
-            if implicit && n_left != 0 && (((y & (step - 1)) ^ (step >> 1)) == 0) {
+            if implicit && n_left != 0 && cfl_is_implicit_sample(y, sample_start, sample_step) {
                 edge[0][edge_i] = BD::Pixel::from_i32(l >> 3);
                 edge[1][edge_i] = u_plane[uleft];
                 edge[2][edge_i] = v_plane[vleft];
@@ -2457,27 +2491,33 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
             vleft = add_off(vleft, cstride);
         }
         for y in ylim..h {
+            let (u_edge, v_edge) = if ylim == 0 {
+                (BD::Pixel::from_i32(edge_mid), BD::Pixel::from_i32(edge_mid))
+            } else {
+                (px(u_plane, uleft, -cstride), px(v_plane, vleft, -cstride))
+            };
             if !skipv || (y & 1) == 0 {
                 dc[0] += l;
-                dc[1] += rp(u_plane, uleft, -cstride);
-                dc[2] += rp(v_plane, vleft, -cstride);
+                dc[1] += u_edge.into();
+                dc[2] += v_edge.into();
             }
-            if implicit && n_left != 0 && (((y & (step - 1)) ^ (step >> 1)) == 0) {
+            if implicit && n_left != 0 && cfl_is_implicit_sample(y, sample_start, sample_step) {
                 edge[0][edge_i] = BD::Pixel::from_i32(l >> 3);
-                edge[1][edge_i] = px(u_plane, uleft, -cstride);
-                edge[2][edge_i] = px(v_plane, vleft, -cstride);
+                edge[1][edge_i] = u_edge;
+                edge[2][edge_i] = v_edge;
                 edge_i += 1;
             }
         }
     }
 
     if has_t {
-        let step = if n_top != 0 {
-            w >> (n_top as u32).trailing_zeros()
+        let (sample_start, sample_step) = if n_top != 0 {
+            cfl_implicit_sample_start_step(w, n_top)
         } else {
-            0
+            (0, 1)
         };
-        let mut l = 0i32;
+        let edge_mid = ((bd.bitdepth_max() + 1) >> 1) as i32;
+        let mut l = 4 << bd.bitdepth();
         for x in 0..xlim {
             let xl = (x << ss_hor) as isize;
             l = if (ss_hor | ss_ver) == 0 {
@@ -2528,7 +2568,7 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
                 dc[1] += rp(u_plane, utop_off, x as isize);
                 dc[2] += rp(v_plane, vtop_off, x as isize);
             }
-            if implicit && n_top != 0 && (((x & (step - 1)) ^ (step >> 1)) == 0) {
+            if implicit && n_top != 0 && cfl_is_implicit_sample(x, sample_start, sample_step) {
                 edge[0][edge_i] = BD::Pixel::from_i32(l >> 3);
                 edge[1][edge_i] = px(u_plane, utop_off, x as isize);
                 edge[2][edge_i] = px(v_plane, vtop_off, x as isize);
@@ -2536,15 +2576,23 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
             }
         }
         for x in xlim..w {
+            let (u_edge, v_edge) = if xlim == 0 {
+                (BD::Pixel::from_i32(edge_mid), BD::Pixel::from_i32(edge_mid))
+            } else {
+                (
+                    px(u_plane, utop_off, xlim as isize - 1),
+                    px(v_plane, vtop_off, xlim as isize - 1),
+                )
+            };
             if !skiph || (x & 1) == 0 {
                 dc[0] += l;
-                dc[1] += rp(u_plane, utop_off, xlim as isize - 1);
-                dc[2] += rp(v_plane, vtop_off, xlim as isize - 1);
+                dc[1] += u_edge.into();
+                dc[2] += v_edge.into();
             }
-            if implicit && n_top != 0 && (((x & (step - 1)) ^ (step >> 1)) == 0) {
+            if implicit && n_top != 0 && cfl_is_implicit_sample(x, sample_start, sample_step) {
                 edge[0][edge_i] = BD::Pixel::from_i32(l >> 3);
-                edge[1][edge_i] = px(u_plane, utop_off, xlim as isize - 1);
-                edge[2][edge_i] = px(v_plane, vtop_off, xlim as isize - 1);
+                edge[1][edge_i] = u_edge;
+                edge[2][edge_i] = v_edge;
                 edge_i += 1;
             }
         }
@@ -2570,8 +2618,8 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
 
     let mut alpha = [0i32; 2];
     if implicit {
-        debug_assert_eq!(edge_i, n_top + n_left);
-        for j in 0..n_top + n_left {
+        debug_assert!(edge_i <= edge[0].len());
+        for j in 0..edge_i {
             let e0: i32 = edge[0][j].into();
             let e1: i32 = edge[1][j].into();
             let e2: i32 = edge[2][j].into();
@@ -2582,15 +2630,32 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
             sum_xy[0] += e0 * e1;
             sum_xy[1] += e0 * e2;
         }
-        let count_l2 = if n_top + n_left > 0 {
-            (n_top as u32 + n_left as u32).trailing_zeros()
+        let count = edge_i as i64;
+        // AVM derive_linear_parameters_alpha divides the cross terms by `count`
+        // (truncating integer division) BEFORE the fixed-point divide, rather than
+        // scaling numerator and denominator by `count`. The LUT-based divider is
+        // sensitive to operand magnitude (it indexes on the MSB position), so the
+        // `count` factor must be removed here to match AVM bit-exactly.
+        let der = if count > 0 {
+            sum_xx as i64 - (sum_x as i64 * sum_x as i64) / count
         } else {
             0
         };
-        let den = sum_xx - (((sum_x as i64 * sum_x as i64) >> count_l2) as i32);
         for pl in 0..2 {
-            let num = sum_xy[pl] - (((sum_x as i64 * sum_y[pl] as i64) >> count_l2) as i32);
-            alpha[pl] = derive_alpha(num, den, 0);
+            let nor = if count > 0 {
+                sum_xy[pl] as i64 - (sum_x as i64 * sum_y[pl] as i64) / count
+            } else {
+                0
+            };
+            alpha[pl] = if der != 0 && nor != 0 {
+                derive_alpha(
+                    cfl_i64_to_i32_saturating(nor),
+                    cfl_i64_to_i32_saturating(der),
+                    0,
+                )
+            } else {
+                0
+            };
         }
     } else {
         let shu = CFL_ALPHA_U_SHIFT - 5;

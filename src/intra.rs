@@ -26,8 +26,10 @@
  * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-use crate::intops::{apply_sign, ulog2};
+use crate::intops::{apply_sign, imin, ulog2};
+use crate::levels::{BlockSize, TxPartition};
 use crate::pixel::BitDepth;
+use crate::tables::BLOCK_DIMENSIONS;
 
 #[inline]
 fn bawp_blk_size_from_samples(n: usize) -> usize {
@@ -239,4 +241,232 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
     if dst_off < plane.len() {
         crate::mc::morph(bd, &mut plane[dst_off..], stride, alpha, beta, w, h);
     }
+}
+
+#[inline(always)]
+fn shrunken_unit(v: i32, ss: i32) -> i32 {
+    (v >> ss).max(1)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn intra_top_right_units(
+    is_luma: bool,
+    tx_partition: u8,
+    is_first_tx: bool,
+    is_coded: &[[u64; 64]; 2],
+    coded_plane: usize,
+    sb_step: i32,
+    bsize: BlockSize,
+    base_x: i32,
+    base_y: i32,
+    col_off: i32,
+    row_off: i32,
+    txw4: i32,
+    ss_x: i32,
+    ss_y: i32,
+    top_available: bool,
+    right_available: bool,
+    px_to_right_edge4: i32,
+) -> i32 {
+    if !top_available || !right_available || px_to_right_edge4 <= 0 {
+        return 0;
+    }
+    if !is_luma && txw4 > 8 {
+        return 0;
+    }
+    if is_luma
+        && (tx_partition == TxPartition::H5 as u8 || tx_partition == TxPartition::V5 as u8)
+        && !is_first_tx
+    {
+        return 0;
+    }
+
+    let bdim = BLOCK_DIMENSIONS[bsize as usize];
+    let plane_bw_unit = shrunken_unit(bdim[0] as i32, ss_x);
+    let top_right_count_unit = txw4;
+    let px_common = imin(top_right_count_unit, px_to_right_edge4);
+    if px_common <= 0 {
+        return 0;
+    }
+
+    if row_off > 0 {
+        let plane_bw_unit_64 = shrunken_unit(16, ss_x);
+        if bdim[0] as i32 > 16 {
+            let tr_col = col_off + top_right_count_unit;
+            let plane_bh_unit_64 = shrunken_unit(16, ss_y);
+            if tr_col != plane_bw_unit
+                && tr_col % plane_bw_unit_64 == 0
+                && row_off % plane_bh_unit_64 == 0
+            {
+                let plane_bw_unit_128 = shrunken_unit(32, ss_x);
+                let plane_bh_unit_128 = shrunken_unit(32, ss_y);
+                return if (row_off % plane_bh_unit_128) != 0 && (tr_col % plane_bw_unit_128) == 0 {
+                    0
+                } else {
+                    px_common
+                };
+            }
+            let col_off_64 = col_off % plane_bw_unit_64;
+            return if col_off_64 + top_right_count_unit < plane_bw_unit_64 {
+                px_common
+            } else {
+                0
+            };
+        }
+        return if col_off + top_right_count_unit < plane_bw_unit {
+            px_common
+        } else {
+            0
+        };
+    }
+
+    if col_off + top_right_count_unit < plane_bw_unit {
+        return px_common;
+    }
+
+    let sb_w = shrunken_unit(sb_step, ss_x);
+    let sb_h = shrunken_unit(sb_step, ss_y);
+    // Availability uses SB-local coordinates (AVM's `& (sb_mi_size - 1)`), but the
+    // `is_coded` window is region-local (indexed by `bx & 63` / `by & 63`, reset
+    // per SB-row). Compute both: SB-local to decide whether the top-right unit is
+    // still inside the current SB, region-local to actually probe the bitmap.
+    let tr_mask_row_sb = (base_y & (sb_h - 1)) - 1;
+    let tr_mask_col_sb = (base_x & (sb_w - 1)) + plane_bw_unit;
+    if tr_mask_row_sb < 0 {
+        return px_common;
+    }
+    if tr_mask_col_sb >= sb_w {
+        return 0;
+    }
+    let row = ((base_y & 63) - 1) as usize;
+    let col0 = (base_x & 63) + plane_bw_unit;
+    if (base_y & 63) - 1 < 0 || col0 >= 64 {
+        return 0;
+    }
+    if (is_coded[coded_plane][row] & (1u64 << (col0 as u32))) == 0 {
+        return 0;
+    }
+
+    let mut coded = 0i32;
+    while coded < top_right_count_unit {
+        let c_sb = tr_mask_col_sb + coded;
+        let c_rg = col0 + coded;
+        if c_sb >= sb_w || c_rg >= 64 || (is_coded[coded_plane][row] & (1u64 << (c_rg as u32))) == 0
+        {
+            break;
+        }
+        coded += 1;
+    }
+    imin(coded, px_common)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn intra_bottom_left_units(
+    is_luma: bool,
+    tx_partition: u8,
+    is_first_tx: bool,
+    is_coded: &[[u64; 64]; 2],
+    coded_plane: usize,
+    sb_step: i32,
+    bsize: BlockSize,
+    base_x: i32,
+    base_y: i32,
+    col_off: i32,
+    row_off: i32,
+    txh4: i32,
+    ss_x: i32,
+    ss_y: i32,
+    bottom_available: bool,
+    left_available: bool,
+    px_to_bottom_edge4: i32,
+) -> i32 {
+    if !bottom_available || !left_available || px_to_bottom_edge4 <= 0 {
+        return 0;
+    }
+    if !is_luma && txh4 > 8 {
+        return 0;
+    }
+    if is_luma
+        && (tx_partition == TxPartition::H5 as u8 || tx_partition == TxPartition::V5 as u8)
+        && !is_first_tx
+    {
+        return 0;
+    }
+
+    let bdim = BLOCK_DIMENSIONS[bsize as usize];
+    let plane_bh_unit = shrunken_unit(bdim[1] as i32, ss_y);
+    let bottom_left_count_unit = txh4;
+    let px_common = imin(bottom_left_count_unit, px_to_bottom_edge4);
+    if px_common <= 0 {
+        return 0;
+    }
+
+    if bdim[0] as i32 > 16 && col_off > 0 {
+        let plane_bw_unit_64 = shrunken_unit(16, ss_x);
+        let col_off_64 = col_off % plane_bw_unit_64;
+        if col_off_64 == 0 {
+            let plane_bh_unit_64 = shrunken_unit(16, ss_y);
+            let row_off_64 = row_off % plane_bh_unit_64;
+            let plane_bh_unit_limited = imin(plane_bh_unit, plane_bh_unit_64);
+            let plane_bw_unit_128 = shrunken_unit(32, ss_x);
+            let col_off_128 = col_off % plane_bw_unit_128;
+            if col_off_128 == 0 {
+                let plane_bh_unit_128 = shrunken_unit(32, ss_y);
+                let row_off_128 = row_off % plane_bh_unit_128;
+                return if row_off_128 + bottom_left_count_unit < plane_bh_unit_128 {
+                    px_common
+                } else {
+                    0
+                };
+            }
+            return if row_off_64 + bottom_left_count_unit < plane_bh_unit_limited {
+                px_common
+            } else {
+                0
+            };
+        }
+    }
+
+    if col_off > 0 {
+        return 0;
+    }
+    if row_off + bottom_left_count_unit < plane_bh_unit {
+        return px_common;
+    }
+
+    let sb_w = shrunken_unit(sb_step, ss_x);
+    let sb_h = shrunken_unit(sb_step, ss_y);
+    // SB-local coordinates gate availability (AVM `& (sb_mi_size - 1)`); the
+    // region-local coordinates (`& 63`) actually index the `is_coded` window.
+    let bl_mask_row_sb = (base_y & (sb_h - 1)) + plane_bh_unit;
+    let bl_mask_col_sb = (base_x & (sb_w - 1)) - 1;
+    if bl_mask_col_sb < 0 {
+        let plane_bottom_row = (base_y & (sb_h - 1)) + plane_bh_unit;
+        return imin(sb_h - plane_bottom_row, px_common).max(0);
+    }
+    if bl_mask_row_sb >= sb_h {
+        return 0;
+    }
+    let row0 = (base_y & 63) + plane_bh_unit;
+    let col = (base_x & 63) - 1;
+    if col < 0 || row0 >= 64 {
+        return 0;
+    }
+    if (is_coded[coded_plane][row0 as usize] & (1u64 << (col as u32))) == 0 {
+        return 0;
+    }
+
+    let mut coded = 0i32;
+    while coded < bottom_left_count_unit {
+        let r_sb = bl_mask_row_sb + coded;
+        let r_rg = row0 + coded;
+        if r_sb >= sb_h
+            || r_rg >= 64
+            || (is_coded[coded_plane][r_rg as usize] & (1u64 << (col as u32))) == 0
+        {
+            break;
+        }
+        coded += 1;
+    }
+    imin(coded, px_common)
 }

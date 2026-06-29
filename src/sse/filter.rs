@@ -59,6 +59,20 @@ fn load_u8x8_i32x2(a: &[u8; 8]) -> (__m128i, __m128i) {
         _mm_cvtepu8_epi32(_mm_srli_si128(v, 4)),
     )
 }
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn load_u8x16_i32x4(a: &[u8; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
+    unsafe {
+        let v = _mm_loadu_si128(a.as_ptr().cast());
+        (
+            _mm_cvtepu8_epi32(v),
+            _mm_cvtepu8_epi32(_mm_srli_si128(v, 4)),
+            _mm_cvtepu8_epi32(_mm_srli_si128(v, 8)),
+            _mm_cvtepu8_epi32(_mm_srli_si128(v, 12)),
+        )
+    }
+}
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn load_i8x8_i32x2(a: &[i8; 8]) -> (__m128i, __m128i) {
@@ -71,12 +85,93 @@ fn load_i8x8_i32x2(a: &[i8; 8]) -> (__m128i, __m128i) {
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
+fn load_i8x16_i32x4(a: &[i8; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
+    unsafe {
+        let v = _mm_loadu_si128(a.as_ptr().cast());
+        (
+            _mm_cvtepi8_epi32(v),
+            _mm_cvtepi8_epi32(_mm_srli_si128(v, 4)),
+            _mm_cvtepi8_epi32(_mm_srli_si128(v, 8)),
+            _mm_cvtepi8_epi32(_mm_srli_si128(v, 12)),
+        )
+    }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn load_i16x8_i32x2(a: &[i16; 8]) -> (__m128i, __m128i) {
     let v = unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) };
     (
         _mm_cvtepi16_epi32(v),
         _mm_cvtepi16_epi32(_mm_srli_si128(v, 8)),
     )
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn load_i16x16_i32x4(a: &[i16; 16]) -> (__m128i, __m128i, __m128i, __m128i) {
+    unsafe {
+        let lo = _mm_loadu_si128(a.as_ptr().cast());
+        let hi = _mm_loadu_si128(a.as_ptr().add(8).cast());
+        (
+            _mm_cvtepi16_epi32(lo),
+            _mm_cvtepi16_epi32(_mm_srli_si128(lo, 8)),
+            _mm_cvtepi16_epi32(hi),
+            _mm_cvtepi16_epi32(_mm_srli_si128(hi, 8)),
+        )
+    }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn load_i16x8(a: &[i16; 8]) -> __m128i {
+    unsafe { _mm_loadu_si128(a.as_ptr().cast()) }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn load_i16x4(a: &[i16; 4]) -> __m128i {
+    unsafe { _mm_loadl_epi64(a.as_ptr().cast()) }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn load_u8x4_i16(a: &[u8; 4]) -> __m128i {
+    _mm_cvtepu8_epi16(_mm_cvtsi32_si128(i32::from_le_bytes(*a)))
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn madd_i16x8_const(a: __m128i, b: __m128i, coeff: __m128i) -> (__m128i, __m128i) {
+    unsafe {
+        (
+            _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff),
+            _mm_madd_epi16(_mm_unpackhi_epi16(a, b), coeff),
+        )
+    }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn madd_i16x4_const(a: __m128i, b: __m128i, coeff: __m128i) -> __m128i {
+    unsafe { _mm_madd_epi16(_mm_unpacklo_epi16(a, b), coeff) }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn madd_i16x8(a: __m128i, b: __m128i, w1: __m128i, w2: __m128i) -> (__m128i, __m128i) {
+    unsafe {
+        (
+            _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2)),
+            _mm_madd_epi16(_mm_unpackhi_epi16(a, b), _mm_unpackhi_epi16(w1, w2)),
+        )
+    }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn madd_i16x4(a: __m128i, b: __m128i, w1: __m128i, w2: __m128i) -> __m128i {
+    unsafe { _mm_madd_epi16(_mm_unpacklo_epi16(a, b), _mm_unpacklo_epi16(w1, w2)) }
 }
 
 #[inline(always)]
@@ -103,6 +198,19 @@ fn store_i32x8_u8(a: &mut [u8; 8], lo: __m128i, hi: __m128i) {
     let p16 = unsafe { _mm_packs_epi32(lo, hi) };
     let p8 = unsafe { _mm_packus_epi16(p16, p16) };
     unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, p8) };
+}
+
+#[inline(always)]
+fn pack_i32x8_u8(lo: __m128i, hi: __m128i) -> __m128i {
+    let p16 = unsafe { _mm_packs_epi32(lo, hi) };
+    unsafe { _mm_packus_epi16(p16, p16) }
+}
+
+#[inline(always)]
+fn store_i32x16_u8(a: &mut [u8; 16], v0: __m128i, v1: __m128i, v2: __m128i, v3: __m128i) {
+    let lo = pack_i32x8_u8(v0, v1);
+    let hi = pack_i32x8_u8(v2, v3);
+    unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, _mm_unpacklo_epi64(lo, hi)) };
 }
 
 #[inline(always)]
@@ -166,25 +274,37 @@ pub(crate) fn residual_add_row_8bpc_sse41(
 ) {
     let rnd_v = _mm_set1_epi32(rnd);
     let shc = _mm_cvtsi32_si128(shift);
-    let (c8, r8) = dst[..n].as_chunks_mut::<8>();
-    let (cc8, _) = c[..n].as_chunks::<8>();
+    let f = |cv: __m128i| _mm_sra_epi32(_mm_add_epi32(cv, rnd_v), shc);
+    let (d16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (cc16, _) = c[..n].as_chunks::<16>();
+    for (d, cv) in d16.iter_mut().zip(cc16) {
+        let c0 = f(load_i32x4((&cv[0..4]).try_into().unwrap()));
+        let c1 = f(load_i32x4((&cv[4..8]).try_into().unwrap()));
+        let c2 = f(load_i32x4((&cv[8..12]).try_into().unwrap()));
+        let c3 = f(load_i32x4((&cv[12..16]).try_into().unwrap()));
+        let (d0, d1, d2, d3) = load_u8x16_i32x4(&*d);
+        store_i32x16_u8(
+            d,
+            _mm_add_epi32(d0, c0),
+            _mm_add_epi32(d1, c1),
+            _mm_add_epi32(d2, c2),
+            _mm_add_epi32(d3, c3),
+        );
+    }
+    let done = d16.len() * 16;
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+    let (cc8, _) = c[done..n].as_chunks::<8>();
     for (d, cv) in c8.iter_mut().zip(cc8) {
-        let cf_lo = _mm_sra_epi32(
-            _mm_add_epi32(load_i32x4((&cv[..4]).try_into().unwrap()), rnd_v),
-            shc,
-        );
-        let cf_hi = _mm_sra_epi32(
-            _mm_add_epi32(load_i32x4((&cv[4..]).try_into().unwrap()), rnd_v),
-            shc,
-        );
+        let cf_lo = f(load_i32x4((&cv[..4]).try_into().unwrap()));
+        let cf_hi = f(load_i32x4((&cv[4..]).try_into().unwrap()));
         let (d_lo, d_hi) = load_u8x8_i32x2(&*d);
         store_i32x8_u8(d, _mm_add_epi32(d_lo, cf_lo), _mm_add_epi32(d_hi, cf_hi));
     }
-    let done = c8.len() * 8;
+    let done = done + c8.len() * 8;
     let (c4, r4) = r8.as_chunks_mut::<4>();
     let (cc4, cr) = c[done..n].as_chunks::<4>();
     for (d, cv) in c4.iter_mut().zip(cc4) {
-        let cf = _mm_sra_epi32(_mm_add_epi32(load_i32x4(cv), rnd_v), shc);
+        let cf = f(load_i32x4(cv));
         let dv = load_u8x4_i32(d);
         store_i32x4_u8(d, _mm_add_epi32(dv, cf));
     }
@@ -347,17 +467,24 @@ pub(crate) fn avg_row_8bpc_sse41(
     let rnd_v = _mm_set1_epi32(rnd);
     let shc = _mm_cvtsi32_si128(sh);
     let f = |a: __m128i, b: __m128i| _mm_sra_epi32(_mm_add_epi32(_mm_add_epi32(a, b), rnd_v), shc);
-    let (c8, r8) = dst[..n].as_chunks_mut::<8>();
-    let (a8, _) = t1[..n].as_chunks::<8>();
-    let (b8, _) = t2[..n].as_chunks::<8>();
+    let (c16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (a16, _) = t1[..n].as_chunks::<16>();
+    let (b16, _) = t2[..n].as_chunks::<16>();
+    for ((d, a), b) in c16.iter_mut().zip(a16).zip(b16) {
+        let (a0, a1, a2, a3) = load_i16x16_i32x4(a);
+        let (b0, b1, b2, b3) = load_i16x16_i32x4(b);
+        store_i32x16_u8(d, f(a0, b0), f(a1, b1), f(a2, b2), f(a3, b3));
+    }
+    let done = c16.len() * 16;
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+    let (a8, _) = t1[done..n].as_chunks::<8>();
+    let (b8, _) = t2[done..n].as_chunks::<8>();
     for ((d, a), b) in c8.iter_mut().zip(a8).zip(b8) {
         let (a0, a1) = load_i16x8_i32x2(a);
         let (b0, b1) = load_i16x8_i32x2(b);
-        let lo = f(a0, b0);
-        let hi = f(a1, b1);
-        store_i32x8_u8(d, lo, hi);
+        store_i32x8_u8(d, f(a0, b0), f(a1, b1));
     }
-    let done = c8.len() * 8;
+    let done = done + c8.len() * 8;
     let (c4, r4) = r8.as_chunks_mut::<4>();
     let (a4, ar) = t1[done..n].as_chunks::<4>();
     let (b4, br) = t2[done..n].as_chunks::<4>();
@@ -382,35 +509,44 @@ pub(crate) fn w_avg_row_8bpc_sse41(
     rnd: i32,
     sh: i32,
 ) {
-    let w1 = _mm_set1_epi32(weight);
-    let w2 = _mm_set1_epi32(16 - weight);
+    // Exact `(a*weight + b*(16-weight) + rnd) >> sh` with one `pmaddwd`
+    // per 4 pixels instead of widening both terms and using two `pmulld`s.
+    let coeff = _mm_set1_epi32(((16 - weight) << 16) | (weight & 0xffff));
     let rnd_v = _mm_set1_epi32(rnd);
     let shc = _mm_cvtsi32_si128(sh);
-    let f = |a: __m128i, b: __m128i| {
-        _mm_sra_epi32(
-            _mm_add_epi32(
-                _mm_add_epi32(_mm_mullo_epi32(a, w1), _mm_mullo_epi32(b, w2)),
-                rnd_v,
-            ),
-            shc,
-        )
-    };
-    let (c8, r8) = dst[..n].as_chunks_mut::<8>();
-    let (a8, _) = t1[..n].as_chunks::<8>();
-    let (b8, _) = t2[..n].as_chunks::<8>();
-    for ((d, a), b) in c8.iter_mut().zip(a8).zip(b8) {
-        let (a0, a1) = load_i16x8_i32x2(a);
-        let (b0, b1) = load_i16x8_i32x2(b);
-        let lo = f(a0, b0);
-        let hi = f(a1, b1);
-        store_i32x8_u8(d, lo, hi);
+    let f = |s: __m128i| _mm_sra_epi32(_mm_add_epi32(s, rnd_v), shc);
+
+    let (c16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (a16, _) = t1[..n].as_chunks::<16>();
+    let (b16, _) = t2[..n].as_chunks::<16>();
+    for ((d, a), b) in c16.iter_mut().zip(a16).zip(b16) {
+        let (s0, s1) = madd_i16x8_const(
+            load_i16x8((&a[..8]).try_into().unwrap()),
+            load_i16x8((&b[..8]).try_into().unwrap()),
+            coeff,
+        );
+        let (s2, s3) = madd_i16x8_const(
+            load_i16x8((&a[8..]).try_into().unwrap()),
+            load_i16x8((&b[8..]).try_into().unwrap()),
+            coeff,
+        );
+        store_i32x16_u8(d, f(s0), f(s1), f(s2), f(s3));
     }
-    let done = c8.len() * 8;
+    let done = c16.len() * 16;
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+    let (a8, _) = t1[done..n].as_chunks::<8>();
+    let (b8, _) = t2[done..n].as_chunks::<8>();
+    for ((d, a), b) in c8.iter_mut().zip(a8).zip(b8) {
+        let (s0, s1) = madd_i16x8_const(load_i16x8(a), load_i16x8(b), coeff);
+        store_i32x8_u8(d, f(s0), f(s1));
+    }
+    let done = done + c8.len() * 8;
     let (c4, r4) = r8.as_chunks_mut::<4>();
     let (a4, ar) = t1[done..n].as_chunks::<4>();
     let (b4, br) = t2[done..n].as_chunks::<4>();
     for ((d, a), b) in c4.iter_mut().zip(a4).zip(b4) {
-        store_i32x4_u8(d, f(load_i16x4_i32(a), load_i16x4_i32(b)));
+        let s = madd_i16x4_const(load_i16x4(a), load_i16x4(b), coeff);
+        store_i32x4_u8(d, f(s));
     }
     for ((d, &a), &b) in r4.iter_mut().zip(ar).zip(br) {
         *d = ((a as i32 * weight + b as i32 * (16 - weight) + rnd) >> sh).clamp(0, 255) as u8;
@@ -430,40 +566,52 @@ pub(crate) fn mask_row_8bpc_sse41(
     rnd: i32,
     sh: i32,
 ) {
+    // Exact `(a*m + b*(64-m) + rnd) >> sh` with `pmaddwd`, matching
+    // dav2d's paired-product shape and avoiding 32-bit `pmulld`.
     let rnd_v = _mm_set1_epi32(rnd);
-    let c64 = _mm_set1_epi32(64);
+    let c64 = _mm_set1_epi16(64);
     let shc = _mm_cvtsi32_si128(sh);
-    let f = |a: __m128i, b: __m128i, m: __m128i| {
-        _mm_sra_epi32(
-            _mm_add_epi32(
-                _mm_add_epi32(
-                    _mm_mullo_epi32(a, m),
-                    _mm_mullo_epi32(b, _mm_sub_epi32(c64, m)),
-                ),
-                rnd_v,
-            ),
-            shc,
-        )
-    };
-    let (c8, r8) = dst[..n].as_chunks_mut::<8>();
-    let (a8, _) = t1[..n].as_chunks::<8>();
-    let (b8, _) = t2[..n].as_chunks::<8>();
-    let (m8, _) = mask[..n].as_chunks::<8>();
-    for (((d, a), b), m) in c8.iter_mut().zip(a8).zip(b8).zip(m8) {
-        let (a0, a1) = load_i16x8_i32x2(a);
-        let (b0, b1) = load_i16x8_i32x2(b);
-        let (m0, m1) = load_u8x8_i32x2(m);
-        let lo = f(a0, b0, m0);
-        let hi = f(a1, b1, m1);
-        store_i32x8_u8(d, lo, hi);
+    let f = |s: __m128i| _mm_sra_epi32(_mm_add_epi32(s, rnd_v), shc);
+
+    let (c16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (a16, _) = t1[..n].as_chunks::<16>();
+    let (b16, _) = t2[..n].as_chunks::<16>();
+    let (m16, _) = mask[..n].as_chunks::<16>();
+    for (((d, a), b), m) in c16.iter_mut().zip(a16).zip(b16).zip(m16) {
+        let (m0, m1) = load_u8x16_i16x2(m);
+        let (s0, s1) = madd_i16x8(
+            load_i16x8((&a[..8]).try_into().unwrap()),
+            load_i16x8((&b[..8]).try_into().unwrap()),
+            m0,
+            _mm_sub_epi16(c64, m0),
+        );
+        let (s2, s3) = madd_i16x8(
+            load_i16x8((&a[8..]).try_into().unwrap()),
+            load_i16x8((&b[8..]).try_into().unwrap()),
+            m1,
+            _mm_sub_epi16(c64, m1),
+        );
+        store_i32x16_u8(d, f(s0), f(s1), f(s2), f(s3));
     }
-    let done = c8.len() * 8;
+    let done = c16.len() * 16;
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+    let (a8, _) = t1[done..n].as_chunks::<8>();
+    let (b8, _) = t2[done..n].as_chunks::<8>();
+    let (m8, _) = mask[done..n].as_chunks::<8>();
+    for (((d, a), b), m) in c8.iter_mut().zip(a8).zip(b8).zip(m8) {
+        let mv = load_u8x8_i16(m);
+        let (s0, s1) = madd_i16x8(load_i16x8(a), load_i16x8(b), mv, _mm_sub_epi16(c64, mv));
+        store_i32x8_u8(d, f(s0), f(s1));
+    }
+    let done = done + c8.len() * 8;
     let (c4, r4) = r8.as_chunks_mut::<4>();
     let (a4, ar) = t1[done..n].as_chunks::<4>();
     let (b4, br) = t2[done..n].as_chunks::<4>();
     let (m4, mr) = mask[done..n].as_chunks::<4>();
     for (((d, a), b), m) in c4.iter_mut().zip(a4).zip(b4).zip(m4) {
-        store_i32x4_u8(d, f(load_i16x4_i32(a), load_i16x4_i32(b), load_u8x4_i32(m)));
+        let mv = load_u8x4_i16(m);
+        let s = madd_i16x4(load_i16x4(a), load_i16x4(b), mv, _mm_sub_epi16(c64, mv));
+        store_i32x4_u8(d, f(s));
     }
     for (((d, &a), &b), &m) in r4.iter_mut().zip(ar).zip(br).zip(mr) {
         let mk = m as i32;
@@ -516,20 +664,35 @@ pub(crate) fn blend_row_8bpc_sse41(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: u
 #[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn morph_row_8bpc_sse41(dst: &mut [u8], alpha: i32, beta: i32, n: usize) {
-    let a_v = _mm_set1_epi32(alpha);
-    let b_v = _mm_set1_epi32(beta);
-    let f = |d: __m128i| _mm_srai_epi32::<8>(_mm_add_epi32(_mm_mullo_epi32(d, a_v), b_v));
-    let (c8, r8) = dst[..n].as_chunks_mut::<8>();
+    if !(i16::MIN as i32..=i16::MAX as i32).contains(&alpha) {
+        for d in dst[..n].iter_mut() {
+            *d = ((alpha * (*d as i32) + beta) >> 8).clamp(0, 255) as u8;
+        }
+        return;
+    }
+
+    // Exact scalar formula using `pmaddwd` with `[pixel, 0]` pairs.
+    let coeff = _mm_set1_epi32(alpha & 0xffff);
+    let beta_v = _mm_set1_epi32(beta);
+    let f = |s: __m128i| _mm_srai_epi32::<8>(_mm_add_epi32(s, beta_v));
+    let zero = _mm_setzero_si128();
+
+    let (c16, r16) = dst[..n].as_chunks_mut::<16>();
+    for d in c16.iter_mut() {
+        let (d0, d1) = load_u8x16_i16x2(&*d);
+        let (s0, s1) = madd_i16x8_const(d0, zero, coeff);
+        let (s2, s3) = madd_i16x8_const(d1, zero, coeff);
+        store_i32x16_u8(d, f(s0), f(s1), f(s2), f(s3));
+    }
+    let (c8, r8) = r16.as_chunks_mut::<8>();
     for d in c8.iter_mut() {
-        let (d0, d1) = load_u8x8_i32x2(&*d);
-        let lo = f(d0);
-        let hi = f(d1);
-        store_i32x8_u8(d, lo, hi);
+        let (s0, s1) = madd_i16x8_const(load_u8x8_i16(&*d), zero, coeff);
+        store_i32x8_u8(d, f(s0), f(s1));
     }
     let (c4, r4) = r8.as_chunks_mut::<4>();
     for d in c4.iter_mut() {
-        let r = f(load_u8x4_i32(d));
-        store_i32x4_u8(d, r);
+        let s = madd_i16x4_const(load_u8x4_i16(d), zero, coeff);
+        store_i32x4_u8(d, f(s));
     }
     for d in r4.iter_mut() {
         *d = ((alpha * (*d as i32) + beta) >> 8).clamp(0, 255) as u8;
@@ -549,8 +712,26 @@ pub(crate) fn gdf_add_run_8bpc_sse41(dst: &mut [u8], err: &[i8], scale: i32, n: 
         let mag = _mm_srai_epi32::<4>(_mm_add_epi32(_mm_abs_epi32(diff), rnd));
         _mm_blendv_epi8(mag, _mm_sub_epi32(zero, mag), _mm_cmpgt_epi32(zero, diff))
     };
-    let (c8, r8) = dst[..n].as_chunks_mut::<8>();
-    let (e8, _) = err[..n].as_chunks::<8>();
+    let (c16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (e16, _) = err[..n].as_chunks::<16>();
+    for (d, e) in c16.iter_mut().zip(e16) {
+        let (e0, e1, e2, e3) = load_i8x16_i32x4(e);
+        let a0 = adj(e0);
+        let a1 = adj(e1);
+        let a2 = adj(e2);
+        let a3 = adj(e3);
+        let (d0, d1, d2, d3) = load_u8x16_i32x4(&*d);
+        store_i32x16_u8(
+            d,
+            _mm_add_epi32(d0, a0),
+            _mm_add_epi32(d1, a1),
+            _mm_add_epi32(d2, a2),
+            _mm_add_epi32(d3, a3),
+        );
+    }
+    let done = c16.len() * 16;
+    let (c8, r8) = r16.as_chunks_mut::<8>();
+    let (e8, _) = err[done..n].as_chunks::<8>();
     for (d, e) in c8.iter_mut().zip(e8) {
         let (e0, e1) = load_i8x8_i32x2(e);
         let a_lo = adj(e0);
@@ -558,7 +739,7 @@ pub(crate) fn gdf_add_run_8bpc_sse41(dst: &mut [u8], err: &[i8], scale: i32, n: 
         let (d_lo, d_hi) = load_u8x8_i32x2(&*d);
         store_i32x8_u8(d, _mm_add_epi32(d_lo, a_lo), _mm_add_epi32(d_hi, a_hi));
     }
-    let done = c8.len() * 8;
+    let done = done + c8.len() * 8;
     let (c4, r4) = r8.as_chunks_mut::<4>();
     let (e4, er) = err[done..n].as_chunks::<4>();
     for (d, e) in c4.iter_mut().zip(e4) {

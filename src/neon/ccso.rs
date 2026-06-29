@@ -124,12 +124,6 @@ fn load_u8x8_subsampled<const SS_HOR: usize>(tmp: &[u8], base: usize) -> uint8x8
     }
 }
 
-#[inline]
-#[target_feature(enable = "neon")]
-fn store_idx8(dst: &mut [u8; 8], out16: uint16x8_t) {
-    unsafe { vst1_u8(dst.as_mut_ptr(), vqmovn_u16(out16)) };
-}
-
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
@@ -173,7 +167,7 @@ fn ccso_prep_lut_8bpc_neon_impl<const SS_HOR: usize, const SS_VER: usize, const 
                 let base = row + (x << SS_HOR);
                 let c = load_u8x8_subsampled::<SS_HOR>(tmp, base);
                 let out8 = &mut dst_row[x..x + 8].as_chunks_mut::<8>().0[0];
-                store_idx8(out8, vshlq_u16(vmovl_u8(c), sh));
+                unsafe { vst1_u8(out8.as_mut_ptr(), vqmovn_u16(vshlq_u16(vmovl_u8(c), sh))) };
                 x += 8;
             }
         } else {
@@ -224,8 +218,8 @@ fn ccso_prep_lut_8bpc_neon_impl<const SS_HOR: usize, const SS_VER: usize, const 
                     load_u8x8_subsampled::<SS_HOR>(tmp, (base as isize - luma_offset) as usize);
                 let out =
                     ccso_make_idx_u16(vmovl_u8(c), vmovl_u8(p0), vmovl_u8(p1), sh, q, nq, edge_clf);
-                let out8 = &mut dst_row[x..x + 8].as_chunks_mut::<8>().0[0];
-                store_idx8(out8, out);
+                let out8 = &mut dst_row[x..x + 8];
+                unsafe { vst1_u8(out8.as_mut_ptr(), vqmovn_u16(out)) };
                 x += 8;
             }
         }
@@ -391,7 +385,7 @@ fn ccso_add_4x4_8bpc(
         let dst_row = &mut dst_rows[yy * dst_stride..];
         let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
         let off = fill_offsets_4_i16(idx4, offset_map);
-        let dst4 = &mut dst_row[xx..xx + 4].as_chunks_mut::<4>().0[0];
+        let dst4 = &mut dst_row[xx..xx + 4];
         let src_q =
             unsafe { vreinterpret_u8_u32(vld1_lane_u32::<0>(dst4.as_ptr().cast(), vdup_n_u32(0))) };
         let cur = vreinterpretq_s16_u16(vmovl_u8(src_q));
@@ -438,7 +432,7 @@ pub(crate) fn ccso_add_8bpc_neon(
                     let off = unsafe { vld1q_s8(off_tmp.as_ptr()) };
                     let off_lo = vmovl_s8(vget_low_s8(off));
                     let off_hi = vmovl_s8(vget_high_s8(off));
-                    let dst16 = &mut dst_row[xx..xx + 16].as_chunks_mut::<16>().0[0];
+                    let dst16 = &mut dst_row[xx..xx + 16];
                     let cur = unsafe { vld1q_u8(dst16.as_ptr()) };
                     let cur_lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(cur)));
                     let cur_hi = vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(cur)));

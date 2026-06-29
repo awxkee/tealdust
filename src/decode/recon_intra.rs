@@ -34,6 +34,7 @@ use crate::env::BlockContext;
 
 use crate::internal::Pass;
 use crate::intops::{imax, imin};
+use crate::intra::{intra_bottom_left_units, intra_top_right_units};
 use crate::levels::{Av2Block, BlockPartition, BlockSize, CFL_PRED, TxPartition};
 
 use crate::msac::MsacReader;
@@ -970,48 +971,52 @@ where
             // C gate: `if (intra && b->uv_mode != CFL_PRED)`.
             if is_intra && uv_mode != CFL_PRED {
                 for pl in 0..2 {
-                    let mut n_tr = 0i32;
-                    if cby + (y << ss_ver) > fi.tile_row_start && (ctw as i32) < 64 {
-                        let csbsz = sbsz >> ss_hor;
-                        let tile_end = col_end_ss;
-                        let w = imin(ctw4, tile_end - (ssbx as i32 + x) - ctw4);
-                        if (cby + y) & (sbsz - 1) == 0 {
-                            n_tr = w;
-                        } else {
-                            let end = imin((ssbx as i32 + x + csbsz) & !(csbsz - 1), tile_end);
-                            let w2 = imin(ctw4, end - (ssbx as i32 + x) - ctw4);
-                            if w2 == 0 {
-                                n_tr = 0;
-                            } else {
-                                let shift = (cbx4 as i32 + x + ctw4) as u32;
-                                let bits = recon.scratch.is_coded[1]
-                                    [(cby4 as i32 + y - 1) as usize]
-                                    >> shift;
-                                let inv = 0x10000u64 | !bits;
-                                n_tr = imin(inv.trailing_zeros() as i32, w2);
-                            }
-                        }
-                    }
-                    let mut n_bl = 0i32;
-                    if cbx + (x << ss_hor) > fi.tile_col_start && (cth as i32) < 64 {
-                        let csbsz = sbsz >> ss_ver;
-                        let end = imin((ssby as i32 + y + csbsz) & !(csbsz - 1), row_end_ss);
-                        let h = imin(cth4, end - (ssby as i32 + y) - cth4);
-                        if (cbx + x) & (sbsz - 1) == 0 || h <= 0 {
-                            n_bl = h;
-                        } else {
-                            let mask = 1u64 << ((cbx4 as i32 + x - 1) as u32);
-                            let mut nb = 0;
-                            while nb < h {
-                                let row = (cby4 as i32 + y + nb + cth4) as usize;
-                                if row >= 64 || (recon.scratch.is_coded[1][row] & mask) == 0 {
-                                    break;
-                                }
-                                nb += 1;
-                            }
-                            n_bl = nb;
-                        }
-                    }
+                    let plane_x = ssbx as i32 + x;
+                    let plane_y = ssby as i32 + y;
+                    let col_start_ss = fi.tile_col_start >> ss_hor;
+                    let row_start_ss = fi.tile_row_start >> ss_ver;
+                    let right_edge4 = col_end_ss - plane_x - ctw4;
+                    let bottom_edge4 = row_end_ss - plane_y - cth4;
+                    let right_available = plane_x + ctw4 < col_end_ss;
+                    let bottom_available = bottom_edge4 > 0 && plane_y + cth4 < row_end_ss;
+                    let n_tr = intra_top_right_units(
+                        false,
+                        b.tx_part,
+                        true,
+                        &recon.scratch.is_coded,
+                        1,
+                        sbsz,
+                        cbs,
+                        ssbx as i32,
+                        ssby as i32,
+                        x,
+                        y,
+                        ctw4,
+                        ss_hor,
+                        ss_ver,
+                        plane_y > row_start_ss,
+                        right_available,
+                        right_edge4,
+                    );
+                    let n_bl = intra_bottom_left_units(
+                        false,
+                        b.tx_part,
+                        true,
+                        &recon.scratch.is_coded,
+                        1,
+                        sbsz,
+                        cbs,
+                        ssbx as i32,
+                        ssby as i32,
+                        x,
+                        y,
+                        cth4,
+                        ss_hor,
+                        ss_ver,
+                        bottom_available,
+                        plane_x > col_start_ss,
+                        bottom_edge4,
+                    );
 
                     let mut apply_ibp = recon.frame.seq_ibp && uvtx != 0;
                     let sm_top = b.intra_data().is_sm[1].a;
@@ -1638,49 +1643,50 @@ where
         let is_hv5 = (by > pb_row_start || bx > pb_col_start)
             && (b.tx_part == TxPartition::H5 as u8 || b.tx_part == TxPartition::V5 as u8);
 
-        let mut n_tr = 0i32;
-        if by > fi.tile_row_start {
-            let mut w = imin(tw4, fi.tile_col_end - bx - tw4);
-            if is_hv5 {
-                n_tr = 0;
-            } else if (by & (sbsz - 1)) == 0 {
-                n_tr = w;
-            } else {
-                let end = imin((bx + sbsz) & !(sbsz - 1), fi.tile_col_end);
-                w = imin(w, end - bx - tw4);
-                if w <= 0 {
-                    n_tr = 0;
-                } else {
-                    let xpos = ((bx4 as i32 + tw4) & 63) as u32;
-                    let bits = recon.scratch.is_coded[0][by4 - 1] >> xpos;
-                    let inv = 0x10000u64 | !bits;
-                    n_tr = imin(inv.trailing_zeros() as i32, w);
-                }
-            }
-        }
-
-        let mut n_bl = 0i32;
-        if bx > fi.tile_col_start {
-            let end = imin((by + sbsz) & !(sbsz - 1), fi.tile_row_end);
-            let h = imin(th4, end - by - th4);
-            // C distinguishes is_hv5 / bottom-edge as separate n_bl=0 cases
-            if is_hv5 || h <= 0 {
-                n_bl = 0;
-            } else if (bx & (sbsz - 1)) == 0 {
-                n_bl = h;
-            } else {
-                let mask = 1u64 << (((bx4 as i32 - 1) & 63) as u32);
-                let mut y = 0;
-                while y < h {
-                    let row = (by4 as i32 + y + th4) as usize;
-                    if row >= 64 || (recon.scratch.is_coded[0][row] & mask) == 0 {
-                        break;
-                    }
-                    y += 1;
-                }
-                n_bl = y;
-            }
-        }
+        let col_off = bx - pb_col_start;
+        let row_off = by - pb_row_start;
+        let right_edge4 = fi.tile_col_end - bx - tw4;
+        let bottom_edge4 = fi.tile_row_end - by - th4;
+        let right_available = bx + tw4 < fi.tile_col_end;
+        let bottom_available = bottom_edge4 > 0 && by + th4 < fi.tile_row_end;
+        let n_tr = intra_top_right_units(
+            true,
+            b.tx_part,
+            !is_hv5,
+            &recon.scratch.is_coded,
+            0,
+            sbsz,
+            BlockSize::from_raw(b.bs),
+            pb_col_start,
+            pb_row_start,
+            col_off,
+            row_off,
+            tw4,
+            0,
+            0,
+            by > fi.tile_row_start,
+            right_available,
+            right_edge4,
+        );
+        let n_bl = intra_bottom_left_units(
+            true,
+            b.tx_part,
+            !is_hv5,
+            &recon.scratch.is_coded,
+            0,
+            sbsz,
+            BlockSize::from_raw(b.bs),
+            pb_col_start,
+            pb_row_start,
+            col_off,
+            row_off,
+            th4,
+            0,
+            0,
+            bottom_available,
+            bx > fi.tile_col_start,
+            bottom_edge4,
+        );
 
         let mut apply_ibp = recon.frame.seq_ibp && tx != 0 && mrl_idx == 0;
         let dip = intra.dip as i32 - 1;
@@ -2034,7 +2040,7 @@ pub(crate) fn mc_avg<BD: crate::pixel::BitDepth>(
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn mc_w_avg<BD: crate::pixel::BitDepth>(
+pub(crate) fn mc_w_avg<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -2054,7 +2060,7 @@ pub(crate) fn mc_w_avg<BD: crate::pixel::BitDepth>(
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn mc_mask<BD: crate::pixel::BitDepth>(
+pub(crate) fn mc_mask<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -2074,7 +2080,7 @@ pub(crate) fn mc_mask<BD: crate::pixel::BitDepth>(
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn mc_w_mask<BD: crate::pixel::BitDepth>(
+pub(crate) fn mc_w_mask<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -2147,7 +2153,7 @@ pub(crate) struct SbCtx<'a, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>> {
     pub(crate) part_r_idx: &'a mut usize,
 }
 
-pub fn decode_sb<BD: crate::pixel::BitDepth, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+pub fn decode_sb<BD: BitDepth, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
     ctx: &mut SbCtx<'_, UPDATE_CDF, M>,
     recon: &mut ReconCtx<BD>,
     pass: u8,

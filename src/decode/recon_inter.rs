@@ -28,17 +28,12 @@
  */
 use super::*;
 use crate::cdf::CdfModeContext;
-
 use crate::env::BlockContext;
-
-use crate::intops::{apply_sign, iclip, imax, imin, ulog2};
+use crate::intops::{iclip, imax, imin};
 use crate::intra::intrabc_morph_pred_luma;
 use crate::levels::{Av2Block, BlockSize, CompInterPredMode, MotionMode, Mv, RefPair};
-
 use crate::msac::MsacReader;
-
 use crate::pixel::Pixel;
-
 use crate::tables::{BLOCK_DIMENSIONS, TXFM_DIMENSIONS};
 
 /// Shared per-block reconstruction state threaded through the intra `recon_b_*`
