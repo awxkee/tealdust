@@ -2103,6 +2103,21 @@ pub(crate) fn copy_db_8bpc(
             lr_backup,
             1,
         );
+        // Seed the top boundary (2 deblocked rows immediately above this root's first
+        // stripe). With a per-root backup buffer these rows are otherwise left zero for
+        // sby > 0, starving the loop-restoration top context at the stripe seam.
+        if y_stripe >= 2 {
+            let yst = strides[0].unsigned_abs();
+            let above2 = ys_off - 2 * yst;
+            let above1 = ys_off - yst;
+            if above2 + w <= src[0].len() && w <= lr_db[0].len() {
+                let (r0, rest) = lr_db[0].split_at_mut(yst);
+                r0[..w].copy_from_slice(&src[0][above2..above2 + w]);
+                if w <= rest.len() && above1 + w <= src[0].len() {
+                    rest[..w].copy_from_slice(&src[0][above1..above1 + w]);
+                }
+            }
+        }
     }
 
     if strides[1] != 0 {
@@ -2138,6 +2153,20 @@ pub(crate) fn copy_db_8bpc(
                 lr_backup,
                 1,
             );
+            if cy_stripe >= 2 {
+                let cst = strides[1].unsigned_abs();
+                for (pl, src_pl) in [(1usize, &src[1]), (2usize, &src[2])] {
+                    let above2 = cys_off - 2 * cst;
+                    let above1 = cys_off - cst;
+                    if above2 + cw <= src_pl.len() && cw <= lr_db[pl].len() {
+                        let (r0, rest) = lr_db[pl].split_at_mut(cst);
+                        r0[..cw].copy_from_slice(&src_pl[above2..above2 + cw]);
+                        if cw <= rest.len() && above1 + cw <= src_pl.len() {
+                            rest[..cw].copy_from_slice(&src_pl[above1..above1 + cw]);
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -2173,6 +2202,18 @@ pub(crate) fn copy_db_hbd(
             lr_backup,
             1,
         );
+        if y_stripe >= 2 {
+            let yst = strides[0].unsigned_abs();
+            let above2 = ys_off - 2 * yst;
+            let above1 = ys_off - yst;
+            if above2 + w <= src[0].len() && w <= lr_db[0].len() {
+                let (r0, rest) = lr_db[0].split_at_mut(yst);
+                r0[..w].copy_from_slice(&src[0][above2..above2 + w]);
+                if w <= rest.len() && above1 + w <= src[0].len() {
+                    rest[..w].copy_from_slice(&src[0][above1..above1 + w]);
+                }
+            }
+        }
     }
 
     if strides[1] != 0 {
@@ -2208,6 +2249,20 @@ pub(crate) fn copy_db_hbd(
                 lr_backup,
                 1,
             );
+            if cy_stripe >= 2 {
+                let cst = strides[1].unsigned_abs();
+                for (pl, src_pl) in [(1usize, &src[1]), (2usize, &src[2])] {
+                    let above2 = cys_off - 2 * cst;
+                    let above1 = cys_off - cst;
+                    if above2 + cw <= src_pl.len() && cw <= lr_db[pl].len() {
+                        let (r0, rest) = lr_db[pl].split_at_mut(cst);
+                        r0[..cw].copy_from_slice(&src_pl[above2..above2 + cw]);
+                        if cw <= rest.len() && above1 + cw <= src_pl.len() {
+                            rest[..cw].copy_from_slice(&src_pl[above1..above1 + cw]);
+                        }
+                    }
+                }
+            }
         }
     }
 }

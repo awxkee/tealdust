@@ -876,7 +876,7 @@ fn cdef_filter_block_8w_8bpc_neon_shape_dispatch<const H: usize>(
             pri_tap,
             dir,
         ),
-        (false, false) => return,
+        (false, false) => (),
     }
 }
 
@@ -940,7 +940,7 @@ fn cdef_filter_block_4w_8bpc_neon_shape_dispatch<const H: usize>(
             pri_tap,
             dir,
         ),
-        (false, false) => return,
+        (false, false) => (),
     }
 }
 

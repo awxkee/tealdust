@@ -153,8 +153,7 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
     let mut ref_pad = [0i32; 16];
     let mut recon_pad = [0i32; 16];
 
-    if numb_up != 0 {
-        let step = width / numb_up;
+    if let Some(step) = width.checked_div(numb_up) {
         let start = if step == 1 { 0 } else { step >> 1 };
         let ref_top_off = (sy as usize - 1) * stride + sx as usize;
         let recon_top_off = (dpy as usize - 1) * stride + dpx as usize;
@@ -188,8 +187,7 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
         count += numb_up;
     }
 
-    if numb_left != 0 {
-        let step = height / numb_left;
+    if let Some(step) = height.checked_div(numb_left) {
         let start = if step == 1 { 0 } else { step >> 1 };
         let ref_left_off = sy as usize * stride + sx as usize - 1;
         let recon_left_off = dpy as usize * stride + dpx as usize - 1;

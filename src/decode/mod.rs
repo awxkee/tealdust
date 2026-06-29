@@ -349,7 +349,6 @@ pub struct SbFrameInfo {
     pub ccso_unit_log2: i32,
     /// Number of CCSO units per frame row, used for current/previous ccsomap indexing.
     pub ccso_unit_w: i32,
-    pub sb256w: i32,
     // Frame flags
     pub skip_mode_enabled: bool,
     pub allow_intrabc: bool,
@@ -527,7 +526,7 @@ impl SbFrameInfo {
             delta_q_res_log2: frame_hdr.delta.q.res_log2,
             quant_yac: frame_hdr.quant.yac as i32,
             sb128: frame_hdr.sb128 as i32,
-            b4_stride: (((bw + 63) & !63) as isize),
+            b4_stride: ((bw + 63) & !63) as isize,
             q_ydc_delta: frame_hdr.quant.ydc_delta as i32,
             q_uac_delta: frame_hdr.quant.uac_delta as i32,
             q_udc_delta: frame_hdr.quant.udc_delta as i32,
@@ -553,7 +552,6 @@ impl SbFrameInfo {
             ],
             ccso_unit_log2,
             ccso_unit_w,
-            sb256w: (bw + 63) >> 6,
             skip_mode_enabled: frame_hdr.skip_mode_enabled != 0,
             allow_intrabc: frame_hdr.allow_intrabc != 0,
             any_lossless: frame_hdr.any_lossless != 0,
@@ -2093,8 +2091,8 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     if frame_hdr.ccso.enabled != 0 && any_ccso_plane {
         let ccso_unit_log2 = ccso_unit_log2_from_headers(seq_hdr, frame_hdr);
         let ccso_unit_mi = 1usize << (ccso_unit_log2 - 2);
-        let ccso_unit_w = ((bw as usize) + ccso_unit_mi - 1) / ccso_unit_mi;
-        let ccso_unit_h = ((bh as usize) + ccso_unit_mi - 1) / ccso_unit_mi;
+        let ccso_unit_w = (bw as usize).div_ceil(ccso_unit_mi);
+        let ccso_unit_h = (bh as usize).div_ceil(ccso_unit_mi);
         let needed = 3usize
             .saturating_mul(ccso_unit_w)
             .saturating_mul(ccso_unit_h);

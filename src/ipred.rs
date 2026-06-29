@@ -2264,7 +2264,7 @@ fn cfl_implicit_sample_start_step(dim: usize, n: usize) -> (usize, usize) {
 
 #[inline(always)]
 fn cfl_is_implicit_sample(pos: usize, start: usize, step: usize) -> bool {
-    pos >= start && (pos - start) % step == 0
+    pos >= start && (pos - start).is_multiple_of(step)
 }
 
 #[inline(always)]

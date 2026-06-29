@@ -742,7 +742,7 @@ fn fgy_row_hbd_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            return crate::neon::fgy_row_hbd_neon;
+            crate::neon::fgy_row_hbd_neon
         }
         #[cfg(not(target_arch = "aarch64"))]
         {
@@ -847,7 +847,7 @@ fn fguv_row_hbd_dispatch(
         }
         #[cfg(target_arch = "aarch64")]
         {
-            return crate::neon::fguv_row_hbd_neon;
+            crate::neon::fguv_row_hbd_neon
         }
         #[cfg(not(target_arch = "aarch64"))]
         {

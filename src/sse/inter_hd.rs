@@ -229,7 +229,13 @@ pub(crate) fn put_bilin_hbd_sse41(
         let mid = &mut mid_scratch[..64 * (h + 1)];
         let sh0 = 4 - ib;
         let rnd0 = if sh0 == 0 { 0 } else { 1 << (sh0 - 1) };
-        for (y, mid_row) in mid.chunks_exact_mut(64).take(h + 1).enumerate() {
+        for (y, mid_row) in mid
+            .as_chunks_mut::<64>()
+            .0
+            .iter_mut()
+            .take(h + 1)
+            .enumerate()
+        {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<4>();
             for (chunk_idx, mid_chunk) in mid_chunks.iter_mut().enumerate() {
@@ -332,7 +338,13 @@ pub(crate) fn prep_bilin_hbd_sse41(
         let mid = &mut mid_scratch[..64 * (h + 1)];
         let sh0 = 4 - ib;
         let rnd0 = if sh0 == 0 { 0 } else { 1 << (sh0 - 1) };
-        for (y, mid_row) in mid.chunks_exact_mut(64).take(h + 1).enumerate() {
+        for (y, mid_row) in mid
+            .as_chunks_mut::<64>()
+            .0
+            .iter_mut()
+            .take(h + 1)
+            .enumerate()
+        {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<4>();
             for (chunk_idx, mid_chunk) in mid_chunks.iter_mut().enumerate() {
@@ -438,7 +450,13 @@ pub(crate) fn put_8tap_hbd_sse41(
             let mid = &mut mid_scratch[..64 * tmp_h];
             let sh0 = bits - ib;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, mid_row) in mid.chunks_exact_mut(64).take(tmp_h).enumerate() {
+            for (y, mid_row) in mid
+                .as_chunks_mut::<64>()
+                .0
+                .iter_mut()
+                .take(tmp_h)
+                .enumerate()
+            {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
                 let src_row = unsafe { src.get_unchecked(base..) };
                 let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<4>();
@@ -573,7 +591,13 @@ pub(crate) fn prep_8tap_hbd_sse41(
             let mid = &mut mid_scratch[..64 * tmp_h];
             let sh0 = bits - ib;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, mid_row) in mid.chunks_exact_mut(64).take(tmp_h).enumerate() {
+            for (y, mid_row) in mid
+                .as_chunks_mut::<64>()
+                .0
+                .iter_mut()
+                .take(tmp_h)
+                .enumerate()
+            {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
                 let src_row = unsafe { src.get_unchecked(base..) };
                 let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<4>();
