@@ -43,6 +43,7 @@ use crate::tables::{NS_WIENER_COEF_RANGE_UV, NS_WIENER_COEF_RANGE_Y};
 mod block_decode;
 mod frame_setup;
 mod loopfilter;
+pub(crate) mod lr_cdef_line_save;
 mod recon_inter;
 mod recon_intra;
 mod recon_opfl;
@@ -1623,24 +1624,34 @@ where
                 let sbh = sbsz >> ss_ver;
                 let lruw = imax(1, imin(tw - fx + half_unit, sbw) >> unit_sz_log2);
                 let lruh = imax(1, imin(th - fy + half_unit, sbh) >> unit_sz_log2);
-                let vsh = unit_sz_log2 - 7 + ss_ver;
-                let hsh = unit_sz_log2 - 7 + ss_hor;
-                // unit_sz_log2 can be 6, giving a negative shift. The shift is a
-                // no-op when the corresponding loop count is 1 (x/_y == 0). Guard
-                // against the negative-shift overflow a malformed unit size can
-                let shl = |v: i32, s: i32| if s >= 0 { v << s } else { v >> (-s) };
-                let mut sb_idx = (by >> 6) * sb256w + (bx >> 6);
-                let start_unit_idx = (((by & 0x30) >> 2) + ((bx & 0x30) >> 4)) as usize;
-
                 for _y in 0..lruh {
                     for x in 0..lruw {
+                        // Derive the (slot, unit_idx) of this restoration unit from
+                        // its frame position, mirroring the filter side
+                        // (looprestoration.rs `lr_sbrow`/`lr_stripe`): the filter
+                        // derives both the SB-256 slot and the 4x4 local unit index
+                        // from the unit's *luma-scale* top-left, so the read side
+                        // must do the same for the two to agree when an SB spans
+                        // more than one unit (unit_size < superblock size).
+                        //
+                        // `fx`/`fy` are this SB's subsampled top-left; the unit's
+                        // subsampled position is `fx + x*unit_sz` / `fy + _y*unit_sz`.
+                        // Shift back to luma scale (`<< ss_*`) before the >>8 (slot)
+                        // and >>6 (local 64-grid index) reductions, exactly as the
+                        // filter does (`aligned_unit_pos <<= ss_ver`; horizontal uses
+                        // `shift_hor = 8 - ss_hor`). At x == _y == 0 this reduces to
+                        // the previous `sb_idx` / `start_unit_idx` byte-for-byte, so
+                        // single-unit streams are unchanged.
+                        let upx = (fx + x * unit_sz) << ss_hor;
+                        let upy = (fy + _y * unit_sz) << ss_ver;
+                        let slot = (upy >> 8) * sb256w + (upx >> 8);
+                        let uidx = (((upy >> 6) & 3) << 2) | ((upx >> 6) & 3);
                         // For valid streams these indices are always in range;
                         // clamp so a malformed unit-size/geometry can't index the
                         // LR mask out of bounds (the entropy read still happens, so
                         // MSAC stays in sync). No-op for valid input.
-                        let unit_idx = start_unit_idx.min(lr_mask[0].lr[p].len() - 1);
-                        let lr_slot =
-                            ((sb_idx + shl(x, hsh)).max(0) as usize).min(lr_mask.len() - 1);
+                        let unit_idx = (uidx.max(0) as usize).min(lr_mask[0].lr[p].len() - 1);
+                        let lr_slot = (slot.max(0) as usize).min(lr_mask.len() - 1);
                         let ns_plane = &frame_hdr.restoration.p[p].ns;
                         read_restoration_info(
                             msac,
@@ -1652,7 +1663,6 @@ where
                             ns_plane,
                         );
                     }
-                    sb_idx += shl(sb256w, vsh);
                 }
             }
         } // end if !is_tip_frame (loop-restoration info read)
@@ -2324,8 +2334,6 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                 let ns_subclass_class_idx = lf.ns_subclass_class_idx;
                 let restore_planes = lf.restore_planes;
                 let lf_start_of_tile_row: &[u8] = &lf.start_of_tile_row;
-                let lf_lr_cdef_line: &[Vec<u8>; 3] = &lf.lr_cdef_line;
-                let lf_lr_cdef_line_hbd: &[Vec<u16>; 3] = &lf.lr_cdef_line_hbd;
                 let mask_dm = DisjointMut::new(&mut lf.mask[..]);
                 let lrmask_dm = DisjointMut::new(&mut lf.lr_mask[..]);
                 let seguv_dm =
@@ -2488,6 +2496,26 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                 let cdef_top_hbd_dm = &cdef_top_hbd_dm;
                 let lr_db_hbd_dm = DisjointMut::new(&mut lf.lr_db_store_hbd[..]);
                 let lr_db_hbd_dm = &lr_db_hbd_dm;
+                crate::decode::lr_cdef_line_save::ensure_lr_cdef_line(
+                    &mut lf.lr_cdef_line,
+                    rows_us,
+                    filter_params.y_stride,
+                    filter_params.uv_stride,
+                    mono_alloc,
+                )?;
+                if bd_local.bitdepth() > 8 {
+                    crate::decode::lr_cdef_line_save::ensure_lr_cdef_line_hbd(
+                        &mut lf.lr_cdef_line_hbd,
+                        rows_us,
+                        crate::decode::loopfilter::hbd_sample_stride(filter_params.y_stride),
+                        crate::decode::loopfilter::hbd_sample_stride(filter_params.uv_stride),
+                        mono_alloc,
+                    )?;
+                }
+                let lr_cdef_dm = DisjointMut::new(std::slice::from_mut(&mut lf.lr_cdef_line));
+                let lr_cdef_dm = &lr_cdef_dm;
+                let lr_cdef_hbd_dm = DisjointMut::new(std::slice::from_mut(&mut lf.lr_cdef_line_hbd));
+                let lr_cdef_hbd_dm = &lr_cdef_hbd_dm;
                 let park_mx = std::sync::Mutex::new(());
                 let park_mx = &park_mx;
                 let park_cv = std::sync::Condvar::new();
@@ -2800,8 +2828,6 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                             lr_mask: unsafe { &*lrmask_dm.whole() },
                                             segmap_uv: unsafe { &*seguv_dm.whole() },
                                             start_of_tile_row: lf_start_of_tile_row,
-                                            lr_cdef_line: lf_lr_cdef_line,
-                                            lr_cdef_line_hbd: lf_lr_cdef_line_hbd,
                                             uv_segmap_stride,
                                             base_q,
                                             gdf_ref_dst_idx,
@@ -2835,10 +2861,14 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                                 cdef_line: unsafe { cdef_line_dm.whole() },
                                                 cdef_top: unsafe { cdef_top_dm.whole() },
                                                 lr_db_line: unsafe { lr_db_dm.whole() },
+                                                lr_cdef_line: unsafe { &mut lr_cdef_dm.whole()[0] },
                                                 ccso_tmp_buf: &mut *ccso_tmp_buf,
                                                 cdef_line_hbd: unsafe { cdef_line_hbd_dm.whole() },
                                                 cdef_top_hbd: unsafe { cdef_top_hbd_dm.whole() },
                                                 lr_db_line_hbd: unsafe { lr_db_hbd_dm.whole() },
+                                                lr_cdef_line_hbd: unsafe {
+                                                    &mut lr_cdef_hbd_dm.whole()[0]
+                                                },
                                                 ccso_tmp_buf_hbd: &mut *ccso_tmp_buf_hbd,
                                             },
                                             crate::decode::loopfilter::FilterSb64Dst {
@@ -2954,6 +2984,13 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                     let root_first = (k >> sb128) << sb128;
                                     let ready =
                                         (root_first..=k).all(|j| cdef_band_done[j].load(Acquire));
+                                    // Cross-tile-row CDEF line (findings issue #2): the
+                                    // previous tile row's bottom CDEF rows are saved
+                                    // during CDEF-FILTER of THIS tile row's first band
+                                    // (= `root_first` for the first root of a tile row),
+                                    // which the base readiness above already waits for
+                                    // (`cdef_band_done[root_first]`). So no extra gate is
+                                    // needed and the MT scheduler is unchanged.
                                     if !ready {
                                         break;
                                     }
@@ -3229,6 +3266,28 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                     n_roots,
                                     mono,
                                 )?;
+                                crate::decode::lr_cdef_line_save::ensure_lr_cdef_line(
+                                    &mut lf.lr_cdef_line,
+                                    rows as usize,
+                                    filter_params.y_stride,
+                                    filter_params.uv_stride,
+                                    mono,
+                                )?;
+                                if bd_local.bitdepth() > 8 {
+                                    let y_s = crate::decode::loopfilter::hbd_sample_stride(
+                                        filter_params.y_stride,
+                                    );
+                                    let uv_s = crate::decode::loopfilter::hbd_sample_stride(
+                                        filter_params.uv_stride,
+                                    );
+                                    crate::decode::lr_cdef_line_save::ensure_lr_cdef_line_hbd(
+                                        &mut lf.lr_cdef_line_hbd,
+                                        rows as usize,
+                                        y_s,
+                                        uv_s,
+                                        mono,
+                                    )?;
+                                }
                                 if bd_local.bitdepth() > 8 {
                                     ensure_filter_lines_hbd(
                                         &mut lf.cdef_line_store_hbd,
@@ -3264,8 +3323,6 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                             lr_mask: &lf.lr_mask[..],
                                             segmap_uv: &lf.segmap_uv[..],
                                             start_of_tile_row: &lf.start_of_tile_row[..],
-                                            lr_cdef_line: &lf.lr_cdef_line,
-                                            lr_cdef_line_hbd: &lf.lr_cdef_line_hbd,
                                             uv_segmap_stride: lf.uv_segmap_stride,
                                             base_q: lf.base_q,
                                             gdf_ref_dst_idx: lf.gdf_ref_dst_idx,
@@ -3295,10 +3352,12 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                                 cdef_line: &mut lf.cdef_line_store,
                                                 cdef_top: &mut lf.cdef_top_store,
                                                 lr_db_line: &mut lf.lr_db_store,
+                                                lr_cdef_line: &mut lf.lr_cdef_line,
                                                 ccso_tmp_buf: &mut lf.ccso_tmp_buf,
                                                 cdef_line_hbd: &mut lf.cdef_line_store_hbd,
                                                 cdef_top_hbd: &mut lf.cdef_top_store_hbd,
                                                 lr_db_line_hbd: &mut lf.lr_db_store_hbd,
+                                                lr_cdef_line_hbd: &mut lf.lr_cdef_line_hbd,
                                                 ccso_tmp_buf_hbd: &mut lf.ccso_tmp_buf_hbd,
                                             },
                                             crate::decode::loopfilter::FilterSb64Dst {
