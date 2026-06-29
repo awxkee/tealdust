@@ -27,6 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 use super::*;
+use crate::looprestoration::INLOOPFILTER_GDF;
 use crate::pixel::Pixel;
 
 pub(crate) struct FilterFrameParams {
@@ -878,8 +879,9 @@ fn filter_sb64_hbd(
     // Keep the existing LR backup contract: the current LR implementation is
     // root-sbrow based, so refresh its DB backup immediately before the root row
     // is restored. CDEF/CCSO do not consume `lr_db_line` in this Rust path.
-    let copy_db_on =
-        sh.restore_planes != 0 && inloop & INLOOPFILTER_WIENER != 0 && last_sb64_in_root;
+    let copy_db_on = sh.restore_planes != 0
+        && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
+        && last_sb64_in_root;
     if copy_db_on && stages & (STAGE_DEBLOCK | STAGE_DEBLOCK_ROWS) != 0 {
         let num_lines = 20usize;
         let ridx = root_sby as usize;
@@ -1031,7 +1033,7 @@ fn filter_sb64_hbd(
     if stages & STAGE_LR != 0
         && last_sb64_in_root
         && sh.restore_planes != 0
-        && inloop & INLOOPFILTER_WIENER != 0
+        && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
     {
         LUMA_SNAP_HBD.with(|snap_cell| {
             let mut snap = snap_cell.borrow_mut();
@@ -1067,6 +1069,9 @@ fn filter_sb64_hbd(
             let empty_lr_db = crate::looprestoration::EMPTY_LR_DB_LINE_HBD;
             let ctx = crate::looprestoration::LrContextHbd {
                 restoration_p: &frame_hdr.restoration.p,
+                gdf_qp_idx: frame_hdr.gdf.qp_idx as i32,
+                gdf_scale: frame_hdr.gdf.scale as i32,
+                gdf_ref_dst_idx: sh.gdf_ref_dst_idx,
                 sb128: frame_hdr.sb128 != 0,
                 cfl_ds_filter_index: seq_hdr.cfl_ds_filter_index as i32,
                 layout: seq_hdr.layout,

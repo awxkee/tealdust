@@ -37,10 +37,10 @@ mod filter;
 mod filter_hd;
 mod inter_hd;
 mod ipred;
-mod ipred_hd;
 mod itx;
 mod looprestoration;
 mod looprestoration_hd;
+mod mc_hd;
 #[cfg(target_arch = "x86_64")]
 mod msac;
 
@@ -74,12 +74,12 @@ pub(crate) use filter_hd::{
 };
 pub(crate) use inter_hd::*;
 pub(crate) use ipred::*;
-pub(crate) use ipred_hd::*;
 pub(crate) use looprestoration::{
     ns_wiener_fir_run_sse41, ns_wiener_uv_fir_run_sse41, pc_wiener_fir_run_sse41,
 };
 pub(crate) use looprestoration_hd::{
     ns_wiener_fir_run_hbd_sse41, ns_wiener_uv_fir_run_hbd_sse41, pc_wiener_fir_run_hbd_sse41,
 };
+pub(crate) use mc_hd::*;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use msac::MsacContextSse;

@@ -227,14 +227,14 @@ fn ns_wiener_fir_run_hbd_neon_impl(
             let (a0, a1, a2, a3, a4, a5, a6, a7) = load32_u16_i32x8(&t.row_p[cp..]);
             let (b0, b1, b2, b3, b4, b5, b6, b7) = load32_u16_i32x8(&t.row_m[cm..]);
             let coef = vdupq_n_s32(t.coef);
-            s0 = vaddq_s32(s0, vmulq_s32(vsubq_s32(vaddq_s32(a0, b0), two_m0), coef));
-            s1 = vaddq_s32(s1, vmulq_s32(vsubq_s32(vaddq_s32(a1, b1), two_m1), coef));
-            s2 = vaddq_s32(s2, vmulq_s32(vsubq_s32(vaddq_s32(a2, b2), two_m2), coef));
-            s3 = vaddq_s32(s3, vmulq_s32(vsubq_s32(vaddq_s32(a3, b3), two_m3), coef));
-            s4 = vaddq_s32(s4, vmulq_s32(vsubq_s32(vaddq_s32(a4, b4), two_m4), coef));
-            s5 = vaddq_s32(s5, vmulq_s32(vsubq_s32(vaddq_s32(a5, b5), two_m5), coef));
-            s6 = vaddq_s32(s6, vmulq_s32(vsubq_s32(vaddq_s32(a6, b6), two_m6), coef));
-            s7 = vaddq_s32(s7, vmulq_s32(vsubq_s32(vaddq_s32(a7, b7), two_m7), coef));
+            s0 = vmlaq_s32(s0, vsubq_s32(vaddq_s32(a0, b0), two_m0), coef);
+            s1 = vmlaq_s32(s1, vsubq_s32(vaddq_s32(a1, b1), two_m1), coef);
+            s2 = vmlaq_s32(s2, vsubq_s32(vaddq_s32(a2, b2), two_m2), coef);
+            s3 = vmlaq_s32(s3, vsubq_s32(vaddq_s32(a3, b3), two_m3), coef);
+            s4 = vmlaq_s32(s4, vsubq_s32(vaddq_s32(a4, b4), two_m4), coef);
+            s5 = vmlaq_s32(s5, vsubq_s32(vaddq_s32(a5, b5), two_m5), coef);
+            s6 = vmlaq_s32(s6, vsubq_s32(vaddq_s32(a6, b6), two_m6), coef);
+            s7 = vmlaq_s32(s7, vsubq_s32(vaddq_s32(a7, b7), two_m7), coef);
         }
         finish32_u16(&mut dst[x..], s0, s1, s2, s3, s4, s5, s6, s7, bitdepth_max);
         x += 32;
@@ -258,10 +258,10 @@ fn ns_wiener_fir_run_hbd_neon_impl(
             let (a0, a1, a2, a3) = load16_u16_i32x4(&t.row_p[cp..]);
             let (b0, b1, b2, b3) = load16_u16_i32x4(&t.row_m[cm..]);
             let coef = vdupq_n_s32(t.coef);
-            s0 = vaddq_s32(s0, vmulq_s32(vsubq_s32(vaddq_s32(a0, b0), two_m0), coef));
-            s1 = vaddq_s32(s1, vmulq_s32(vsubq_s32(vaddq_s32(a1, b1), two_m1), coef));
-            s2 = vaddq_s32(s2, vmulq_s32(vsubq_s32(vaddq_s32(a2, b2), two_m2), coef));
-            s3 = vaddq_s32(s3, vmulq_s32(vsubq_s32(vaddq_s32(a3, b3), two_m3), coef));
+            s0 = vmlaq_s32(s0, vsubq_s32(vaddq_s32(a0, b0), two_m0), coef);
+            s1 = vmlaq_s32(s1, vsubq_s32(vaddq_s32(a1, b1), two_m1), coef);
+            s2 = vmlaq_s32(s2, vsubq_s32(vaddq_s32(a2, b2), two_m2), coef);
+            s3 = vmlaq_s32(s3, vsubq_s32(vaddq_s32(a3, b3), two_m3), coef);
         }
         finish16_u16(&mut dst[x..], s0, s1, s2, s3, bitdepth_max);
         x += 16;
@@ -281,14 +281,8 @@ fn ns_wiener_fir_run_hbd_neon_impl(
             let (alo, ahi) = load8_u16_i32(&t.row_p[cp..]);
             let (blo, bhi) = load8_u16_i32(&t.row_m[cm..]);
             let coef = vdupq_n_s32(t.coef);
-            slo = vaddq_s32(
-                slo,
-                vmulq_s32(vsubq_s32(vaddq_s32(alo, blo), two_mlo), coef),
-            );
-            shi = vaddq_s32(
-                shi,
-                vmulq_s32(vsubq_s32(vaddq_s32(ahi, bhi), two_mhi), coef),
-            );
+            slo = vmlaq_s32(slo, vsubq_s32(vaddq_s32(alo, blo), two_mlo), coef);
+            shi = vmlaq_s32(shi, vsubq_s32(vaddq_s32(ahi, bhi), two_mhi), coef);
         }
         finish8_u16(&mut dst[x..], slo, shi, bitdepth_max);
         x += 8;
@@ -338,14 +332,14 @@ fn pc_wiener_fir_run_hbd_neon_impl(
             let (a0, a1, a2, a3, a4, a5, a6, a7) = load32_u16_i32x8(&t.row_p[cp..]);
             let (b0, b1, b2, b3, b4, b5, b6, b7) = load32_u16_i32x8(&t.row_m[cm..]);
             let coef = vdupq_n_s32(t.coef);
-            s0 = vaddq_s32(s0, vmulq_s32(vaddq_s32(a0, b0), coef));
-            s1 = vaddq_s32(s1, vmulq_s32(vaddq_s32(a1, b1), coef));
-            s2 = vaddq_s32(s2, vmulq_s32(vaddq_s32(a2, b2), coef));
-            s3 = vaddq_s32(s3, vmulq_s32(vaddq_s32(a3, b3), coef));
-            s4 = vaddq_s32(s4, vmulq_s32(vaddq_s32(a4, b4), coef));
-            s5 = vaddq_s32(s5, vmulq_s32(vaddq_s32(a5, b5), coef));
-            s6 = vaddq_s32(s6, vmulq_s32(vaddq_s32(a6, b6), coef));
-            s7 = vaddq_s32(s7, vmulq_s32(vaddq_s32(a7, b7), coef));
+            s0 = vmlaq_s32(s0, vaddq_s32(a0, b0), coef);
+            s1 = vmlaq_s32(s1, vaddq_s32(a1, b1), coef);
+            s2 = vmlaq_s32(s2, vaddq_s32(a2, b2), coef);
+            s3 = vmlaq_s32(s3, vaddq_s32(a3, b3), coef);
+            s4 = vmlaq_s32(s4, vaddq_s32(a4, b4), coef);
+            s5 = vmlaq_s32(s5, vaddq_s32(a5, b5), coef);
+            s6 = vmlaq_s32(s6, vaddq_s32(a6, b6), coef);
+            s7 = vmlaq_s32(s7, vaddq_s32(a7, b7), coef);
         }
         finish32_u16(&mut dst[x..], s0, s1, s2, s3, s4, s5, s6, s7, bitdepth_max);
         x += 32;
@@ -366,10 +360,10 @@ fn pc_wiener_fir_run_hbd_neon_impl(
             let (a0, a1, a2, a3) = load16_u16_i32x4(&t.row_p[cp..]);
             let (b0, b1, b2, b3) = load16_u16_i32x4(&t.row_m[cm..]);
             let coef = vdupq_n_s32(t.coef);
-            s0 = vaddq_s32(s0, vmulq_s32(vaddq_s32(a0, b0), coef));
-            s1 = vaddq_s32(s1, vmulq_s32(vaddq_s32(a1, b1), coef));
-            s2 = vaddq_s32(s2, vmulq_s32(vaddq_s32(a2, b2), coef));
-            s3 = vaddq_s32(s3, vmulq_s32(vaddq_s32(a3, b3), coef));
+            s0 = vmlaq_s32(s0, vaddq_s32(a0, b0), coef);
+            s1 = vmlaq_s32(s1, vaddq_s32(a1, b1), coef);
+            s2 = vmlaq_s32(s2, vaddq_s32(a2, b2), coef);
+            s3 = vmlaq_s32(s3, vaddq_s32(a3, b3), coef);
         }
         finish16_u16(&mut dst[x..], s0, s1, s2, s3, bitdepth_max);
         x += 16;
@@ -388,8 +382,8 @@ fn pc_wiener_fir_run_hbd_neon_impl(
             let (alo, ahi) = load8_u16_i32(&t.row_p[cp..]);
             let (blo, bhi) = load8_u16_i32(&t.row_m[cm..]);
             let coef = vdupq_n_s32(t.coef);
-            slo = vaddq_s32(slo, vmulq_s32(vaddq_s32(alo, blo), coef));
-            shi = vaddq_s32(shi, vmulq_s32(vaddq_s32(ahi, bhi), coef));
+            slo = vmlaq_s32(slo, vaddq_s32(alo, blo), coef);
+            shi = vmlaq_s32(shi, vaddq_s32(ahi, bhi), coef);
         }
         finish8_u16(&mut dst[x..], slo, shi, bitdepth_max);
         x += 8;
@@ -465,10 +459,10 @@ fn ns_wiener_uv_fir_run_hbd_neon_impl(
             let (a0, a1, a2, a3) = load16_u16_i32x4(&t.row_p[cp..]);
             let (b0, b1, b2, b3) = load16_u16_i32x4(&t.row_m[cm..]);
             let coef = vdupq_n_s32(t.coef);
-            s0 = vaddq_s32(s0, vmulq_s32(vsubq_s32(vaddq_s32(a0, b0), two_m0), coef));
-            s1 = vaddq_s32(s1, vmulq_s32(vsubq_s32(vaddq_s32(a1, b1), two_m1), coef));
-            s2 = vaddq_s32(s2, vmulq_s32(vsubq_s32(vaddq_s32(a2, b2), two_m2), coef));
-            s3 = vaddq_s32(s3, vmulq_s32(vsubq_s32(vaddq_s32(a3, b3), two_m3), coef));
+            s0 = vmlaq_s32(s0, vsubq_s32(vaddq_s32(a0, b0), two_m0), coef);
+            s1 = vmlaq_s32(s1, vsubq_s32(vaddq_s32(a1, b1), two_m1), coef);
+            s2 = vmlaq_s32(s2, vsubq_s32(vaddq_s32(a2, b2), two_m2), coef);
+            s3 = vmlaq_s32(s3, vsubq_s32(vaddq_s32(a3, b3), two_m3), coef);
         }
         let lb = lo + x * lstep;
         let (lc0, lc1, lc2, lc3) = gather16_u16_i32(l_center, lb, lstep);
@@ -476,10 +470,10 @@ fn ns_wiener_uv_fir_run_hbd_neon_impl(
             let li = (lb as i32 + t.ldx) as usize;
             let (lv0, lv1, lv2, lv3) = gather16_u16_i32(t.row, li, lstep);
             let coef = vdupq_n_s32(t.coef);
-            s0 = vaddq_s32(s0, vmulq_s32(vsubq_s32(lv0, lc0), coef));
-            s1 = vaddq_s32(s1, vmulq_s32(vsubq_s32(lv1, lc1), coef));
-            s2 = vaddq_s32(s2, vmulq_s32(vsubq_s32(lv2, lc2), coef));
-            s3 = vaddq_s32(s3, vmulq_s32(vsubq_s32(lv3, lc3), coef));
+            s0 = vmlaq_s32(s0, vsubq_s32(lv0, lc0), coef);
+            s1 = vmlaq_s32(s1, vsubq_s32(lv1, lc1), coef);
+            s2 = vmlaq_s32(s2, vsubq_s32(lv2, lc2), coef);
+            s3 = vmlaq_s32(s3, vsubq_s32(lv3, lc3), coef);
         }
         finish16_u16(&mut dst[x..], s0, s1, s2, s3, bitdepth_max);
         x += 16;
@@ -495,22 +489,16 @@ fn ns_wiener_uv_fir_run_hbd_neon_impl(
             let (alo, ahi) = load8_u16_i32(&t.row_p[(cb as i32 + t.dx) as usize..]);
             let (blo, bhi) = load8_u16_i32(&t.row_m[(cb as i32 - t.dx) as usize..]);
             let coef = vdupq_n_s32(t.coef);
-            slo = vaddq_s32(
-                slo,
-                vmulq_s32(vsubq_s32(vaddq_s32(alo, blo), two_mlo), coef),
-            );
-            shi = vaddq_s32(
-                shi,
-                vmulq_s32(vsubq_s32(vaddq_s32(ahi, bhi), two_mhi), coef),
-            );
+            slo = vmlaq_s32(slo, vsubq_s32(vaddq_s32(alo, blo), two_mlo), coef);
+            shi = vmlaq_s32(shi, vsubq_s32(vaddq_s32(ahi, bhi), two_mhi), coef);
         }
         let lb = lo + x * lstep;
         let (lclo, lchi) = gather8_u16_i32(l_center, lb, lstep);
         for t in ltaps {
             let (lvlo, lvhi) = gather8_u16_i32(t.row, (lb as i32 + t.ldx) as usize, lstep);
             let coef = vdupq_n_s32(t.coef);
-            slo = vaddq_s32(slo, vmulq_s32(vsubq_s32(lvlo, lclo), coef));
-            shi = vaddq_s32(shi, vmulq_s32(vsubq_s32(lvhi, lchi), coef));
+            slo = vmlaq_s32(slo, vsubq_s32(lvlo, lclo), coef);
+            shi = vmlaq_s32(shi, vsubq_s32(lvhi, lchi), coef);
         }
         finish8_u16(&mut dst[x..], slo, shi, bitdepth_max);
         x += 8;

@@ -37,76 +37,6 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
-#[target_feature(enable = "avx2")]
-pub(crate) fn pal_pred_8bpc_avx2(
-    dst: &mut [u8],
-    stride: usize,
-    pal: &[u8],
-    idx: &[u8],
-    w: usize,
-    h: usize,
-) {
-    if w < 16 {
-        crate::ipred::pal_pred(dst, stride, pal, idx, w, h);
-        return;
-    }
-
-    let mut pal_buf = [0u8; 16];
-    pal_buf[..8].copy_from_slice(&pal[..8]);
-    let pal_v = unsafe { _mm_loadu_si128(pal_buf.as_ptr() as *const __m128i) };
-    let mask = _mm_set1_epi8(7);
-    let mut idx_off = 0usize;
-    let mut dst_off = 0usize;
-    for _ in 0..h {
-        let row = &mut dst[dst_off..dst_off + w];
-        let row_idx = &idx[idx_off..idx_off + (w >> 1)];
-        let (idx16, rem16) = row_idx.as_chunks::<16>();
-        let mut x = 0usize;
-        for c in idx16.iter() {
-            let packed = unsafe { _mm_loadu_si128(c.as_ptr() as *const __m128i) };
-            let lo_idx = _mm_and_si128(packed, mask);
-            let hi_idx = _mm_and_si128(_mm_srli_epi16::<4>(packed), mask);
-            let lo = _mm_shuffle_epi8(pal_v, lo_idx);
-            let hi = _mm_shuffle_epi8(pal_v, hi_idx);
-            unsafe {
-                _mm_storeu_si128(
-                    row[x..].as_mut_ptr() as *mut __m128i,
-                    _mm_unpacklo_epi8(lo, hi),
-                );
-                _mm_storeu_si128(
-                    row[x + 16..].as_mut_ptr() as *mut __m128i,
-                    _mm_unpackhi_epi8(lo, hi),
-                );
-            }
-            x += 32;
-        }
-
-        let (idx8, rem) = rem16.as_chunks::<8>();
-        for c in idx8.iter() {
-            let packed = unsafe { _mm_loadl_epi64(c.as_ptr() as *const __m128i) };
-            let lo_idx = _mm_and_si128(packed, mask);
-            let hi_idx = _mm_and_si128(_mm_srli_epi16::<4>(packed), mask);
-            let lo = _mm_shuffle_epi8(pal_v, lo_idx);
-            let hi = _mm_shuffle_epi8(pal_v, hi_idx);
-            unsafe {
-                _mm_storeu_si128(
-                    row[x..].as_mut_ptr() as *mut __m128i,
-                    _mm_unpacklo_epi8(lo, hi),
-                );
-            }
-            x += 16;
-        }
-
-        for &i in rem {
-            row[x] = pal[(i & 7) as usize];
-            row[x + 1] = pal[(i >> 4) as usize];
-            x += 2;
-        }
-        idx_off += w >> 1;
-        dst_off += stride;
-    }
-}
-
 #[inline]
 #[target_feature(enable = "avx2")]
 fn avg_pred_8bpc_avx2(dst: &mut [u8], stride: usize, tmp: &[u8], w: usize, h: usize) {
@@ -253,7 +183,7 @@ fn store_i16x16_u8_fixed(a: &mut [u8; 16], v: __m256i) {
         let lo = _mm256_castsi256_si128(v);
         let hi = _mm256_extracti128_si256::<1>(v);
         let packed = _mm_packus_epi16(lo, hi);
-        _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, packed);
+        _mm_storeu_si128(a.as_mut_ptr().cast(), packed);
     }
 }
 
@@ -688,7 +618,7 @@ fn load_u8x16_fixed(a: &[u8; 16]) -> __m128i {
 
 #[inline(always)]
 fn store_u8x16_fixed(a: &mut [u8; 16], v: __m128i) {
-    unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, v) };
+    unsafe { _mm_storeu_si128(a.as_mut_ptr().cast(), v) };
 }
 
 /// Horizontal sum of all bytes in `s` (each lane widened to u32).
@@ -798,7 +728,7 @@ fn load_u8x8_i16_fixed(a: &[u8; 8]) -> __m128i {
 #[inline(always)]
 fn store_i16x8_u8_fixed(a: &mut [u8; 8], v: __m128i) {
     let packed = unsafe { _mm_packus_epi16(v, _mm_setzero_si128()) };
-    unsafe { _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, packed) };
+    unsafe { _mm_storel_epi64(a.as_mut_ptr().cast(), packed) };
 }
 
 #[target_feature(enable = "avx2")]
@@ -887,9 +817,10 @@ fn load8_u8_i32_rev_avx2(a: &[u8; 8]) -> __m256i {
     unsafe { _mm256_cvtepu8_epi32(_mm_shuffle_epi8(v, mask)) }
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "avx2")]
 fn widen8_at_avx2<const LO: i32>(v: __m128i) -> __m256i {
-    unsafe { _mm256_cvtepu8_epi32(_mm_srli_si128(v, LO)) }
+    _mm256_cvtepu8_epi32(_mm_srli_si128(v, LO))
 }
 
 /// Apply the 4-tap directional filter to one 8-lane AVX2 vector.
@@ -925,7 +856,7 @@ fn store_i32x8_u8_fixed(a: &mut [u8; 8], v: __m256i) {
         let hi = _mm256_extracti128_si256::<1>(v);
         let packed16 = _mm_packus_epi32(lo, hi);
         let packed8 = _mm_packus_epi16(packed16, _mm_setzero_si128());
-        _mm_storel_epi64(a.as_mut_ptr() as *mut __m128i, packed8);
+        _mm_storel_epi64(a.as_mut_ptr().cast(), packed8);
     }
 }
 
@@ -941,7 +872,7 @@ fn store_i32x8x2_u8_fixed(a: &mut [u8; 16], lo8: __m256i, hi8: __m256i) {
             _mm256_extracti128_si256::<1>(hi8),
         );
         let packed = _mm_packus_epi16(lo16, hi16);
-        _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, packed);
+        _mm_storeu_si128(a.as_mut_ptr().cast(), packed);
     }
 }
 

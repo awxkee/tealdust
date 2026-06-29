@@ -136,10 +136,14 @@ where
                 bh,
             );
         } else {
-            crate::ipred::pal_pred(
-                &mut recon.dst_y[dst_off..],
+            let dst16 = BD::Pixel::try_as_u16_slice_mut(&mut recon.dst_y)
+                .expect("HBD palette prediction requires u16 storage");
+            let pal16 = BD::Pixel::try_as_u16_slice(&pal)
+                .expect("HBD palette prediction requires a u16 palette");
+            crate::ipred_dispatch::pal_pred_hbd(
+                &mut dst16[dst_off..],
                 stride,
-                &pal,
+                pal16,
                 &recon.scratch.pal_idx_y[..],
                 bw,
                 bh,

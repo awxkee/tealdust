@@ -23,7 +23,7 @@ pub enum InloopFilterType {
     None = 0,
     Deblock = 1,
     Cdef = 2,
-    Restoration = 4,
+    Ccso = 4,
     Wiener = 8,
     Gdf = 16,
     #[default]

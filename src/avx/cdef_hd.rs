@@ -581,7 +581,7 @@ fn cdef_filter_block_hbd_avx2_shape_dispatch<const W: usize, const H: usize>(
             pri_tap,
             dir,
         ),
-        (false, false) => return,
+        (false, false) => (),
     }
 }
 

@@ -897,6 +897,74 @@ pub(crate) fn gdf_add_run_8bpc(dst: &mut [u8], err: &[i8], scale: i32, n: usize)
     unsafe { resolve_gdf_add()(dst, err, scale, n) };
 }
 
+#[inline]
+fn gdf_bitdepth_from_max(bitdepth_max: i32) -> i32 {
+    if bitdepth_max <= 0xff {
+        8
+    } else if bitdepth_max <= 0x3ff {
+        10
+    } else {
+        12
+    }
+}
+
+#[inline]
+pub(crate) fn gdf_add_run_hbd_scalar(
+    dst: &mut [u16],
+    err: &[i8],
+    scale: i32,
+    n: usize,
+    bitdepth_max: i32,
+) {
+    let bitdepth = gdf_bitdepth_from_max(bitdepth_max);
+    let shift = (12 - bitdepth) as u32;
+    let rnd = if shift == 0 { 0 } else { 1 << (shift - 1) };
+    for (d, &err) in dst[..n].iter_mut().zip(&err[..n]) {
+        let diff = err as i32 * scale;
+        let mag = (diff.abs() + rnd) >> shift;
+        let adj = if diff < 0 { -mag } else { mag };
+        *d = (*d as i32 + adj).clamp(0, bitdepth_max) as u16;
+    }
+}
+
+pub(crate) type GdfAddHbdFn = unsafe fn(&mut [u16], &[i8], i32, usize, i32);
+
+static GDF_ADD_HBD: OnceLock<GdfAddHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_gdf_add_hbd() -> GdfAddHbdFn {
+    *GDF_ADD_HBD.get_or_init(|| {
+        let mut _f = gdf_add_run_hbd_scalar as GdfAddHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::gdf_add_run_hbd_neon as GdfAddHbdFn;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::gdf_add_run_hbd_avx2 as GdfAddHbdFn;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+pub(crate) fn gdf_add_run_hbd(
+    dst: &mut [u16],
+    err: &[i8],
+    scale: i32,
+    n: usize,
+    bitdepth_max: i32,
+) {
+    if n == 0 || scale == 0 {
+        return;
+    }
+    // SAFETY: the resolver only selects target-feature implementations when
+    // the CPU supports them; otherwise it keeps the scalar implementation.
+    unsafe { resolve_gdf_add_hbd()(dst, err, scale, n, bitdepth_max) };
+}
+
 pub(crate) type GdfGradFn = unsafe fn(
     &mut [[u16; 4]],
     usize,
@@ -905,6 +973,19 @@ pub(crate) type GdfGradFn = unsafe fn(
     [&[u8]; 2],
     [&[u8]; 2],
     [&[u8]; 2],
+    usize,
+    i32,
+    u32,
+);
+
+pub(crate) type GdfGradHbdFn = unsafe fn(
+    &mut [[u16; 4]],
+    usize,
+    usize,
+    usize,
+    [&[u16]; 2],
+    [&[u16]; 2],
+    [&[u16]; 2],
     usize,
     i32,
     u32,
@@ -931,6 +1012,42 @@ pub(crate) fn gdf_gradient_group_scalar(
         let brow: &[u8; 8] = center_rows[y][bcol..bcol + 8].try_into().unwrap();
         let arow: &[u8; 8] = a_rows[y][acol..acol + 8].try_into().unwrap();
         let crow: &[u8; 8] = c_rows[y][ccol..ccol + 8].try_into().unwrap();
+        for (((acc, &b), &a), &c) in acc.iter_mut().zip(brow).zip(arow).zip(crow) {
+            let b = (b as i32) >> shift;
+            let a = (a as i32) >> shift;
+            let c = (c as i32) >> shift;
+            *acc += (b + b - a - c).abs();
+        }
+    }
+    for (cell, pair) in dst[base_cell..base_cell + ncells]
+        .iter_mut()
+        .zip(acc.as_chunks::<2>().0.iter())
+    {
+        cell[d] = (pair[0] + pair[1]) as u16;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gdf_gradient_group_hbd_scalar(
+    dst: &mut [[u16; 4]],
+    d: usize,
+    base_cell: usize,
+    ncells: usize,
+    center_rows: [&[u16]; 2],
+    a_rows: [&[u16]; 2],
+    c_rows: [&[u16]; 2],
+    col0: usize,
+    dx: i32,
+    shift: u32,
+) {
+    let mut acc = [0i32; 8];
+    for y in 0..2 {
+        let bcol = col0 - 1;
+        let acol = (bcol as i32 - dx) as usize;
+        let ccol = (bcol as i32 + dx) as usize;
+        let brow: &[u16; 8] = center_rows[y][bcol..bcol + 8].try_into().unwrap();
+        let arow: &[u16; 8] = a_rows[y][acol..acol + 8].try_into().unwrap();
+        let crow: &[u16; 8] = c_rows[y][ccol..ccol + 8].try_into().unwrap();
         for (((acc, &b), &a), &c) in acc.iter_mut().zip(brow).zip(arow).zip(crow) {
             let b = (b as i32) >> shift;
             let a = (a as i32) >> shift;
@@ -990,6 +1107,58 @@ pub(crate) fn gdf_gradient_group(
     // SAFETY: see `avg_row_8bpc`.
     unsafe {
         resolve_gdf_grad()(
+            dst,
+            d,
+            base_cell,
+            ncells,
+            center_rows,
+            a_rows,
+            c_rows,
+            col0,
+            dx,
+            shift,
+        )
+    };
+}
+
+static GDF_GRAD_HBD: OnceLock<GdfGradHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_gdf_grad_hbd() -> GdfGradHbdFn {
+    *GDF_GRAD_HBD.get_or_init(|| {
+        let mut _f = gdf_gradient_group_hbd_scalar as GdfGradHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::gdf_gradient_group_hbd_neon as GdfGradHbdFn;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::gdf_gradient_group_hbd_avx2 as GdfGradHbdFn;
+            }
+        }
+        _f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn gdf_gradient_group_hbd(
+    dst: &mut [[u16; 4]],
+    d: usize,
+    base_cell: usize,
+    ncells: usize,
+    center_rows: [&[u16]; 2],
+    a_rows: [&[u16]; 2],
+    c_rows: [&[u16]; 2],
+    col0: usize,
+    dx: i32,
+    shift: u32,
+) {
+    // SAFETY: the resolver only selects target-feature implementations when
+    // the CPU supports them; otherwise it keeps the scalar implementation.
+    unsafe {
+        resolve_gdf_grad_hbd()(
             dst,
             d,
             base_cell,

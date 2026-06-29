@@ -1044,16 +1044,21 @@ pub(crate) fn warp_affine_plane_8bpc<BD: crate::pixel::BitDepth>(
                     dst8, dst_stride, src8, src_stride, src_off, &abcd, mx, my,
                 );
             } else {
-                crate::mc::warp_affine_8x8(
-                    bd,
-                    &mut dst[dst_sub..],
+                // SAFETY by type convention: HBD decode uses u16 pixel storage.
+                let dst16 = BD::Pixel::try_as_u16_slice_mut(&mut dst[dst_sub..])
+                    .expect("HBD warp destination must be u16-backed");
+                let src16 =
+                    BD::Pixel::try_as_u16_slice(src).expect("HBD warp source must be u16-backed");
+                crate::mc_dispatch::warp_affine_8x8_hbd(
+                    dst16,
                     dst_stride,
-                    src,
+                    src16,
                     src_stride,
                     src_off,
                     &abcd,
                     mx,
                     my,
+                    bd.bitdepth(),
                 );
             }
             x += 8;
@@ -1319,16 +1324,19 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                     my,
                 );
             } else {
-                crate::mc::warp_affine_8x8t(
-                    bd,
+                // SAFETY by type convention: HBD decode uses u16 pixel storage.
+                let src16 =
+                    BD::Pixel::try_as_u16_slice(src).expect("HBD warp source must be u16-backed");
+                crate::mc_dispatch::warp_affine_8x8t_hbd(
                     &mut tmp[dst_sub..],
                     tmp_stride,
-                    src,
+                    src16,
                     src_stride,
                     src_off,
                     &abcd,
                     mx,
                     my,
+                    bd.bitdepth(),
                 );
             }
             x += 8;

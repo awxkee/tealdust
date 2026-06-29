@@ -36,17 +36,19 @@ mod deblocking;
 mod filmgrain;
 mod filter;
 mod filter_hd;
-mod inter;
-mod inter_hd;
 mod ipred;
 mod ipred_hd;
 mod itx;
 mod looprestoration;
 mod looprestoration_hd;
+mod mc;
+mod mc_hbd;
 #[cfg(target_arch = "x86_64")]
 mod msac;
 #[cfg(target_arch = "x86_64")]
 mod msac512;
+mod pal;
+mod refmvs;
 mod stx;
 
 pub(crate) use itx::*;
@@ -61,8 +63,14 @@ pub(crate) use cdef_hd::{
     cdef_filter_block_4x4_hbd_avx2, cdef_filter_block_4x8_hbd_avx2, cdef_filter_block_8x8_hbd_avx2,
     cdef_filter_block_hbd_avx2, cdef_find_dir_hbd_avx2, cdef_padding_hbd_avx2,
 };
-pub(crate) use cfl::{cfl_apply_420_8bpc_avx2, cfl_apply_422_8bpc_avx2, cfl_apply_444_8bpc_avx2};
-pub(crate) use cfl_hd::{cfl_apply_420_hbd_avx2, cfl_apply_422_hbd_avx2, cfl_apply_444_hbd_avx2};
+pub(crate) use cfl::{
+    cfl_alpha_accum_8bpc_avx2, cfl_apply_420_8bpc_avx2, cfl_apply_422_8bpc_avx2,
+    cfl_apply_444_8bpc_avx2, cfl_gen_y_row_8bpc_avx2, cfl_mhccp_pred_8bpc_avx2,
+};
+pub(crate) use cfl_hd::{
+    cfl_alpha_accum_hbd_avx2, cfl_apply_420_hbd_avx2, cfl_apply_422_hbd_avx2,
+    cfl_apply_444_hbd_avx2, cfl_gen_y_row_hbd_avx2, cfl_mhccp_pred_hbd_avx2,
+};
 pub(crate) use deblocking::{
     deblock_apply_8bpc_avx2, deblock_apply_hbd_avx2, deblock_h_sb64uv_8bpc_avx2,
     deblock_h_sb64y_8bpc_avx2, deblock_v_sb64uv_8bpc_avx2, deblock_v_sb64y_8bpc_avx2,
@@ -79,11 +87,10 @@ pub(crate) use filter::{
     residual_add_row_8bpc_avx2, row_clip_avx2, w_avg_row_8bpc_avx2,
 };
 pub(crate) use filter_hd::{
-    avg_row_hbd_avx2, blend_row_hbd_avx2, dc_add_row_hbd_avx2, mask_row_hbd_avx2,
-    morph_row_hbd_avx2, residual_add_row_hbd_avx2, w_avg_row_hbd_avx2,
+    avg_row_hbd_avx2, blend_row_hbd_avx2, dc_add_row_hbd_avx2, gdf_add_run_hbd_avx2,
+    gdf_gradient_group_hbd_avx2, mask_row_hbd_avx2, morph_row_hbd_avx2, residual_add_row_hbd_avx2,
+    w_avg_row_hbd_avx2,
 };
-pub(crate) use inter::*;
-pub(crate) use inter_hd::*;
 pub(crate) use ipred::*;
 pub(crate) use ipred_hd::*;
 pub(crate) use looprestoration::{
@@ -92,6 +99,10 @@ pub(crate) use looprestoration::{
 pub(crate) use looprestoration_hd::{
     ns_wiener_fir_run_hbd_avx2, ns_wiener_uv_fir_run_hbd_avx2, pc_wiener_fir_run_hbd_avx2,
 };
+pub(crate) use mc::*;
+pub(crate) use mc_hbd::*;
 pub(crate) use msac::MsacContextAvx;
 pub(crate) use msac512::MsacContextAvx512;
+pub(crate) use pal::{pal_pred_8bpc_avx2, pal_pred_hbd_avx2};
+pub(crate) use refmvs::{splat_mv_avx2, splat_warpmv_avx2};
 pub(crate) use stx::{stxfm4_8bpc_avx2, stxfm4_hbd_avx2, stxfm8_8bpc_avx2, stxfm8_hbd_avx2};

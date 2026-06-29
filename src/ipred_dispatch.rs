@@ -1036,6 +1036,52 @@ pub(crate) fn pal_pred_8bpc(
     call_ipred!(resolve_pal_pred_8bpc(), dst, stride, pal, idx, w, h);
 }
 
+pub(crate) type PalPredHbdFn =
+    unsafe fn(dst: &mut [u16], stride: usize, pal: &[u16], idx: &[u8], w: usize, h: usize);
+
+#[inline]
+pub(crate) fn pal_pred_hbd_scalar(
+    dst: &mut [u16],
+    stride: usize,
+    pal: &[u16],
+    idx: &[u8],
+    w: usize,
+    h: usize,
+) {
+    crate::ipred::pal_pred(dst, stride, pal, idx, w, h);
+}
+
+static PAL_PRED_HBD: OnceLock<PalPredHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_pal_pred_hbd() -> PalPredHbdFn {
+    *PAL_PRED_HBD.get_or_init(|| {
+        let mut _f: PalPredHbdFn = pal_pred_hbd_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::pal_pred_hbd_neon;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::pal_pred_hbd_avx2;
+            }
+        }
+        _f
+    })
+}
+
+pub(crate) fn pal_pred_hbd(
+    dst: &mut [u16],
+    stride: usize,
+    pal: &[u16],
+    idx: &[u8],
+    w: usize,
+    h: usize,
+) {
+    call_ipred!(resolve_pal_pred_hbd(), dst, stride, pal, idx, w, h);
+}
+
 pub(crate) type IntraPredHbdFn = unsafe fn(
     dst: &mut [u16],
     stride: usize,

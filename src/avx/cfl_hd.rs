@@ -29,7 +29,7 @@
 
 use core::arch::x86_64::*;
 
-use crate::cfl_dispatch::CflApplyHbd;
+use crate::cfl_dispatch::{CflAlphaAccumHbd, CflApplyHbd, CflMhccpPredHbd};
 const CFL_FLT_TYPE_VSTRIP: u32 = 1;
 const CFL_FLT_TYPE_GAUSS: u32 = 2;
 
@@ -1128,5 +1128,475 @@ pub(crate) fn cfl_apply_422_hbd_avx2(args: CflApplyHbd<'_>) {
         CFL_FLT_TYPE_VSTRIP => cfl_apply_422_hbd_avx2_impl::<CFL_FLT_TYPE_VSTRIP>(args),
         CFL_FLT_TYPE_GAUSS => cfl_apply_422_hbd_avx2_impl::<CFL_FLT_TYPE_GAUSS>(args),
         _ => cfl_apply_422_hbd_avx2_impl::<0>(args),
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn reduce_i32x8(v: __m256i) -> i32 {
+    let hi = _mm256_extracti128_si256::<1>(v);
+    let lo = _mm256_castsi256_si128(v);
+    let sum = _mm_add_epi32(lo, hi);
+    let sum = _mm_add_epi32(sum, _mm_shuffle_epi32::<0b1110_1110>(sum));
+    let sum = _mm_add_epi32(sum, _mm_shuffle_epi32::<0b0101_0101>(sum));
+    _mm_cvtsi128_si32(sum)
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) fn cfl_alpha_accum_hbd_avx2(args: CflAlphaAccumHbd<'_>) {
+    if args.sample_stride != 1 || args.len < 16 {
+        crate::cfl_dispatch::cfl_alpha_accum_hbd_scalar(args);
+        return;
+    }
+
+    let CflAlphaAccumHbd {
+        alpha,
+        samples,
+        sample_off,
+        sample_stride: _,
+        imat0,
+        imat1,
+        imat_off,
+        len,
+        a2sh,
+    } = args;
+
+    let ones = _mm256_set1_epi16(1);
+    let mut acc0 = _mm256_setzero_si256();
+    let mut acc1 = _mm256_setzero_si256();
+    let mut acc2 = _mm256_setzero_si256();
+    let mut processed = 0usize;
+
+    let (sample_chunks, sample_rem) = samples[sample_off..sample_off + len].as_chunks::<16>();
+    for (chunk_idx, s) in sample_chunks.iter().enumerate() {
+        let i = imat_off + chunk_idx * 16;
+        let v = load_u16x16(s);
+        let m0 = load_u16x16((&imat0[i..i + 16]).try_into().unwrap());
+        let m1 = load_u16x16((&imat1[i..i + 16]).try_into().unwrap());
+        acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(v, m0));
+        acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(v, m1));
+        acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(v, ones));
+    }
+    processed += sample_chunks.len() * 16;
+
+    alpha[0] += reduce_i32x8(acc0);
+    alpha[1] += reduce_i32x8(acc1);
+    alpha[2] += reduce_i32x8(acc2) << a2sh;
+
+    if !sample_rem.is_empty() {
+        crate::cfl_dispatch::cfl_alpha_accum_hbd_scalar(crate::cfl_dispatch::CflAlphaAccumHbd {
+            alpha,
+            samples,
+            sample_off: sample_off + processed,
+            sample_stride: 1,
+            imat0,
+            imat1,
+            imat_off: imat_off + processed,
+            len: sample_rem.len(),
+            a2sh,
+        });
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn mhccp_round_signed_shift16_hbd_avx2(v: __m256i) -> __m256i {
+    let zero = _mm256_setzero_si256();
+    let sign = _mm256_cmpgt_epi32(zero, v);
+    let mag = _mm256_srai_epi32::<16>(_mm256_add_epi32(
+        _mm256_abs_epi32(v),
+        _mm256_set1_epi32(1 << 15),
+    ));
+    _mm256_sub_epi32(_mm256_xor_si256(mag, sign), sign)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn mhccp_mul32_hbd_avx2(v: __m256i, alpha: i32) -> __m256i {
+    mhccp_round_signed_shift16_hbd_avx2(_mm256_mullo_epi32(v, _mm256_set1_epi32(alpha)))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn mhccp_sqrnd_hbd_avx2(v: __m256i, bitdepth: i32) -> __m256i {
+    _mm256_sra_epi32(
+        _mm256_add_epi32(
+            _mm256_mullo_epi32(v, v),
+            _mm256_set1_epi32(1 << (bitdepth - 1)),
+        ),
+        _mm_cvtsi32_si128(bitdepth),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn mhccp_pred_hbd_avx2(
+    v0: __m256i,
+    v1: __m256i,
+    alpha: [i32; 3],
+    a2v2: __m256i,
+    bitdepth: i32,
+) -> __m256i {
+    _mm256_add_epi32(
+        _mm256_add_epi32(
+            mhccp_mul32_hbd_avx2(v0, alpha[0]),
+            mhccp_mul32_hbd_avx2(mhccp_sqrnd_hbd_avx2(v1, bitdepth), alpha[1]),
+        ),
+        a2v2,
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn mhccp_load_u16x16_i32_halves(src: &[u16; 16]) -> (__m256i, __m256i) {
+    let v = load_u16x16(src);
+    (
+        _mm256_cvtepu16_epi32(_mm256_castsi256_si128(v)),
+        _mm256_cvtepu16_epi32(_mm256_extracti128_si256::<1>(v)),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_i32x16_u16_clip(a: &mut [u16; 16], lo: __m256i, hi: __m256i, max_v: __m256i) {
+    let zero = _mm256_setzero_si256();
+    let lo = _mm256_min_epi32(_mm256_max_epi32(lo, zero), max_v);
+    let hi = _mm256_min_epi32(_mm256_max_epi32(hi, zero), max_v);
+    let p = _mm256_permute4x64_epi64::<0xd8>(_mm256_packus_epi32(lo, hi));
+    unsafe { _mm256_storeu_si256(a.as_mut_ptr() as *mut __m256i, p) };
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn mhccp_pred_hbd_x16_avx2(
+    v0: &[u16; 16],
+    v1: &[u16; 16],
+    alpha: [i32; 3],
+    a2v2: __m256i,
+    bitdepth: i32,
+) -> (__m256i, __m256i) {
+    let (v0_lo, v0_hi) = mhccp_load_u16x16_i32_halves(v0);
+    let (v1_lo, v1_hi) = mhccp_load_u16x16_i32_halves(v1);
+    (
+        mhccp_pred_hbd_avx2(v0_lo, v1_lo, alpha, a2v2, bitdepth),
+        mhccp_pred_hbd_avx2(v0_hi, v1_hi, alpha, a2v2, bitdepth),
+    )
+}
+
+#[inline(always)]
+fn mhccp_pred_one_hbd(
+    alpha: &[i32; 3],
+    a2v2: i32,
+    v0: i32,
+    v1: i32,
+    bitdepth: i32,
+    bitdepth_max: i32,
+) -> u16 {
+    let sq = (v1 * v1 + (1 << (bitdepth - 1))) >> bitdepth;
+    (crate::ipred::mul32(alpha[0], v0, 16) + crate::ipred::mul32(alpha[1], sq, 16) + a2v2)
+        .clamp(0, bitdepth_max) as u16
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) fn cfl_mhccp_pred_hbd_avx2(args: CflMhccpPredHbd<'_>) {
+    if !crate::cfl_dispatch::cfl_mhccp_coeffs_fit_fast_mul(&args.alpha)
+        || args.w < 8
+        || args.bitdepth > 12
+    {
+        crate::cfl_dispatch::cfl_mhccp_pred_hbd_scalar(args);
+        return;
+    }
+
+    let CflMhccpPredHbd {
+        dst,
+        dst_stride,
+        src,
+        src_off,
+        src_top_stride,
+        w,
+        h,
+        alpha,
+        edge_flags,
+        dir,
+        bitdepth,
+        bitdepth_max,
+    } = args;
+    let has_t = edge_flags & (1 << 2) != 0;
+    let has_l = edge_flags & (1 << 3) != 0;
+    let dir_t = dir == crate::levels::CflMhDir::Top;
+    let dir_l = dir == crate::levels::CflMhDir::Left;
+    let n_top = if has_t { 1 + dir_t as usize } else { 0 };
+    let n_left = if has_l { 1 + dir_l as usize } else { 0 };
+    let left_off = src_off + 64 * 64 + n_left * n_top;
+    let mid = 1 << (bitdepth - 1);
+    let a2v2_scalar = crate::ipred::mul32(alpha[2], mid, 16);
+    let a2v2 = _mm256_set1_epi32(a2v2_scalar);
+    let max_v = _mm256_set1_epi32(bitdepth_max);
+
+    let mut sp = src_off;
+    let mut y = 0usize;
+    if dir_t && has_t && y < h {
+        let dst_row = &mut dst[..w];
+        let (dst16, r16) = dst_row.as_chunks_mut::<16>();
+        let prev = sp - src_top_stride;
+        for (i, chunk) in dst16.iter_mut().enumerate() {
+            let x = i * 16;
+            let (lo, hi) = mhccp_pred_hbd_x16_avx2(
+                (&src[prev + x..prev + x + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+                bitdepth,
+            );
+            store_i32x16_u16_clip(chunk, lo, hi, max_v);
+        }
+        let done16 = dst16.len() * 16;
+        let (dst8, dst_tail) = r16.as_chunks_mut::<8>();
+        for (i, chunk) in dst8.iter_mut().enumerate() {
+            let x = done16 + i * 8;
+            let out = mhccp_pred_hbd_avx2(
+                load_u16x8_i32((&src[prev + x..prev + x + 8]).try_into().unwrap()),
+                load_u16x8_i32((&src[sp + x..sp + x + 8]).try_into().unwrap()),
+                alpha,
+                a2v2,
+                bitdepth,
+            );
+            store_i32x8_u16_clip(chunk, out, max_v);
+        }
+        let done = done16 + dst8.len() * 8;
+        for (x, d) in (done..w).zip(dst_tail.iter_mut()) {
+            *d = mhccp_pred_one_hbd(
+                &alpha,
+                a2v2_scalar,
+                src[prev + x] as i32,
+                src[sp + x] as i32,
+                bitdepth,
+                bitdepth_max,
+            );
+        }
+        sp += w;
+        y = 1;
+    }
+
+    for (row_y, dst_row) in dst.chunks_mut(dst_stride).take(h).enumerate().skip(y) {
+        let dst_row = &mut dst_row[..w];
+        let mut x0 = 0usize;
+        if dir_l {
+            let v0 = if has_l {
+                src[left_off + row_y * n_left + 1] as i32
+            } else {
+                src[sp] as i32
+            };
+            dst_row[0] = mhccp_pred_one_hbd(
+                &alpha,
+                a2v2_scalar,
+                v0,
+                src[sp] as i32,
+                bitdepth,
+                bitdepth_max,
+            );
+            x0 = 1;
+        }
+
+        let (dst16, r16) = dst_row[x0..].as_chunks_mut::<16>();
+        for (i, chunk) in dst16.iter_mut().enumerate() {
+            let x = x0 + i * 16;
+            let v0_off = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x - 1
+            } else {
+                sp + x
+            };
+            let (lo, hi) = mhccp_pred_hbd_x16_avx2(
+                (&src[v0_off..v0_off + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+                bitdepth,
+            );
+            store_i32x16_u16_clip(chunk, lo, hi, max_v);
+        }
+        let done16 = x0 + dst16.len() * 16;
+        let (dst8, dst_tail) = r16.as_chunks_mut::<8>();
+        for (i, chunk) in dst8.iter_mut().enumerate() {
+            let x = done16 + i * 8;
+            let v0_off = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x - 1
+            } else {
+                sp + x
+            };
+            let out = mhccp_pred_hbd_avx2(
+                load_u16x8_i32((&src[v0_off..v0_off + 8]).try_into().unwrap()),
+                load_u16x8_i32((&src[sp + x..sp + x + 8]).try_into().unwrap()),
+                alpha,
+                a2v2,
+                bitdepth,
+            );
+            store_i32x8_u16_clip(chunk, out, max_v);
+        }
+        let done = done16 + dst8.len() * 8;
+        for (x, d) in (done..w).zip(dst_tail.iter_mut()) {
+            let v0_idx = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x.saturating_sub(1)
+            } else {
+                sp + x
+            };
+            *d = mhccp_pred_one_hbd(
+                &alpha,
+                a2v2_scalar,
+                src[v0_idx] as i32,
+                src[sp + x] as i32,
+                bitdepth,
+                bitdepth_max,
+            );
+        }
+        sp += w;
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gen_y8_hbd_i32<const FILTER: i32>(
+    src: &[u16],
+    src_off: usize,
+    top: &[u16],
+    top_off: usize,
+    bottom_offset: usize,
+    x: usize,
+) -> __m256i {
+    let xl = x << 1;
+    if FILTER == 1 {
+        let left_w = _mm256_setr_epi16(1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0);
+        let center_right_w = _mm256_setr_epi16(2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1);
+        let cur_left = load_u16x16(
+            src[src_off + xl - 1..src_off + xl - 1 + 16]
+                .try_into()
+                .unwrap(),
+        );
+        let cur_center = load_u16x16(src[src_off + xl..src_off + xl + 16].try_into().unwrap());
+        let bot_left = load_u16x16(
+            src[src_off + bottom_offset + xl - 1..src_off + bottom_offset + xl - 1 + 16]
+                .try_into()
+                .unwrap(),
+        );
+        let bot_center = load_u16x16(
+            src[src_off + bottom_offset + xl..src_off + bottom_offset + xl + 16]
+                .try_into()
+                .unwrap(),
+        );
+        let cur = _mm256_add_epi32(
+            _mm256_madd_epi16(cur_left, left_w),
+            _mm256_madd_epi16(cur_center, center_right_w),
+        );
+        let bot = _mm256_add_epi32(
+            _mm256_madd_epi16(bot_left, left_w),
+            _mm256_madd_epi16(bot_center, center_right_w),
+        );
+        _mm256_srai_epi32::<3>(_mm256_add_epi32(cur, bot))
+    } else if FILTER == 2 {
+        let left_w = _mm256_setr_epi16(1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0);
+        let center_right_w = _mm256_setr_epi16(4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1, 4, 1);
+        let center_w = left_w;
+        let cur_left = load_u16x16(
+            src[src_off + xl - 1..src_off + xl - 1 + 16]
+                .try_into()
+                .unwrap(),
+        );
+        let cur_center = load_u16x16(src[src_off + xl..src_off + xl + 16].try_into().unwrap());
+        let top_c = load_u16x16(top[top_off + xl..top_off + xl + 16].try_into().unwrap());
+        let bot_c = load_u16x16(
+            src[src_off + bottom_offset + xl..src_off + bottom_offset + xl + 16]
+                .try_into()
+                .unwrap(),
+        );
+        let cur = _mm256_add_epi32(
+            _mm256_madd_epi16(cur_left, left_w),
+            _mm256_madd_epi16(cur_center, center_right_w),
+        );
+        let tb = _mm256_add_epi32(
+            _mm256_madd_epi16(top_c, center_w),
+            _mm256_madd_epi16(bot_c, center_w),
+        );
+        _mm256_srai_epi32::<3>(_mm256_add_epi32(cur, tb))
+    } else {
+        let ones = _mm256_set1_epi16(1);
+        let cur = load_u16x16(src[src_off + xl..src_off + xl + 16].try_into().unwrap());
+        let bot = load_u16x16(
+            src[src_off + bottom_offset + xl..src_off + bottom_offset + xl + 16]
+                .try_into()
+                .unwrap(),
+        );
+        _mm256_srai_epi32::<2>(_mm256_add_epi32(
+            _mm256_madd_epi16(cur, ones),
+            _mm256_madd_epi16(bot, ones),
+        ))
+    }
+}
+
+#[target_feature(enable = "avx2")]
+fn cfl_gen_y_row_hbd_avx2_impl<const FILTER: i32>(args: crate::cfl_dispatch::CflGenYRowHbd<'_>) {
+    let crate::cfl_dispatch::CflGenYRowHbd {
+        dst,
+        src,
+        src_off,
+        top,
+        top_off,
+        bottom_offset,
+        n_left,
+        filter_type: _,
+    } = args;
+
+    let mut processed = 0usize;
+    if FILTER != 0 && n_left == 0 && !dst.is_empty() {
+        crate::cfl_dispatch::cfl_gen_y_row_hbd_scalar(crate::cfl_dispatch::CflGenYRowHbd {
+            dst: &mut dst[..1],
+            src,
+            src_off,
+            top,
+            top_off,
+            bottom_offset,
+            n_left,
+            filter_type: FILTER,
+        });
+        processed = 1;
+    }
+
+    let max_v = _mm256_set1_epi32(u16::MAX as i32);
+    let (chunks, rem) = dst[processed..].as_chunks_mut::<8>();
+    for (chunk_idx, chunk) in chunks.iter_mut().enumerate() {
+        let x = n_left + processed + chunk_idx * 8;
+        store_i32x8_u16_clip(
+            chunk,
+            gen_y8_hbd_i32::<FILTER>(src, src_off, top, top_off, bottom_offset, x),
+            max_v,
+        );
+    }
+    processed += chunks.len() * 8;
+
+    if !rem.is_empty() {
+        crate::cfl_dispatch::cfl_gen_y_row_hbd_scalar(crate::cfl_dispatch::CflGenYRowHbd {
+            dst: rem,
+            src,
+            src_off,
+            top,
+            top_off,
+            bottom_offset,
+            n_left: n_left + processed,
+            filter_type: FILTER,
+        });
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) fn cfl_gen_y_row_hbd_avx2(args: crate::cfl_dispatch::CflGenYRowHbd<'_>) {
+    match args.filter_type {
+        1 => cfl_gen_y_row_hbd_avx2_impl::<1>(args),
+        2 => cfl_gen_y_row_hbd_avx2_impl::<2>(args),
+        _ => cfl_gen_y_row_hbd_avx2_impl::<0>(args),
     }
 }

@@ -441,3 +441,96 @@ pub(crate) unsafe fn morph_row_hbd_neon(
         *d = ((alpha * (*d as i32) + beta) >> 8).clamp(0, bitdepth_max) as u16;
     }
 }
+
+#[inline]
+fn gdf_bitdepth_from_max(bitdepth_max: i32) -> i32 {
+    if bitdepth_max <= 0xff {
+        8
+    } else if bitdepth_max <= 0x3ff {
+        10
+    } else {
+        12
+    }
+}
+
+/// High-bit-depth GDF residual add.
+///
+/// Matches dav2d/AVM scalar scaling: 10-bit residuals are shifted by 2 on add,
+/// while 12-bit residuals are used at full precision.
+#[target_feature(enable = "neon")]
+pub(crate) fn gdf_add_run_hbd_neon(
+    dst: &mut [u16],
+    err: &[i8],
+    scale: i32,
+    n: usize,
+    bitdepth_max: i32,
+) {
+    let bitdepth = gdf_bitdepth_from_max(bitdepth_max);
+    let shift = 12 - bitdepth;
+    let sc = vdupq_n_s16(scale as i16);
+    let rnd = vdupq_n_s16(if shift == 0 { 0 } else { 1 << (shift - 1) });
+    let nsh = vdupq_n_s16(-(shift as i16));
+    let zero = vdupq_n_s16(0);
+    let max_v = vdupq_n_s16(bitdepth_max as i16);
+    let adj = |e: int16x8_t| {
+        let diff = vmulq_s16(e, sc);
+        let mag = vshlq_s16(vaddq_s16(vabsq_s16(diff), rnd), nsh);
+        vbslq_s16(vcltq_s16(diff, zero), vnegq_s16(mag), mag)
+    };
+    let clip = |v: int16x8_t| vreinterpretq_u16_s16(vminq_s16(vmaxq_s16(v, zero), max_v));
+
+    let (d8, tail_dst) = dst[..n].as_chunks_mut::<8>();
+    let (e8, tail_err) = err[..n].as_chunks::<8>();
+    for (d, e) in d8.iter_mut().zip(e8) {
+        let d0 = vreinterpretq_s16_u16(unsafe { vld1q_u16(d.as_ptr()) });
+        let e0 = unsafe { vmovl_s8(vld1_s8(e.as_ptr())) };
+        unsafe { vst1q_u16(d.as_mut_ptr(), clip(vaddq_s16(d0, adj(e0)))) };
+    }
+
+    let rnd_scalar = if shift == 0 { 0 } else { 1 << (shift - 1) };
+    for (d, &e) in tail_dst.iter_mut().zip(tail_err) {
+        let diff = e as i32 * scale;
+        let mag = (diff.abs() + rnd_scalar) >> shift;
+        let adj = if diff < 0 { -mag } else { mag };
+        *d = (*d as i32 + adj).clamp(0, bitdepth_max) as u16;
+    }
+}
+
+/// HBD GDF gradient: per-column `|2*b - a - c|` summed over two rows,
+/// then pair-reduced to up to four 2x2 output cells.
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "neon")]
+pub(crate) fn gdf_gradient_group_hbd_neon(
+    dst: &mut [[u16; 4]],
+    d: usize,
+    base_cell: usize,
+    ncells: usize,
+    center_rows: [&[u16]; 2],
+    a_rows: [&[u16]; 2],
+    c_rows: [&[u16]; 2],
+    col0: usize,
+    dx: i32,
+    shift: u32,
+) {
+    let mut acc = vdupq_n_s16(0);
+    let nsh = vdupq_n_s16(-(shift as i16));
+    for y in 0..2 {
+        let bcol = col0 - 1;
+        let acol = (bcol as i32 - dx) as usize;
+        let ccol = (bcol as i32 + dx) as usize;
+        let b = unsafe { vld1q_u16(center_rows[y].as_ptr().add(bcol)) };
+        let a = unsafe { vld1q_u16(a_rows[y].as_ptr().add(acol)) };
+        let c = unsafe { vld1q_u16(c_rows[y].as_ptr().add(ccol)) };
+        let b = vreinterpretq_s16_u16(vshlq_u16(b, nsh));
+        let a = vreinterpretq_s16_u16(vshlq_u16(a, nsh));
+        let c = vreinterpretq_s16_u16(vshlq_u16(c, nsh));
+        let t = vsubq_s16(vsubq_s16(vaddq_s16(b, b), a), c);
+        acc = vaddq_s16(acc, vabsq_s16(t));
+    }
+    let pair = vpaddq_s16(acc, acc);
+    let mut out = [0i16; 8];
+    unsafe { vst1q_s16(out.as_mut_ptr(), pair) };
+    for k in 0..ncells {
+        dst[base_cell + k][d] = out[k] as u16;
+    }
+}

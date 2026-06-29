@@ -201,6 +201,95 @@ pub(crate) fn compute_gradient_row_8bpc(
     }
 }
 
+/// Compute 2x2 high-bit-depth GDF gradient features for 4 directions.
+///
+/// Uses the same SIMD hook shape as the 8-bit GDF path for full groups,
+/// with scalar tail handling. The bit-depth normalization follows dav2d/AVM-style
+/// GDF: 10-bit keeps the sample precision, while 12-bit is down-shifted by 2
+/// before the gradient is formed.
+pub(crate) fn compute_gradient_row_hbd(
+    dst: &mut [[u16; 4]],
+    rows: &[&[u16]],
+    row_off: usize,
+    col_off: usize,
+    w: usize,
+    shift: u32,
+) {
+    let offs: [[i32; 2]; 4] = [[1, 0], [0, 1], [1, 1], [-1, 1]];
+    let ncells = (w + 2 + 1) >> 1;
+
+    // SIMD: process full groups of 4 output cells (= 8 input columns) per
+    // direction. HBD samples are normalized before the gradient is formed
+    // (10-bit: shift 0, 12-bit: shift 2), matching dav2d/AVM scalar GDF.
+    let full_groups = ncells / 4;
+    for g in 0..full_groups {
+        let base_cell = g * 4;
+        let col0 = col_off + base_cell * 2;
+        for d in 0..4 {
+            let dy = offs[d][0];
+            let dx = offs[d][1];
+            let center_rows = [rows[row_off - 1], rows[row_off]];
+            let a_rows = [
+                rows[(row_off as i32 - 1 - dy) as usize],
+                rows[(row_off as i32 - dy) as usize],
+            ];
+            let c_rows = [
+                rows[(row_off as i32 - 1 + dy) as usize],
+                rows[(row_off as i32 + dy) as usize],
+            ];
+            crate::filter::gdf_gradient_group_hbd(
+                dst,
+                d,
+                base_cell,
+                4,
+                center_rows,
+                a_rows,
+                c_rows,
+                col0,
+                dx,
+                shift,
+            );
+        }
+    }
+
+    // Scalar tail for the remaining < 4 cells.
+    let mut x1 = (full_groups * 4) * 2;
+    while x1 < w + 2 {
+        for d in 0..4 {
+            let mut grad = 0i32;
+            for x2 in 0..2usize {
+                let x = col_off + x1 + x2;
+                for y in 0..2 {
+                    let dy = offs[d][0];
+                    let dx = offs[d][1];
+                    let ry = row_off + y;
+                    let a = (rows[(ry as i32 - 1 - dy) as usize][(x as i32 - 1 - dx) as usize]
+                        as i32)
+                        >> shift;
+                    let b = (rows[ry - 1][x - 1] as i32) >> shift;
+                    let c = (rows[(ry as i32 - 1 + dy) as usize][(x as i32 - 1 + dx) as usize]
+                        as i32)
+                        >> shift;
+                    grad += (b * 2 - a - c).abs();
+                }
+            }
+            dst[x1 >> 1][d] = grad as u16;
+        }
+        x1 += 2;
+    }
+}
+
+#[inline]
+fn gdf_bitdepth_from_max(bitdepth_max: i32) -> i32 {
+    if bitdepth_max <= 0xff {
+        8
+    } else if bitdepth_max <= 0x3ff {
+        10
+    } else {
+        12
+    }
+}
+
 /// Compute PC-Wiener class LUT index from gradient features and skip mask.
 pub(crate) fn get_class_lut_idx_8bpc(
     rows: &[&[u8]],
@@ -297,6 +386,47 @@ pub(crate) fn gdf_add_8bpc(
                     &err[y * err_stride + x0..],
                     scale,
                     n,
+                );
+            }
+        }
+    }
+}
+
+pub(crate) fn gdf_add_hbd(
+    p: &mut [u16],
+    stride: usize,
+    err: &[i8],
+    err_stride: usize,
+    w: usize,
+    h: usize,
+    scale: i32,
+    ll_mask: &[[u16; 4]],
+    bitdepth_max: i32,
+) {
+    let bw = w >> 2;
+    for by in 0..h >> 2 {
+        let skip_mask = ll_mask[by][0];
+        let mut bx = 0usize;
+        while bx < bw {
+            if skip_mask & (1 << bx) != 0 {
+                bx += 1;
+                continue;
+            }
+            // Batch consecutive non-skipped 4x4 blocks into one run per row.
+            let bx_start = bx;
+            bx += 1;
+            while bx < bw && skip_mask & (1 << bx) == 0 {
+                bx += 1;
+            }
+            let x0 = bx_start << 2;
+            let n = (bx - bx_start) << 2;
+            for y in by * 4..by * 4 + 4 {
+                crate::filter::gdf_add_run_hbd(
+                    &mut p[y * stride + x0..],
+                    &err[y * err_stride + x0..],
+                    scale,
+                    n,
+                    bitdepth_max,
                 );
             }
         }
@@ -1554,6 +1684,221 @@ pub(crate) fn gdf_prep_8bpc(
     }
 }
 
+pub(crate) fn gdf_prep_hbd(
+    dst: &mut [i8],
+    dst_stride: usize,
+    p: &[u16],
+    p_off: usize,
+    stride: usize,
+    left: &[[u16; 6]],
+    lpf: &[u16],
+    lpf_off: usize,
+    lpf_bottom: &[u16],
+    lpf_bottom_off: usize,
+    w: usize,
+    h: usize,
+    ref_dst_idx: usize,
+    qp_idx: usize,
+    edges: u8,
+    bitdepth_max: i32,
+) {
+    let bitdepth = gdf_bitdepth_from_max(bitdepth_max);
+    let down_shift = if bitdepth == 12 { 2 } else { 0 };
+    let up_shift = if bitdepth == 8 { 2 } else { 0 };
+    let grad_shift = 4 - up_shift;
+    let up_scale = 1i32 << up_shift;
+
+    let mut row_buffers = [[0u16; REST_UNIT_STRIDE]; 13];
+    let mut ptrs: [usize; 13] = [0; 13];
+    let o = ROW_ORIGIN;
+
+    backup_row_hbd(&mut row_buffers[6], o, p, p_off, &left[0], 6, w, 6, edges);
+    ptrs[6] = 6;
+
+    if edges & LR_HAVE_TOP_INTEGRATED != 0 {
+        for n in 0..6 {
+            backup_row_lpf_hbd(
+                &mut row_buffers[n],
+                o,
+                lpf,
+                lpf_off + n * stride,
+                w,
+                6,
+                edges,
+            );
+            ptrs[n] = n;
+        }
+    } else if edges & LR_HAVE_TOP != 0 {
+        backup_row_lpf_hbd(&mut row_buffers[4], o, lpf, lpf_off, w, 6, edges);
+        ptrs[4] = 4;
+        backup_row_lpf_hbd(&mut row_buffers[5], o, lpf, lpf_off + stride, w, 6, edges);
+        ptrs[5] = 5;
+        ptrs[0] = 4;
+        ptrs[1] = 4;
+        ptrs[2] = 4;
+        ptrs[3] = 4;
+    } else {
+        for n in 0..6 {
+            ptrs[n] = 6;
+        }
+    }
+
+    let mut bak_idx = 7usize;
+    for y in 1..6 {
+        backup_row_hbd(
+            &mut row_buffers[bak_idx],
+            o,
+            p,
+            p_off + y * stride,
+            &left[y],
+            6,
+            w,
+            6,
+            edges,
+        );
+        ptrs[bak_idx] = bak_idx;
+        bak_idx += 1;
+    }
+
+    let alpha_base = ref_dst_idx * 528 + qp_idx * 88;
+    let weight_base = ref_dst_idx * 1584 + qp_idx * 264;
+    let bias_idx = ref_dst_idx * 6 + qp_idx;
+
+    let (error_lut_base, scale) = if ref_dst_idx == 0 {
+        (qp_idx * 4096, 8i32)
+    } else {
+        ((ref_dst_idx - 1) * 6000 + qp_idx * 1000, 5i32)
+    };
+
+    let mut grad = [[[0u16; 4]; GRADIENT_BUF_STRIDE]; 2];
+    {
+        let refs: [&[u16]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u16]);
+        compute_gradient_row_hbd(&mut grad[0], &refs, 6, o, w, down_shift);
+    }
+    let mut grad_bit: usize = 1;
+
+    for y in 0..h {
+        if y + 6 < h {
+            backup_row_hbd(
+                &mut row_buffers[bak_idx],
+                o,
+                p,
+                p_off + (y + 6) * stride,
+                &left[y + 6],
+                6,
+                w,
+                6,
+                edges,
+            );
+            ptrs[12] = bak_idx;
+        } else if edges & LR_HAVE_BOTTOM_INTEGRATED != 0 {
+            backup_row_lpf_hbd(
+                &mut row_buffers[bak_idx],
+                o,
+                p,
+                p_off + (y + 6) * stride,
+                w,
+                6,
+                edges,
+            );
+            ptrs[12] = bak_idx;
+        } else if y + 4 < h && edges & LR_HAVE_BOTTOM != 0 {
+            let offset_y = y + 6 - h;
+            backup_row_lpf_hbd(
+                &mut row_buffers[bak_idx],
+                o,
+                lpf_bottom,
+                lpf_bottom_off + offset_y * stride,
+                w,
+                6,
+                edges,
+            );
+            ptrs[12] = bak_idx;
+        } else {
+            ptrs[12] = ptrs[11];
+        }
+        bak_idx += 1;
+        if bak_idx == 13 {
+            bak_idx = 0;
+        }
+
+        if y & 1 == 0 {
+            let refs: [&[u16]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u16]);
+            compute_gradient_row_hbd(&mut grad[grad_bit], &refs, 8, o, w, down_shift);
+            grad_bit ^= 1;
+        }
+
+        let mut x1 = 0usize;
+        while x1 < w {
+            let mut grad_sums = [0i32; 4];
+            let hx = x1 >> 1;
+            for d in 0..4 {
+                grad_sums[d] = grad[0][hx][d] as i32
+                    + grad[0][hx + 1][d] as i32
+                    + grad[1][hx][d] as i32
+                    + grad[1][hx + 1][d] as i32;
+            }
+            let cls = ((grad_sums[0] <= grad_sums[1]) as usize)
+                | (((grad_sums[2] <= grad_sums[3]) as usize) << 1);
+
+            let mut shared_vals = [0i32; 3];
+            for idx in 0..3 {
+                shared_vals[idx] = GDF_BIAS[bias_idx][idx] as i32;
+            }
+            for d in 0..4 {
+                let k = d + 18;
+                let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
+                let v = imin(grad_sums[d] >> grad_shift, alpha);
+                for idx in 0..3 {
+                    shared_vals[idx] += v * GDF_WEIGHT[weight_base + idx * 88 + k * 4 + cls] as i32;
+                }
+            }
+
+            for x2 in 0..2 {
+                let x = x1 + x2;
+                let mut idx_vals = shared_vals;
+                let m = (row_buffers[ptrs[6]][o + x] as i32) >> down_shift;
+                for k in 0..18 {
+                    let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
+                    let dy = GDF_COORDS[k][0] as i32;
+                    let dx = GDF_COORDS[k][1] as i32;
+                    let a = (row_buffers[ptrs[(6 - dy) as usize]]
+                        [(o as i32 + x as i32 - dx) as usize] as i32)
+                        >> down_shift;
+                    let b = (row_buffers[ptrs[(6 + dy) as usize]]
+                        [(o as i32 + x as i32 + dx) as usize] as i32)
+                        >> down_shift;
+                    let above = iclip((a - m) * up_scale, -alpha, alpha);
+                    let below = iclip((b - m) * up_scale, -alpha, alpha);
+                    let v = iclip(above + below, -512, 511);
+                    for idx in 0..3 {
+                        idx_vals[idx] +=
+                            v * GDF_WEIGHT[weight_base + idx * 88 + k * 4 + cls] as i32;
+                    }
+                }
+
+                let mut full_idx = 0usize;
+                for idx in 0..3 {
+                    let sv = idx_vals[idx] * scale;
+                    let v = apply_sign((sv.abs() + (1 << 14)) >> 15, sv);
+                    let sub_idx = (iclip(v, -scale, scale - 1) + scale) as usize;
+                    full_idx = full_idx * (scale as usize * 2) + sub_idx;
+                }
+                if ref_dst_idx == 0 {
+                    dst[y * dst_stride + x] = GDF_INTRA_ERROR[error_lut_base + full_idx];
+                } else {
+                    dst[y * dst_stride + x] = GDF_INTER_ERROR[error_lut_base + full_idx];
+                }
+            }
+            x1 += 2;
+        }
+
+        for r in 0..12 {
+            ptrs[r] = ptrs[r + 1];
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub(crate) enum RestorationType {
@@ -2036,7 +2381,7 @@ fn lr_sbrow(
     let unit_size = 1 << unit_size_log2;
     let half_unit_size = unit_size >> 1;
 
-    let row_y = y + ((8 >> ss_ver) * (first_sby_in_tile_row != FirstSbInTileRow::None) as i32);
+    let row_y = y + ((8 >> ss_ver) * (y != 0) as i32);
     let shift_hor = 8 - ss_hor;
 
     let mut pre_lr_border = [[[0u8; 6]; 264]; 2];
@@ -3413,6 +3758,9 @@ pub(crate) fn ns_wiener_single_uv_hbd(
 
 pub(crate) struct LrContextHbd<'a> {
     pub(crate) restoration_p: &'a [FhRestorationPlane; 3],
+    pub(crate) gdf_qp_idx: i32,
+    pub(crate) gdf_scale: i32,
+    pub(crate) gdf_ref_dst_idx: i32,
     pub(crate) sb128: bool,
     pub(crate) cfl_ds_filter_index: i32,
     pub(crate) layout: PixelLayout,
@@ -3467,6 +3815,10 @@ fn lr_stripe_hbd(
         (64 - 8 * (first_sby_in_tile_row != FirstSbInTileRow::None) as i32) >> ss_ver,
         row_h - y,
     );
+
+    let ref_dst_idx = ctx.gdf_ref_dst_idx;
+    let qp_idx = ctx.gdf_qp_idx;
+    let gdf_scale = ctx.gdf_scale;
 
     let wiener_type: u8 = if ctx.inloop_filters & INLOOPFILTER_WIENER != 0 {
         lr.restoration_type
@@ -3530,6 +3882,7 @@ fn lr_stripe_hbd(
     let lstride_u = lstride.unsigned_abs();
     let stride_u = abs_stride;
 
+    let mut gdf_err = [0i8; 64 * 64];
     let mut left_idx = 0usize;
     let mut noskip_offset = 0usize;
     // by `stripe_h * stride` each iteration). The slice kernels index `p` with a
@@ -3559,7 +3912,10 @@ fn lr_stripe_hbd(
         let sb256_idx =
             ctx.sb256w as usize * ((((y << ss_ver) + inc) as usize) >> 8) + sb256x as usize;
 
-        let gdf_enabled = false;
+        let gdf_enabled = plane == 0
+            && ctx.inloop_filters & INLOOPFILTER_GDF != 0
+            && sb256_idx < ctx.mask.len()
+            && ctx.mask[sb256_idx].gdf[((((y + inc) >> 4) & 12) + sb64x_idx) as usize] != 0;
 
         let plane_u = plane as usize;
         let stripe_u = stripe_h as usize;
@@ -3581,7 +3937,31 @@ fn lr_stripe_hbd(
             None
         };
 
-        let _ = gdf_enabled;
+        // GDF prep: compute the per-pixel error into gdf_err before LR writes back.
+        if gdf_enabled {
+            let (top_slice, top_off): (&[u16], usize) = match cdef_top {
+                Some(off) => (&ctx.lr_cdef_line[plane_u], off),
+                None => (&ctx.lr_db_line[plane_u], lpf_off),
+            };
+            gdf_prep_hbd(
+                &mut gdf_err,
+                64,
+                &*p,
+                cur_off,
+                stride_u,
+                &left[left_idx..],
+                top_slice,
+                top_off,
+                &ctx.lr_db_line[plane_u],
+                lpf_off + 6 * stride_u,
+                w_u,
+                stripe_u,
+                ref_dst_idx as usize,
+                qp_idx as usize,
+                edges,
+                ctx.bitdepth_max,
+            );
+        }
 
         let y4 = (((y << ss_ver) & 255) >> 2) as usize;
 
@@ -3786,6 +4166,20 @@ fn lr_stripe_hbd(
             }
         }
 
+        if gdf_enabled {
+            gdf_add_hbd(
+                &mut p[cur_off..],
+                stride_u,
+                &gdf_err,
+                64,
+                w_u,
+                stripe_u,
+                gdf_scale,
+                ll_mask_buf,
+                ctx.bitdepth_max,
+            );
+        }
+
         edges &= !(LR_HAVE_BOTTOM_INTEGRATED | LR_HAVE_TOP_INTEGRATED);
         left_idx += stripe_h as usize;
         cur_off += stripe_u * stride_u;
@@ -3821,7 +4215,7 @@ fn lr_sbrow_hbd_inner(
     let unit_size = 1 << unit_size_log2;
     let half_unit_size = unit_size >> 1;
 
-    let row_y = y + ((8 >> ss_ver) * (first_sby_in_tile_row != FirstSbInTileRow::None) as i32);
+    let row_y = y + ((8 >> ss_ver) * (y != 0) as i32);
     let shift_hor = 8 - ss_hor;
 
     let mut pre_lr_border = [[[0u16; 6]; 264]; 2];

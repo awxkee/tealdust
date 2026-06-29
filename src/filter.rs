@@ -688,6 +688,18 @@ pub(crate) fn gdf_add_run(dst: &mut [u8], err: &[i8], scale: i32, n: usize) {
     crate::rowops_dispatch::gdf_add_run_8bpc(dst, err, scale, n);
 }
 
+/// High-bit-depth GDF residual add over a run of `n` consecutive pixels.
+#[inline]
+pub(crate) fn gdf_add_run_hbd(
+    dst: &mut [u16],
+    err: &[i8],
+    scale: i32,
+    n: usize,
+    bitdepth_max: i32,
+) {
+    crate::rowops_dispatch::gdf_add_run_hbd(dst, err, scale, n, bitdepth_max);
+}
+
 /// GDF gradient: accumulate per-column gradient into 8 lanes, then pair-reduce.
 #[allow(clippy::too_many_arguments)]
 #[inline]
@@ -704,6 +716,35 @@ pub(crate) fn gdf_gradient_group(
     shift: u32,
 ) {
     crate::rowops_dispatch::gdf_gradient_group(
+        dst,
+        d,
+        base_cell,
+        ncells,
+        center_rows,
+        a_rows,
+        c_rows,
+        col0,
+        dx,
+        shift,
+    );
+}
+
+/// High-bit-depth GDF gradient: accumulate per-column gradient into 8 lanes, then pair-reduce.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn gdf_gradient_group_hbd(
+    dst: &mut [[u16; 4]],
+    d: usize,
+    base_cell: usize,
+    ncells: usize,
+    center_rows: [&[u16]; 2],
+    a_rows: [&[u16]; 2],
+    c_rows: [&[u16]; 2],
+    col0: usize,
+    dx: i32,
+    shift: u32,
+) {
+    crate::rowops_dispatch::gdf_gradient_group_hbd(
         dst,
         d,
         base_cell,

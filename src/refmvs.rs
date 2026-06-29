@@ -27,6 +27,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use std::sync::OnceLock;
+
 use crate::headers::{WarpedMotionParams, WarpedMotionType};
 use crate::intops::{apply_sign, apply_sign64, iclip, iclip64to32, imax, imin, ulog2};
 use crate::levels::INVALID_MV;
@@ -2539,7 +2541,105 @@ pub(crate) fn refmvs_find(
     }
 }
 
+pub(crate) type SplatMvFn = unsafe fn(
+    &mut [Block],
+    &mut Block,
+    Option<&mut [TemporalBlock]>,
+    isize,
+    &TemporalBlock,
+    i32,
+    i32,
+);
+
+pub(crate) type SplatWarpMvFn = unsafe fn(
+    &mut [Block],
+    &mut Block,
+    Option<&mut [TemporalBlock]>,
+    isize,
+    &mut TemporalBlock,
+    i64,
+    i64,
+    &WarpedMotionParams,
+    i32,
+    i32,
+);
+
+static SPLAT_MV: OnceLock<SplatMvFn> = OnceLock::new();
+static SPLAT_WARPMV: OnceLock<SplatWarpMvFn> = OnceLock::new();
+
+#[inline]
+fn resolve_splat_mv() -> SplatMvFn {
+    *SPLAT_MV.get_or_init(|| {
+        let mut _f = splat_mv_scalar as SplatMvFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::splat_mv_neon as SplatMvFn;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::splat_mv_avx2 as SplatMvFn;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+fn resolve_splat_warpmv() -> SplatWarpMvFn {
+    *SPLAT_WARPMV.get_or_init(|| {
+        let mut _f = splat_warpmv_scalar as SplatWarpMvFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::splat_warpmv_neon as SplatWarpMvFn;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::splat_warpmv_avx2 as SplatWarpMvFn;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
 pub(crate) fn splat_mv(
+    s_dst: &mut [Block],
+    s_src: &mut Block,
+    t_dst: Option<&mut [TemporalBlock]>,
+    t_stride: isize,
+    t_src: &TemporalBlock,
+    bw4: i32,
+    bh4: i32,
+) {
+    // SAFETY: resolver only installs target-feature kernels after runtime checks.
+    unsafe { resolve_splat_mv()(s_dst, s_src, t_dst, t_stride, t_src, bw4, bh4) }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn splat_warpmv(
+    s_dst: &mut [Block],
+    s_src: &mut Block,
+    t_dst: Option<&mut [TemporalBlock]>,
+    t_stride: isize,
+    t_src: &mut TemporalBlock,
+    mvy: i64,
+    mvx: i64,
+    mat: &WarpedMotionParams,
+    bw4: i32,
+    bh4: i32,
+) {
+    // SAFETY: resolver only installs target-feature kernels after runtime checks.
+    unsafe {
+        resolve_splat_warpmv()(
+            s_dst, s_src, t_dst, t_stride, t_src, mvy, mvx, mat, bw4, bh4,
+        )
+    }
+}
+
+pub(crate) fn splat_mv_scalar(
     s_dst: &mut [Block],
     s_src: &mut Block,
     mut t_dst: Option<&mut [TemporalBlock]>,
@@ -3571,7 +3671,7 @@ pub(crate) fn save_tmvs(
     }
 }
 
-pub(crate) fn splat_warpmv(
+pub(crate) fn splat_warpmv_scalar(
     s_dst: &mut [Block],
     s_src: &mut Block,
     mut t_dst: Option<&mut [TemporalBlock]>,

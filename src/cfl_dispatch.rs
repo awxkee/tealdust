@@ -28,6 +28,8 @@
  */
 use std::sync::OnceLock;
 
+use crate::levels::CflMhDir;
+
 const CFL_FLT_TYPE_VSTRIP: u32 = 1;
 const CFL_FLT_TYPE_GAUSS: u32 = 2;
 
@@ -82,6 +84,98 @@ pub(crate) struct CflApplyHbd<'a> {
 
 pub(crate) type CflApplyFn = for<'a> unsafe fn(CflApply8<'a>);
 pub(crate) type CflApplyHbdFn = for<'a> unsafe fn(CflApplyHbd<'a>);
+
+pub(crate) struct CflMhccpPred8<'a> {
+    pub(crate) dst: &'a mut [u8],
+    pub(crate) dst_stride: usize,
+    pub(crate) src: &'a [u8],
+    pub(crate) src_off: usize,
+    pub(crate) src_top_stride: usize,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) alpha: [i32; 3],
+    pub(crate) edge_flags: i32,
+    pub(crate) dir: CflMhDir,
+}
+
+pub(crate) struct CflMhccpPredHbd<'a> {
+    pub(crate) dst: &'a mut [u16],
+    pub(crate) dst_stride: usize,
+    pub(crate) src: &'a [u16],
+    pub(crate) src_off: usize,
+    pub(crate) src_top_stride: usize,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) alpha: [i32; 3],
+    pub(crate) edge_flags: i32,
+    pub(crate) dir: CflMhDir,
+    pub(crate) bitdepth: i32,
+    pub(crate) bitdepth_max: i32,
+}
+
+pub(crate) struct CflGenYRow8<'a> {
+    pub(crate) dst: &'a mut [u8],
+    pub(crate) src: &'a [u8],
+    pub(crate) src_off: usize,
+    pub(crate) top: &'a [u8],
+    pub(crate) top_off: usize,
+    pub(crate) bottom_offset: usize,
+    pub(crate) n_left: usize,
+    pub(crate) filter_type: i32,
+}
+
+pub(crate) struct CflGenYRowHbd<'a> {
+    pub(crate) dst: &'a mut [u16],
+    pub(crate) src: &'a [u16],
+    pub(crate) src_off: usize,
+    pub(crate) top: &'a [u16],
+    pub(crate) top_off: usize,
+    pub(crate) bottom_offset: usize,
+    pub(crate) n_left: usize,
+    pub(crate) filter_type: i32,
+}
+
+pub(crate) struct CflAlphaAccum8<'a> {
+    pub(crate) alpha: &'a mut [i32; 3],
+    pub(crate) samples: &'a [u8],
+    pub(crate) sample_off: usize,
+    pub(crate) sample_stride: usize,
+    pub(crate) imat0: &'a [u16; crate::ipred::CFL_MHCCP_MAX_EDGE_SAMPLES],
+    pub(crate) imat1: &'a [u16; crate::ipred::CFL_MHCCP_MAX_EDGE_SAMPLES],
+    pub(crate) imat_off: usize,
+    pub(crate) len: usize,
+    pub(crate) a2sh: i32,
+}
+
+pub(crate) struct CflAlphaAccumHbd<'a> {
+    pub(crate) alpha: &'a mut [i32; 3],
+    pub(crate) samples: &'a [u16],
+    pub(crate) sample_off: usize,
+    pub(crate) sample_stride: usize,
+    pub(crate) imat0: &'a [u16; crate::ipred::CFL_MHCCP_MAX_EDGE_SAMPLES],
+    pub(crate) imat1: &'a [u16; crate::ipred::CFL_MHCCP_MAX_EDGE_SAMPLES],
+    pub(crate) imat_off: usize,
+    pub(crate) len: usize,
+    pub(crate) a2sh: i32,
+}
+
+pub(crate) type CflGenYRow8Fn = for<'a> unsafe fn(CflGenYRow8<'a>);
+pub(crate) type CflGenYRowHbdFn = for<'a> unsafe fn(CflGenYRowHbd<'a>);
+
+pub(crate) type CflAlphaAccum8Fn = for<'a> unsafe fn(CflAlphaAccum8<'a>);
+pub(crate) type CflAlphaAccumHbdFn = for<'a> unsafe fn(CflAlphaAccumHbd<'a>);
+
+pub(crate) type CflMhccpPred8Fn = for<'a> unsafe fn(CflMhccpPred8<'a>);
+pub(crate) type CflMhccpPredHbdFn = for<'a> unsafe fn(CflMhccpPredHbd<'a>);
+
+#[inline(always)]
+pub(crate) fn cfl_mhccp_coeffs_fit_fast_mul(alpha: &[i32; 3]) -> bool {
+    // For AV2 MHCCP predictors v0/sqrnd(v1) are bounded by the pixel max
+    // (255 for 8bpc, <=4095 for current HBD).  With |alpha| <= 65535 the
+    // scalar mul32(a, b, 16) never enters its operand-dropping path, so the SIMD
+    // `(a * b + sign-round) >> 16` path is exact.
+    alpha.iter().all(|&a| a.unsigned_abs() <= 65_535)
+}
 
 #[inline(always)]
 fn predict_one(dc: i32, alpha: i32, ac: i32) -> u8 {
@@ -814,6 +908,511 @@ pub(crate) fn cfl_apply_422_hbd_scalar(args: CflApplyHbd<'_>) {
     if do_v {
         pad_bottom_hbd(v, vrow0, cstride, w, h, ylim);
     }
+}
+
+#[inline(always)]
+fn gen_y_filter_8bpc(
+    src: &[u8],
+    src_off: usize,
+    top: &[u8],
+    top_off: usize,
+    bottom_offset: usize,
+    n_left: usize,
+    x: usize,
+    filter_type: i32,
+) -> u8 {
+    let c = x << 1;
+    let r = c + 1;
+    let l_idx = if n_left > 0 {
+        c - 1
+    } else {
+        (c as i32 - 1).max(0) as usize
+    };
+    match filter_type {
+        1 => {
+            ((src[src_off + l_idx] as u32
+                + 2 * src[src_off + c] as u32
+                + src[src_off + r] as u32
+                + src[src_off + bottom_offset + l_idx] as u32
+                + 2 * src[src_off + bottom_offset + c] as u32
+                + src[src_off + bottom_offset + r] as u32)
+                >> 3) as u8
+        }
+        2 => {
+            ((src[src_off + l_idx] as u32
+                + 4 * src[src_off + c] as u32
+                + src[src_off + r] as u32
+                + top[top_off + c] as u32
+                + src[src_off + bottom_offset + c] as u32)
+                >> 3) as u8
+        }
+        _ => {
+            ((src[src_off + c] as u32
+                + src[src_off + r] as u32
+                + src[src_off + bottom_offset + c] as u32
+                + src[src_off + bottom_offset + r] as u32)
+                >> 2) as u8
+        }
+    }
+}
+
+#[inline(always)]
+fn gen_y_filter_hbd(
+    src: &[u16],
+    src_off: usize,
+    top: &[u16],
+    top_off: usize,
+    bottom_offset: usize,
+    n_left: usize,
+    x: usize,
+    filter_type: i32,
+) -> u16 {
+    let c = x << 1;
+    let r = c + 1;
+    let l_idx = if n_left > 0 {
+        c - 1
+    } else {
+        (c as i32 - 1).max(0) as usize
+    };
+    match filter_type {
+        1 => {
+            ((src[src_off + l_idx] as u32
+                + 2 * src[src_off + c] as u32
+                + src[src_off + r] as u32
+                + src[src_off + bottom_offset + l_idx] as u32
+                + 2 * src[src_off + bottom_offset + c] as u32
+                + src[src_off + bottom_offset + r] as u32)
+                >> 3) as u16
+        }
+        2 => {
+            ((src[src_off + l_idx] as u32
+                + 4 * src[src_off + c] as u32
+                + src[src_off + r] as u32
+                + top[top_off + c] as u32
+                + src[src_off + bottom_offset + c] as u32)
+                >> 3) as u16
+        }
+        _ => {
+            ((src[src_off + c] as u32
+                + src[src_off + r] as u32
+                + src[src_off + bottom_offset + c] as u32
+                + src[src_off + bottom_offset + r] as u32)
+                >> 2) as u16
+        }
+    }
+}
+
+pub(crate) fn cfl_gen_y_row_8bpc_scalar(args: CflGenYRow8<'_>) {
+    let CflGenYRow8 {
+        dst,
+        src,
+        src_off,
+        top,
+        top_off,
+        bottom_offset,
+        n_left,
+        filter_type,
+    } = args;
+
+    for (rel_x, dst_px) in dst.iter_mut().enumerate() {
+        *dst_px = gen_y_filter_8bpc(
+            src,
+            src_off,
+            top,
+            top_off,
+            bottom_offset,
+            n_left,
+            n_left + rel_x,
+            filter_type,
+        );
+    }
+}
+
+pub(crate) fn cfl_gen_y_row_hbd_scalar(args: CflGenYRowHbd<'_>) {
+    let CflGenYRowHbd {
+        dst,
+        src,
+        src_off,
+        top,
+        top_off,
+        bottom_offset,
+        n_left,
+        filter_type,
+    } = args;
+
+    for (rel_x, dst_px) in dst.iter_mut().enumerate() {
+        *dst_px = gen_y_filter_hbd(
+            src,
+            src_off,
+            top,
+            top_off,
+            bottom_offset,
+            n_left,
+            n_left + rel_x,
+            filter_type,
+        );
+    }
+}
+
+pub(crate) fn cfl_alpha_accum_8bpc_scalar(args: CflAlphaAccum8<'_>) {
+    let CflAlphaAccum8 {
+        alpha,
+        samples,
+        sample_off,
+        sample_stride,
+        imat0,
+        imat1,
+        imat_off,
+        len,
+        a2sh,
+    } = args;
+
+    for i in 0..len {
+        let v = samples[sample_off + i * sample_stride] as i32;
+        alpha[0] += imat0[imat_off + i] as i32 * v;
+        alpha[1] += imat1[imat_off + i] as i32 * v;
+        alpha[2] += v << a2sh;
+    }
+}
+
+pub(crate) fn cfl_alpha_accum_hbd_scalar(args: CflAlphaAccumHbd<'_>) {
+    let CflAlphaAccumHbd {
+        alpha,
+        samples,
+        sample_off,
+        sample_stride,
+        imat0,
+        imat1,
+        imat_off,
+        len,
+        a2sh,
+    } = args;
+
+    for i in 0..len {
+        let v = samples[sample_off + i * sample_stride] as i32;
+        alpha[0] += imat0[imat_off + i] as i32 * v;
+        alpha[1] += imat1[imat_off + i] as i32 * v;
+        alpha[2] += v << a2sh;
+    }
+}
+
+const CFL_MHCCP_HAS_TOP: i32 = 1 << 2;
+const CFL_MHCCP_HAS_LEFT: i32 = 1 << 3;
+
+#[inline(always)]
+fn mhccp_mul32(a: i32, b: i32) -> i32 {
+    crate::ipred::mul32(a, b, 16)
+}
+
+#[inline(always)]
+fn mhccp_sqrnd_8(v: i32) -> i32 {
+    (v * v + 128) >> 8
+}
+
+#[inline(always)]
+fn mhccp_sqrnd_hbd(v: i32, bitdepth: i32) -> i32 {
+    (v * v + (1 << (bitdepth - 1))) >> bitdepth
+}
+
+#[inline(always)]
+fn mhccp_pred_one_8(alpha: &[i32; 3], a2v2: i32, v0: i32, v1: i32) -> u8 {
+    (mhccp_mul32(alpha[0], v0) + mhccp_mul32(alpha[1], mhccp_sqrnd_8(v1)) + a2v2).clamp(0, 255)
+        as u8
+}
+
+#[inline(always)]
+fn mhccp_pred_one_hbd(
+    alpha: &[i32; 3],
+    a2v2: i32,
+    v0: i32,
+    v1: i32,
+    bitdepth: i32,
+    bitdepth_max: i32,
+) -> u16 {
+    (mhccp_mul32(alpha[0], v0) + mhccp_mul32(alpha[1], mhccp_sqrnd_hbd(v1, bitdepth)) + a2v2)
+        .clamp(0, bitdepth_max) as u16
+}
+
+pub(crate) fn cfl_mhccp_pred_8bpc_scalar(args: CflMhccpPred8<'_>) {
+    let CflMhccpPred8 {
+        dst,
+        dst_stride,
+        src,
+        src_off,
+        src_top_stride,
+        w,
+        h,
+        alpha,
+        edge_flags,
+        dir,
+    } = args;
+
+    let has_t = edge_flags & CFL_MHCCP_HAS_TOP != 0;
+    let has_l = edge_flags & CFL_MHCCP_HAS_LEFT != 0;
+    let dir_t = dir == CflMhDir::Top;
+    let dir_l = dir == CflMhDir::Left;
+    let n_top = if has_t { 1 + dir_t as usize } else { 0 };
+    let n_left = if has_l { 1 + dir_l as usize } else { 0 };
+    let left_off = src_off + 64 * 64 + n_left * n_top;
+    let a2v2 = mhccp_mul32(alpha[2], 128);
+
+    let mut sp = src_off;
+    let mut y = 0usize;
+    if dir_t && has_t && y < h {
+        let dst_row = &mut dst[..w];
+        let prev_row = sp - src_top_stride;
+        for (x, dst_px) in dst_row.iter_mut().enumerate() {
+            *dst_px = mhccp_pred_one_8(&alpha, a2v2, src[prev_row + x] as i32, src[sp + x] as i32);
+        }
+        sp += w;
+        y = 1;
+    }
+
+    for (row_y, dst_row) in dst.chunks_mut(dst_stride).take(h).enumerate().skip(y) {
+        let dst_row = &mut dst_row[..w];
+        let mut x = 0usize;
+        if dir_l && has_l && x < w {
+            let v0 = src[left_off + row_y * n_left + 1] as i32;
+            let v1 = src[sp] as i32;
+            dst_row[0] = mhccp_pred_one_8(&alpha, a2v2, v0, v1);
+            x = 1;
+        }
+        for (rel_x, dst_px) in dst_row[x..].iter_mut().enumerate() {
+            let x = x + rel_x;
+            let v0_idx = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x.saturating_sub(1)
+            } else {
+                sp + x
+            };
+            *dst_px = mhccp_pred_one_8(&alpha, a2v2, src[v0_idx] as i32, src[sp + x] as i32);
+        }
+        sp += w;
+    }
+}
+
+pub(crate) fn cfl_mhccp_pred_hbd_scalar(args: CflMhccpPredHbd<'_>) {
+    let CflMhccpPredHbd {
+        dst,
+        dst_stride,
+        src,
+        src_off,
+        src_top_stride,
+        w,
+        h,
+        alpha,
+        edge_flags,
+        dir,
+        bitdepth,
+        bitdepth_max,
+    } = args;
+
+    let has_t = edge_flags & CFL_MHCCP_HAS_TOP != 0;
+    let has_l = edge_flags & CFL_MHCCP_HAS_LEFT != 0;
+    let dir_t = dir == CflMhDir::Top;
+    let dir_l = dir == CflMhDir::Left;
+    let n_top = if has_t { 1 + dir_t as usize } else { 0 };
+    let n_left = if has_l { 1 + dir_l as usize } else { 0 };
+    let left_off = src_off + 64 * 64 + n_left * n_top;
+    let mid = 1 << (bitdepth - 1);
+    let a2v2 = mhccp_mul32(alpha[2], mid);
+
+    let mut sp = src_off;
+    let mut y = 0usize;
+    if dir_t && has_t && y < h {
+        let dst_row = &mut dst[..w];
+        let prev_row = sp - src_top_stride;
+        for (x, dst_px) in dst_row.iter_mut().enumerate() {
+            *dst_px = mhccp_pred_one_hbd(
+                &alpha,
+                a2v2,
+                src[prev_row + x] as i32,
+                src[sp + x] as i32,
+                bitdepth,
+                bitdepth_max,
+            );
+        }
+        sp += w;
+        y = 1;
+    }
+
+    for (row_y, dst_row) in dst.chunks_mut(dst_stride).take(h).enumerate().skip(y) {
+        let dst_row = &mut dst_row[..w];
+        let mut x = 0usize;
+        if dir_l && has_l && x < w {
+            let v0 = src[left_off + row_y * n_left + 1] as i32;
+            let v1 = src[sp] as i32;
+            dst_row[0] = mhccp_pred_one_hbd(&alpha, a2v2, v0, v1, bitdepth, bitdepth_max);
+            x = 1;
+        }
+        for (rel_x, dst_px) in dst_row[x..].iter_mut().enumerate() {
+            let x = x + rel_x;
+            let v0_idx = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x.saturating_sub(1)
+            } else {
+                sp + x
+            };
+            *dst_px = mhccp_pred_one_hbd(
+                &alpha,
+                a2v2,
+                src[v0_idx] as i32,
+                src[sp + x] as i32,
+                bitdepth,
+                bitdepth_max,
+            );
+        }
+        sp += w;
+    }
+}
+
+static CFL_ALPHA_ACCUM_8BPC: OnceLock<CflAlphaAccum8Fn> = OnceLock::new();
+static CFL_ALPHA_ACCUM_HBD: OnceLock<CflAlphaAccumHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_cfl_alpha_accum_8bpc() -> CflAlphaAccum8Fn {
+    *CFL_ALPHA_ACCUM_8BPC.get_or_init(|| {
+        let mut _f: CflAlphaAccum8Fn = cfl_alpha_accum_8bpc_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::cfl_alpha_accum_8bpc_neon;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cfl_alpha_accum_8bpc_avx2;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+fn resolve_cfl_alpha_accum_hbd() -> CflAlphaAccumHbdFn {
+    *CFL_ALPHA_ACCUM_HBD.get_or_init(|| {
+        let mut _f: CflAlphaAccumHbdFn = cfl_alpha_accum_hbd_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::cfl_alpha_accum_hbd_neon;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cfl_alpha_accum_hbd_avx2;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+pub(crate) fn cfl_alpha_accum_8bpc(args: CflAlphaAccum8<'_>) {
+    unsafe { resolve_cfl_alpha_accum_8bpc()(args) };
+}
+
+#[inline]
+pub(crate) fn cfl_alpha_accum_hbd(args: CflAlphaAccumHbd<'_>) {
+    unsafe { resolve_cfl_alpha_accum_hbd()(args) };
+}
+
+static CFL_GEN_Y_ROW_8BPC: OnceLock<CflGenYRow8Fn> = OnceLock::new();
+static CFL_GEN_Y_ROW_HBD: OnceLock<CflGenYRowHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_cfl_gen_y_row_8bpc() -> CflGenYRow8Fn {
+    *CFL_GEN_Y_ROW_8BPC.get_or_init(|| {
+        let mut _f: CflGenYRow8Fn = cfl_gen_y_row_8bpc_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::cfl_gen_y_row_8bpc_neon;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cfl_gen_y_row_8bpc_avx2;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+fn resolve_cfl_gen_y_row_hbd() -> CflGenYRowHbdFn {
+    *CFL_GEN_Y_ROW_HBD.get_or_init(|| {
+        let mut _f: CflGenYRowHbdFn = cfl_gen_y_row_hbd_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::cfl_gen_y_row_hbd_neon;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cfl_gen_y_row_hbd_avx2;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+pub(crate) fn cfl_gen_y_row_8bpc(args: CflGenYRow8<'_>) {
+    unsafe { resolve_cfl_gen_y_row_8bpc()(args) };
+}
+
+#[inline]
+pub(crate) fn cfl_gen_y_row_hbd(args: CflGenYRowHbd<'_>) {
+    unsafe { resolve_cfl_gen_y_row_hbd()(args) };
+}
+
+static CFL_MHCCP_PRED_8BPC: OnceLock<CflMhccpPred8Fn> = OnceLock::new();
+static CFL_MHCCP_PRED_HBD: OnceLock<CflMhccpPredHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_cfl_mhccp_pred_8bpc() -> CflMhccpPred8Fn {
+    *CFL_MHCCP_PRED_8BPC.get_or_init(|| {
+        let mut _f: CflMhccpPred8Fn = cfl_mhccp_pred_8bpc_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::cfl_mhccp_pred_8bpc_neon;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cfl_mhccp_pred_8bpc_avx2;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+fn resolve_cfl_mhccp_pred_hbd() -> CflMhccpPredHbdFn {
+    *CFL_MHCCP_PRED_HBD.get_or_init(|| {
+        let mut _f: CflMhccpPredHbdFn = cfl_mhccp_pred_hbd_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::cfl_mhccp_pred_hbd_neon;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cfl_mhccp_pred_hbd_avx2;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+pub(crate) fn cfl_mhccp_pred_8bpc(args: CflMhccpPred8<'_>) {
+    unsafe { resolve_cfl_mhccp_pred_8bpc()(args) };
+}
+
+#[inline]
+pub(crate) fn cfl_mhccp_pred_hbd(args: CflMhccpPredHbd<'_>) {
+    unsafe { resolve_cfl_mhccp_pred_hbd()(args) };
 }
 
 static CFL_APPLY_420_8BPC: OnceLock<CflApplyFn> = OnceLock::new();

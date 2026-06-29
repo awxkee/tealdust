@@ -33,66 +33,6 @@ use crate::levels::ANGLE_MULTI_MRL_FLAG;
 use crate::tables::SM_WEIGHTS;
 use std::arch::aarch64::*;
 
-#[target_feature(enable = "neon")]
-pub(crate) fn pal_pred_8bpc_neon(
-    dst: &mut [u8],
-    stride: usize,
-    pal: &[u8],
-    idx: &[u8],
-    w: usize,
-    h: usize,
-) {
-    if w < 16 {
-        crate::ipred::pal_pred(dst, stride, pal, idx, w, h);
-        return;
-    }
-
-    let mut pal_buf = [0u8; 16];
-    pal_buf[..8].copy_from_slice(&pal[..8]);
-    let pal_v = unsafe { vld1q_u8(pal_buf.as_ptr()) };
-    let mask = vdupq_n_u8(7);
-    let zero = vdup_n_u8(0);
-    let mut idx_off = 0usize;
-    let mut dst_off = 0usize;
-    for _ in 0..h {
-        let row = &mut dst[dst_off..dst_off + w];
-        let row_idx = &idx[idx_off..idx_off + (w >> 1)];
-        let (idx16, rem16) = row_idx.as_chunks::<16>();
-        let mut x = 0usize;
-        for c in idx16.iter() {
-            let packed = unsafe { vld1q_u8(c.as_ptr()) };
-            let lo_idx = vandq_u8(packed, mask);
-            let hi_idx = vandq_u8(vshrq_n_u8::<4>(packed), mask);
-            let lo = vqtbl1q_u8(pal_v, lo_idx);
-            let hi = vqtbl1q_u8(pal_v, hi_idx);
-            unsafe {
-                vst1q_u8(row[x..].as_mut_ptr(), vzip1q_u8(lo, hi));
-                vst1q_u8(row[x + 16..].as_mut_ptr(), vzip2q_u8(lo, hi));
-            }
-            x += 32;
-        }
-
-        let (idx8, rem) = rem16.as_chunks::<8>();
-        for c in idx8.iter() {
-            let packed = unsafe { vcombine_u8(vld1_u8(c.as_ptr()), zero) };
-            let lo_idx = vandq_u8(packed, mask);
-            let hi_idx = vandq_u8(vshrq_n_u8::<4>(packed), mask);
-            let lo = vqtbl1q_u8(pal_v, lo_idx);
-            let hi = vqtbl1q_u8(pal_v, hi_idx);
-            unsafe { vst1q_u8(row[x..].as_mut_ptr(), vzip1q_u8(lo, hi)) };
-            x += 16;
-        }
-
-        for &i in rem {
-            row[x] = pal[(i & 7) as usize];
-            row[x + 1] = pal[(i >> 4) as usize];
-            x += 2;
-        }
-        idx_off += w >> 1;
-        dst_off += stride;
-    }
-}
-
 #[inline]
 #[target_feature(enable = "neon")]
 fn avg_pred_8bpc_neon(dst: &mut [u8], stride: usize, tmp: &[u8], w: usize, h: usize) {
@@ -884,43 +824,41 @@ pub(crate) fn ipred_paeth_8bpc_neon(
 }
 
 /// 8 bytes -> two i32x4 lanes (ascending): lane k == a[k].
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load8_u8_i32(a: &[u8; 8]) -> (int32x4_t, int32x4_t) {
     let w = unsafe { vmovl_u8(vld1_u8(a.as_ptr())) };
-    unsafe {
-        (
-            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
-            vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
-        )
-    }
+    (
+        vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
+        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
+    )
 }
 
 /// 8 bytes -> two i32x4 lanes (reversed): lane k == a[7 - k].
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn load8_u8_i32_rev(a: &[u8; 8]) -> (int32x4_t, int32x4_t) {
     let r = unsafe { vrev64_u8(vld1_u8(a.as_ptr())) };
-    let w = unsafe { vmovl_u8(r) };
-    unsafe {
-        (
-            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
-            vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
-        )
-    }
+    let w = vmovl_u8(r);
+    (
+        vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
+        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
+    )
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn widen8_at_neon<const OFF: i32>(v: uint8x16_t) -> (int32x4_t, int32x4_t) {
-    let w = unsafe { vmovl_u8(vget_low_u8(vextq_u8::<OFF>(v, v))) };
-    unsafe {
-        (
-            vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
-            vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
-        )
-    }
+    let w = vmovl_u8(vget_low_u8(vextq_u8::<OFF>(v, v)));
+    (
+        vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(w))),
+        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(w))),
+    )
 }
 
 /// `clamp((a*w0 + b*w1 + c*w2 + d*w3 + 64) >> 7, 0, 255)` packed to 8 u8.
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn tap4_pack_neon(
     a: int32x4_t,
     b: int32x4_t,
@@ -932,19 +870,17 @@ fn tap4_pack_neon(
     w2: (int32x4_t, int32x4_t),
     w3: (int32x4_t, int32x4_t),
 ) -> uint8x8_t {
-    unsafe {
-        let acc_lo = vaddq_s32(
-            vaddq_s32(vmulq_s32(a, w0.0), vmulq_s32(b, w1.0)),
-            vaddq_s32(vmulq_s32(c, w2.0), vmulq_s32(d, w3.0)),
-        );
-        let acc_hi = vaddq_s32(
-            vaddq_s32(vmulq_s32(a, w0.1), vmulq_s32(b, w1.1)),
-            vaddq_s32(vmulq_s32(c, w2.1), vmulq_s32(d, w3.1)),
-        );
-        let res_lo = vshrq_n_s32::<7>(vaddq_s32(acc_lo, rnd));
-        let res_hi = vshrq_n_s32::<7>(vaddq_s32(acc_hi, rnd));
-        vqmovn_u16(vcombine_u16(vqmovun_s32(res_lo), vqmovun_s32(res_hi)))
-    }
+    let acc_lo = vaddq_s32(
+        vaddq_s32(vmulq_s32(a, w0.0), vmulq_s32(b, w1.0)),
+        vaddq_s32(vmulq_s32(c, w2.0), vmulq_s32(d, w3.0)),
+    );
+    let acc_hi = vaddq_s32(
+        vaddq_s32(vmulq_s32(a, w0.1), vmulq_s32(b, w1.1)),
+        vaddq_s32(vmulq_s32(c, w2.1), vmulq_s32(d, w3.1)),
+    );
+    let res_lo = vshrq_n_s32::<7>(vaddq_s32(acc_lo, rnd));
+    let res_hi = vshrq_n_s32::<7>(vaddq_s32(acc_hi, rnd));
+    vqmovn_u16(vcombine_u16(vqmovun_s32(res_lo), vqmovun_s32(res_hi)))
 }
 
 #[inline(always)]

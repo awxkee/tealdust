@@ -451,3 +451,123 @@ pub(crate) fn morph_row_hbd_avx2(
         *d = ((alpha * (*d as i32) + beta) >> 8).clamp(0, bitdepth_max) as u16;
     }
 }
+
+#[inline]
+fn gdf_bitdepth_from_max(bitdepth_max: i32) -> i32 {
+    if bitdepth_max <= 0xff {
+        8
+    } else if bitdepth_max <= 0x3ff {
+        10
+    } else {
+        12
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gdf_adj_i16x16(e: __m256i, scale: __m256i, rnd: __m256i, sh: __m128i) -> __m256i {
+    let zero = _mm256_setzero_si256();
+    let diff = _mm256_mullo_epi16(e, scale);
+    let mag = _mm256_sra_epi16(_mm256_add_epi16(_mm256_abs_epi16(diff), rnd), sh);
+    _mm256_blendv_epi8(
+        mag,
+        _mm256_sub_epi16(zero, mag),
+        _mm256_cmpgt_epi16(zero, diff),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn i16x16_to_i32x8x2(v: __m256i) -> (__m256i, __m256i) {
+    (
+        _mm256_cvtepi16_epi32(_mm256_castsi256_si128(v)),
+        _mm256_cvtepi16_epi32(_mm256_extracti128_si256::<1>(v)),
+    )
+}
+
+/// High-bit-depth GDF residual add.
+///
+/// Matches dav2d/AVM scalar scaling: 10-bit residuals are shifted by 2 on add,
+/// while 12-bit residuals are used at full precision.
+#[target_feature(enable = "avx2")]
+pub(crate) fn gdf_add_run_hbd_avx2(
+    dst: &mut [u16],
+    err: &[i8],
+    scale: i32,
+    n: usize,
+    bitdepth_max: i32,
+) {
+    let bitdepth = gdf_bitdepth_from_max(bitdepth_max);
+    let shift = 12 - bitdepth;
+    let sc = _mm256_set1_epi16(scale as i16);
+    let rnd = _mm256_set1_epi16(if shift == 0 { 0 } else { 1 << (shift - 1) });
+    let sh = _mm_cvtsi32_si128(shift);
+    let max_v = _mm256_set1_epi32(bitdepth_max);
+
+    let (d16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (e16, er16) = err[..n].as_chunks::<16>();
+    for (d, e) in d16.iter_mut().zip(e16) {
+        let e = unsafe { _mm_loadu_si128(e.as_ptr().cast()) };
+        let adj = gdf_adj_i16x16(_mm256_cvtepi8_epi16(e), sc, rnd, sh);
+        let (a0, a1) = i16x16_to_i32x8x2(adj);
+        let (d0, d1) = load_u16x16_i32x2(&*d);
+        store_i32x16_u16_clip(d, _mm256_add_epi32(d0, a0), _mm256_add_epi32(d1, a1), max_v);
+    }
+
+    let (d8, tail_dst) = r16.as_chunks_mut::<8>();
+    let (e8, tail_err) = er16.as_chunks::<8>();
+    for (d, e) in d8.iter_mut().zip(e8) {
+        let e = unsafe { _mm_loadl_epi64(e.as_ptr().cast()) };
+        let adj = gdf_adj_i16x16(_mm256_cvtepi8_epi16(e), sc, rnd, sh);
+        let a = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(adj));
+        let d0 = load_u16x8_i32(&*d);
+        store_i32x8_u16_clip(d, _mm256_add_epi32(d0, a), max_v);
+    }
+
+    let rnd_scalar = if shift == 0 { 0 } else { 1 << (shift - 1) };
+    for (d, &e) in tail_dst.iter_mut().zip(tail_err) {
+        let diff = e as i32 * scale;
+        let mag = (diff.abs() + rnd_scalar) >> shift;
+        let adj = if diff < 0 { -mag } else { mag };
+        *d = (*d as i32 + adj).clamp(0, bitdepth_max) as u16;
+    }
+}
+
+/// HBD GDF gradient: per-column `|2*b - a - c|` summed over two rows,
+/// then pair-reduced to up to four 2x2 output cells.
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "avx2")]
+pub(crate) fn gdf_gradient_group_hbd_avx2(
+    dst: &mut [[u16; 4]],
+    d: usize,
+    base_cell: usize,
+    ncells: usize,
+    center_rows: [&[u16]; 2],
+    a_rows: [&[u16]; 2],
+    c_rows: [&[u16]; 2],
+    col0: usize,
+    dx: i32,
+    shift: u32,
+) {
+    let mut acc = _mm_setzero_si128();
+    let sh = _mm_cvtsi32_si128(shift as i32);
+    for y in 0..2 {
+        let bcol = col0 - 1;
+        let acol = (bcol as i32 - dx) as usize;
+        let ccol = (bcol as i32 + dx) as usize;
+        let b = unsafe { _mm_loadu_si128(center_rows[y].as_ptr().add(bcol).cast()) };
+        let a = unsafe { _mm_loadu_si128(a_rows[y].as_ptr().add(acol).cast()) };
+        let c = unsafe { _mm_loadu_si128(c_rows[y].as_ptr().add(ccol).cast()) };
+        let b = _mm_srl_epi16(b, sh);
+        let a = _mm_srl_epi16(a, sh);
+        let c = _mm_srl_epi16(c, sh);
+        let t = _mm_sub_epi16(_mm_sub_epi16(_mm_add_epi16(b, b), a), c);
+        acc = _mm_add_epi16(acc, _mm_abs_epi16(t));
+    }
+    let pair = _mm_madd_epi16(acc, _mm_set1_epi16(1));
+    let mut out = [0i32; 4];
+    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), pair) };
+    for k in 0..ncells {
+        dst[base_cell + k][d] = out[k] as u16;
+    }
+}

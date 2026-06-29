@@ -1637,12 +1637,28 @@ pub(crate) fn pal_pred<P: Pixel>(
     w: usize,
     h: usize,
 ) {
-    let mut idx_iter = idx.iter();
-    for dst_row in dst.chunks_mut(stride).take(h) {
-        for pair in dst_row[..w].as_chunks_mut::<2>().0.iter_mut() {
-            let i = *idx_iter.next().expect("palette index buffer too small");
-            pair[0] = pal[(i & 7) as usize];
-            pair[1] = pal[(i >> 4) as usize];
+    if pal.len() < 8 {
+        return;
+    }
+    let idx_stride = w.div_ceil(2);
+
+    let pal = &pal[..8];
+
+    for (dst_row, idx_row) in dst.chunks_mut(stride).zip(idx.chunks(idx_stride)).take(h) {
+        let dst_row = &mut dst_row[..w];
+
+        for (pair, &packed) in dst_row
+            .as_chunks_mut::<2>()
+            .0
+            .iter_mut()
+            .zip(idx_row.iter())
+        {
+            pair[0] = pal[(packed & 7) as usize];
+            pair[1] = pal[(packed >> 4) as usize];
+        }
+
+        if let Some(last) = dst_row.as_chunks_mut::<2>().1.last_mut() {
+            *last = pal[(idx_row[w / 2] & 7) as usize];
         }
     }
 }
@@ -1892,24 +1908,61 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
                 filter_type,
             );
         }
-        for x in n_left..n_left + tw {
-            let c = x * 2;
-            let r = c + 1;
-            let l_idx = if n_left > 0 {
-                c - 1
-            } else {
-                imax(c as i32 - 1, 0) as usize
-            };
-            dst[dst_p + x - n_left] = cfl_filter(
-                src,
-                sp + c,
-                sp + l_idx,
-                sp + r,
-                b as usize,
-                tb,
-                tp + c,
+        let mut generated_main_row = false;
+        if let (Some(dst8), Some(src8), Some(top8)) = (
+            P::try_as_u8_slice_mut(dst),
+            P::try_as_u8_slice(src),
+            P::try_as_u8_slice(tb),
+        ) {
+            crate::cfl_dispatch::cfl_gen_y_row_8bpc(crate::cfl_dispatch::CflGenYRow8 {
+                dst: &mut dst8[dst_p..dst_p + tw],
+                src: src8,
+                src_off: sp,
+                top: top8,
+                top_off: tp,
+                bottom_offset: b as usize,
+                n_left,
                 filter_type,
-            );
+            });
+            generated_main_row = true;
+        } else if let (Some(dst16), Some(src16), Some(top16)) = (
+            P::try_as_u16_slice_mut(dst),
+            P::try_as_u16_slice(src),
+            P::try_as_u16_slice(tb),
+        ) {
+            crate::cfl_dispatch::cfl_gen_y_row_hbd(crate::cfl_dispatch::CflGenYRowHbd {
+                dst: &mut dst16[dst_p..dst_p + tw],
+                src: src16,
+                src_off: sp,
+                top: top16,
+                top_off: tp,
+                bottom_offset: b as usize,
+                n_left,
+                filter_type,
+            });
+            generated_main_row = true;
+        }
+
+        if !generated_main_row {
+            for x in n_left..n_left + tw {
+                let c = x * 2;
+                let r = c + 1;
+                let l_idx = if n_left > 0 {
+                    c - 1
+                } else {
+                    imax(c as i32 - 1, 0) as usize
+                };
+                dst[dst_p + x - n_left] = cfl_filter(
+                    src,
+                    sp + c,
+                    sp + l_idx,
+                    sp + r,
+                    b as usize,
+                    tb,
+                    tp + c,
+                    filter_type,
+                );
+            }
         }
         sp += vstep as usize;
         dst_lp += n_left;
@@ -2101,23 +2154,81 @@ pub(crate) fn cfl_calc_alphas<BD: BitDepth>(
         };
         let start: usize = if !has_l { 1 } else { 0 };
         let end = imax(start as i32, refw as i32 - 1 - (start == 0) as i32) as usize;
-        for i in start..end {
-            let v: i32 = top[top_off + i].into();
-            alpha[0] += imat[0][n] as i32 * v;
-            alpha[1] += imat[1][n] as i32 * v;
-            alpha[2] += v << a2sh;
-            n += 1;
+        let len = end.saturating_sub(start);
+        if len != 0 {
+            if let Some(top8) = <BD::Pixel as Pixel>::try_as_u8_slice(top) {
+                crate::cfl_dispatch::cfl_alpha_accum_8bpc(crate::cfl_dispatch::CflAlphaAccum8 {
+                    alpha,
+                    samples: top8,
+                    sample_off: top_off + start,
+                    sample_stride: 1,
+                    imat0: &imat[0],
+                    imat1: &imat[1],
+                    imat_off: n,
+                    len,
+                    a2sh,
+                });
+            } else if let Some(top16) = <BD::Pixel as Pixel>::try_as_u16_slice(top) {
+                crate::cfl_dispatch::cfl_alpha_accum_hbd(crate::cfl_dispatch::CflAlphaAccumHbd {
+                    alpha,
+                    samples: top16,
+                    sample_off: top_off + start,
+                    sample_stride: 1,
+                    imat0: &imat[0],
+                    imat1: &imat[1],
+                    imat_off: n,
+                    len,
+                    a2sh,
+                });
+            } else {
+                for i in start..end {
+                    let v: i32 = top[top_off + i].into();
+                    alpha[0] += imat[0][n + i - start] as i32 * v;
+                    alpha[1] += imat[1][n + i - start] as i32 * v;
+                    alpha[2] += v << a2sh;
+                }
+            }
+            n += len;
         }
     }
     if has_l {
         let start = if has_t { 0 } else { 1 }; // = !has_t
         let end = if has_t { refh - 2 } else { refh - 1 };
-        for i in start..end {
-            let v: i32 = c[c_off + i * stride - 1].into();
-            alpha[0] += imat[0][n] as i32 * v;
-            alpha[1] += imat[1][n] as i32 * v;
-            alpha[2] += v << a2sh;
-            n += 1;
+        let len = end.saturating_sub(start);
+        if len != 0 {
+            if let Some(c8) = <BD::Pixel as Pixel>::try_as_u8_slice(c) {
+                crate::cfl_dispatch::cfl_alpha_accum_8bpc(crate::cfl_dispatch::CflAlphaAccum8 {
+                    alpha,
+                    samples: c8,
+                    sample_off: c_off + start * stride - 1,
+                    sample_stride: stride,
+                    imat0: &imat[0],
+                    imat1: &imat[1],
+                    imat_off: n,
+                    len,
+                    a2sh,
+                });
+            } else if let Some(c16) = <BD::Pixel as Pixel>::try_as_u16_slice(c) {
+                crate::cfl_dispatch::cfl_alpha_accum_hbd(crate::cfl_dispatch::CflAlphaAccumHbd {
+                    alpha,
+                    samples: c16,
+                    sample_off: c_off + start * stride - 1,
+                    sample_stride: stride,
+                    imat0: &imat[0],
+                    imat1: &imat[1],
+                    imat_off: n,
+                    len,
+                    a2sh,
+                });
+            } else {
+                for i in start..end {
+                    let v: i32 = c[c_off + i * stride - 1].into();
+                    alpha[0] += imat[0][n + i - start] as i32 * v;
+                    alpha[1] += imat[1][n + i - start] as i32 * v;
+                    alpha[2] += v << a2sh;
+                }
+            }
+            n += len;
         }
     }
 
@@ -2173,6 +2284,46 @@ pub(crate) fn cfl_mhccp_pred<BD: BitDepth>(
     edge_flags: i32,
     dir: CflMhDir,
 ) {
+    if let (Some(src_u8), Some(dst_u8)) = (
+        BD::Pixel::try_as_u8_slice(src),
+        BD::Pixel::try_as_u8_slice_mut(dst),
+    ) {
+        crate::cfl_dispatch::cfl_mhccp_pred_8bpc(crate::cfl_dispatch::CflMhccpPred8 {
+            dst: dst_u8,
+            dst_stride,
+            src: src_u8,
+            src_off,
+            src_top_stride,
+            w,
+            h,
+            alpha: *alpha,
+            edge_flags,
+            dir,
+        });
+        return;
+    }
+
+    if let (Some(src_u16), Some(dst_u16)) = (
+        BD::Pixel::try_as_u16_slice(src),
+        BD::Pixel::try_as_u16_slice_mut(dst),
+    ) {
+        crate::cfl_dispatch::cfl_mhccp_pred_hbd(crate::cfl_dispatch::CflMhccpPredHbd {
+            dst: dst_u16,
+            dst_stride,
+            src: src_u16,
+            src_off,
+            src_top_stride,
+            w,
+            h,
+            alpha: *alpha,
+            edge_flags,
+            dir,
+            bitdepth: bd.bitdepth() as i32,
+            bitdepth_max: bd.bitdepth_max(),
+        });
+        return;
+    }
+
     let has_t = edge_flags & CFL_HAS_TOP != 0;
     let has_l = edge_flags & CFL_HAS_LEFT != 0;
     let dir_t = dir == CflMhDir::Top;
