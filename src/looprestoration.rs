@@ -1828,6 +1828,7 @@ pub(crate) fn gdf_prep_hbd(
             grad_bit ^= 1;
         }
 
+        let refs: [&[u16]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u16]);
         let mut x1 = 0usize;
         while x1 < w {
             let mut grad_sums = [0i32; 4];
@@ -1854,41 +1855,22 @@ pub(crate) fn gdf_prep_hbd(
                 }
             }
 
-            for x2 in 0..2 {
-                let x = x1 + x2;
-                let mut idx_vals = shared_vals;
-                let m = (row_buffers[ptrs[6]][o + x] as i32) >> down_shift;
-                for k in 0..18 {
-                    let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
-                    let dy = GDF_COORDS[k][0] as i32;
-                    let dx = GDF_COORDS[k][1] as i32;
-                    let a = (row_buffers[ptrs[(6 - dy) as usize]]
-                        [(o as i32 + x as i32 - dx) as usize] as i32)
-                        >> down_shift;
-                    let b = (row_buffers[ptrs[(6 + dy) as usize]]
-                        [(o as i32 + x as i32 + dx) as usize] as i32)
-                        >> down_shift;
-                    let above = iclip((a - m) * up_scale, -alpha, alpha);
-                    let below = iclip((b - m) * up_scale, -alpha, alpha);
-                    let v = iclip(above + below, -512, 511);
-                    for idx in 0..3 {
-                        idx_vals[idx] +=
-                            v * GDF_WEIGHT[weight_base + idx * 88 + k * 4 + cls] as i32;
-                    }
-                }
-
-                let mut full_idx = 0usize;
-                for idx in 0..3 {
-                    let sv = idx_vals[idx] * scale;
-                    let v = apply_sign((sv.abs() + (1 << 14)) >> 15, sv);
-                    let sub_idx = (iclip(v, -scale, scale - 1) + scale) as usize;
-                    full_idx = full_idx * (scale as usize * 2) + sub_idx;
-                }
-                if ref_dst_idx == 0 {
-                    dst[y * dst_stride + x] = GDF_INTRA_ERROR[error_lut_base + full_idx];
-                } else {
-                    dst[y * dst_stride + x] = GDF_INTER_ERROR[error_lut_base + full_idx];
-                }
+            let err_pair = crate::filter::gdf_prep_pair_hbd(
+                refs,
+                o + x1,
+                cls,
+                shared_vals,
+                alpha_base,
+                weight_base,
+                error_lut_base,
+                scale,
+                down_shift,
+                up_scale,
+                ref_dst_idx,
+            );
+            dst[y * dst_stride + x1] = err_pair[0];
+            if x1 + 1 < w {
+                dst[y * dst_stride + x1 + 1] = err_pair[1];
             }
             x1 += 2;
         }

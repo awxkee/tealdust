@@ -29,7 +29,7 @@
 
 use core::arch::aarch64::*;
 
-use crate::cfl_dispatch::{CflAlphaAccum8, CflApply8, CflMhccpPred8};
+use crate::cfl_dispatch::{CflAlphaAccum8, CflApply8, CflGenMat8, CflMhccpPred8};
 const CFL_FLT_TYPE_VSTRIP: u32 = 1;
 const CFL_FLT_TYPE_GAUSS: u32 = 2;
 
@@ -1320,17 +1320,124 @@ fn mhccp_pred16_store_neon(
     );
 }
 
-#[inline(always)]
+#[inline]
+#[target_feature(enable = "neon")]
 fn accum_alpha_u16x8(acc: uint32x4_t, v: uint16x8_t, m: uint16x8_t) -> uint32x4_t {
-    unsafe {
-        let acc = vmlal_u16(acc, vget_low_u16(v), vget_low_u16(m));
-        vmlal_u16(acc, vget_high_u16(v), vget_high_u16(m))
+    let acc = vmlal_u16(acc, vget_low_u16(v), vget_low_u16(m));
+    vmlal_u16(acc, vget_high_u16(v), vget_high_u16(m))
+}
+
+#[inline(always)]
+fn load_strided_u8x16(samples: &[u8], mut off: usize, stride: usize) -> [u8; 16] {
+    let mut tmp = [0u8; 16];
+    for dst in &mut tmp {
+        *dst = samples[off];
+        off += stride;
+    }
+    tmp
+}
+
+#[inline(always)]
+fn load_strided_u8x8(samples: &[u8], mut off: usize, stride: usize) -> [u8; 8] {
+    let mut tmp = [0u8; 8];
+    for dst in &mut tmp {
+        *dst = samples[off];
+        off += stride;
+    }
+    tmp
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn sqrnd_u8x8_neon(v: uint8x8_t) -> uint16x8_t {
+    vshrq_n_u16::<8>(vaddq_u16(vmull_u8(v, v), vdupq_n_u16(128)))
+}
+
+#[target_feature(enable = "neon")]
+pub(crate) fn cfl_gen_mat_8bpc_neon(args: CflGenMat8<'_>) {
+    if args.len < 8 {
+        crate::cfl_dispatch::cfl_gen_mat_8bpc_scalar(args);
+        return;
+    }
+
+    let CflGenMat8 {
+        sums,
+        imat0,
+        imat1,
+        imat_off,
+        y,
+        v0_off,
+        v0_stride,
+        v1_off,
+        v1_stride,
+        len,
+    } = args;
+
+    let mut acc00 = vdupq_n_u32(0);
+    let mut acc01 = vdupq_n_u32(0);
+    let mut acc0 = vdupq_n_u32(0);
+    let mut acc11 = vdupq_n_u32(0);
+    let mut acc1 = vdupq_n_u32(0);
+    let chunks = len / 8;
+    let processed = chunks * 8;
+
+    for chunk_idx in 0..chunks {
+        let rel = chunk_idx * 8;
+        let v0_u8 = if v0_stride == 1 {
+            load_u8x8((&y[v0_off + rel..v0_off + rel + 8]).try_into().unwrap())
+        } else {
+            let tmp = load_strided_u8x8(y, v0_off + rel * v0_stride, v0_stride);
+            load_u8x8(&tmp)
+        };
+        let raw1_u8 = if v1_stride == 1 {
+            load_u8x8((&y[v1_off + rel..v1_off + rel + 8]).try_into().unwrap())
+        } else {
+            let tmp = load_strided_u8x8(y, v1_off + rel * v1_stride, v1_stride);
+            load_u8x8(&tmp)
+        };
+        let v0 = vmovl_u8(v0_u8);
+        let v1 = sqrnd_u8x8_neon(raw1_u8);
+
+        acc00 = accum_alpha_u16x8(acc00, v0, v0);
+        acc01 = accum_alpha_u16x8(acc01, v0, v1);
+        acc0 = vaddq_u32(acc0, vmovl_u16(vget_low_u16(v0)));
+        acc0 = vaddq_u32(acc0, vmovl_u16(vget_high_u16(v0)));
+        acc11 = accum_alpha_u16x8(acc11, v1, v1);
+        acc1 = vaddq_u32(acc1, vmovl_u16(vget_low_u16(v1)));
+        acc1 = vaddq_u32(acc1, vmovl_u16(vget_high_u16(v1)));
+
+        let out = imat_off + rel;
+        unsafe {
+            vst1q_u16(imat0[out..].as_mut_ptr(), v0);
+            vst1q_u16(imat1[out..].as_mut_ptr(), v1);
+        }
+    }
+
+    sums.m00 += vaddvq_u32(acc00) as i32;
+    sums.m01 += vaddvq_u32(acc01) as i32;
+    sums.sum0 += vaddvq_u32(acc0) as i32;
+    sums.m11 += vaddvq_u32(acc11) as i32;
+    sums.sum1 += vaddvq_u32(acc1) as i32;
+
+    if processed < len {
+        crate::cfl_dispatch::cfl_gen_mat_8bpc_scalar(crate::cfl_dispatch::CflGenMat8 {
+            sums,
+            imat0,
+            imat1,
+            imat_off: imat_off + processed,
+            y,
+            v0_off: v0_off + processed * v0_stride,
+            v0_stride,
+            v1_off: v1_off + processed * v1_stride,
+            v1_stride,
+            len: len - processed,
+        });
     }
 }
 
 #[target_feature(enable = "neon")]
 pub(crate) fn cfl_alpha_accum_8bpc_neon(args: CflAlphaAccum8<'_>) {
-    if args.sample_stride != 1 || args.len < 16 {
+    if args.len < 16 {
         crate::cfl_dispatch::cfl_alpha_accum_8bpc_scalar(args);
         return;
     }
@@ -1339,7 +1446,7 @@ pub(crate) fn cfl_alpha_accum_8bpc_neon(args: CflAlphaAccum8<'_>) {
         alpha,
         samples,
         sample_off,
-        sample_stride: _,
+        sample_stride,
         imat0,
         imat1,
         imat_off,
@@ -1350,43 +1457,69 @@ pub(crate) fn cfl_alpha_accum_8bpc_neon(args: CflAlphaAccum8<'_>) {
     let mut acc0 = vdupq_n_u32(0);
     let mut acc1 = vdupq_n_u32(0);
     let mut acc2 = vdupq_n_u32(0);
-    let mut processed = 0usize;
+    let chunks = len / 16;
+    let processed = chunks * 16;
 
-    let (sample_chunks, sample_rem) = samples[sample_off..sample_off + len].as_chunks::<16>();
-    for (chunk_idx, s) in sample_chunks.iter().enumerate() {
-        let i = imat_off + chunk_idx * 16;
-        let v = load_u8x16(s);
-        let vlo = vmovl_u8(vget_low_u8(v));
-        let vhi = vmovl_u8(vget_high_u8(v));
-        let m0lo = unsafe { vld1q_u16(imat0[i..].as_ptr()) };
-        let m0hi = unsafe { vld1q_u16(imat0[i + 8..].as_ptr()) };
-        let m1lo = unsafe { vld1q_u16(imat1[i..].as_ptr()) };
-        let m1hi = unsafe { vld1q_u16(imat1[i + 8..].as_ptr()) };
-        acc0 = accum_alpha_u16x8(acc0, vlo, m0lo);
-        acc0 = accum_alpha_u16x8(acc0, vhi, m0hi);
-        acc1 = accum_alpha_u16x8(acc1, vlo, m1lo);
-        acc1 = accum_alpha_u16x8(acc1, vhi, m1hi);
-        acc2 = vaddq_u32(acc2, vmovl_u16(vget_low_u16(vlo)));
-        acc2 = vaddq_u32(acc2, vmovl_u16(vget_high_u16(vlo)));
-        acc2 = vaddq_u32(acc2, vmovl_u16(vget_low_u16(vhi)));
-        acc2 = vaddq_u32(acc2, vmovl_u16(vget_high_u16(vhi)));
+    if sample_stride == 1 {
+        let sample_chunks = samples[sample_off..sample_off + processed]
+            .as_chunks::<16>()
+            .0;
+        for (chunk_idx, s) in sample_chunks.iter().enumerate() {
+            let i = imat_off + chunk_idx * 16;
+            let v = load_u8x16(s);
+            let vlo = vmovl_u8(vget_low_u8(v));
+            let vhi = vmovl_u8(vget_high_u8(v));
+            let m0lo = unsafe { vld1q_u16(imat0[i..].as_ptr()) };
+            let m0hi = unsafe { vld1q_u16(imat0[i + 8..].as_ptr()) };
+            let m1lo = unsafe { vld1q_u16(imat1[i..].as_ptr()) };
+            let m1hi = unsafe { vld1q_u16(imat1[i + 8..].as_ptr()) };
+            acc0 = accum_alpha_u16x8(acc0, vlo, m0lo);
+            acc0 = accum_alpha_u16x8(acc0, vhi, m0hi);
+            acc1 = accum_alpha_u16x8(acc1, vlo, m1lo);
+            acc1 = accum_alpha_u16x8(acc1, vhi, m1hi);
+            acc2 = vaddq_u32(acc2, vmovl_u16(vget_low_u16(vlo)));
+            acc2 = vaddq_u32(acc2, vmovl_u16(vget_high_u16(vlo)));
+            acc2 = vaddq_u32(acc2, vmovl_u16(vget_low_u16(vhi)));
+            acc2 = vaddq_u32(acc2, vmovl_u16(vget_high_u16(vhi)));
+        }
+    } else {
+        let mut off = sample_off;
+        for chunk_idx in 0..chunks {
+            let i = imat_off + chunk_idx * 16;
+            let s = load_strided_u8x16(samples, off, sample_stride);
+            off += 16 * sample_stride;
+            let v = load_u8x16(&s);
+            let vlo = vmovl_u8(vget_low_u8(v));
+            let vhi = vmovl_u8(vget_high_u8(v));
+            let m0lo = unsafe { vld1q_u16(imat0[i..].as_ptr()) };
+            let m0hi = unsafe { vld1q_u16(imat0[i + 8..].as_ptr()) };
+            let m1lo = unsafe { vld1q_u16(imat1[i..].as_ptr()) };
+            let m1hi = unsafe { vld1q_u16(imat1[i + 8..].as_ptr()) };
+            acc0 = accum_alpha_u16x8(acc0, vlo, m0lo);
+            acc0 = accum_alpha_u16x8(acc0, vhi, m0hi);
+            acc1 = accum_alpha_u16x8(acc1, vlo, m1lo);
+            acc1 = accum_alpha_u16x8(acc1, vhi, m1hi);
+            acc2 = vaddq_u32(acc2, vmovl_u16(vget_low_u16(vlo)));
+            acc2 = vaddq_u32(acc2, vmovl_u16(vget_high_u16(vlo)));
+            acc2 = vaddq_u32(acc2, vmovl_u16(vget_low_u16(vhi)));
+            acc2 = vaddq_u32(acc2, vmovl_u16(vget_high_u16(vhi)));
+        }
     }
-    processed += sample_chunks.len() * 16;
 
     alpha[0] += vaddvq_u32(acc0) as i32;
     alpha[1] += vaddvq_u32(acc1) as i32;
     alpha[2] += (vaddvq_u32(acc2) as i32) << a2sh;
 
-    if !sample_rem.is_empty() {
+    if processed < len {
         crate::cfl_dispatch::cfl_alpha_accum_8bpc_scalar(CflAlphaAccum8 {
             alpha,
             samples,
-            sample_off: sample_off + processed,
-            sample_stride: 1,
+            sample_off: sample_off + processed * sample_stride,
+            sample_stride,
             imat0,
             imat1,
             imat_off: imat_off + processed,
-            len: sample_rem.len(),
+            len: len - processed,
             a2sh,
         });
     }

@@ -28,6 +28,29 @@
  */
 use std::sync::OnceLock;
 
+use crate::gdf_tables::{GDF_ALPHA, GDF_INTER_ERROR, GDF_INTRA_ERROR, GDF_WEIGHT};
+
+const GDF_PREP_COORDS: [[i8; 2]; 18] = [
+    [6, 0],
+    [5, 0],
+    [4, 0],
+    [3, 0],
+    [2, 1],
+    [2, 0],
+    [2, -1],
+    [1, 2],
+    [1, 1],
+    [1, 0],
+    [1, -1],
+    [1, -2],
+    [0, 3],
+    [0, 2],
+    [0, 1],
+    [0, -1],
+    [0, -2],
+    [0, -3],
+];
+
 pub(crate) type ResidualAddFn = unsafe fn(&mut [u8], &[i32], usize, i32, i32);
 
 pub(crate) fn residual_add_row_8bpc_scalar(
@@ -1171,6 +1194,136 @@ pub(crate) fn gdf_gradient_group_hbd(
             shift,
         )
     };
+}
+
+#[inline]
+fn gdf_prep_apply_sign(v: i32) -> i32 {
+    if v < 0 {
+        -((v.wrapping_neg() + (1 << 14)) >> 15)
+    } else {
+        (v + (1 << 14)) >> 15
+    }
+}
+
+#[inline]
+fn gdf_prep_lookup_error(ref_dst_idx: usize, error_lut_base: usize, full_idx: usize) -> i8 {
+    if ref_dst_idx == 0 {
+        GDF_INTRA_ERROR[error_lut_base + full_idx]
+    } else {
+        GDF_INTER_ERROR[error_lut_base + full_idx]
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gdf_prep_pair_hbd_scalar(
+    rows: [&[u16]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    down_shift: u32,
+    up_scale: i32,
+    ref_dst_idx: usize,
+) -> [i8; 2] {
+    let mut out = [0i8; 2];
+    for x2 in 0..2 {
+        let x = col + x2;
+        let mut idx_vals = shared_vals;
+        let m = (rows[6][x] as i32) >> down_shift;
+        for (k, &[dy, dx]) in GDF_PREP_COORDS.iter().enumerate() {
+            let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
+            let a = (rows[(6 - dy as i32) as usize][(x as i32 - dx as i32) as usize] as i32)
+                >> down_shift;
+            let b = (rows[(6 + dy as i32) as usize][(x as i32 + dx as i32) as usize] as i32)
+                >> down_shift;
+            let above = ((a - m) * up_scale).clamp(-alpha, alpha);
+            let below = ((b - m) * up_scale).clamp(-alpha, alpha);
+            let v = (above + below).clamp(-512, 511);
+            for idx in 0..3 {
+                idx_vals[idx] += v * GDF_WEIGHT[weight_base + idx * 88 + k * 4 + cls] as i32;
+            }
+        }
+
+        let mut full_idx = 0usize;
+        for &idx_val in &idx_vals {
+            let v = gdf_prep_apply_sign(idx_val * scale);
+            let sub_idx = (v.clamp(-scale, scale - 1) + scale) as usize;
+            full_idx = full_idx * (scale as usize * 2) + sub_idx;
+        }
+        out[x2] = gdf_prep_lookup_error(ref_dst_idx, error_lut_base, full_idx);
+    }
+    out
+}
+
+pub(crate) type GdfPrepPairHbdFn = unsafe fn(
+    [&[u16]; 13],
+    usize,
+    usize,
+    [i32; 3],
+    usize,
+    usize,
+    usize,
+    i32,
+    u32,
+    i32,
+    usize,
+) -> [i8; 2];
+
+static GDF_PREP_PAIR_HBD: OnceLock<GdfPrepPairHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_gdf_prep_pair_hbd() -> GdfPrepPairHbdFn {
+    *GDF_PREP_PAIR_HBD.get_or_init(|| {
+        let mut _f = gdf_prep_pair_hbd_scalar as GdfPrepPairHbdFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::gdf_prep_pair_hbd_neon as GdfPrepPairHbdFn;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::gdf_prep_pair_hbd_avx2 as GdfPrepPairHbdFn;
+            }
+        }
+        _f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn gdf_prep_pair_hbd(
+    rows: [&[u16]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    down_shift: u32,
+    up_scale: i32,
+    ref_dst_idx: usize,
+) -> [i8; 2] {
+    // SAFETY: the resolver only selects target-feature implementations when
+    // the CPU supports them; otherwise it keeps the scalar implementation.
+    unsafe {
+        resolve_gdf_prep_pair_hbd()(
+            rows,
+            col,
+            cls,
+            shared_vals,
+            alpha_base,
+            weight_base,
+            error_lut_base,
+            scale,
+            down_shift,
+            up_scale,
+            ref_dst_idx,
+        )
+    }
 }
 
 pub(crate) type CctxI16Fn = unsafe fn(&mut [i16], &mut [i16], i32, i32, usize, i32, i32);

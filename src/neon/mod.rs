@@ -60,11 +60,12 @@ pub(crate) use cdef_hd::{
 pub(crate) use cfl::{
     cfl_alpha_accum_8bpc_neon, cfl_apply_420_8bpc_neon, cfl_apply_420_8bpc_neon_rdm,
     cfl_apply_422_8bpc_neon, cfl_apply_422_8bpc_neon_rdm, cfl_apply_444_8bpc_neon,
-    cfl_apply_444_8bpc_neon_rdm, cfl_gen_y_row_8bpc_neon, cfl_mhccp_pred_8bpc_neon,
+    cfl_apply_444_8bpc_neon_rdm, cfl_gen_mat_8bpc_neon, cfl_gen_y_row_8bpc_neon,
+    cfl_mhccp_pred_8bpc_neon,
 };
 pub(crate) use cfl_hd::{
     cfl_alpha_accum_hbd_neon, cfl_apply_420_hbd_neon, cfl_apply_422_hbd_neon,
-    cfl_apply_444_hbd_neon, cfl_gen_y_row_hbd_neon, cfl_mhccp_pred_hbd_neon,
+    cfl_apply_444_hbd_neon, cfl_gen_mat_hbd_neon, cfl_gen_y_row_hbd_neon, cfl_mhccp_pred_hbd_neon,
 };
 pub(crate) use deblocking::{
     deblock_apply_8bpc_neon, deblock_apply_hbd_neon, deblock_h_sb64uv_8bpc_neon,
@@ -83,8 +84,8 @@ pub(crate) use filter::{
 };
 pub(crate) use filter_hd::{
     avg_row_hbd_neon, blend_row_hbd_neon, dc_add_row_hbd_neon, gdf_add_run_hbd_neon,
-    gdf_gradient_group_hbd_neon, mask_row_hbd_neon, morph_row_hbd_neon, residual_add_row_hbd_neon,
-    w_avg_row_hbd_neon,
+    gdf_gradient_group_hbd_neon, gdf_prep_pair_hbd_neon, mask_row_hbd_neon, morph_row_hbd_neon,
+    residual_add_row_hbd_neon, w_avg_row_hbd_neon,
 };
 pub(crate) use ipred::*;
 pub(crate) use ipred_hd::*;

@@ -29,6 +29,29 @@
 
 use std::arch::x86_64::*;
 
+use crate::gdf_tables::{GDF_ALPHA, GDF_INTER_ERROR, GDF_INTRA_ERROR, GDF_WEIGHT};
+
+const GDF_PREP_COORDS: [[i8; 2]; 18] = [
+    [6, 0],
+    [5, 0],
+    [4, 0],
+    [3, 0],
+    [2, 1],
+    [2, 0],
+    [2, -1],
+    [1, 2],
+    [1, 1],
+    [1, 0],
+    [1, -1],
+    [1, -2],
+    [0, 3],
+    [0, 2],
+    [0, 1],
+    [0, -1],
+    [0, -2],
+    [0, -3],
+];
+
 #[inline(always)]
 fn load_i32x8(a: &[i32; 8]) -> __m256i {
     unsafe { _mm256_loadu_si256(a.as_ptr() as *const __m256i) }
@@ -570,4 +593,133 @@ pub(crate) fn gdf_gradient_group_hbd_avx2(
     for k in 0..ncells {
         dst[base_cell + k][d] = out[k] as u16;
     }
+}
+
+#[inline]
+fn gdf_prep_apply_sign(v: i32) -> i32 {
+    if v < 0 {
+        -((v.wrapping_neg() + (1 << 14)) >> 15)
+    } else {
+        (v + (1 << 14)) >> 15
+    }
+}
+
+#[inline]
+fn gdf_prep_lookup_error(ref_dst_idx: usize, error_lut_base: usize, full_idx: usize) -> i8 {
+    if ref_dst_idx == 0 {
+        GDF_INTRA_ERROR[error_lut_base + full_idx]
+    } else {
+        GDF_INTER_ERROR[error_lut_base + full_idx]
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gdf_load_pair_i32(row: &[u16], col: usize, sh: __m128i) -> __m128i {
+    let raw = unsafe { core::ptr::read_unaligned(row.as_ptr().add(col).cast::<u32>()) } as i32;
+    _mm_srl_epi32(_mm_cvtepu16_epi32(_mm_cvtsi32_si128(raw)), sh)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gdf_clip_i32x4(v: __m128i, lo: __m128i, hi: __m128i) -> __m128i {
+    _mm_min_epi32(_mm_max_epi32(v, lo), hi)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gdf_store_i32x4(v: __m128i) -> [i32; 4] {
+    let mut out = [0i32; 4];
+    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), v) };
+    out
+}
+
+/// HBD GDF prep inner 2-pixel pair.
+///
+/// The pair shares `cls` and gradient-derived `shared_vals`, so AVX2 is used
+/// across the two x samples while the final LUT indexing remains scalar.
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "avx2")]
+pub(crate) fn gdf_prep_pair_hbd_avx2(
+    rows: [&[u16]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    down_shift: u32,
+    up_scale: i32,
+    ref_dst_idx: usize,
+) -> [i8; 2] {
+    let sh = _mm_cvtsi32_si128(down_shift as i32);
+    let m = gdf_load_pair_i32(rows[6], col, sh);
+    let up_scale_v = _mm_set1_epi32(up_scale);
+    let v_lo = _mm_set1_epi32(-512);
+    let v_hi = _mm_set1_epi32(511);
+    let mut acc0 = _mm_set1_epi32(shared_vals[0]);
+    let mut acc1 = _mm_set1_epi32(shared_vals[1]);
+    let mut acc2 = _mm_set1_epi32(shared_vals[2]);
+
+    for (k, &[dy, dx]) in GDF_PREP_COORDS.iter().enumerate() {
+        let dy = dy as i32;
+        let dx = dx as i32;
+        let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
+        let alpha_v = _mm_set1_epi32(alpha);
+        let neg_alpha_v = _mm_set1_epi32(-alpha);
+        let a_col = (col as i32 - dx) as usize;
+        let b_col = (col as i32 + dx) as usize;
+        let a = gdf_load_pair_i32(rows[(6 - dy) as usize], a_col, sh);
+        let b = gdf_load_pair_i32(rows[(6 + dy) as usize], b_col, sh);
+        let above = gdf_clip_i32x4(
+            _mm_mullo_epi32(_mm_sub_epi32(a, m), up_scale_v),
+            neg_alpha_v,
+            alpha_v,
+        );
+        let below = gdf_clip_i32x4(
+            _mm_mullo_epi32(_mm_sub_epi32(b, m), up_scale_v),
+            neg_alpha_v,
+            alpha_v,
+        );
+        let v = gdf_clip_i32x4(_mm_add_epi32(above, below), v_lo, v_hi);
+        acc0 = _mm_add_epi32(
+            acc0,
+            _mm_mullo_epi32(
+                v,
+                _mm_set1_epi32(GDF_WEIGHT[weight_base + k * 4 + cls] as i32),
+            ),
+        );
+        acc1 = _mm_add_epi32(
+            acc1,
+            _mm_mullo_epi32(
+                v,
+                _mm_set1_epi32(GDF_WEIGHT[weight_base + 88 + k * 4 + cls] as i32),
+            ),
+        );
+        acc2 = _mm_add_epi32(
+            acc2,
+            _mm_mullo_epi32(
+                v,
+                _mm_set1_epi32(GDF_WEIGHT[weight_base + 176 + k * 4 + cls] as i32),
+            ),
+        );
+    }
+
+    let vals = [
+        gdf_store_i32x4(acc0),
+        gdf_store_i32x4(acc1),
+        gdf_store_i32x4(acc2),
+    ];
+    let mut out = [0i8; 2];
+    for lane in 0..2 {
+        let mut full_idx = 0usize;
+        for idx_vals in &vals {
+            let v = gdf_prep_apply_sign(idx_vals[lane] * scale);
+            let sub_idx = (v.clamp(-scale, scale - 1) + scale) as usize;
+            full_idx = full_idx * (scale as usize * 2) + sub_idx;
+        }
+        out[lane] = gdf_prep_lookup_error(ref_dst_idx, error_lut_base, full_idx);
+    }
+    out
 }

@@ -117,10 +117,10 @@ pub(crate) fn blend_top_grain_row_avx2(
     let (old_chunks, old_tail) = old[..n].as_chunks::<16>();
     let (grain_chunks, grain_tail) = grain[..n].as_chunks::<16>();
     for ((d, o), g) in dst_chunks.iter_mut().zip(old_chunks).zip(grain_chunks) {
-        let o_lo = unsafe { _mm_loadu_si128(o.as_ptr() as *const __m128i) };
-        let o_hi = unsafe { _mm_loadu_si128(o.as_ptr().add(8) as *const __m128i) };
-        let g_lo = unsafe { _mm_loadu_si128(g.as_ptr() as *const __m128i) };
-        let g_hi = unsafe { _mm_loadu_si128(g.as_ptr().add(8) as *const __m128i) };
+        let o_lo = unsafe { _mm_loadu_si128(o.as_ptr().cast()) };
+        let o_hi = unsafe { _mm_loadu_si128(o.as_ptr().add(8).cast()) };
+        let g_lo = unsafe { _mm_loadu_si128(g.as_ptr().cast()) };
+        let g_hi = unsafe { _mm_loadu_si128(g.as_ptr().add(8).cast()) };
         let out_lo = blend_top_grain8_avx2(o_lo, g_lo, old_w_v, new_w_v, round, minv, maxv);
         let out_hi = blend_top_grain8_avx2(o_hi, g_hi, old_w_v, new_w_v, round, minv, maxv);
         let out = _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(out_lo), out_hi);
@@ -191,13 +191,13 @@ fn apply_8bpc_vec16(
     let minv = _mm_set1_epi16(min_value as i16);
     let maxv = _mm_set1_epi16(max_value as i16);
 
-    let src8 = unsafe { _mm_loadu_si128(src as *const __m128i) };
+    let src8 = unsafe { _mm_loadu_si128(src.cast()) };
     let src_lo = _mm_cvtepu8_epi16(src8);
     let src_hi = _mm_cvtepu8_epi16(_mm_srli_si128::<8>(src8));
-    let g_lo = unsafe { _mm_loadu_si128(grain as *const __m128i) };
-    let g_hi = unsafe { _mm_loadu_si128(grain.add(8) as *const __m128i) };
-    let s_lo = unsafe { _mm_loadu_si128(scale as *const __m128i) };
-    let s_hi = unsafe { _mm_loadu_si128(scale.add(8) as *const __m128i) };
+    let g_lo = unsafe { _mm_loadu_si128(grain.cast()) };
+    let g_hi = unsafe { _mm_loadu_si128(grain.add(8).cast()) };
+    let s_lo = unsafe { _mm_loadu_si128(scale.cast()) };
+    let s_hi = unsafe { _mm_loadu_si128(scale.add(8).cast()) };
 
     let n_lo = noise_8x_i16(g_lo, s_lo, round, scaling_shift);
     let n_hi = noise_8x_i16(g_hi, s_hi, round, scaling_shift);
@@ -222,11 +222,11 @@ fn apply_hbd_vec4(
     let minv = _mm_set1_epi32(min_value);
     let maxv = _mm_set1_epi32(max_value);
 
-    let src4 = unsafe { _mm_loadl_epi64(src as *const __m128i) };
+    let src4 = unsafe { _mm_loadl_epi64(src.cast()) };
     let src32 = _mm_cvtepu16_epi32(src4);
-    let grain16 = unsafe { _mm_loadl_epi64(grain as *const __m128i) };
+    let grain16 = unsafe { _mm_loadl_epi64(grain.cast()) };
     let grain32 = _mm_cvtepi16_epi32(grain16);
-    let scale32 = unsafe { _mm_loadu_si128(scale as *const __m128i) };
+    let scale32 = unsafe { _mm_loadu_si128(scale.cast()) };
     let noise = srai_epi32_runtime(
         _mm_add_epi32(_mm_mullo_epi32(scale32, grain32), round),
         scaling_shift,
@@ -251,11 +251,11 @@ fn apply_hbd_vec8(
     let minv = _mm256_set1_epi32(min_value);
     let maxv = _mm256_set1_epi32(max_value);
 
-    let src8 = unsafe { _mm_loadu_si128(src as *const __m128i) };
+    let src8 = unsafe { _mm_loadu_si128(src.cast()) };
     let src32 = _mm256_cvtepu16_epi32(src8);
-    let grain16 = unsafe { _mm_loadu_si128(grain as *const __m128i) };
+    let grain16 = unsafe { _mm_loadu_si128(grain.cast()) };
     let grain32 = _mm256_cvtepi16_epi32(grain16);
-    let scale32 = unsafe { _mm256_loadu_si256(scale as *const __m256i) };
+    let scale32 = unsafe { _mm256_loadu_si256(scale.cast()) };
     let noise = srai_epi32x8_runtime(
         _mm256_add_epi32(_mm256_mullo_epi32(scale32, grain32), round),
         scaling_shift,

@@ -758,6 +758,37 @@ pub(crate) fn gdf_gradient_group_hbd(
     );
 }
 
+/// High-bit-depth GDF prep inner 2-pixel pair.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn gdf_prep_pair_hbd(
+    rows: [&[u16]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    down_shift: u32,
+    up_scale: i32,
+    ref_dst_idx: usize,
+) -> [i8; 2] {
+    crate::rowops_dispatch::gdf_prep_pair_hbd(
+        rows,
+        col,
+        cls,
+        shared_vals,
+        alpha_base,
+        weight_base,
+        error_lut_base,
+        scale,
+        down_shift,
+        up_scale,
+        ref_dst_idx,
+    )
+}
+
 #[cfg(test)]
 mod wiener_scalar_proof {
     use super::*;

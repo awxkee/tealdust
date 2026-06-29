@@ -30,7 +30,7 @@
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-use crate::cfl_dispatch::{CflAlphaAccum8, CflApply8, CflMhccpPred8};
+use crate::cfl_dispatch::{CflAlphaAccum8, CflApply8, CflGenMat8, CflMhccpPred8};
 const CFL_FLT_TYPE_VSTRIP: u32 = 1;
 const CFL_FLT_TYPE_GAUSS: u32 = 2;
 
@@ -1543,9 +1543,120 @@ fn reduce_i32x8(v: __m256i) -> i32 {
     _mm_cvtsi128_si32(sum)
 }
 
+#[inline(always)]
+fn load_strided_u8x16(samples: &[u8], mut off: usize, stride: usize) -> [u8; 16] {
+    let mut tmp = [0u8; 16];
+    for dst in &mut tmp {
+        *dst = samples[off];
+        off += stride;
+    }
+    tmp
+}
+
+#[inline(always)]
+fn load_strided_u8x8(samples: &[u8], mut off: usize, stride: usize) -> [u8; 8] {
+    let mut tmp = [0u8; 8];
+    for dst in &mut tmp {
+        *dst = samples[off];
+        off += stride;
+    }
+    tmp
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_i32x8_u16(a: &mut [u16; 8], v: __m256i) {
+    let lo = _mm256_castsi256_si128(v);
+    let hi = _mm256_extracti128_si256::<1>(v);
+    let p = _mm_packus_epi32(lo, hi);
+    unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, p) };
+}
+
+#[target_feature(enable = "avx2")]
+pub(crate) fn cfl_gen_mat_8bpc_avx2(args: CflGenMat8<'_>) {
+    if args.len < 8 {
+        crate::cfl_dispatch::cfl_gen_mat_8bpc_scalar(args);
+        return;
+    }
+
+    let CflGenMat8 {
+        sums,
+        imat0,
+        imat1,
+        imat_off,
+        y,
+        v0_off,
+        v0_stride,
+        v1_off,
+        v1_stride,
+        len,
+    } = args;
+
+    let mut acc00 = _mm256_setzero_si256();
+    let mut acc01 = _mm256_setzero_si256();
+    let mut acc0 = _mm256_setzero_si256();
+    let mut acc11 = _mm256_setzero_si256();
+    let mut acc1 = _mm256_setzero_si256();
+    let chunks = len / 8;
+    let processed = chunks * 8;
+
+    for chunk_idx in 0..chunks {
+        let rel = chunk_idx * 8;
+        let v0 = if v0_stride == 1 {
+            mhccp_load_u8x8_i32(&y[v0_off + rel..])
+        } else {
+            let tmp = load_strided_u8x8(y, v0_off + rel * v0_stride, v0_stride);
+            mhccp_load_u8x8_i32(&tmp)
+        };
+        let raw1 = if v1_stride == 1 {
+            mhccp_load_u8x8_i32(&y[v1_off + rel..])
+        } else {
+            let tmp = load_strided_u8x8(y, v1_off + rel * v1_stride, v1_stride);
+            mhccp_load_u8x8_i32(&tmp)
+        };
+        let v1 = _mm256_srai_epi32::<8>(_mm256_add_epi32(
+            _mm256_mullo_epi32(raw1, raw1),
+            _mm256_set1_epi32(128),
+        ));
+
+        acc00 = _mm256_add_epi32(acc00, _mm256_mullo_epi32(v0, v0));
+        acc01 = _mm256_add_epi32(acc01, _mm256_mullo_epi32(v0, v1));
+        acc0 = _mm256_add_epi32(acc0, v0);
+        acc11 = _mm256_add_epi32(acc11, _mm256_mullo_epi32(v1, v1));
+        acc1 = _mm256_add_epi32(acc1, v1);
+
+        let out = imat_off + rel;
+        let dst0: &mut [u16; 8] = (&mut imat0[out..out + 8]).try_into().unwrap();
+        let dst1: &mut [u16; 8] = (&mut imat1[out..out + 8]).try_into().unwrap();
+        store_i32x8_u16(dst0, v0);
+        store_i32x8_u16(dst1, v1);
+    }
+
+    sums.m00 += reduce_i32x8(acc00);
+    sums.m01 += reduce_i32x8(acc01);
+    sums.sum0 += reduce_i32x8(acc0);
+    sums.m11 += reduce_i32x8(acc11);
+    sums.sum1 += reduce_i32x8(acc1);
+
+    if processed < len {
+        crate::cfl_dispatch::cfl_gen_mat_8bpc_scalar(crate::cfl_dispatch::CflGenMat8 {
+            sums,
+            imat0,
+            imat1,
+            imat_off: imat_off + processed,
+            y,
+            v0_off: v0_off + processed * v0_stride,
+            v0_stride,
+            v1_off: v1_off + processed * v1_stride,
+            v1_stride,
+            len: len - processed,
+        });
+    }
+}
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn cfl_alpha_accum_8bpc_avx2(args: CflAlphaAccum8<'_>) {
-    if args.sample_stride != 1 || args.len < 16 {
+    if args.len < 16 {
         crate::cfl_dispatch::cfl_alpha_accum_8bpc_scalar(args);
         return;
     }
@@ -1554,7 +1665,7 @@ pub(crate) fn cfl_alpha_accum_8bpc_avx2(args: CflAlphaAccum8<'_>) {
         alpha,
         samples,
         sample_off,
-        sample_stride: _,
+        sample_stride,
         imat0,
         imat1,
         imat_off,
@@ -1566,34 +1677,51 @@ pub(crate) fn cfl_alpha_accum_8bpc_avx2(args: CflAlphaAccum8<'_>) {
     let mut acc0 = _mm256_setzero_si256();
     let mut acc1 = _mm256_setzero_si256();
     let mut acc2 = _mm256_setzero_si256();
-    let mut processed = 0usize;
+    let chunks = len / 16;
+    let processed = chunks * 16;
 
-    let (sample_chunks, sample_rem) = samples[sample_off..sample_off + len].as_chunks::<16>();
-    for (chunk_idx, s) in sample_chunks.iter().enumerate() {
-        let i = imat_off + chunk_idx * 16;
-        let v = _mm256_cvtepu8_epi16(load_u8x16(s));
-        let m0 = load_u16x16((&imat0[i..i + 16]).try_into().unwrap());
-        let m1 = load_u16x16((&imat1[i..i + 16]).try_into().unwrap());
-        acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(v, m0));
-        acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(v, m1));
-        acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(v, ones));
+    if sample_stride == 1 {
+        let sample_chunks = samples[sample_off..sample_off + processed]
+            .as_chunks::<16>()
+            .0;
+        for (chunk_idx, s) in sample_chunks.iter().enumerate() {
+            let i = imat_off + chunk_idx * 16;
+            let v = _mm256_cvtepu8_epi16(load_u8x16(s));
+            let m0 = load_u16x16((&imat0[i..i + 16]).try_into().unwrap());
+            let m1 = load_u16x16((&imat1[i..i + 16]).try_into().unwrap());
+            acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(v, m0));
+            acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(v, m1));
+            acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(v, ones));
+        }
+    } else {
+        let mut off = sample_off;
+        for chunk_idx in 0..chunks {
+            let i = imat_off + chunk_idx * 16;
+            let s = load_strided_u8x16(samples, off, sample_stride);
+            off += 16 * sample_stride;
+            let v = _mm256_cvtepu8_epi16(load_u8x16(&s));
+            let m0 = load_u16x16((&imat0[i..i + 16]).try_into().unwrap());
+            let m1 = load_u16x16((&imat1[i..i + 16]).try_into().unwrap());
+            acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(v, m0));
+            acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(v, m1));
+            acc2 = _mm256_add_epi32(acc2, _mm256_madd_epi16(v, ones));
+        }
     }
-    processed += sample_chunks.len() * 16;
 
     alpha[0] += reduce_i32x8(acc0);
     alpha[1] += reduce_i32x8(acc1);
     alpha[2] += reduce_i32x8(acc2) << a2sh;
 
-    if !sample_rem.is_empty() {
+    if processed < len {
         crate::cfl_dispatch::cfl_alpha_accum_8bpc_scalar(crate::cfl_dispatch::CflAlphaAccum8 {
             alpha,
             samples,
-            sample_off: sample_off + processed,
-            sample_stride: 1,
+            sample_off: sample_off + processed * sample_stride,
+            sample_stride,
             imat0,
             imat1,
             imat_off: imat_off + processed,
-            len: sample_rem.len(),
+            len: len - processed,
             a2sh,
         });
     }

@@ -216,10 +216,12 @@ pub(crate) fn ipred_v_8bpc_neon(
         dst[..width].copy_from_slice(top);
     }
 
-    let mut off = stride;
-    for _ in 1..height {
-        dst.copy_within(0..width, off);
-        off += stride;
+    if height > 1 {
+        let (first, rest) = dst.split_at_mut(stride);
+        let src = &first[..width];
+        for row in rest.chunks_mut(stride).take(height - 1) {
+            row[..width].copy_from_slice(src);
+        }
     }
 }
 
@@ -272,17 +274,101 @@ pub(crate) fn ipred_smooth_v_8bpc_neon(
     let scale = (n_pel >= 64) as usize + (n_pel > 512) as usize;
     let weights = &SM_WEIGHTS[scale];
     let bottom = tl[o - h - 1] as i16;
+    let tl_src = &tl[o + 1..o + 1 + w];
 
     unsafe {
         let bottom_v = vdupq_n_s16(bottom);
         let rnd = vdupq_n_s16((h >> 1) as i16);
         let add32 = vdupq_n_s16(32);
+        let mut y = 0usize;
         let mut off = 0usize;
-        for y in 0..h {
+        while y + 1 < h {
+            let (head, tail) = dst[off..].split_at_mut(stride);
+            let row0 = &mut head[..w];
+            let row1 = &mut tail[..w];
+            let off_y0 = vdupq_n_s16((h - 1 - y) as i16);
+            let off_y1 = vdupq_n_s16((h - 2 - y) as i16);
+            let w_ver0 = vdupq_n_s16(weights[y] as i16);
+            let w_ver1 = vdupq_n_s16(weights[y + 1] as i16);
+            let (c16_0, r16_0) = row0.as_chunks_mut::<16>();
+            let (c16_1, r16_1) = row1.as_chunks_mut::<16>();
+            for ((dst0, dst1), tl) in c16_0
+                .iter_mut()
+                .zip(c16_1.iter_mut())
+                .zip(tl_src.as_chunks::<16>().0.iter())
+            {
+                let (above0, above1) = load_u8x16_i16x2_neon(tl);
+                let mul00 = vmulq_s16(vsubq_s16(above0, bottom_v), off_y0);
+                let pred00 = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul00, rnd), bhl2));
+                let adj00 = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(above0, pred00), w_ver0),
+                    add32,
+                ));
+                let mul01 = vmulq_s16(vsubq_s16(above1, bottom_v), off_y0);
+                let pred01 = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul01, rnd), bhl2));
+                let adj01 = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(above1, pred01), w_ver0),
+                    add32,
+                ));
+                store_i16x8x2_u8_fixed(dst0, vaddq_s16(pred00, adj00), vaddq_s16(pred01, adj01));
+
+                let mul10 = vmulq_s16(vsubq_s16(above0, bottom_v), off_y1);
+                let pred10 = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul10, rnd), bhl2));
+                let adj10 = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(above0, pred10), w_ver1),
+                    add32,
+                ));
+                let mul11 = vmulq_s16(vsubq_s16(above1, bottom_v), off_y1);
+                let pred11 = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul11, rnd), bhl2));
+                let adj11 = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(above1, pred11), w_ver1),
+                    add32,
+                ));
+                store_i16x8x2_u8_fixed(dst1, vaddq_s16(pred10, adj10), vaddq_s16(pred11, adj11));
+            }
+
+            let done = c16_0.len() * 16;
+            let (c8_0, r8_0) = r16_0.as_chunks_mut::<8>();
+            let (c8_1, r8_1) = r16_1.as_chunks_mut::<8>();
+            for ((dst0, dst1), tl) in c8_0
+                .iter_mut()
+                .zip(c8_1.iter_mut())
+                .zip(tl_src[done..].as_chunks::<8>().0.iter())
+            {
+                let above = load_u8x8_i16_fixed(tl);
+                let mul0 = vmulq_s16(vsubq_s16(above, bottom_v), off_y0);
+                let pred0 = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul0, rnd), bhl2));
+                let adj0 =
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(above, pred0), w_ver0), add32));
+                store_i16x8_u8_fixed(dst0, vaddq_s16(pred0, adj0));
+
+                let mul1 = vmulq_s16(vsubq_s16(above, bottom_v), off_y1);
+                let pred1 = vaddq_s16(bottom_v, sra_i16(vaddq_s16(mul1, rnd), bhl2));
+                let adj1 =
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(above, pred1), w_ver1), add32));
+                store_i16x8_u8_fixed(dst1, vaddq_s16(pred1, adj1));
+            }
+
+            let base_x = done + c8_0.len() * 8;
+            for (xi, (dst0, dst1)) in r8_0.iter_mut().zip(r8_1.iter_mut()).enumerate() {
+                let above = tl_src[base_x + xi] as i32;
+                let pred0 = bottom as i32
+                    + (((above - bottom as i32) * (h as i32 - 1 - y as i32) + (h >> 1) as i32)
+                        >> bhl2);
+                let pred1 = bottom as i32
+                    + (((above - bottom as i32) * (h as i32 - 2 - y as i32) + (h >> 1) as i32)
+                        >> bhl2);
+                *dst0 = (pred0 + (((above - pred0) * weights[y] as i32 + 32) >> 6)) as u8;
+                *dst1 = (pred1 + (((above - pred1) * weights[y + 1] as i32 + 32) >> 6)) as u8;
+            }
+            y += 2;
+            off += stride * 2;
+        }
+
+        if y < h {
             let off_y = vdupq_n_s16((h - 1 - y) as i16);
             let w_ver = vdupq_n_s16(weights[y] as i16);
             let row = &mut dst[off..off + w];
-            let tl_src = &tl[o + 1..];
             let (c16, r16) = row.as_chunks_mut::<16>();
             for (dst, tl) in c16.iter_mut().zip(tl_src.as_chunks::<16>().0.iter()) {
                 let (above0, above1) = load_u8x16_i16x2_neon(tl);
@@ -311,11 +397,11 @@ pub(crate) fn ipred_smooth_v_8bpc_neon(
             let base_x = done + c8.len() * 8;
             for (xi, dst) in r8.iter_mut().enumerate() {
                 let above = tl_src[base_x + xi] as i32;
-                let mul = (above - bottom as i32) * (h as i32 - 1 - y as i32);
-                let pred = bottom as i32 + ((mul + (h >> 1) as i32) >> bhl2);
+                let pred = bottom as i32
+                    + (((above - bottom as i32) * (h as i32 - 1 - y as i32) + (h >> 1) as i32)
+                        >> bhl2);
                 *dst = (pred + (((above - pred) * weights[y] as i32 + 32) >> 6)) as u8;
             }
-            off += stride;
         }
     }
 }
@@ -343,8 +429,125 @@ pub(crate) fn ipred_smooth_h_8bpc_neon(
         let right_v = vdupq_n_s16(right);
         let rnd = vdupq_n_s16((w >> 1) as i16);
         let add32 = vdupq_n_s16(32);
+        let mut y = 0usize;
         let mut off = 0usize;
-        for y in 0..h {
+        while y + 1 < h {
+            let (head, tail) = dst[off..].split_at_mut(stride);
+            let row0 = &mut head[..w];
+            let row1 = &mut tail[..w];
+            let left0 = tl[o - 1 - y] as i16;
+            let left1 = tl[o - 2 - y] as i16;
+            let left0_v = vdupq_n_s16(left0);
+            let left1_v = vdupq_n_s16(left1);
+            let diff0 = vdupq_n_s16(left0 - right);
+            let diff1 = vdupq_n_s16(left1 - right);
+
+            let (c16_0, r16_0) = row0.as_chunks_mut::<16>();
+            let (c16_1, r16_1) = row1.as_chunks_mut::<16>();
+            for (ci, ((oc0, oc1), wxc)) in c16_0
+                .iter_mut()
+                .zip(c16_1.iter_mut())
+                .zip(weights[..w].as_chunks::<16>().0.iter())
+                .enumerate()
+            {
+                let x = ci * 16;
+                let d_lo = dist8((w - 1 - x) as i16);
+                let d_hi = dist8((w - 1 - x - 8) as i16);
+                let (wx_lo, wx_hi) = load_u8x16_i16x2_neon(wxc);
+
+                let pred0_lo = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff0, d_lo), rnd), bwl2),
+                );
+                let adj0_lo = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(left0_v, pred0_lo), wx_lo),
+                    add32,
+                ));
+                let pred0_hi = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff0, d_hi), rnd), bwl2),
+                );
+                let adj0_hi = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(left0_v, pred0_hi), wx_hi),
+                    add32,
+                ));
+                store_i16x8x2_u8_fixed(
+                    oc0,
+                    vaddq_s16(pred0_lo, adj0_lo),
+                    vaddq_s16(pred0_hi, adj0_hi),
+                );
+
+                let pred1_lo = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff1, d_lo), rnd), bwl2),
+                );
+                let adj1_lo = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(left1_v, pred1_lo), wx_lo),
+                    add32,
+                ));
+                let pred1_hi = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff1, d_hi), rnd), bwl2),
+                );
+                let adj1_hi = vshrq_n_s16::<6>(vaddq_s16(
+                    vmulq_s16(vsubq_s16(left1_v, pred1_hi), wx_hi),
+                    add32,
+                ));
+                store_i16x8x2_u8_fixed(
+                    oc1,
+                    vaddq_s16(pred1_lo, adj1_lo),
+                    vaddq_s16(pred1_hi, adj1_hi),
+                );
+            }
+
+            let done = c16_0.len() * 16;
+            let (c8_0, r8_0) = r16_0.as_chunks_mut::<8>();
+            let (c8_1, r8_1) = r16_1.as_chunks_mut::<8>();
+            for (ci, ((oc0, oc1), wxc)) in c8_0
+                .iter_mut()
+                .zip(c8_1.iter_mut())
+                .zip(weights[done..w].as_chunks::<8>().0.iter())
+                .enumerate()
+            {
+                let x = done + ci * 8;
+                let dvec = dist8((w - 1 - x) as i16);
+                let wx = load_u8x8_i16_fixed(wxc);
+                let pred0 = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff0, dvec), rnd), bwl2),
+                );
+                let adj0 =
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left0_v, pred0), wx), add32));
+                store_i16x8_u8_fixed(oc0, vaddq_s16(pred0, adj0));
+
+                let pred1 = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff1, dvec), rnd), bwl2),
+                );
+                let adj1 =
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left1_v, pred1), wx), add32));
+                store_i16x8_u8_fixed(oc1, vaddq_s16(pred1, adj1));
+            }
+            let base_x = done + c8_0.len() * 8;
+            for (xi, (oc0, oc1)) in r8_0.iter_mut().zip(r8_1.iter_mut()).enumerate() {
+                let x = base_x + xi;
+                let pred0 = right as i32
+                    + (((left0 as i32 - right as i32) * (w as i32 - 1 - x as i32)
+                        + (w >> 1) as i32)
+                        >> bwl2);
+                let pred1 = right as i32
+                    + (((left1 as i32 - right as i32) * (w as i32 - 1 - x as i32)
+                        + (w >> 1) as i32)
+                        >> bwl2);
+                *oc0 = (pred0 + (((left0 as i32 - pred0) * weights[x] as i32 + 32) >> 6)) as u8;
+                *oc1 = (pred1 + (((left1 as i32 - pred1) * weights[x] as i32 + 32) >> 6)) as u8;
+            }
+
+            y += 2;
+            off += stride * 2;
+        }
+
+        if y < h {
             let left = tl[o - 1 - y] as i16;
             let left_v = vdupq_n_s16(left);
             let diff = vdupq_n_s16(left - right);
@@ -403,7 +606,6 @@ pub(crate) fn ipred_smooth_h_8bpc_neon(
                 let pred = right as i32 + ((mul + (w >> 1) as i32) >> bwl2);
                 *oc = (pred + (((left as i32 - pred) * weights[x] as i32 + 32) >> 6)) as u8;
             }
-            off += stride;
         }
     }
 }
@@ -428,6 +630,7 @@ pub(crate) fn ipred_smooth_8bpc_neon(
     let weights = &SM_WEIGHTS[scale];
     let right = tl[o + w + 1] as i16;
     let bottom = tl[o - h - 1] as i16;
+    let top_src = &tl[o + 1..o + 1 + w];
 
     unsafe {
         let right_v = vdupq_n_s16(right);
@@ -436,15 +639,229 @@ pub(crate) fn ipred_smooth_8bpc_neon(
         let rnd_hor = vdupq_n_s16((w >> 1) as i16);
         let add32 = vdupq_n_s16(32);
         let one = vdupq_n_s16(1);
+        let mut y = 0usize;
         let mut off = 0usize;
-        for y in 0..h {
+        while y + 1 < h {
+            let (head, tail) = dst[off..].split_at_mut(stride);
+            let row0 = &mut head[..w];
+            let row1 = &mut tail[..w];
+            let left0 = tl[o - 1 - y] as i16;
+            let left1 = tl[o - 2 - y] as i16;
+            let left0_v = vdupq_n_s16(left0);
+            let left1_v = vdupq_n_s16(left1);
+            let diff_hor0 = vdupq_n_s16(left0 - right);
+            let diff_hor1 = vdupq_n_s16(left1 - right);
+            let off_ver0 = vdupq_n_s16((h - 1 - y) as i16);
+            let off_ver1 = vdupq_n_s16((h - 2 - y) as i16);
+            let w_ver0 = vdupq_n_s16(weights[y] as i16);
+            let w_ver1 = vdupq_n_s16(weights[y + 1] as i16);
+
+            let (c16_0, r16_0) = row0.as_chunks_mut::<16>();
+            let (c16_1, r16_1) = row1.as_chunks_mut::<16>();
+            for (ci, (((oc0, oc1), t), wxc)) in c16_0
+                .iter_mut()
+                .zip(c16_1.iter_mut())
+                .zip(top_src.as_chunks::<16>().0.iter())
+                .zip(weights[..w].as_chunks::<16>().0.iter())
+                .enumerate()
+            {
+                let x = ci * 16;
+                let (above0, above1) = load_u8x16_i16x2_neon(t);
+                let (wx0, wx1) = load_u8x16_i16x2_neon(wxc);
+                let d0 = dist8((w - 1 - x) as i16);
+                let d1 = dist8((w - 1 - x - 8) as i16);
+
+                let mut pv0_lo = vaddq_s16(
+                    bottom_v,
+                    sra_i16(
+                        vaddq_s16(vmulq_s16(vsubq_s16(above0, bottom_v), off_ver0), rnd_ver),
+                        bhl2,
+                    ),
+                );
+                let mut ph0_lo = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff_hor0, d0), rnd_hor), bwl2),
+                );
+                pv0_lo = vaddq_s16(
+                    pv0_lo,
+                    vshrq_n_s16::<6>(vaddq_s16(
+                        vmulq_s16(vsubq_s16(above0, pv0_lo), w_ver0),
+                        add32,
+                    )),
+                );
+                ph0_lo = vaddq_s16(
+                    ph0_lo,
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left0_v, ph0_lo), wx0), add32)),
+                );
+                let out0_lo = vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pv0_lo, ph0_lo), one));
+
+                let mut pv0_hi = vaddq_s16(
+                    bottom_v,
+                    sra_i16(
+                        vaddq_s16(vmulq_s16(vsubq_s16(above1, bottom_v), off_ver0), rnd_ver),
+                        bhl2,
+                    ),
+                );
+                let mut ph0_hi = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff_hor0, d1), rnd_hor), bwl2),
+                );
+                pv0_hi = vaddq_s16(
+                    pv0_hi,
+                    vshrq_n_s16::<6>(vaddq_s16(
+                        vmulq_s16(vsubq_s16(above1, pv0_hi), w_ver0),
+                        add32,
+                    )),
+                );
+                ph0_hi = vaddq_s16(
+                    ph0_hi,
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left0_v, ph0_hi), wx1), add32)),
+                );
+                let out0_hi = vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pv0_hi, ph0_hi), one));
+                store_i16x8x2_u8_fixed(oc0, out0_lo, out0_hi);
+
+                let mut pv1_lo = vaddq_s16(
+                    bottom_v,
+                    sra_i16(
+                        vaddq_s16(vmulq_s16(vsubq_s16(above0, bottom_v), off_ver1), rnd_ver),
+                        bhl2,
+                    ),
+                );
+                let mut ph1_lo = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff_hor1, d0), rnd_hor), bwl2),
+                );
+                pv1_lo = vaddq_s16(
+                    pv1_lo,
+                    vshrq_n_s16::<6>(vaddq_s16(
+                        vmulq_s16(vsubq_s16(above0, pv1_lo), w_ver1),
+                        add32,
+                    )),
+                );
+                ph1_lo = vaddq_s16(
+                    ph1_lo,
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left1_v, ph1_lo), wx0), add32)),
+                );
+                let out1_lo = vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pv1_lo, ph1_lo), one));
+
+                let mut pv1_hi = vaddq_s16(
+                    bottom_v,
+                    sra_i16(
+                        vaddq_s16(vmulq_s16(vsubq_s16(above1, bottom_v), off_ver1), rnd_ver),
+                        bhl2,
+                    ),
+                );
+                let mut ph1_hi = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff_hor1, d1), rnd_hor), bwl2),
+                );
+                pv1_hi = vaddq_s16(
+                    pv1_hi,
+                    vshrq_n_s16::<6>(vaddq_s16(
+                        vmulq_s16(vsubq_s16(above1, pv1_hi), w_ver1),
+                        add32,
+                    )),
+                );
+                ph1_hi = vaddq_s16(
+                    ph1_hi,
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left1_v, ph1_hi), wx1), add32)),
+                );
+                let out1_hi = vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pv1_hi, ph1_hi), one));
+                store_i16x8x2_u8_fixed(oc1, out1_lo, out1_hi);
+            }
+            let done = c16_0.len() * 16;
+            let (c8_0, r8_0) = r16_0.as_chunks_mut::<8>();
+            let (c8_1, r8_1) = r16_1.as_chunks_mut::<8>();
+            for (ci, (((oc0, oc1), t), wxc)) in c8_0
+                .iter_mut()
+                .zip(c8_1.iter_mut())
+                .zip(top_src[done..].as_chunks::<8>().0.iter())
+                .zip(weights[done..w].as_chunks::<8>().0.iter())
+                .enumerate()
+            {
+                let above = load_u8x8_i16_fixed(t);
+                let wx = load_u8x8_i16_fixed(wxc);
+                let d = dist8((w - 1 - done - ci * 8) as i16);
+
+                let mut pv0 = vaddq_s16(
+                    bottom_v,
+                    sra_i16(
+                        vaddq_s16(vmulq_s16(vsubq_s16(above, bottom_v), off_ver0), rnd_ver),
+                        bhl2,
+                    ),
+                );
+                let mut ph0 = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff_hor0, d), rnd_hor), bwl2),
+                );
+                pv0 = vaddq_s16(
+                    pv0,
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(above, pv0), w_ver0), add32)),
+                );
+                ph0 = vaddq_s16(
+                    ph0,
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left0_v, ph0), wx), add32)),
+                );
+                store_i16x8_u8_fixed(oc0, vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pv0, ph0), one)));
+
+                let mut pv1 = vaddq_s16(
+                    bottom_v,
+                    sra_i16(
+                        vaddq_s16(vmulq_s16(vsubq_s16(above, bottom_v), off_ver1), rnd_ver),
+                        bhl2,
+                    ),
+                );
+                let mut ph1 = vaddq_s16(
+                    right_v,
+                    sra_i16(vaddq_s16(vmulq_s16(diff_hor1, d), rnd_hor), bwl2),
+                );
+                pv1 = vaddq_s16(
+                    pv1,
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(above, pv1), w_ver1), add32)),
+                );
+                ph1 = vaddq_s16(
+                    ph1,
+                    vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left1_v, ph1), wx), add32)),
+                );
+                store_i16x8_u8_fixed(oc1, vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pv1, ph1), one)));
+            }
+            let base_x = done + c8_0.len() * 8;
+            for (xi, (oc0, oc1)) in r8_0.iter_mut().zip(r8_1.iter_mut()).enumerate() {
+                let x = base_x + xi;
+                let above = tl[o + 1 + x] as i32;
+                let mut pv0 = bottom as i32
+                    + (((above - bottom as i32) * (h as i32 - 1 - y as i32) + (h >> 1) as i32)
+                        >> bhl2);
+                let mut ph0 = right as i32
+                    + (((left0 as i32 - right as i32) * (w as i32 - 1 - x as i32)
+                        + (w >> 1) as i32)
+                        >> bwl2);
+                pv0 += ((above - pv0) * weights[y] as i32 + 32) >> 6;
+                ph0 += ((left0 as i32 - ph0) * weights[x] as i32 + 32) >> 6;
+                *oc0 = ((pv0 + ph0 + 1) >> 1) as u8;
+
+                let mut pv1 = bottom as i32
+                    + (((above - bottom as i32) * (h as i32 - 2 - y as i32) + (h >> 1) as i32)
+                        >> bhl2);
+                let mut ph1 = right as i32
+                    + (((left1 as i32 - right as i32) * (w as i32 - 1 - x as i32)
+                        + (w >> 1) as i32)
+                        >> bwl2);
+                pv1 += ((above - pv1) * weights[y + 1] as i32 + 32) >> 6;
+                ph1 += ((left1 as i32 - ph1) * weights[x] as i32 + 32) >> 6;
+                *oc1 = ((pv1 + ph1 + 1) >> 1) as u8;
+            }
+            y += 2;
+            off += stride * 2;
+        }
+
+        if y < h {
             let left = tl[o - 1 - y] as i16;
             let left_v = vdupq_n_s16(left);
             let diff_hor = vdupq_n_s16(left - right);
             let off_ver = vdupq_n_s16((h - 1 - y) as i16);
             let w_ver = vdupq_n_s16(weights[y] as i16);
             let row = &mut dst[off..off + w];
-            let top_src = &tl[o + 1..o + 1 + w];
             let (c16, r16) = row.as_chunks_mut::<16>();
             for (ci, ((oc, t), wxc)) in c16
                 .iter_mut()
@@ -499,7 +916,6 @@ pub(crate) fn ipred_smooth_8bpc_neon(
                     vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left_v, ph1), wx1), add32)),
                 );
                 let out1 = vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pv1, ph1), one));
-
                 store_i16x8x2_u8_fixed(oc, out0, out1);
             }
             let done = c16.len() * 16;
@@ -513,7 +929,6 @@ pub(crate) fn ipred_smooth_8bpc_neon(
                 let above = load_u8x8_i16_fixed(t);
                 let wx = load_u8x8_i16_fixed(wxc);
                 let d = dist8((w - 1 - done - ci * 8) as i16);
-
                 let mut pred_ver = vaddq_s16(
                     bottom_v,
                     sra_i16(
@@ -536,8 +951,10 @@ pub(crate) fn ipred_smooth_8bpc_neon(
                     pred_hor,
                     vshrq_n_s16::<6>(vaddq_s16(vmulq_s16(vsubq_s16(left_v, pred_hor), wx), add32)),
                 );
-                let out = vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pred_ver, pred_hor), one));
-                store_i16x8_u8_fixed(oc, out);
+                store_i16x8_u8_fixed(
+                    oc,
+                    vshrq_n_s16::<1>(vaddq_s16(vaddq_s16(pred_ver, pred_hor), one)),
+                );
             }
             let base_x = done + c8.len() * 8;
             for (xi, oc) in r8.iter_mut().enumerate() {
@@ -551,7 +968,6 @@ pub(crate) fn ipred_smooth_8bpc_neon(
                 pred_hor += ((left as i32 - pred_hor) * weights[x] as i32 + 32) >> 6;
                 *oc = ((pred_ver + pred_hor + 1) >> 1) as u8;
             }
-            off += stride;
         }
     }
 }
@@ -588,7 +1004,19 @@ fn sum_u8_neon(s: &[u8]) -> u32 {
 fn splat_fill_neon(dst: &mut [u8], stride: usize, off: usize, w: usize, h: usize, dc: u8) {
     let v = vdupq_n_u8(dc);
     let mut p = off;
-    for _ in 0..h {
+    let mut rows = h;
+    while rows >= 4 {
+        for _ in 0..4 {
+            let (chunks, rem) = dst[p..p + w].as_chunks_mut::<16>();
+            for c in chunks.iter_mut() {
+                store_u8x16_fixed(c, v);
+            }
+            rem.fill(dc);
+            p += stride;
+        }
+        rows -= 4;
+    }
+    for _ in 0..rows {
         let (chunks, rem) = dst[p..p + w].as_chunks_mut::<16>();
         for c in chunks.iter_mut() {
             store_u8x16_fixed(c, v);
@@ -702,6 +1130,21 @@ pub(crate) fn ipred_dc_8bpc_neon(
     unsafe { ipred_dc_8bpc_neon_impl(dst, stride, tl, o, w, h, angle) }
 }
 
+#[inline]
+#[target_feature(enable = "neon")]
+fn paeth_i16x8_neon(left: int16x8_t, top: int16x8_t, topleft: int16x8_t) -> int16x8_t {
+    let base = vsubq_s16(vaddq_s16(left, top), topleft);
+    let ld = vabsq_s16(vsubq_s16(left, base));
+    let td = vabsq_s16(vsubq_s16(top, base));
+    let tld = vabsq_s16(vsubq_s16(topleft, base));
+    let left_mask = vandq_u16(
+        vceqq_s16(ld, vminq_s16(ld, td)),
+        vceqq_s16(ld, vminq_s16(ld, tld)),
+    );
+    let top_mask = vceqq_s16(td, vminq_s16(td, tld));
+    vbslq_s16(left_mask, left, vbslq_s16(top_mask, top, topleft))
+}
+
 #[target_feature(enable = "neon")]
 fn ipred_paeth_8bpc_neon_impl(
     dst: &mut [u8],
@@ -711,104 +1154,129 @@ fn ipred_paeth_8bpc_neon_impl(
     w: usize,
     h: usize,
 ) {
-    let topleft = tl[o] as i32;
+    let topleft_s = tl[o] as i32;
     if w < 8 {
         return crate::ipred::ipred_paeth_8bpc(dst, stride, tl, o, w, h);
     }
-    let tl_v = vdupq_n_s16(topleft as i16);
-    let mut off = 0;
-    for y in 0..h {
-        let left = tl[o - 1 - y] as i32;
-        let left_v = vdupq_n_s16(left as i16);
-        let top_src = &tl[o + 1..o + 1 + w];
-        let (c16, r16) = dst[off..off + w].as_chunks_mut::<16>();
+
+    let topleft = vdupq_n_s16(topleft_s as i16);
+    let top_src = &tl[o + 1..o + 1 + w];
+
+    let mut y = 0usize;
+    let mut off = 0usize;
+    while y + 1 < h {
+        let (head, tail) = dst[off..].split_at_mut(stride);
+        let row0 = &mut head[..w];
+        let row1 = &mut tail[..w];
+
+        let left0_s = tl[o - 1 - y] as i32;
+        let left1_s = tl[o - 2 - y] as i32;
+        let left0 = vdupq_n_s16(left0_s as i16);
+        let left1 = vdupq_n_s16(left1_s as i16);
+
+        let (c16_0, r16_0) = row0.as_chunks_mut::<16>();
+        let (c16_1, r16_1) = row1.as_chunks_mut::<16>();
+        for ((d0, d1), t) in c16_0
+            .iter_mut()
+            .zip(c16_1.iter_mut())
+            .zip(top_src.as_chunks::<16>().0.iter())
+        {
+            let (top0, top1) = load_u8x16_i16x2_neon(t);
+            store_i16x8x2_u8_fixed(
+                d0,
+                paeth_i16x8_neon(left0, top0, topleft),
+                paeth_i16x8_neon(left0, top1, topleft),
+            );
+            store_i16x8x2_u8_fixed(
+                d1,
+                paeth_i16x8_neon(left1, top0, topleft),
+                paeth_i16x8_neon(left1, top1, topleft),
+            );
+        }
+
+        let done = c16_0.len() * 16;
+        let (c8_0, r8_0) = r16_0.as_chunks_mut::<8>();
+        let (c8_1, r8_1) = r16_1.as_chunks_mut::<8>();
+        for ((d0, d1), t) in c8_0
+            .iter_mut()
+            .zip(c8_1.iter_mut())
+            .zip(top_src[done..].as_chunks::<8>().0.iter())
+        {
+            let top = load_u8x8_i16_fixed(t);
+            store_i16x8_u8_fixed(d0, paeth_i16x8_neon(left0, top, topleft));
+            store_i16x8_u8_fixed(d1, paeth_i16x8_neon(left1, top, topleft));
+        }
+
+        let base_x = done + c8_0.len() * 8;
+        for (xi, (d0, d1)) in r8_0.iter_mut().zip(r8_1.iter_mut()).enumerate() {
+            let top = tl[o + 1 + base_x + xi] as i32;
+
+            let base0 = left0_s + top - topleft_s;
+            let ld0 = (left0_s - base0).abs();
+            let td0 = (top - base0).abs();
+            let tld0 = (topleft_s - base0).abs();
+            *d0 = if ld0 <= td0 && ld0 <= tld0 {
+                left0_s
+            } else if td0 <= tld0 {
+                top
+            } else {
+                topleft_s
+            } as u8;
+
+            let base1 = left1_s + top - topleft_s;
+            let ld1 = (left1_s - base1).abs();
+            let td1 = (top - base1).abs();
+            let tld1 = (topleft_s - base1).abs();
+            *d1 = if ld1 <= td1 && ld1 <= tld1 {
+                left1_s
+            } else if td1 <= tld1 {
+                top
+            } else {
+                topleft_s
+            } as u8;
+        }
+
+        y += 2;
+        off += stride * 2;
+    }
+
+    if y < h {
+        let left_s = tl[o - 1 - y] as i32;
+        let left = vdupq_n_s16(left_s as i16);
+        let row = &mut dst[off..off + w];
+
+        let (c16, r16) = row.as_chunks_mut::<16>();
         for (d, t) in c16.iter_mut().zip(top_src.as_chunks::<16>().0.iter()) {
             let (top0, top1) = load_u8x16_i16x2_neon(t);
-            let base0 = vsubq_s16(vaddq_s16(left_v, top0), tl_v);
-            let cond_l0 = vandq_u16(
-                vceqq_s16(
-                    vabsq_s16(vsubq_s16(left_v, base0)),
-                    vminq_s16(
-                        vabsq_s16(vsubq_s16(left_v, base0)),
-                        vabsq_s16(vsubq_s16(top0, base0)),
-                    ),
-                ),
-                vceqq_s16(
-                    vabsq_s16(vsubq_s16(left_v, base0)),
-                    vminq_s16(
-                        vabsq_s16(vsubq_s16(left_v, base0)),
-                        vabsq_s16(vsubq_s16(tl_v, base0)),
-                    ),
-                ),
+            store_i16x8x2_u8_fixed(
+                d,
+                paeth_i16x8_neon(left, top0, topleft),
+                paeth_i16x8_neon(left, top1, topleft),
             );
-            let cond_t0 = vceqq_s16(
-                vabsq_s16(vsubq_s16(top0, base0)),
-                vminq_s16(
-                    vabsq_s16(vsubq_s16(top0, base0)),
-                    vabsq_s16(vsubq_s16(tl_v, base0)),
-                ),
-            );
-            let res0 = vbslq_s16(cond_l0, left_v, vbslq_s16(cond_t0, top0, tl_v));
-            let base1 = vsubq_s16(vaddq_s16(left_v, top1), tl_v);
-            let cond_l1 = vandq_u16(
-                vceqq_s16(
-                    vabsq_s16(vsubq_s16(left_v, base1)),
-                    vminq_s16(
-                        vabsq_s16(vsubq_s16(left_v, base1)),
-                        vabsq_s16(vsubq_s16(top1, base1)),
-                    ),
-                ),
-                vceqq_s16(
-                    vabsq_s16(vsubq_s16(left_v, base1)),
-                    vminq_s16(
-                        vabsq_s16(vsubq_s16(left_v, base1)),
-                        vabsq_s16(vsubq_s16(tl_v, base1)),
-                    ),
-                ),
-            );
-            let cond_t1 = vceqq_s16(
-                vabsq_s16(vsubq_s16(top1, base1)),
-                vminq_s16(
-                    vabsq_s16(vsubq_s16(top1, base1)),
-                    vabsq_s16(vsubq_s16(tl_v, base1)),
-                ),
-            );
-            let res1 = vbslq_s16(cond_l1, left_v, vbslq_s16(cond_t1, top1, tl_v));
-            store_i16x8x2_u8_fixed(d, res0, res1);
         }
+
         let done = c16.len() * 16;
         let (c8, r8) = r16.as_chunks_mut::<8>();
         for (d, t) in c8.iter_mut().zip(top_src[done..].as_chunks::<8>().0.iter()) {
-            let top_v = load_u8x8_i16_fixed(t);
-            let base = vsubq_s16(vaddq_s16(left_v, top_v), tl_v);
-            let ld = vabsq_s16(vsubq_s16(left_v, base));
-            let td = vabsq_s16(vsubq_s16(top_v, base));
-            let tld = vabsq_s16(vsubq_s16(tl_v, base));
-            let cond_l = vandq_u16(
-                vceqq_s16(ld, vminq_s16(ld, td)),
-                vceqq_s16(ld, vminq_s16(ld, tld)),
-            );
-            let cond_t = vceqq_s16(td, vminq_s16(td, tld));
-            let inner = vbslq_s16(cond_t, top_v, tl_v);
-            let res = vbslq_s16(cond_l, left_v, inner);
-            store_i16x8_u8_fixed(d, res);
+            let top = load_u8x8_i16_fixed(t);
+            store_i16x8_u8_fixed(d, paeth_i16x8_neon(left, top, topleft));
         }
+
         let base_x = done + c8.len() * 8;
         for (xi, d) in r8.iter_mut().enumerate() {
             let top = tl[o + 1 + base_x + xi] as i32;
-            let base = left + top - topleft;
-            let ldiff = (left - base).abs();
-            let tdiff = (top - base).abs();
-            let tldiff = (topleft - base).abs();
-            *d = if ldiff <= tdiff && ldiff <= tldiff {
-                left
-            } else if tdiff <= tldiff {
+            let base = left_s + top - topleft_s;
+            let ld = (left_s - base).abs();
+            let td = (top - base).abs();
+            let tld = (topleft_s - base).abs();
+            *d = if ld <= td && ld <= tld {
+                left_s
+            } else if td <= tld {
                 top
             } else {
-                topleft
+                topleft_s
             } as u8;
         }
-        off += stride;
     }
 }
 
@@ -1670,6 +2138,174 @@ fn z2_top_span_chroma_neon(
     }
 }
 
+#[inline]
+#[target_feature(enable = "neon")]
+fn z2_left_span_luma_neon(
+    filt: &[u8],
+    left_off: usize,
+    y: usize,
+    dy: i32,
+    mrl_idx: usize,
+    dst_row: &mut [u8],
+    mut x: usize,
+    w: usize,
+    mut xpos: i32,
+) -> (usize, i32) {
+    let limit = -(64 * (1 + mrl_idx as i32));
+    let rnd = vdupq_n_s32(64);
+
+    while x + 8 <= w && xpos + 64 * 7 < limit {
+        let mut c0 = [0i16; 8];
+        let mut c1 = [0i16; 8];
+        let mut c2 = [0i16; 8];
+        let mut c3 = [0i16; 8];
+        let mut p0 = [0i16; 8];
+        let mut p1 = [0i16; 8];
+        let mut p2 = [0i16; 8];
+        let mut p3 = [0i16; 8];
+        for i in 0..8 {
+            let xpos_l = (x + i + 1) as i32;
+            let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
+            let base_y = ypos_l >> 6;
+            let shift = ((ypos_l & 0x3F) >> 1) as usize;
+            let bi = (left_off as i32 - base_y) as usize;
+            let f = &crate::ipred::DR_INTERP_FILTER[shift];
+            c0[i] = f.a as i16;
+            c1[i] = f.b as i16;
+            c2[i] = f.c as i16;
+            c3[i] = f.d as i16;
+            p0[i] = filt[bi - 1] as i16;
+            p1[i] = filt[bi - 2] as i16;
+            p2[i] = filt[bi - 3] as i16;
+            p3[i] = filt[bi - 4] as i16;
+        }
+
+        let c0 = unsafe { vld1q_s16(c0.as_ptr()) };
+        let c1 = unsafe { vld1q_s16(c1.as_ptr()) };
+        let c2 = unsafe { vld1q_s16(c2.as_ptr()) };
+        let c3 = unsafe { vld1q_s16(c3.as_ptr()) };
+        let p0 = unsafe { vld1q_s16(p0.as_ptr()) };
+        let p1 = unsafe { vld1q_s16(p1.as_ptr()) };
+        let p2 = unsafe { vld1q_s16(p2.as_ptr()) };
+        let p3 = unsafe { vld1q_s16(p3.as_ptr()) };
+        let acc_lo = vmlal_s16(
+            vmlal_s16(
+                vmlal_s16(
+                    vmull_s16(vget_low_s16(c0), vget_low_s16(p0)),
+                    vget_low_s16(c1),
+                    vget_low_s16(p1),
+                ),
+                vget_low_s16(c2),
+                vget_low_s16(p2),
+            ),
+            vget_low_s16(c3),
+            vget_low_s16(p3),
+        );
+        let acc_hi = vmlal_s16(
+            vmlal_s16(
+                vmlal_s16(
+                    vmull_s16(vget_high_s16(c0), vget_high_s16(p0)),
+                    vget_high_s16(c1),
+                    vget_high_s16(p1),
+                ),
+                vget_high_s16(c2),
+                vget_high_s16(p2),
+            ),
+            vget_high_s16(c3),
+            vget_high_s16(p3),
+        );
+        let res_lo = vshrq_n_s32::<7>(vaddq_s32(acc_lo, rnd));
+        let res_hi = vshrq_n_s32::<7>(vaddq_s32(acc_hi, rnd));
+        store_u8x8_fixed(
+            (&mut dst_row[x..x + 8]).try_into().unwrap(),
+            vqmovn_u16(vcombine_u16(vqmovun_s32(res_lo), vqmovun_s32(res_hi))),
+        );
+        x += 8;
+        xpos += 64 * 8;
+    }
+
+    while x < w && xpos < limit {
+        let xpos_l = (x + 1) as i32;
+        let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
+        let base_y = ypos_l >> 6;
+        let shift = ((ypos_l & 0x3F) >> 1) as usize;
+        let bi = (left_off as i32 - base_y) as usize;
+        let f = &crate::ipred::DR_INTERP_FILTER[shift];
+        let v = f.a as i32 * filt[bi - 1] as i32
+            + f.b as i32 * filt[bi - 2] as i32
+            + f.c as i32 * filt[bi - 3] as i32
+            + f.d as i32 * filt[bi - 4] as i32;
+        dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
+        x += 1;
+        xpos += 64;
+    }
+
+    (x, xpos)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn z2_left_span_chroma_neon(
+    filt: &[u8],
+    left_off: usize,
+    y: usize,
+    dy: i32,
+    mrl_idx: usize,
+    dst_row: &mut [u8],
+    mut x: usize,
+    w: usize,
+    mut xpos: i32,
+) -> (usize, i32) {
+    let limit = -(64 * (1 + mrl_idx as i32));
+    let rnd = vdupq_n_u16(16);
+
+    while x + 8 <= w && xpos + 64 * 7 < limit {
+        let mut iw = [0u16; 8];
+        let mut sw = [0u16; 8];
+        let mut p0 = [0u8; 8];
+        let mut p1 = [0u8; 8];
+        for i in 0..8 {
+            let xpos_l = (x + i + 1) as i32;
+            let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
+            let base_y = ypos_l >> 6;
+            let shift = ((ypos_l & 0x3F) >> 1) as u16;
+            let bi = (left_off as i32 - base_y) as usize;
+            iw[i] = 32 - shift;
+            sw[i] = shift;
+            p0[i] = filt[bi - 2];
+            p1[i] = filt[bi - 3];
+        }
+        let r = vshrq_n_u16::<5>(vaddq_u16(
+            vaddq_u16(
+                vmulq_u16(vmovl_u8(unsafe { vld1_u8(p0.as_ptr()) }), unsafe {
+                    vld1q_u16(iw.as_ptr())
+                }),
+                vmulq_u16(vmovl_u8(unsafe { vld1_u8(p1.as_ptr()) }), unsafe {
+                    vld1q_u16(sw.as_ptr())
+                }),
+            ),
+            rnd,
+        ));
+        store_u8x8_fixed((&mut dst_row[x..x + 8]).try_into().unwrap(), vqmovn_u16(r));
+        x += 8;
+        xpos += 64 * 8;
+    }
+
+    while x < w && xpos < limit {
+        let xpos_l = (x + 1) as i32;
+        let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
+        let base_y = ypos_l >> 6;
+        let shift = ((ypos_l & 0x3F) >> 1) as usize;
+        let bi = (left_off as i32 - base_y) as usize;
+        let v = (32 - shift as i32) * filt[bi - 2] as i32 + shift as i32 * filt[bi - 3] as i32;
+        dst_row[x] = ((v + 16) >> 5).clamp(0, 255) as u8;
+        x += 1;
+        xpos += 64;
+    }
+
+    (x, xpos)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
 fn ipred_z2_8bpc_neon_impl(
@@ -1783,27 +2419,13 @@ fn ipred_z2_8bpc_neon_impl(
         let mut x = 0usize;
         let dst_row = &mut dst[y * stride..y * stride + w];
 
-        while x < w && xpos < -(64 * (1 + mrl_idx as i32)) {
-            let xpos_l = (x + 1) as i32;
-            let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
-            let base_y = ypos_l >> 6;
-            let shift = ((ypos_l & 0x3F) >> 1) as usize;
-            let bi = (left_off as i32 - base_y) as usize;
-            if is_luma {
-                let f = &crate::ipred::DR_INTERP_FILTER[shift];
-                let v = f.a as i32 * filt2[bi - 1] as i32
-                    + f.b as i32 * filt2[bi - 2] as i32
-                    + f.c as i32 * filt2[bi - 3] as i32
-                    + f.d as i32 * filt2[bi - 4] as i32;
-                dst_row[x] = ((v + 64) >> 7).clamp(0, 255) as u8;
-            } else {
-                let v = (32 - shift as i32) * filt2[bi - 2] as i32
-                    + shift as i32 * filt2[bi - 3] as i32;
-                dst_row[x] = ((v + 16) >> 5).clamp(0, 255) as u8;
-            }
-            x += 1;
-            xpos += 64;
-        }
+        // Left reference span: pack varying shifts/indices into local lanes,
+        // then run NEON filter math with scalar tails.
+        (x, xpos) = if is_luma {
+            z2_left_span_luma_neon(&filt2, left_off, y, dy, mrl_idx, dst_row, x, w, xpos)
+        } else {
+            z2_left_span_chroma_neon(&filt2, left_off, y, dy, mrl_idx, dst_row, x, w, xpos)
+        };
 
         if x < w {
             let shift = ((xpos & 0x3F) >> 1) as usize;
@@ -1830,6 +2452,125 @@ pub(crate) fn ipred_z2_8bpc_neon(
     max_height: i32,
 ) {
     unsafe { ipred_z2_8bpc_neon_impl(dst, stride, tl, o, w, h, angle, max_width, max_height) }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn dip_dot_neon(inp: &[i32; 11], weights: &[u16; 11]) -> i32 {
+    let mut s = 0i32;
+    for i in 0..11 {
+        s += weights[i] as i32 * inp[i];
+    }
+    s
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn dip_dot2_neon(inp: &[i32; 11], w0: &[u16; 11], w1: &[u16; 11]) -> [i32; 2] {
+    let mut acc = vdupq_n_s32(0);
+    for i in 0..11 {
+        let mut w = vdupq_n_s32(0);
+        w = vsetq_lane_s32::<0>(w0[i] as i32, w);
+        w = vsetq_lane_s32::<1>(w1[i] as i32, w);
+        acc = vmlaq_n_s32(acc, w, inp[i]);
+    }
+    let mut out = [0i32; 4];
+    unsafe { vst1q_s32(out.as_mut_ptr(), acc) };
+    [out[0], out[1]]
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn dip_dot4_neon(
+    inp: &[i32; 11],
+    w0: &[u16; 11],
+    w1: &[u16; 11],
+    w2: &[u16; 11],
+    w3: &[u16; 11],
+) -> [i32; 4] {
+    let mut acc = vdupq_n_s32(0);
+    for i in 0..11 {
+        let mut w = vdupq_n_s32(0);
+        w = vsetq_lane_s32::<0>(w0[i] as i32, w);
+        w = vsetq_lane_s32::<1>(w1[i] as i32, w);
+        w = vsetq_lane_s32::<2>(w2[i] as i32, w);
+        w = vsetq_lane_s32::<3>(w3[i] as i32, w);
+        acc = vmlaq_n_s32(acc, w, inp[i]);
+    }
+    let mut out = [0i32; 4];
+    unsafe { vst1q_s32(out.as_mut_ptr(), acc) };
+    out
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn dip_vertical_interp_8bpc_neon(
+    dst: &mut [u8],
+    stride: usize,
+    tl: &[u8],
+    o: usize,
+    w: usize,
+    step_y: usize,
+    uhl2: i32,
+    grid_h: usize,
+) {
+    if step_y <= 1 {
+        return;
+    }
+    let mut p0_buf = [0u8; 128];
+    let mut p1_buf = [0u8; 128];
+    let sh = vdupq_n_s16(-(uhl2 as i16));
+    for gy in 0..grid_h {
+        let base_y = gy * step_y;
+        let sparse_y = base_y + step_y - 1;
+        if gy == 0 {
+            p0_buf[..w].copy_from_slice(&tl[o + 1..o + 1 + w]);
+        } else {
+            let prev = (base_y - 1) * stride;
+            p0_buf[..w].copy_from_slice(&dst[prev..prev + w]);
+        }
+        let p1_off = sparse_y * stride;
+        p1_buf[..w].copy_from_slice(&dst[p1_off..p1_off + w]);
+
+        for z in 0..step_y - 1 {
+            let z1 = (z + 1) as u16;
+            let w0 = vdupq_n_u16((step_y as u16) - z1);
+            let w1 = vdupq_n_u16(z1);
+            let row_off = (base_y + z) * stride;
+            let row = &mut dst[row_off..row_off + w];
+            let mut x = 0usize;
+            while x + 16 <= w {
+                let a = unsafe { vld1q_u8(p0_buf[x..].as_ptr()) };
+                let b = unsafe { vld1q_u8(p1_buf[x..].as_ptr()) };
+                let al = vmovl_u8(vget_low_u8(a));
+                let ah = vmovl_u8(vget_high_u8(a));
+                let bl = vmovl_u8(vget_low_u8(b));
+                let bh = vmovl_u8(vget_high_u8(b));
+                let rl = vshlq_u16(vaddq_u16(vmulq_u16(al, w0), vmulq_u16(bl, w1)), sh);
+                let rh = vshlq_u16(vaddq_u16(vmulq_u16(ah, w0), vmulq_u16(bh, w1)), sh);
+                unsafe {
+                    vst1q_u8(
+                        row[x..].as_mut_ptr(),
+                        vcombine_u8(vqmovn_u16(rl), vqmovn_u16(rh)),
+                    );
+                }
+                x += 16;
+            }
+            while x + 8 <= w {
+                let a = vmovl_u8(unsafe { vld1_u8(p0_buf[x..].as_ptr()) });
+                let b = vmovl_u8(unsafe { vld1_u8(p1_buf[x..].as_ptr()) });
+                let r = vshlq_u16(vaddq_u16(vmulq_u16(a, w0), vmulq_u16(b, w1)), sh);
+                unsafe { vst1_u8(row[x..].as_mut_ptr(), vqmovn_u16(r)) };
+                x += 8;
+            }
+            while x < w {
+                row[x] = ((p0_buf[x] as i32 * (step_y as i32 - z as i32 - 1)
+                    + p1_buf[x] as i32 * (z as i32 + 1))
+                    >> uhl2) as u8;
+                x += 1;
+            }
+        }
+    }
 }
 
 #[target_feature(enable = "neon")]
@@ -1913,20 +2654,54 @@ pub(crate) fn ipred_dip_8bpc_neon(
     let grid_h = 8usize >> dhl2;
     let grid_w = 8usize >> dwl2;
 
+    let weights = &DIP_WEIGHTS[m];
+
     let mut y = step_y - 1;
     for gy in 0..grid_h {
         let iy = gy * dh;
+        let mut gx = 0usize;
         let mut x = step_x - 1;
         let dst_row = &mut dst[y * stride..y * stride + width];
-        for gx in 0..grid_w {
+        while gx + 4 <= grid_w {
+            let ix0 = gx * dw;
+            let ix1 = ix0 + dw;
+            let ix2 = ix1 + dw;
+            let ix3 = ix2 + dw;
+            let idx0 = if trans { ix0 * 8 + iy } else { iy * 8 + ix0 };
+            let idx1 = if trans { ix1 * 8 + iy } else { iy * 8 + ix1 };
+            let idx2 = if trans { ix2 * 8 + iy } else { iy * 8 + ix2 };
+            let idx3 = if trans { ix3 * 8 + iy } else { iy * 8 + ix3 };
+            let s = dip_dot4_neon(
+                &inp,
+                &weights[idx0],
+                &weights[idx1],
+                &weights[idx2],
+                &weights[idx3],
+            );
+            dst_row[x] = (((s[0] + 2048) >> 12) - in_sum).clamp(0, 255) as u8;
+            dst_row[x + step_x] = (((s[1] + 2048) >> 12) - in_sum).clamp(0, 255) as u8;
+            dst_row[x + step_x * 2] = (((s[2] + 2048) >> 12) - in_sum).clamp(0, 255) as u8;
+            dst_row[x + step_x * 3] = (((s[3] + 2048) >> 12) - in_sum).clamp(0, 255) as u8;
+            gx += 4;
+            x += step_x * 4;
+        }
+        if gx + 2 <= grid_w {
+            let ix0 = gx * dw;
+            let ix1 = ix0 + dw;
+            let idx0 = if trans { ix0 * 8 + iy } else { iy * 8 + ix0 };
+            let idx1 = if trans { ix1 * 8 + iy } else { iy * 8 + ix1 };
+            let s = dip_dot2_neon(&inp, &weights[idx0], &weights[idx1]);
+            dst_row[x] = (((s[0] + 2048) >> 12) - in_sum).clamp(0, 255) as u8;
+            dst_row[x + step_x] = (((s[1] + 2048) >> 12) - in_sum).clamp(0, 255) as u8;
+            gx += 2;
+            x += step_x * 2;
+        }
+        while gx < grid_w {
             let ix = gx * dw;
             let idx = if trans { ix * 8 + iy } else { iy * 8 + ix };
-            let mut s = 0i32;
-            let weights = &DIP_WEIGHTS[m][idx];
-            for i in 0..11 {
-                s += weights[i] as i32 * inp[i];
-            }
+            let s = dip_dot_neon(&inp, &weights[idx]);
             dst_row[x] = (((s + 2048) >> 12) - in_sum).clamp(0, 255) as u8;
+            gx += 1;
             x += step_x;
         }
         y += step_y;
@@ -1951,29 +2726,5 @@ pub(crate) fn ipred_dip_8bpc_neon(
         }
     }
 
-    if step_y > 1 {
-        let mut p0_buf = [0u8; 128];
-        let mut p1_buf = [0u8; 128];
-        for gy in 0..grid_h {
-            let base_y = gy * step_y;
-            let sparse_y = base_y + step_y - 1;
-            if gy == 0 {
-                p0_buf[..width].copy_from_slice(&tl[o + 1..o + 1 + width]);
-            } else {
-                let prev = (base_y - 1) * stride;
-                p0_buf[..width].copy_from_slice(&dst[prev..prev + width]);
-            }
-            let p1_off = sparse_y * stride;
-            p1_buf[..width].copy_from_slice(&dst[p1_off..p1_off + width]);
-            for z in 0..step_y - 1 {
-                let z1 = (z + 1) as i32;
-                let row_off = (base_y + z) * stride;
-                let row = &mut dst[row_off..row_off + width];
-                for x in 0..width {
-                    row[x] = ((p0_buf[x] as i32 * (step_y as i32 - z1) + p1_buf[x] as i32 * z1)
-                        >> uhl2) as u8;
-                }
-            }
-        }
-    }
+    dip_vertical_interp_8bpc_neon(dst, stride, tl, o, width, step_y, uhl2, grid_h);
 }

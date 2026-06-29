@@ -65,11 +65,12 @@ pub(crate) use cdef_hd::{
 };
 pub(crate) use cfl::{
     cfl_alpha_accum_8bpc_avx2, cfl_apply_420_8bpc_avx2, cfl_apply_422_8bpc_avx2,
-    cfl_apply_444_8bpc_avx2, cfl_gen_y_row_8bpc_avx2, cfl_mhccp_pred_8bpc_avx2,
+    cfl_apply_444_8bpc_avx2, cfl_gen_mat_8bpc_avx2, cfl_gen_y_row_8bpc_avx2,
+    cfl_mhccp_pred_8bpc_avx2,
 };
 pub(crate) use cfl_hd::{
     cfl_alpha_accum_hbd_avx2, cfl_apply_420_hbd_avx2, cfl_apply_422_hbd_avx2,
-    cfl_apply_444_hbd_avx2, cfl_gen_y_row_hbd_avx2, cfl_mhccp_pred_hbd_avx2,
+    cfl_apply_444_hbd_avx2, cfl_gen_mat_hbd_avx2, cfl_gen_y_row_hbd_avx2, cfl_mhccp_pred_hbd_avx2,
 };
 pub(crate) use deblocking::{
     deblock_apply_8bpc_avx2, deblock_apply_hbd_avx2, deblock_h_sb64uv_8bpc_avx2,
@@ -88,8 +89,8 @@ pub(crate) use filter::{
 };
 pub(crate) use filter_hd::{
     avg_row_hbd_avx2, blend_row_hbd_avx2, dc_add_row_hbd_avx2, gdf_add_run_hbd_avx2,
-    gdf_gradient_group_hbd_avx2, mask_row_hbd_avx2, morph_row_hbd_avx2, residual_add_row_hbd_avx2,
-    w_avg_row_hbd_avx2,
+    gdf_gradient_group_hbd_avx2, gdf_prep_pair_hbd_avx2, mask_row_hbd_avx2, morph_row_hbd_avx2,
+    residual_add_row_hbd_avx2, w_avg_row_hbd_avx2,
 };
 pub(crate) use ipred::*;
 pub(crate) use ipred_hd::*;

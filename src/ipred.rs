@@ -2037,8 +2037,12 @@ pub(crate) fn cfl_gen_mat<BD: BitDepth>(
     }
 
     let mut n: usize = 0;
+    let mut sums = crate::cfl_dispatch::CflGenMatSums::default();
+    let (imat0, imat1) = {
+        let (lo, hi) = imat.split_at_mut(1);
+        (&mut lo[0], &mut hi[0])
+    };
 
-    let mat2sh = bd_bits - 1;
     if has_t {
         for i in 0..n_left {
             let v0: i32 = y[left_off + i].into();
@@ -2048,13 +2052,9 @@ pub(crate) fn cfl_gen_mat<BD: BitDepth>(
                 y[y_off].into()
             };
             let v1 = sqrnd(bd, neighbor);
-            imat[0][n] = v0 as u16;
-            imat[1][n] = v1 as u16;
-            mat[0][0] += v0 * v0;
-            mat[0][1] += v0 * v1;
-            mat[0][2] += v0 << mat2sh;
-            mat[1][1] += v1 * v1;
-            mat[1][2] += v1 << mat2sh;
+            imat0[n] = v0 as u16;
+            imat1[n] = v1 as u16;
+            sums.add_pair(v0, v1);
             n += 1;
         }
         let start: usize = if !dir_l && !has_l { 1 } else { 0 };
@@ -2062,18 +2062,48 @@ pub(crate) fn cfl_gen_mat<BD: BitDepth>(
             start as i32,
             refw as i32 - n_left as i32 - 1 - (start == 0) as i32,
         ) as usize;
-        for i in start..end {
-            let v0: i32 = y[y_off + i].into();
-            let yi = y_off + dir_t as usize * y_top_stride + i + dir_l as usize;
-            let v1 = sqrnd(bd, y[yi].into());
-            imat[0][n] = v0 as u16;
-            imat[1][n] = v1 as u16;
-            mat[0][0] += v0 * v0;
-            mat[0][1] += v0 * v1;
-            mat[0][2] += v0 << mat2sh;
-            mat[1][1] += v1 * v1;
-            mat[1][2] += v1 << mat2sh;
-            n += 1;
+        let len = end.saturating_sub(start);
+        if len != 0 {
+            let v0_off = y_off + start;
+            let v1_off = y_off + dir_t as usize * y_top_stride + start + dir_l as usize;
+            if let Some(y8) = <BD::Pixel as Pixel>::try_as_u8_slice(y) {
+                crate::cfl_dispatch::cfl_gen_mat_8bpc(crate::cfl_dispatch::CflGenMat8 {
+                    sums: &mut sums,
+                    imat0: &mut *imat0,
+                    imat1: &mut *imat1,
+                    imat_off: n,
+                    y: y8,
+                    v0_off,
+                    v0_stride: 1,
+                    v1_off,
+                    v1_stride: 1,
+                    len,
+                });
+            } else if let Some(y16) = <BD::Pixel as Pixel>::try_as_u16_slice(y) {
+                crate::cfl_dispatch::cfl_gen_mat_hbd(crate::cfl_dispatch::CflGenMatHbd {
+                    sums: &mut sums,
+                    imat0: &mut *imat0,
+                    imat1: &mut *imat1,
+                    imat_off: n,
+                    y: y16,
+                    v0_off,
+                    v0_stride: 1,
+                    v1_off,
+                    v1_stride: 1,
+                    len,
+                    bitdepth: bd_bits,
+                });
+            } else {
+                for (rel_i, i) in (start..end).enumerate() {
+                    let v0: i32 = y[y_off + i].into();
+                    let yi = y_off + dir_t as usize * y_top_stride + i + dir_l as usize;
+                    let v1 = sqrnd(bd, y[yi].into());
+                    imat0[n + rel_i] = v0 as u16;
+                    imat1[n + rel_i] = v1 as u16;
+                    sums.add_pair(v0, v1);
+                }
+            }
+            n += len;
         }
     }
 
@@ -2082,21 +2112,57 @@ pub(crate) fn cfl_gen_mat<BD: BitDepth>(
         let start = (dir_t && !has_t) as i32;
         let begin = (1 - start) as usize;
         let end = imax(begin as i32, refh as i32 - start - 1) as usize;
-        for i in begin..end {
-            let v0: i32 = y[left_off + i * n_left].into();
-            let ni = left_off + (i + dir_t as usize) * n_left + dir_l as usize;
-            let v1 = sqrnd(bd, y[ni].into());
-            imat[0][n] = v0 as u16;
-            imat[1][n] = v1 as u16;
-            mat[0][0] += v0 * v0;
-            mat[0][1] += v0 * v1;
-            mat[0][2] += v0 << mat2sh;
-            mat[1][1] += v1 * v1;
-            mat[1][2] += v1 << mat2sh;
-            n += 1;
+        let len = end.saturating_sub(begin);
+        if len != 0 {
+            let v0_off = left_off + begin * n_left;
+            let v1_off = left_off + (begin + dir_t as usize) * n_left + dir_l as usize;
+            if let Some(y8) = <BD::Pixel as Pixel>::try_as_u8_slice(y) {
+                crate::cfl_dispatch::cfl_gen_mat_8bpc(crate::cfl_dispatch::CflGenMat8 {
+                    sums: &mut sums,
+                    imat0: &mut *imat0,
+                    imat1: &mut *imat1,
+                    imat_off: n,
+                    y: y8,
+                    v0_off,
+                    v0_stride: n_left,
+                    v1_off,
+                    v1_stride: n_left,
+                    len,
+                });
+            } else if let Some(y16) = <BD::Pixel as Pixel>::try_as_u16_slice(y) {
+                crate::cfl_dispatch::cfl_gen_mat_hbd(crate::cfl_dispatch::CflGenMatHbd {
+                    sums: &mut sums,
+                    imat0: &mut *imat0,
+                    imat1: &mut *imat1,
+                    imat_off: n,
+                    y: y16,
+                    v0_off,
+                    v0_stride: n_left,
+                    v1_off,
+                    v1_stride: n_left,
+                    len,
+                    bitdepth: bd_bits,
+                });
+            } else {
+                for (rel_i, i) in (begin..end).enumerate() {
+                    let v0: i32 = y[left_off + i * n_left].into();
+                    let ni = left_off + (i + dir_t as usize) * n_left + dir_l as usize;
+                    let v1 = sqrnd(bd, y[ni].into());
+                    imat0[n + rel_i] = v0 as u16;
+                    imat1[n + rel_i] = v1 as u16;
+                    sums.add_pair(v0, v1);
+                }
+            }
+            n += len;
         }
     }
 
+    let mat2sh = bd_bits - 1;
+    mat[0][0] = sums.m00;
+    mat[0][1] = sums.m01;
+    mat[0][2] = sums.sum0 << mat2sh;
+    mat[1][1] = sums.m11;
+    mat[1][2] = sums.sum1 << mat2sh;
     mat[2][2] = (n as i32) << ((bd_bits - 1) << 1);
 
     if n > 0 {

@@ -150,7 +150,19 @@ fn sum_u16_neon(s: &[u16]) -> u32 {
 fn splat_fill_neon(dst: &mut [u16], stride: usize, off: usize, w: usize, h: usize, dc: u16) {
     let v = vdupq_n_u16(dc);
     let mut p = off;
-    for _ in 0..h {
+    let mut rows = h;
+    while rows >= 4 {
+        for _ in 0..4 {
+            let (chunks, rem) = dst[p..p + w].as_chunks_mut::<8>();
+            for c in chunks.iter_mut() {
+                store_u16x8(c, v);
+            }
+            rem.fill(dc);
+            p += stride;
+        }
+        rows -= 4;
+    }
+    for _ in 0..rows {
         let (chunks, rem) = dst[p..p + w].as_chunks_mut::<8>();
         for c in chunks.iter_mut() {
             store_u16x8(c, v);
@@ -195,10 +207,12 @@ fn ipred_v_hbd_neon_impl(
     } else {
         dst[..w].copy_from_slice(&tl[o + 1..o + 1 + w]);
     }
-    let mut off = stride;
-    for _ in 1..h {
-        dst.copy_within(0..w, off);
-        off += stride;
+    if h > 1 {
+        let (first, rest) = dst.split_at_mut(stride);
+        let src = &first[..w];
+        for row in rest.chunks_mut(stride).take(h - 1) {
+            row[..w].copy_from_slice(src);
+        }
     }
 }
 
@@ -372,12 +386,73 @@ fn ipred_smooth_v_hbd_neon_impl(
     let bottom_s = tl[o - h - 1] as i32;
     let bottom = vdupq_n_s32(bottom_s);
     let add32 = vdupq_n_s32(32);
+    let top_src = &tl[o + 1..o + 1 + w];
+
+    let mut y = 0usize;
     let mut off = 0usize;
-    for y in 0..h {
+    while y + 1 < h {
+        let (head, tail) = dst[off..].split_at_mut(stride);
+        let row0 = &mut head[..w];
+        let row1 = &mut tail[..w];
+        let off_y0 = vdupq_n_s32((h - 1 - y) as i32);
+        let off_y1 = vdupq_n_s32((h - 2 - y) as i32);
+        let w_ver0 = vdupq_n_s32(weights[y] as i32);
+        let w_ver1 = vdupq_n_s32(weights[y + 1] as i32);
+        let (chunks0, rem0) = row0.as_chunks_mut::<4>();
+        let (chunks1, rem1) = row1.as_chunks_mut::<4>();
+        for ((d0, d1), t) in chunks0
+            .iter_mut()
+            .zip(chunks1.iter_mut())
+            .zip(top_src.as_chunks::<4>().0.iter())
+        {
+            let above = load_u16x4_i32_neon(t);
+            let pred0 = vaddq_s32(
+                bottom,
+                sra_i32_neon(
+                    vaddq_s32(vmulq_s32(vsubq_s32(above, bottom), off_y0), rnd),
+                    bhl2,
+                ),
+            );
+            let out0 = vaddq_s32(
+                pred0,
+                vshrq_n_s32::<6>(vaddq_s32(vmulq_s32(vsubq_s32(above, pred0), w_ver0), add32)),
+            );
+            store_i32x4_u16_max_neon(d0, out0, bitdepth_max);
+
+            let pred1 = vaddq_s32(
+                bottom,
+                sra_i32_neon(
+                    vaddq_s32(vmulq_s32(vsubq_s32(above, bottom), off_y1), rnd),
+                    bhl2,
+                ),
+            );
+            let out1 = vaddq_s32(
+                pred1,
+                vshrq_n_s32::<6>(vaddq_s32(vmulq_s32(vsubq_s32(above, pred1), w_ver1), add32)),
+            );
+            store_i32x4_u16_max_neon(d1, out1, bitdepth_max);
+        }
+        let base = chunks0.len() * 4;
+        for (i, (d0, d1)) in rem0.iter_mut().zip(rem1.iter_mut()).enumerate() {
+            let x = base + i;
+            let above = tl[o + 1 + x] as i32;
+            let pred0 = bottom_s
+                + (((above - bottom_s) * (h as i32 - 1 - y as i32) + (h >> 1) as i32) >> bhl2);
+            let pred1 = bottom_s
+                + (((above - bottom_s) * (h as i32 - 2 - y as i32) + (h >> 1) as i32) >> bhl2);
+            *d0 = (pred0 + (((above - pred0) * weights[y] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+            *d1 = (pred1 + (((above - pred1) * weights[y + 1] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+        }
+        y += 2;
+        off += stride * 2;
+    }
+
+    if y < h {
         let off_y = vdupq_n_s32((h - 1 - y) as i32);
         let w_ver = vdupq_n_s32(weights[y] as i32);
         let row = &mut dst[off..off + w];
-        let top_src = &tl[o + 1..o + 1 + w];
         let (chunks, rem) = row.as_chunks_mut::<4>();
         for (d, t) in chunks.iter_mut().zip(top_src.as_chunks::<4>().0.iter()) {
             let above = load_u16x4_i32_neon(t);
@@ -403,7 +478,6 @@ fn ipred_smooth_v_hbd_neon_impl(
             *d = (pred + (((above - pred) * weights[y] as i32 + 32) >> 6))
                 .clamp(0, bitdepth_max as i32) as u16;
         }
-        off += stride;
     }
 }
 
@@ -429,8 +503,68 @@ fn ipred_smooth_h_hbd_neon_impl(
     let right_s = tl[o + w + 1] as i32;
     let right = vdupq_n_s32(right_s);
     let add32 = vdupq_n_s32(32);
+
+    let mut y = 0usize;
     let mut off = 0usize;
-    for y in 0..h {
+    while y + 1 < h {
+        let (head, tail) = dst[off..].split_at_mut(stride);
+        let row0 = &mut head[..w];
+        let row1 = &mut tail[..w];
+        let left0_s = tl[o - 1 - y] as i32;
+        let left1_s = tl[o - 2 - y] as i32;
+        let left0 = vdupq_n_s32(left0_s);
+        let left1 = vdupq_n_s32(left1_s);
+        let diff0 = vdupq_n_s32(left0_s - right_s);
+        let diff1 = vdupq_n_s32(left1_s - right_s);
+
+        let (chunks0, rem0) = row0.as_chunks_mut::<4>();
+        let (chunks1, rem1) = row1.as_chunks_mut::<4>();
+        for (ci, ((d0, d1), wx)) in chunks0
+            .iter_mut()
+            .zip(chunks1.iter_mut())
+            .zip(weights[..w].as_chunks::<4>().0.iter())
+            .enumerate()
+        {
+            let x0 = (w - 1 - ci * 4) as i32;
+            let dist = dist4_hbd_neon(x0);
+            let wx = weights4_hbd_neon(wx);
+            let pred0 = vaddq_s32(
+                right,
+                sra_i32_neon(vaddq_s32(vmulq_s32(diff0, dist), rnd), bwl2),
+            );
+            let out0 = vaddq_s32(
+                pred0,
+                vshrq_n_s32::<6>(vaddq_s32(vmulq_s32(vsubq_s32(left0, pred0), wx), add32)),
+            );
+            store_i32x4_u16_max_neon(d0, out0, bitdepth_max);
+
+            let pred1 = vaddq_s32(
+                right,
+                sra_i32_neon(vaddq_s32(vmulq_s32(diff1, dist), rnd), bwl2),
+            );
+            let out1 = vaddq_s32(
+                pred1,
+                vshrq_n_s32::<6>(vaddq_s32(vmulq_s32(vsubq_s32(left1, pred1), wx), add32)),
+            );
+            store_i32x4_u16_max_neon(d1, out1, bitdepth_max);
+        }
+        let base = chunks0.len() * 4;
+        for (i, (d0, d1)) in rem0.iter_mut().zip(rem1.iter_mut()).enumerate() {
+            let x = base + i;
+            let pred0 = right_s
+                + (((left0_s - right_s) * (w as i32 - 1 - x as i32) + (w >> 1) as i32) >> bwl2);
+            let pred1 = right_s
+                + (((left1_s - right_s) * (w as i32 - 1 - x as i32) + (w >> 1) as i32) >> bwl2);
+            *d0 = (pred0 + (((left0_s - pred0) * weights[x] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+            *d1 = (pred1 + (((left1_s - pred1) * weights[x] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+        }
+        y += 2;
+        off += stride * 2;
+    }
+
+    if y < h {
         let left_s = tl[o - 1 - y] as i32;
         let left = vdupq_n_s32(left_s);
         let diff = vdupq_n_s32(left_s - right_s);
@@ -463,7 +597,6 @@ fn ipred_smooth_h_hbd_neon_impl(
             *d = (pred + (((left_s - pred) * weights[x] as i32 + 32) >> 6))
                 .clamp(0, bitdepth_max as i32) as u16;
         }
-        off += stride;
     }
 }
 
@@ -494,15 +627,120 @@ fn ipred_smooth_hbd_neon_impl(
     let bottom = vdupq_n_s32(bottom_s);
     let add32 = vdupq_n_s32(32);
     let one = vdupq_n_s32(1);
+    let top_src = &tl[o + 1..o + 1 + w];
+
+    let mut y = 0usize;
     let mut off = 0usize;
-    for y in 0..h {
+    while y + 1 < h {
+        let (head, tail) = dst[off..].split_at_mut(stride);
+        let row0 = &mut head[..w];
+        let row1 = &mut tail[..w];
+        let left0_s = tl[o - 1 - y] as i32;
+        let left1_s = tl[o - 2 - y] as i32;
+        let left0 = vdupq_n_s32(left0_s);
+        let left1 = vdupq_n_s32(left1_s);
+        let diff_hor0 = vdupq_n_s32(left0_s - right_s);
+        let diff_hor1 = vdupq_n_s32(left1_s - right_s);
+        let off_ver0 = vdupq_n_s32((h - 1 - y) as i32);
+        let off_ver1 = vdupq_n_s32((h - 2 - y) as i32);
+        let w_ver0 = vdupq_n_s32(weights[y] as i32);
+        let w_ver1 = vdupq_n_s32(weights[y + 1] as i32);
+
+        let (chunks0, rem0) = row0.as_chunks_mut::<4>();
+        let (chunks1, rem1) = row1.as_chunks_mut::<4>();
+        for (ci, (((d0, d1), t), wx)) in chunks0
+            .iter_mut()
+            .zip(chunks1.iter_mut())
+            .zip(top_src.as_chunks::<4>().0.iter())
+            .zip(weights[..w].as_chunks::<4>().0.iter())
+            .enumerate()
+        {
+            let above = load_u16x4_i32_neon(t);
+            let wx = weights4_hbd_neon(wx);
+            let x0 = (w - 1 - ci * 4) as i32;
+            let dist = dist4_hbd_neon(x0);
+
+            let pv0 = vaddq_s32(
+                bottom,
+                sra_i32_neon(
+                    vaddq_s32(vmulq_s32(vsubq_s32(above, bottom), off_ver0), rnd_ver),
+                    bhl2,
+                ),
+            );
+            let ph0 = vaddq_s32(
+                right,
+                sra_i32_neon(vaddq_s32(vmulq_s32(diff_hor0, dist), rnd_hor), bwl2),
+            );
+            let pv0 = vaddq_s32(
+                pv0,
+                vshrq_n_s32::<6>(vaddq_s32(vmulq_s32(vsubq_s32(above, pv0), w_ver0), add32)),
+            );
+            let ph0 = vaddq_s32(
+                ph0,
+                vshrq_n_s32::<6>(vaddq_s32(vmulq_s32(vsubq_s32(left0, ph0), wx), add32)),
+            );
+            store_i32x4_u16_max_neon(
+                d0,
+                vshrq_n_s32::<1>(vaddq_s32(vaddq_s32(pv0, ph0), one)),
+                bitdepth_max,
+            );
+
+            let pv1 = vaddq_s32(
+                bottom,
+                sra_i32_neon(
+                    vaddq_s32(vmulq_s32(vsubq_s32(above, bottom), off_ver1), rnd_ver),
+                    bhl2,
+                ),
+            );
+            let ph1 = vaddq_s32(
+                right,
+                sra_i32_neon(vaddq_s32(vmulq_s32(diff_hor1, dist), rnd_hor), bwl2),
+            );
+            let pv1 = vaddq_s32(
+                pv1,
+                vshrq_n_s32::<6>(vaddq_s32(vmulq_s32(vsubq_s32(above, pv1), w_ver1), add32)),
+            );
+            let ph1 = vaddq_s32(
+                ph1,
+                vshrq_n_s32::<6>(vaddq_s32(vmulq_s32(vsubq_s32(left1, ph1), wx), add32)),
+            );
+            store_i32x4_u16_max_neon(
+                d1,
+                vshrq_n_s32::<1>(vaddq_s32(vaddq_s32(pv1, ph1), one)),
+                bitdepth_max,
+            );
+        }
+        let base = chunks0.len() * 4;
+        for (i, (d0, d1)) in rem0.iter_mut().zip(rem1.iter_mut()).enumerate() {
+            let x = base + i;
+            let above = tl[o + 1 + x] as i32;
+            let mut pv0 = bottom_s
+                + (((above - bottom_s) * (h as i32 - 1 - y as i32) + (h >> 1) as i32) >> bhl2);
+            let mut ph0 = right_s
+                + (((left0_s - right_s) * (w as i32 - 1 - x as i32) + (w >> 1) as i32) >> bwl2);
+            pv0 += ((above - pv0) * weights[y] as i32 + 32) >> 6;
+            ph0 += ((left0_s - ph0) * weights[x] as i32 + 32) >> 6;
+            *d0 = ((pv0 + ph0 + 1) >> 1).clamp(0, bitdepth_max as i32) as u16;
+
+            let mut pv1 = bottom_s
+                + (((above - bottom_s) * (h as i32 - 2 - y as i32) + (h >> 1) as i32) >> bhl2);
+            let mut ph1 = right_s
+                + (((left1_s - right_s) * (w as i32 - 1 - x as i32) + (w >> 1) as i32) >> bwl2);
+            pv1 += ((above - pv1) * weights[y + 1] as i32 + 32) >> 6;
+            ph1 += ((left1_s - ph1) * weights[x] as i32 + 32) >> 6;
+            *d1 = ((pv1 + ph1 + 1) >> 1).clamp(0, bitdepth_max as i32) as u16;
+        }
+        y += 2;
+        off += stride * 2;
+    }
+
+    if y < h {
         let left_s = tl[o - 1 - y] as i32;
         let left = vdupq_n_s32(left_s);
         let diff_hor = vdupq_n_s32(left_s - right_s);
         let off_ver = vdupq_n_s32((h - 1 - y) as i32);
         let w_ver = vdupq_n_s32(weights[y] as i32);
         let row = &mut dst[off..off + w];
-        let top_src = &tl[o + 1..o + 1 + w];
         let (chunks, rem) = row.as_chunks_mut::<4>();
         for (ci, ((d, t), wx)) in chunks
             .iter_mut()
@@ -555,8 +793,19 @@ fn ipred_smooth_hbd_neon_impl(
             ph += ((left_s - ph) * weights[x] as i32 + 32) >> 6;
             *d = ((pv + ph + 1) >> 1).clamp(0, bitdepth_max as i32) as u16;
         }
-        off += stride;
     }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn paeth_i32x4_neon(left: int32x4_t, top: int32x4_t, topleft: int32x4_t) -> int32x4_t {
+    let base = vsubq_s32(vaddq_s32(left, top), topleft);
+    let ld = vabsq_s32(vsubq_s32(left, base));
+    let td = vabsq_s32(vsubq_s32(top, base));
+    let tld = vabsq_s32(vsubq_s32(topleft, base));
+    let left_mask = vandq_u32(vcleq_s32(ld, td), vcleq_s32(ld, tld));
+    let top_mask = vcleq_s32(td, tld);
+    vbslq_s32(left_mask, left, vbslq_s32(top_mask, top, topleft))
 }
 
 #[target_feature(enable = "neon")]
@@ -576,24 +825,76 @@ fn ipred_paeth_hbd_neon_impl(
 
     let topleft_s = tl[o] as i32;
     let topleft = vdupq_n_s32(topleft_s);
+    let top_src = &tl[o + 1..o + 1 + w];
+
+    let mut y = 0usize;
     let mut off = 0usize;
-    for y in 0..h {
+    while y + 1 < h {
+        let (head, tail) = dst[off..].split_at_mut(stride);
+        let row0 = &mut head[..w];
+        let row1 = &mut tail[..w];
+
+        let left0_s = tl[o - 1 - y] as i32;
+        let left1_s = tl[o - 2 - y] as i32;
+        let left0 = vdupq_n_s32(left0_s);
+        let left1 = vdupq_n_s32(left1_s);
+
+        let (chunks0, rem0) = row0.as_chunks_mut::<4>();
+        let (chunks1, rem1) = row1.as_chunks_mut::<4>();
+        for ((d0, d1), t) in chunks0
+            .iter_mut()
+            .zip(chunks1.iter_mut())
+            .zip(top_src.as_chunks::<4>().0.iter())
+        {
+            let top = load_u16x4_i32_neon(t);
+            store_i32x4_u16_max_neon(d0, paeth_i32x4_neon(left0, top, topleft), bitdepth_max);
+            store_i32x4_u16_max_neon(d1, paeth_i32x4_neon(left1, top, topleft), bitdepth_max);
+        }
+
+        let base_x = chunks0.len() * 4;
+        for (i, (d0, d1)) in rem0.iter_mut().zip(rem1.iter_mut()).enumerate() {
+            let top_s = tl[o + 1 + base_x + i] as i32;
+
+            let base0 = left0_s + top_s - topleft_s;
+            let ld0 = (left0_s - base0).abs();
+            let td0 = (top_s - base0).abs();
+            let tld0 = (topleft_s - base0).abs();
+            *d0 = if ld0 <= td0 && ld0 <= tld0 {
+                left0_s
+            } else if td0 <= tld0 {
+                top_s
+            } else {
+                topleft_s
+            } as u16;
+
+            let base1 = left1_s + top_s - topleft_s;
+            let ld1 = (left1_s - base1).abs();
+            let td1 = (top_s - base1).abs();
+            let tld1 = (topleft_s - base1).abs();
+            *d1 = if ld1 <= td1 && ld1 <= tld1 {
+                left1_s
+            } else if td1 <= tld1 {
+                top_s
+            } else {
+                topleft_s
+            } as u16;
+        }
+
+        y += 2;
+        off += stride * 2;
+    }
+
+    if y < h {
         let left_s = tl[o - 1 - y] as i32;
         let left = vdupq_n_s32(left_s);
         let row = &mut dst[off..off + w];
-        let top_src = &tl[o + 1..o + 1 + w];
+
         let (chunks, rem) = row.as_chunks_mut::<4>();
         for (d, t) in chunks.iter_mut().zip(top_src.as_chunks::<4>().0.iter()) {
             let top = load_u16x4_i32_neon(t);
-            let base = vsubq_s32(vaddq_s32(left, top), topleft);
-            let ld = vabsq_s32(vsubq_s32(left, base));
-            let td = vabsq_s32(vsubq_s32(top, base));
-            let tld = vabsq_s32(vsubq_s32(topleft, base));
-            let left_mask = vandq_u32(vcleq_s32(ld, td), vcleq_s32(ld, tld));
-            let top_mask = vandq_u32(vmvnq_u32(left_mask), vcleq_s32(td, tld));
-            let inner = vbslq_s32(top_mask, top, topleft);
-            store_i32x4_u16_max_neon(d, vbslq_s32(left_mask, left, inner), bitdepth_max);
+            store_i32x4_u16_max_neon(d, paeth_i32x4_neon(left, top, topleft), bitdepth_max);
         }
+
         let base_x = chunks.len() * 4;
         for (i, d) in rem.iter_mut().enumerate() {
             let top_s = tl[o + 1 + base_x + i] as i32;
@@ -609,7 +910,6 @@ fn ipred_paeth_hbd_neon_impl(
                 topleft_s
             } as u16;
         }
-        off += stride;
     }
 }
 
@@ -1416,6 +1716,146 @@ fn z2_top_span_chroma_hbd_neon(
     }
 }
 
+#[inline]
+#[target_feature(enable = "neon")]
+fn z2_left_span_luma_hbd_neon(
+    filt: &[u16],
+    left_off: usize,
+    y: usize,
+    dy: i32,
+    mrl_idx: usize,
+    dst_row: &mut [u16],
+    mut x: usize,
+    w: usize,
+    mut xpos: i32,
+    bitdepth_max: u16,
+) -> (usize, i32) {
+    let limit = -(64 * (1 + mrl_idx as i32));
+    let rnd = vdupq_n_s32(64);
+
+    while x + 4 <= w && xpos + 64 * 3 < limit {
+        let mut c0 = [0i16; 4];
+        let mut c1 = [0i16; 4];
+        let mut c2 = [0i16; 4];
+        let mut c3 = [0i16; 4];
+        let mut p0 = [0i16; 4];
+        let mut p1 = [0i16; 4];
+        let mut p2 = [0i16; 4];
+        let mut p3 = [0i16; 4];
+        for i in 0..4 {
+            let xpos_l = (x + i + 1) as i32;
+            let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
+            let base_y = ypos_l >> 6;
+            let shift = ((ypos_l & 0x3F) >> 1) as usize;
+            let bi = (left_off as i32 - base_y) as usize;
+            let f = &crate::ipred::DR_INTERP_FILTER[shift];
+            c0[i] = f.a as i16;
+            c1[i] = f.b as i16;
+            c2[i] = f.c as i16;
+            c3[i] = f.d as i16;
+            p0[i] = filt[bi - 1] as i16;
+            p1[i] = filt[bi - 2] as i16;
+            p2[i] = filt[bi - 3] as i16;
+            p3[i] = filt[bi - 4] as i16;
+        }
+        let c0 = unsafe { vld1_s16(c0.as_ptr()) };
+        let c1 = unsafe { vld1_s16(c1.as_ptr()) };
+        let c2 = unsafe { vld1_s16(c2.as_ptr()) };
+        let c3 = unsafe { vld1_s16(c3.as_ptr()) };
+        let p0 = unsafe { vld1_s16(p0.as_ptr()) };
+        let p1 = unsafe { vld1_s16(p1.as_ptr()) };
+        let p2 = unsafe { vld1_s16(p2.as_ptr()) };
+        let p3 = unsafe { vld1_s16(p3.as_ptr()) };
+        let acc = vmlal_s16(
+            vmlal_s16(vmlal_s16(vmull_s16(c0, p0), c1, p1), c2, p2),
+            c3,
+            p3,
+        );
+        let v = vshrq_n_s32::<7>(vaddq_s32(acc, rnd));
+        store_i32x4_u16_max_neon(&mut dst_row[x..], v, bitdepth_max);
+        x += 4;
+        xpos += 64 * 4;
+    }
+
+    while x < w && xpos < limit {
+        let xpos_l = (x + 1) as i32;
+        let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
+        let base_y = ypos_l >> 6;
+        let shift = ((ypos_l & 0x3F) >> 1) as usize;
+        let bi = (left_off as i32 - base_y) as usize;
+        let f = &crate::ipred::DR_INTERP_FILTER[shift];
+        let v = f.a as i32 * filt[bi - 1] as i32
+            + f.b as i32 * filt[bi - 2] as i32
+            + f.c as i32 * filt[bi - 3] as i32
+            + f.d as i32 * filt[bi - 4] as i32;
+        dst_row[x] = (((v + 64) >> 7).clamp(0, bitdepth_max as i32)) as u16;
+        x += 1;
+        xpos += 64;
+    }
+
+    (x, xpos)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn z2_left_span_chroma_hbd_neon(
+    filt: &[u16],
+    left_off: usize,
+    y: usize,
+    dy: i32,
+    mrl_idx: usize,
+    dst_row: &mut [u16],
+    mut x: usize,
+    w: usize,
+    mut xpos: i32,
+    bitdepth_max: u16,
+) -> (usize, i32) {
+    let limit = -(64 * (1 + mrl_idx as i32));
+    let rnd = vdupq_n_s32(16);
+
+    while x + 4 <= w && xpos + 64 * 3 < limit {
+        let mut iw = [0i32; 4];
+        let mut sw = [0i32; 4];
+        let mut p0 = [0u16; 4];
+        let mut p1 = [0u16; 4];
+        for i in 0..4 {
+            let xpos_l = (x + i + 1) as i32;
+            let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
+            let base_y = ypos_l >> 6;
+            let shift = ((ypos_l & 0x3F) >> 1) as i32;
+            let bi = (left_off as i32 - base_y) as usize;
+            iw[i] = 32 - shift;
+            sw[i] = shift;
+            p0[i] = filt[bi - 2];
+            p1[i] = filt[bi - 3];
+        }
+        let v = vshrq_n_s32::<5>(vaddq_s32(
+            vaddq_s32(
+                vmulq_s32(load_u16x4_i32_neon(&p0), unsafe { vld1q_s32(iw.as_ptr()) }),
+                vmulq_s32(load_u16x4_i32_neon(&p1), unsafe { vld1q_s32(sw.as_ptr()) }),
+            ),
+            rnd,
+        ));
+        store_i32x4_u16_max_neon(&mut dst_row[x..], v, bitdepth_max);
+        x += 4;
+        xpos += 64 * 4;
+    }
+
+    while x < w && xpos < limit {
+        let xpos_l = (x + 1) as i32;
+        let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
+        let base_y = ypos_l >> 6;
+        let shift = ((ypos_l & 0x3F) >> 1) as usize;
+        let bi = (left_off as i32 - base_y) as usize;
+        let v = (32 - shift as i32) * filt[bi - 2] as i32 + shift as i32 * filt[bi - 3] as i32;
+        dst_row[x] = ((v + 16) >> 5).clamp(0, bitdepth_max as i32) as u16;
+        x += 1;
+        xpos += 64;
+    }
+
+    (x, xpos)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
 fn ipred_z2_hbd_neon_impl(
@@ -1527,27 +1967,35 @@ fn ipred_z2_hbd_neon_impl(
         let mut xpos = -(ypos + mrl_idx as i32) * dx;
         let mut x = 0usize;
         let dst_row = &mut dst[y * stride..y * stride + w];
-        while x < w && xpos < -(64 * (1 + mrl_idx as i32)) {
-            let xpos_l = (x + 1) as i32;
-            let ypos_l = ((y as i32) << 6) - (xpos_l + mrl_idx as i32) * dy;
-            let base_y = ypos_l >> 6;
-            let shift = ((ypos_l & 0x3F) >> 1) as usize;
-            let bi = (left_off as i32 - base_y) as usize;
-            if is_luma {
-                let f = &crate::ipred::DR_INTERP_FILTER[shift];
-                let v = f.a as i32 * filt2[bi - 1] as i32
-                    + f.b as i32 * filt2[bi - 2] as i32
-                    + f.c as i32 * filt2[bi - 3] as i32
-                    + f.d as i32 * filt2[bi - 4] as i32;
-                dst_row[x] = (((v + 64) >> 7).clamp(0, bitdepth_max as i32)) as u16;
-            } else {
-                let v = (32 - shift as i32) * filt2[bi - 2] as i32
-                    + shift as i32 * filt2[bi - 3] as i32;
-                dst_row[x] = ((v + 16) >> 5).clamp(0, bitdepth_max as i32) as u16;
-            }
-            x += 1;
-            xpos += 64;
-        }
+        // Left reference span: pack the variable-shift samples into local lanes
+        // and run the filter in NEON, preserving scalar tails.
+        (x, xpos) = if is_luma {
+            z2_left_span_luma_hbd_neon(
+                &filt2,
+                left_off,
+                y,
+                dy,
+                mrl_idx,
+                dst_row,
+                x,
+                w,
+                xpos,
+                bitdepth_max,
+            )
+        } else {
+            z2_left_span_chroma_hbd_neon(
+                &filt2,
+                left_off,
+                y,
+                dy,
+                mrl_idx,
+                dst_row,
+                x,
+                w,
+                xpos,
+                bitdepth_max,
+            )
+        };
         if x < w {
             let shift = ((xpos & 0x3F) >> 1) as usize;
             if is_luma {
@@ -1660,6 +2108,126 @@ pub(crate) fn ipred_z2_hbd_neon(
     }
 }
 
+#[inline]
+#[target_feature(enable = "neon")]
+fn dip_dot_hbd_neon(inp: &[i32; 11], weights: &[u16; 11]) -> i32 {
+    let mut s = 0i32;
+    for i in 0..11 {
+        s += weights[i] as i32 * inp[i];
+    }
+    s
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn dip_dot2_hbd_neon(inp: &[i32; 11], w0: &[u16; 11], w1: &[u16; 11]) -> [i32; 2] {
+    let mut acc = vdupq_n_s32(0);
+    for i in 0..11 {
+        let mut w = vdupq_n_s32(0);
+        w = vsetq_lane_s32::<0>(w0[i] as i32, w);
+        w = vsetq_lane_s32::<1>(w1[i] as i32, w);
+        acc = vmlaq_n_s32(acc, w, inp[i]);
+    }
+    let mut out = [0i32; 4];
+    unsafe { vst1q_s32(out.as_mut_ptr(), acc) };
+    [out[0], out[1]]
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn dip_dot4_hbd_neon(
+    inp: &[i32; 11],
+    w0: &[u16; 11],
+    w1: &[u16; 11],
+    w2: &[u16; 11],
+    w3: &[u16; 11],
+) -> [i32; 4] {
+    let mut acc = vdupq_n_s32(0);
+    for i in 0..11 {
+        let mut w = vdupq_n_s32(0);
+        w = vsetq_lane_s32::<0>(w0[i] as i32, w);
+        w = vsetq_lane_s32::<1>(w1[i] as i32, w);
+        w = vsetq_lane_s32::<2>(w2[i] as i32, w);
+        w = vsetq_lane_s32::<3>(w3[i] as i32, w);
+        acc = vmlaq_n_s32(acc, w, inp[i]);
+    }
+    let mut out = [0i32; 4];
+    unsafe { vst1q_s32(out.as_mut_ptr(), acc) };
+    out
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn dip_vertical_interp_hbd_neon(
+    dst: &mut [u16],
+    stride: usize,
+    tl: &[u16],
+    o: usize,
+    w: usize,
+    step_y: usize,
+    uhl2: i32,
+    grid_h: usize,
+) {
+    if step_y <= 1 {
+        return;
+    }
+    let mut p0_buf = [0u16; 128];
+    let mut p1_buf = [0u16; 128];
+    let sh = vdupq_n_s32(-uhl2);
+    for gy in 0..grid_h {
+        let base_y = gy * step_y;
+        let sparse_y = base_y + step_y - 1;
+        if gy == 0 {
+            p0_buf[..w].copy_from_slice(&tl[o + 1..o + 1 + w]);
+        } else {
+            let prev = (base_y - 1) * stride;
+            p0_buf[..w].copy_from_slice(&dst[prev..prev + w]);
+        }
+        let p1_off = sparse_y * stride;
+        p1_buf[..w].copy_from_slice(&dst[p1_off..p1_off + w]);
+
+        for z in 0..step_y - 1 {
+            let z1 = (z + 1) as u16;
+            let w0 = (step_y as u16) - z1;
+            let w1 = z1;
+            let row_off = (base_y + z) * stride;
+            let row = &mut dst[row_off..row_off + w];
+            let mut x = 0usize;
+            while x + 8 <= w {
+                let a = unsafe { vld1q_u16(p0_buf[x..].as_ptr()) };
+                let b = unsafe { vld1q_u16(p1_buf[x..].as_ptr()) };
+                let lo = vshlq_u32(
+                    vaddq_u32(
+                        vmull_n_u16(vget_low_u16(a), w0),
+                        vmull_n_u16(vget_low_u16(b), w1),
+                    ),
+                    sh,
+                );
+                let hi = vshlq_u32(
+                    vaddq_u32(
+                        vmull_n_u16(vget_high_u16(a), w0),
+                        vmull_n_u16(vget_high_u16(b), w1),
+                    ),
+                    sh,
+                );
+                unsafe {
+                    vst1q_u16(
+                        row[x..].as_mut_ptr(),
+                        vcombine_u16(vqmovn_u32(lo), vqmovn_u32(hi)),
+                    )
+                };
+                x += 8;
+            }
+            while x < w {
+                row[x] = ((p0_buf[x] as i32 * (step_y as i32 - z as i32 - 1)
+                    + p1_buf[x] as i32 * (z as i32 + 1))
+                    >> uhl2) as u16;
+                x += 1;
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
 pub(crate) fn ipred_dip_hbd_neon(
@@ -1743,20 +2311,58 @@ pub(crate) fn ipred_dip_hbd_neon(
     let grid_h = 8usize >> dhl2;
     let grid_w = 8usize >> dwl2;
 
+    let weights = &DIP_WEIGHTS[m];
+
     let mut y = step_y - 1;
     for gy in 0..grid_h {
         let iy = gy * dh;
+        let mut gx = 0usize;
         let mut x = step_x - 1;
         let dst_row = &mut dst[y * stride..y * stride + width];
-        for gx in 0..grid_w {
+        while gx + 4 <= grid_w {
+            let ix0 = gx * dw;
+            let ix1 = ix0 + dw;
+            let ix2 = ix1 + dw;
+            let ix3 = ix2 + dw;
+            let idx0 = if trans { ix0 * 8 + iy } else { iy * 8 + ix0 };
+            let idx1 = if trans { ix1 * 8 + iy } else { iy * 8 + ix1 };
+            let idx2 = if trans { ix2 * 8 + iy } else { iy * 8 + ix2 };
+            let idx3 = if trans { ix3 * 8 + iy } else { iy * 8 + ix3 };
+            let s = dip_dot4_hbd_neon(
+                &inp,
+                &weights[idx0],
+                &weights[idx1],
+                &weights[idx2],
+                &weights[idx3],
+            );
+            dst_row[x] = (((s[0] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
+            dst_row[x + step_x] =
+                (((s[1] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
+            dst_row[x + step_x * 2] =
+                (((s[2] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
+            dst_row[x + step_x * 3] =
+                (((s[3] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
+            gx += 4;
+            x += step_x * 4;
+        }
+        if gx + 2 <= grid_w {
+            let ix0 = gx * dw;
+            let ix1 = ix0 + dw;
+            let idx0 = if trans { ix0 * 8 + iy } else { iy * 8 + ix0 };
+            let idx1 = if trans { ix1 * 8 + iy } else { iy * 8 + ix1 };
+            let s = dip_dot2_hbd_neon(&inp, &weights[idx0], &weights[idx1]);
+            dst_row[x] = (((s[0] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
+            dst_row[x + step_x] =
+                (((s[1] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
+            gx += 2;
+            x += step_x * 2;
+        }
+        while gx < grid_w {
             let ix = gx * dw;
             let idx = if trans { ix * 8 + iy } else { iy * 8 + ix };
-            let mut s = 0i32;
-            let weights = &DIP_WEIGHTS[m][idx];
-            for i in 0..11 {
-                s += weights[i] as i32 * inp[i];
-            }
+            let s = dip_dot_hbd_neon(&inp, &weights[idx]);
             dst_row[x] = (((s + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
+            gx += 1;
             x += step_x;
         }
         y += step_y;
@@ -1781,29 +2387,5 @@ pub(crate) fn ipred_dip_hbd_neon(
         }
     }
 
-    if step_y > 1 {
-        let mut p0_buf = [0u16; 128];
-        let mut p1_buf = [0u16; 128];
-        for gy in 0..grid_h {
-            let base_y = gy * step_y;
-            let sparse_y = base_y + step_y - 1;
-            if gy == 0 {
-                p0_buf[..width].copy_from_slice(&tl[o + 1..o + 1 + width]);
-            } else {
-                let prev = (base_y - 1) * stride;
-                p0_buf[..width].copy_from_slice(&dst[prev..prev + width]);
-            }
-            let p1_off = sparse_y * stride;
-            p1_buf[..width].copy_from_slice(&dst[p1_off..p1_off + width]);
-            for z in 0..step_y - 1 {
-                let z1 = (z + 1) as i32;
-                let row_off = (base_y + z) * stride;
-                let row = &mut dst[row_off..row_off + width];
-                for x in 0..width {
-                    row[x] = ((p0_buf[x] as i32 * (step_y as i32 - z1) + p1_buf[x] as i32 * z1)
-                        >> uhl2) as u16;
-                }
-            }
-        }
-    }
+    dip_vertical_interp_hbd_neon(dst, stride, tl, o, width, step_y, uhl2, grid_h);
 }

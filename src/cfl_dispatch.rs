@@ -159,11 +159,60 @@ pub(crate) struct CflAlphaAccumHbd<'a> {
     pub(crate) a2sh: i32,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CflGenMatSums {
+    pub(crate) m00: i32,
+    pub(crate) m01: i32,
+    pub(crate) sum0: i32,
+    pub(crate) m11: i32,
+    pub(crate) sum1: i32,
+}
+
+impl CflGenMatSums {
+    #[inline(always)]
+    pub(crate) fn add_pair(&mut self, v0: i32, v1: i32) {
+        self.m00 += v0 * v0;
+        self.m01 += v0 * v1;
+        self.sum0 += v0;
+        self.m11 += v1 * v1;
+        self.sum1 += v1;
+    }
+}
+
+pub(crate) struct CflGenMat8<'a> {
+    pub(crate) sums: &'a mut CflGenMatSums,
+    pub(crate) imat0: &'a mut [u16; crate::ipred::CFL_MHCCP_MAX_EDGE_SAMPLES],
+    pub(crate) imat1: &'a mut [u16; crate::ipred::CFL_MHCCP_MAX_EDGE_SAMPLES],
+    pub(crate) imat_off: usize,
+    pub(crate) y: &'a [u8],
+    pub(crate) v0_off: usize,
+    pub(crate) v0_stride: usize,
+    pub(crate) v1_off: usize,
+    pub(crate) v1_stride: usize,
+    pub(crate) len: usize,
+}
+
+pub(crate) struct CflGenMatHbd<'a> {
+    pub(crate) sums: &'a mut CflGenMatSums,
+    pub(crate) imat0: &'a mut [u16; crate::ipred::CFL_MHCCP_MAX_EDGE_SAMPLES],
+    pub(crate) imat1: &'a mut [u16; crate::ipred::CFL_MHCCP_MAX_EDGE_SAMPLES],
+    pub(crate) imat_off: usize,
+    pub(crate) y: &'a [u16],
+    pub(crate) v0_off: usize,
+    pub(crate) v0_stride: usize,
+    pub(crate) v1_off: usize,
+    pub(crate) v1_stride: usize,
+    pub(crate) len: usize,
+    pub(crate) bitdepth: i32,
+}
+
 pub(crate) type CflGenYRow8Fn = for<'a> unsafe fn(CflGenYRow8<'a>);
 pub(crate) type CflGenYRowHbdFn = for<'a> unsafe fn(CflGenYRowHbd<'a>);
 
 pub(crate) type CflAlphaAccum8Fn = for<'a> unsafe fn(CflAlphaAccum8<'a>);
 pub(crate) type CflAlphaAccumHbdFn = for<'a> unsafe fn(CflAlphaAccumHbd<'a>);
+pub(crate) type CflGenMat8Fn = for<'a> unsafe fn(CflGenMat8<'a>);
+pub(crate) type CflGenMatHbdFn = for<'a> unsafe fn(CflGenMatHbd<'a>);
 
 pub(crate) type CflMhccpPred8Fn = for<'a> unsafe fn(CflMhccpPred8<'a>);
 pub(crate) type CflMhccpPredHbdFn = for<'a> unsafe fn(CflMhccpPredHbd<'a>);
@@ -1096,6 +1145,58 @@ pub(crate) fn cfl_alpha_accum_hbd_scalar(args: CflAlphaAccumHbd<'_>) {
     }
 }
 
+#[inline(always)]
+fn cfl_mhccp_sqrnd(v: i32, bitdepth: i32) -> i32 {
+    (v * v + (1 << (bitdepth - 1))) >> bitdepth
+}
+
+pub(crate) fn cfl_gen_mat_8bpc_scalar(args: CflGenMat8<'_>) {
+    let CflGenMat8 {
+        sums,
+        imat0,
+        imat1,
+        imat_off,
+        y,
+        v0_off,
+        v0_stride,
+        v1_off,
+        v1_stride,
+        len,
+    } = args;
+
+    for i in 0..len {
+        let v0 = y[v0_off + i * v0_stride] as i32;
+        let v1 = cfl_mhccp_sqrnd(y[v1_off + i * v1_stride] as i32, 8);
+        imat0[imat_off + i] = v0 as u16;
+        imat1[imat_off + i] = v1 as u16;
+        sums.add_pair(v0, v1);
+    }
+}
+
+pub(crate) fn cfl_gen_mat_hbd_scalar(args: CflGenMatHbd<'_>) {
+    let CflGenMatHbd {
+        sums,
+        imat0,
+        imat1,
+        imat_off,
+        y,
+        v0_off,
+        v0_stride,
+        v1_off,
+        v1_stride,
+        len,
+        bitdepth,
+    } = args;
+
+    for i in 0..len {
+        let v0 = y[v0_off + i * v0_stride] as i32;
+        let v1 = cfl_mhccp_sqrnd(y[v1_off + i * v1_stride] as i32, bitdepth);
+        imat0[imat_off + i] = v0 as u16;
+        imat1[imat_off + i] = v1 as u16;
+        sums.add_pair(v0, v1);
+    }
+}
+
 const CFL_MHCCP_HAS_TOP: i32 = 1 << 2;
 const CFL_MHCCP_HAS_LEFT: i32 = 1 << 3;
 
@@ -1266,6 +1367,55 @@ pub(crate) fn cfl_mhccp_pred_hbd_scalar(args: CflMhccpPredHbd<'_>) {
         }
         sp += w;
     }
+}
+
+static CFL_GEN_MAT_8BPC: OnceLock<CflGenMat8Fn> = OnceLock::new();
+static CFL_GEN_MAT_HBD: OnceLock<CflGenMatHbdFn> = OnceLock::new();
+
+#[inline]
+fn resolve_cfl_gen_mat_8bpc() -> CflGenMat8Fn {
+    *CFL_GEN_MAT_8BPC.get_or_init(|| {
+        let mut _f: CflGenMat8Fn = cfl_gen_mat_8bpc_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::cfl_gen_mat_8bpc_neon;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cfl_gen_mat_8bpc_avx2;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+fn resolve_cfl_gen_mat_hbd() -> CflGenMatHbdFn {
+    *CFL_GEN_MAT_HBD.get_or_init(|| {
+        let mut _f: CflGenMatHbdFn = cfl_gen_mat_hbd_scalar;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::cfl_gen_mat_hbd_neon;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::cfl_gen_mat_hbd_avx2;
+            }
+        }
+        _f
+    })
+}
+
+#[inline]
+pub(crate) fn cfl_gen_mat_8bpc(args: CflGenMat8<'_>) {
+    unsafe { resolve_cfl_gen_mat_8bpc()(args) };
+}
+
+#[inline]
+pub(crate) fn cfl_gen_mat_hbd(args: CflGenMatHbd<'_>) {
+    unsafe { resolve_cfl_gen_mat_hbd()(args) };
 }
 
 static CFL_ALPHA_ACCUM_8BPC: OnceLock<CflAlphaAccum8Fn> = OnceLock::new();
