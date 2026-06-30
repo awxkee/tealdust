@@ -249,7 +249,6 @@ impl Coeff for i16 {
 
     #[inline(always)]
     fn from_i32(v: i32) -> Self {
-        debug_assert!((i16::MIN as i32..=i16::MAX as i32).contains(&v));
         v as i16
     }
 

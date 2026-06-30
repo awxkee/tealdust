@@ -1960,38 +1960,115 @@ pub(crate) fn decode_coefs_sse2<C: Coeff, const UPDATE_CDF: bool>(
     decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
 }
 
-#[cfg(all(target_arch = "x86_64", feature = "avx"))]
-#[target_feature(enable = "avx2")]
-pub(crate) fn decode_coefs_avx2<C: Coeff, const UPDATE_CDF: bool>(
-    msac: &mut crate::avx::MsacContextAvx<'_, UPDATE_CDF>,
-    coef: &mut CdfCoefContext,
-    mode: &mut CdfModeContext,
-    a: &[u8],
-    l: &[u8],
-    p: &DecodeCoefParams,
-    cf: &mut [C],
-    txtp: &mut u16,
-    res_ctx: &mut u8,
-    levels_scratch: &mut [i8; 1089],
-) -> i32 {
-    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn intrabc_put_bilin<BD: crate::pixel::BitDepth>(
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    dst_stride: usize,
+    src: &[BD::Pixel],
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+) {
+    use crate::pixel::Pixel;
+
+    if BD::BPC == 8 {
+        if let (Some(dst8), Some(src8)) = (
+            <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst),
+            <BD::Pixel as Pixel>::try_as_u8_slice(src),
+        ) {
+            let mut scratch = Vec::new();
+            crate::mc_dispatch::put_bilin_8bpc_with_scratch(
+                dst8,
+                dst_stride,
+                src8,
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                &mut scratch,
+            );
+            return;
+        }
+    } else if BD::BPC == 16 {
+        if let (Some(dst16), Some(src16)) = (
+            <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst),
+            <BD::Pixel as Pixel>::try_as_u16_slice(src),
+        ) {
+            let mut scratch = Vec::new();
+            crate::mc_dispatch::put_bilin_hbd_with_scratch(
+                dst16,
+                dst_stride,
+                src16,
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                bd.bitdepth(),
+                &mut scratch,
+            );
+            return;
+        }
+    }
+
+    crate::mc::put_bilin(bd, dst, dst_stride, src, src_stride, w, h, mx, my);
 }
 
-#[cfg(all(target_arch = "x86_64", feature = "avx"))]
-#[target_feature(enable = "avx512f,avx512dq")]
-pub(crate) fn decode_coefs_avx512<C: Coeff, const UPDATE_CDF: bool>(
-    msac: &mut crate::avx::MsacContextAvx512<'_, UPDATE_CDF>,
-    coef: &mut CdfCoefContext,
-    mode: &mut CdfModeContext,
-    a: &[u8],
-    l: &[u8],
-    p: &DecodeCoefParams,
-    cf: &mut [C],
-    txtp: &mut u16,
-    res_ctx: &mut u8,
-    levels_scratch: &mut [i8; 1089],
-) -> i32 {
-    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn intrabc_gather_src<P: crate::pixel::Pixel>(
+    plane: &[P],
+    stride: usize,
+    srcbuf: &mut [P],
+    src_stride: usize,
+    src_w: usize,
+    src_h: usize,
+    sx: i32,
+    sy: i32,
+    right: i32,
+    bottom: i32,
+) {
+    debug_assert!(src_stride >= src_w);
+    debug_assert!(srcbuf.len() >= src_stride * src_h);
+
+    let bottom = bottom.max(1);
+    let src_w_i32 = src_w as i32;
+
+    for (ry, dst_row) in srcbuf.chunks_mut(src_stride).take(src_h).enumerate() {
+        let cy = (sy + ry as i32).clamp(0, bottom - 1) as usize;
+        let row_start = cy.saturating_mul(stride).min(plane.len());
+        let row_end = row_start.saturating_add(stride).min(plane.len());
+        let src_row = &plane[row_start..row_end];
+
+        if src_row.is_empty() {
+            dst_row[..src_w].fill(P::default());
+            continue;
+        }
+
+        let row_right = right.max(1).min(src_row.len() as i32);
+        let left_ext = (-sx).clamp(0, src_w_i32) as usize;
+        let right_ext = (sx + src_w_i32 - row_right).clamp(0, src_w_i32 - left_ext as i32) as usize;
+        let center_w = src_w - left_ext - right_ext;
+
+        if left_ext != 0 {
+            dst_row[..left_ext].fill(src_row[0]);
+        }
+
+        if center_w != 0 {
+            let src_x = (sx + left_ext as i32).clamp(0, row_right - 1) as usize;
+            dst_row[left_ext..left_ext + center_w]
+                .copy_from_slice(&src_row[src_x..src_x + center_w]);
+        }
+
+        if right_ext != 0 {
+            dst_row[src_w - right_ext..src_w].fill(src_row[row_right as usize - 1]);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2010,94 +2087,58 @@ pub(crate) fn intrabc_pred<BD: crate::pixel::BitDepth>(
     right: i32,
     bottom: i32,
 ) {
-    use crate::pixel::Pixel;
-    let left = 0i32;
-    let top = 0i32;
     let h_mul = 4 >> ss_hor;
     let v_mul = 4 >> ss_ver;
+
     // put filter (`mx << !ss_hor`). For an unsubsampled plane that is
     // (mvx & 7) << 1; for a subsampled chroma plane it is (mvx & 15).
     let mx_lo = mvx & (15 >> (ss_hor == 0) as i32);
     let my_lo = mvy & (15 >> (ss_ver == 0) as i32);
     let mx = mx_lo << (ss_hor == 0) as i32;
     let my = my_lo << (ss_ver == 0) as i32;
+
     // Source (reference) position within the current plane, in samples.
     let sx = bx * h_mul + (mvx >> (3 + ss_hor));
     let sy = by * v_mul + (mvy >> (3 + ss_ver));
+
     // Destination position (block origin), in samples.
     let dpx = bx * h_mul;
     let dpy = by * v_mul;
 
     let w = (bw4 * h_mul) as usize;
     let h = (bh4 * v_mul) as usize;
-
-    // Gather the source region (plus one extra row/col of subpel context) into a
-    // contiguous scratch buffer (as i32), with edge clamping identical to
-    // mc.emu_edge. This also lets src and dst share the same plane buffer safely.
-    let src_w = w + (mx_lo != 0) as usize; // extra column for the +stride tap
-    let src_h = h + (my_lo != 0) as usize; // extra row for the +stride tap
+    let src_w = w + usize::from(mx_lo != 0);
+    let src_h = h + usize::from(my_lo != 0);
     let src_stride = src_w;
-    let mut srcbuf = vec![0i32; src_stride * src_h];
-    for ry in 0..src_h {
-        let cy = (sy + ry as i32).clamp(top, bottom - 1) as usize;
-        for rx in 0..src_w {
-            let cx = (sx + rx as i32).clamp(left, right - 1) as usize;
-            srcbuf[ry * src_stride + rx] = plane[cy * stride + cx].into();
-        }
-    }
+
+    let mut srcbuf = vec![BD::Pixel::default(); src_stride * src_h];
+    intrabc_gather_src(
+        plane,
+        stride,
+        &mut srcbuf,
+        src_stride,
+        src_w,
+        src_h,
+        sx,
+        sy,
+        right,
+        bottom,
+    );
 
     let dst_off = (dpy as usize) * stride + dpx as usize;
-    let bdmax = bd.bitdepth_max();
-
-    let ib = crate::mc::intermediate_bits(bd);
-    if mx != 0 {
-        if my != 0 {
-            // 2-pass: horizontal into mid (16-bit), then vertical.
-            let mut mid = vec![0i32; src_w * (h + 1)];
-            for ry in 0..(h + 1) {
-                for x in 0..w {
-                    let s = ry * src_stride + x;
-                    let v = 16 * srcbuf[s] + mx * (srcbuf[s + 1] - srcbuf[s]);
-                    mid[ry * w + x] = (v + ((1 << (4 - ib)) >> 1)) >> (4 - ib);
-                }
-            }
-            for ry in 0..h {
-                for x in 0..w {
-                    let m0 = mid[ry * w + x];
-                    let m1 = mid[(ry + 1) * w + x];
-                    let v = 16 * m0 + my * (m1 - m0);
-                    let px = (v + ((1 << (4 + ib)) >> 1)) >> (4 + ib);
-                    plane[dst_off + ry * stride + x] = BD::Pixel::from_i32(iclip(px, 0, bdmax));
-                }
-            }
-        } else {
-            let rnd = (1 << ib) >> 1;
-            for ry in 0..h {
-                for x in 0..w {
-                    let s = ry * src_stride + x;
-                    let v = 16 * srcbuf[s] + mx * (srcbuf[s + 1] - srcbuf[s]);
-                    let px = (v + ((1 << (4 - ib)) >> 1)) >> (4 - ib);
-                    plane[dst_off + ry * stride + x] =
-                        BD::Pixel::from_i32(iclip((px + rnd) >> ib, 0, bdmax));
-                }
-            }
-        }
-    } else if my != 0 {
-        for ry in 0..h {
-            for x in 0..w {
-                let s0 = ry * src_stride + x;
-                let s1 = (ry + 1) * src_stride + x;
-                let v = 16 * srcbuf[s0] + my * (srcbuf[s1] - srcbuf[s0]);
-                let px = (v + ((1 << 4) >> 1)) >> 4;
-                plane[dst_off + ry * stride + x] = BD::Pixel::from_i32(iclip(px, 0, bdmax));
-            }
-        }
-    } else {
-        // integer copy
-        for ry in 0..h {
-            for x in 0..w {
-                plane[dst_off + ry * stride + x] = BD::Pixel::from_i32(srcbuf[ry * src_stride + x]);
-            }
-        }
+    if dst_off >= plane.len() {
+        return;
     }
+
+    intrabc_put_bilin(
+        bd,
+        &mut plane[dst_off..],
+        stride,
+        &srcbuf,
+        src_stride,
+        w,
+        h,
+        mx,
+        my,
+    );
 }

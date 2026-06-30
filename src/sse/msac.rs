@@ -84,7 +84,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         let start = self.buf_pos;
         let c = 40 - self.cnt;
         debug_assert!(c >= 0);
-        debug_assert!(c <= 55);
 
         let c = c as u32;
         let n = (c as usize >> 3) + 1;
@@ -495,167 +494,99 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
     }
 }
 
-#[inline(always)]
-fn load_cdf<const LANES: usize>(cdf: &[u16; LANES]) -> __m128i {
-    debug_assert!(LANES == 4 || LANES == 8);
-    unsafe {
-        if LANES == 4 {
-            _mm_loadl_epi64(cdf.as_ptr().cast::<__m128i>())
-        } else {
-            _mm_loadu_si128(cdf.as_ptr().cast::<__m128i>())
-        }
-    }
-}
-
-#[inline(always)]
-fn load_min_prob<const LANES: usize, const N: usize>() -> __m128i {
-    debug_assert!(LANES == 4 || LANES == 8);
-    let ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
-    unsafe {
-        if LANES == 4 {
-            _mm_loadl_epi64(ptr)
-        } else {
-            _mm_loadu_si128(ptr)
-        }
-    }
-}
-
-#[inline(always)]
-fn update_cdf_sse2<const N: usize, const LANES: usize>(
-    cdf: &mut [u16; LANES],
-    cdf_v: __m128i,
-    ge_mask: __m128i,
-    rate: u8,
-) {
-    debug_assert!((1..=7).contains(&N));
-    debug_assert!(LANES == 4 || LANES == 8);
-    debug_assert!(N < LANES);
-
-    unsafe {
-        let shift = _mm_cvtsi32_si128(rate as i32);
-        let half = _mm_set1_epi16(0x8000u16 as i16);
-
-        let add_delta = _mm_srl_epi16(_mm_sub_epi16(half, cdf_v), shift);
-        let sub_delta = _mm_srl_epi16(cdf_v, shift);
-        let add_path = _mm_add_epi16(cdf_v, add_delta);
-        let sub_path = _mm_sub_epi16(cdf_v, sub_delta);
-
-        // ge_mask is all-ones for lanes i >= decoded symbol and zero for lanes
-        // i < decoded symbol.  That exactly matches the two AV1 CDF update halves:
-        // before val move toward 32768, at/after val move toward zero.
-        let updated = _mm_or_si128(
-            _mm_and_si128(ge_mask, sub_path),
-            _mm_andnot_si128(ge_mask, add_path),
-        );
-
-        if LANES == 4 {
-            _mm_storel_epi64(cdf.as_mut_ptr().cast::<__m128i>(), updated);
-        } else {
-            _mm_storeu_si128(cdf.as_mut_ptr().cast::<__m128i>(), updated);
-        }
-    }
-}
 #[repr(C, align(16))]
 struct AlignedU16x8([u16; 8]);
 
 static PW_127: AlignedU16x8 = AlignedU16x8([127; 8]);
 
-#[inline(always)]
-fn pw_127() -> __m128i {
-    unsafe { _mm_load_si128(PW_127.0.as_ptr().cast()) }
-}
-
 #[repr(C, align(16))]
-pub(crate) struct AlignedSse9(pub(crate) [u16; 9]);
+struct AlignedSseMsac(pub(crate) [u16; 16]);
 
 #[inline(always)]
 fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const LANES: usize>(
     s: &mut MsacContextSse<'_, UPDATE_CDF>,
     cdf: &mut [u16; LANES],
 ) -> u32 {
+    debug_assert!(LANES == 4 || LANES == 8);
+    debug_assert!(N < LANES);
+
     unsafe {
-        debug_assert!(LANES == 4 || LANES == 8);
-        debug_assert!(N < LANES);
+        // m0 = cdf
+        let cdf_v = if LANES == 4 {
+            _mm_loadl_epi64(cdf.as_ptr().cast())
+        } else {
+            _mm_loadu_si128(cdf.as_ptr().cast())
+        };
+        let mp_ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
+        let min_prob = _mm_load_si128(mp_ptr);
 
-        unsafe {
-            // m0 = cdf
-            let cdf_v = if LANES == 4 {
-                _mm_loadl_epi64(cdf.as_ptr().cast())
-            } else {
-                _mm_loadu_si128(cdf.as_ptr().cast())
-            };
-            let mp_ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
-            let min_prob = _mm_load_si128(mp_ptr);
-
-            let rng_x = _mm_cvtsi32_si128(s.rng as i32);
-            let mut rng_bc = _mm_shufflelo_epi16::<0>(rng_x);
-            if LANES == 8 {
-                rng_bc = _mm_unpacklo_epi64(rng_bc, rng_bc);
-            }
-
-            let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
-            let bp = bounds.as_mut_ptr().cast::<u16>();
-            bp.write(s.rng as u16);
-
-            // p = max((cdf | 127) - min_prob, 0)
-            let pw = _mm_load_si128(PW_127.0.as_ptr().cast());
-            let p = _mm_subs_epu16(_mm_or_si128(cdf_v, pw), min_prob);
-
-            // scale = (rng >> 8) << 6, derived from the SAME rng broadcast.
-            let scale = _mm_slli_epi16::<6>(_mm_srli_epi16::<8>(rng_bc));
-            // boundaries = (p *hi scale) << 3
-            let bnd = _mm_slli_epi16::<3>(_mm_mulhi_epu16(p, scale));
-
-            // c = (dif >> 48) broadcast from dif XMM via pshuflw q3333 [+ punpck].
-            let dif_x = _mm_cvtsi64_si128(s.dif as i64);
-            let mut c_bc = _mm_shufflelo_epi16::<0xFF>(dif_x);
-            if LANES == 8 {
-                c_bc = _mm_unpacklo_epi64(c_bc, c_bc);
-            }
-
-            // Spill boundaries (issued before the CDF update so the store hides).
-            _mm_storeu_si128(bp.add(1).cast(), bnd);
-
-            // cmp lane j = 0xFFFF iff c >= b_j   (subs_epu16(b,c)==0).
-            let cmp = _mm_cmpeq_epi16(_mm_subs_epu16(bnd, c_bc), _mm_setzero_si128());
-
-            if UPDATE_CDF {
-                let pc = cdf[N];
-                let count = (pc & 0xff) as u8;
-                debug_assert!(count <= 32);
-                let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize]
-                    + if N > 2 { 1 } else { 0 };
-                let sh = _mm_cvtsi32_si128(rate as i32);
-
-                let ones = _mm_cmpeq_epi16(cmp, cmp);
-                let sel = _mm_avg_epu16(ones, cmp);
-                let shifted_mask = _mm_srl_epi16(cmp, sh);
-                let toward = _mm_sub_epi16(sel, cdf_v);
-                let base = _mm_sub_epi16(cdf_v, shifted_mask);
-                let delta = _mm_srl_epi16(toward, sh);
-                let out = _mm_add_epi16(base, delta);
-
-                if LANES == 4 {
-                    _mm_storel_epi64(cdf.as_mut_ptr().cast(), out);
-                } else {
-                    _mm_storeu_si128(cdf.as_mut_ptr().cast(), out);
-                }
-                cdf[N] = pc + u16::from(count < 32);
-            }
-
-            let raw = _mm_movemask_epi8(cmp) as u32;
-            let mask = raw | (1u32 << (2 * N));
-            let i = (mask.trailing_zeros() >> 1) as usize;
-
-            let initialized = bounds.assume_init().0;
-            let u = initialized[i] as u32;
-            let v = initialized[i + 1] as u32;
-
-            debug_assert!(u <= s.rng);
-            debug_assert!(u >= v);
-            s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
-
-            i as u32
+        let rng_x = _mm_cvtsi32_si128(s.rng as i32);
+        let mut rng_bc = _mm_shufflelo_epi16::<0>(rng_x);
+        if LANES == 8 {
+            rng_bc = _mm_unpacklo_epi64(rng_bc, rng_bc);
         }
+
+        let mut bounds = core::mem::MaybeUninit::<AlignedSseMsac>::uninit();
+        let bp = bounds.as_mut_ptr().cast::<u16>();
+        bp.add(7).write(s.rng as u16);
+
+        // p = max((cdf | 127) - min_prob, 0)
+        let pw = _mm_load_si128(PW_127.0.as_ptr().cast());
+        let p = _mm_subs_epu16(_mm_or_si128(cdf_v, pw), min_prob);
+
+        // scale = (rng >> 8) << 6, derived from the SAME rng broadcast.
+        let scale = _mm_slli_epi16::<6>(_mm_srli_epi16::<8>(rng_bc));
+        // boundaries = (p *hi scale) << 3
+        let bnd = _mm_slli_epi16::<3>(_mm_mulhi_epu16(p, scale));
+
+        // c = (dif >> 48) broadcast from dif XMM via pshuflw q3333 [+ punpck].
+        let dif_x = _mm_cvtsi64_si128(s.dif as i64);
+        let mut c_bc = _mm_shufflelo_epi16::<0xFF>(dif_x);
+        if LANES == 8 {
+            c_bc = _mm_unpacklo_epi64(c_bc, c_bc);
+        }
+
+        _mm_store_si128(bp.add(8).cast(), bnd);
+
+        // cmp lane j = 0xFFFF iff c >= b_j   (subs_epu16(b,c)==0).
+        let cmp = _mm_cmpeq_epi16(_mm_subs_epu16(bnd, c_bc), _mm_setzero_si128());
+
+        if UPDATE_CDF {
+            let pc = cdf[N];
+            let count = (pc & 0xff) as u8;
+            debug_assert!(count <= 32);
+            let rate =
+                MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
+            let sh = _mm_cvtsi32_si128(rate as i32);
+
+            let ones = _mm_cmpeq_epi16(cmp, cmp);
+            let sel = _mm_avg_epu16(ones, cmp);
+            let shifted_mask = _mm_srl_epi16(cmp, sh);
+            let toward = _mm_sub_epi16(sel, cdf_v);
+            let base = _mm_sub_epi16(cdf_v, shifted_mask);
+            let delta = _mm_srl_epi16(toward, sh);
+            let out = _mm_add_epi16(base, delta);
+
+            if LANES == 4 {
+                _mm_storel_epi64(cdf.as_mut_ptr().cast(), out);
+            } else {
+                _mm_storeu_si128(cdf.as_mut_ptr().cast(), out);
+            }
+            cdf[N] = pc + u16::from(count < 32);
+        }
+
+        let raw = _mm_movemask_epi8(cmp) as u32;
+        let mask = raw | (1u32 << (2 * N));
+        let i = (mask.trailing_zeros() >> 1) as usize;
+
+        let initialized = bounds.assume_init().0;
+        let u = initialized[7 + i] as u32;
+        let v = initialized[8 + i] as u32;
+
+        debug_assert!(u <= s.rng);
+        debug_assert!(u >= v);
+        s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
+
+        i as u32
     }
 }

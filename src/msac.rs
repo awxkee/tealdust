@@ -222,12 +222,6 @@ pub(crate) struct ScalarMsacBackend;
 #[cfg(target_arch = "x86_64")]
 pub(crate) struct SseMsacBackend;
 
-#[cfg(all(target_arch = "x86_64", feature = "avx"))]
-pub(crate) struct AvxMsacBackend;
-
-#[cfg(all(target_arch = "x86_64", feature = "avx"))]
-pub(crate) struct Avx512MsacBackend;
-
 pub(crate) trait MsacBackend<const UPDATE_CDF: bool> {
     type Ctx<'a>: MsacReader<UPDATE_CDF> + 'a
     where
@@ -264,36 +258,6 @@ impl<const UPDATE_CDF: bool> MsacBackend<UPDATE_CDF> for SseMsacBackend {
     #[inline(always)]
     fn resume<'a>(data: &'a [u8], st: MsacState) -> Self::Ctx<'a> {
         crate::sse::MsacContextSse::resume(data, st)
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", feature = "avx"))]
-impl<const UPDATE_CDF: bool> MsacBackend<UPDATE_CDF> for AvxMsacBackend {
-    type Ctx<'a> = crate::avx::MsacContextAvx<'a, UPDATE_CDF>;
-
-    #[inline(always)]
-    fn new<'a>(data: &'a [u8]) -> Self::Ctx<'a> {
-        crate::avx::MsacContextAvx::new(data)
-    }
-
-    #[inline(always)]
-    fn resume<'a>(data: &'a [u8], st: MsacState) -> Self::Ctx<'a> {
-        crate::avx::MsacContextAvx::resume(data, st)
-    }
-}
-
-#[cfg(all(target_arch = "x86_64", feature = "avx"))]
-impl<const UPDATE_CDF: bool> MsacBackend<UPDATE_CDF> for Avx512MsacBackend {
-    type Ctx<'a> = crate::avx::MsacContextAvx512<'a, UPDATE_CDF>;
-
-    #[inline(always)]
-    fn new<'a>(data: &'a [u8]) -> Self::Ctx<'a> {
-        crate::avx::MsacContextAvx512::new(data)
-    }
-
-    #[inline(always)]
-    fn resume<'a>(data: &'a [u8], st: MsacState) -> Self::Ctx<'a> {
-        crate::avx::MsacContextAvx512::resume(data, st)
     }
 }
 
@@ -372,7 +336,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         let start = self.buf_pos;
         let c = 40 - self.cnt;
         debug_assert!(c >= 0);
-        debug_assert!(c <= 55);
 
         let c = c as u32;
         let n = (c as usize >> 3) + 1;
