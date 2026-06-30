@@ -1564,6 +1564,9 @@ fn avx2_load16_i16_coeff_packed_const<const IS_RECT2: bool>(src: &[i16], off: us
 #[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_pair8_i16_from_rows(a: __m128i, b: __m128i) -> __m256i {
+    // Tail-only helper: the full 16-column path uses native YMM unpacking.
+    // For an 8-column tail AVX2 still has to build one YMM from two XMM
+    // interleaves; keep it as two unpack µops plus one lane insert.
     let lo = _mm_unpacklo_epi16(a, b);
     let hi = _mm_unpackhi_epi16(a, b);
     _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi)
@@ -2163,58 +2166,49 @@ fn avx2_dct16_i16x16_scratch16_stride_active_store<const STRIDE: usize, const AC
     let f1 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 1);
     let g0 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 0);
     let g1 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 1);
-
-    // --- Even half of the 16-point DCT, computed dav2d-style ----------------
-    //
-    // As with the 32-point kernel, the even half was previously expressed via
-    // nested macros (`cc_at!`/`a_at!`) re-expanded at each output, re-emitting
-    // the shared `d`/`cc` butterfly nodes every time. We compute each node once
-    // and only fan out with add/sub. There are 8 even outputs; rows 8..15 are
-    // their reflection and drop out of the final ± step, identical results.
-
-    // cc[0..4]: g ± f butterfly (dct4-even stage), no extra multiplies.
-    let cc0 = avx2_i32x16_add(g0, f0);
-    let cc1 = avx2_i32x16_add(g1, f1);
-    let cc2 = avx2_i32x16_sub(g1, f1);
-    let cc3 = avx2_i32x16_sub(g0, f0);
-
-    // d[0..4]: dct8-even odd rotations (each = 2 madd_pair), computed once.
-    let d0 = d_at!(0usize);
-    let d1 = d_at!(1usize);
-    let d2 = d_at!(2usize);
-    let d3 = d_at!(3usize);
-
-    // a[0..8]: cc ± d. a[0..4] = cc[k]+d[k]; a[4..8] = cc[7-k]-d[7-k], matching
-    // the old `a_at!` exactly.
-    let a: [Avx2I32x16; 8] = [
-        avx2_i32x16_add(cc0, d0),
-        avx2_i32x16_add(cc1, d1),
-        avx2_i32x16_add(cc2, d2),
-        avx2_i32x16_add(cc3, d3),
-        avx2_i32x16_sub(cc3, d3),
-        avx2_i32x16_sub(cc2, d2),
-        avx2_i32x16_sub(cc1, d1),
-        avx2_i32x16_sub(cc0, d0),
-    ];
-
-    // Final ± fan-out with the 8-point odd half b[m]. Each output written once.
-    macro_rules! emit {
-        ($m:expr) => {{
-            let m: usize = $m;
-            let av = a[m];
-            let bv = b_at!(m);
-            avx2_store_i32x16_row(tmp, base + m * 32, avx2_i32x16_add(av, bv));
-            avx2_store_i32x16_row(tmp, base + (15 - m) * 32, avx2_i32x16_sub(av, bv));
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            match $k {
+                0 => avx2_i32x16_add(g0, f0),
+                1 => avx2_i32x16_add(g1, f1),
+                2 => avx2_i32x16_sub(g1, f1),
+                _ => avx2_i32x16_sub(g0, f0),
+            }
         }};
     }
-    emit!(0usize);
-    emit!(1usize);
-    emit!(2usize);
-    emit!(3usize);
-    emit!(4usize);
-    emit!(5usize);
-    emit!(6usize);
-    emit!(7usize);
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                avx2_i32x16_add(cc_at!(k), d_at!(k))
+            } else {
+                avx2_i32x16_sub(cc_at!(7 - k), d_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! store_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
+            avx2_store_i32x16_row(tmp, base + k * 32, avx2_i32x16_add(a0, b0));
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            avx2_store_i32x16_row(tmp, base + (k + 1) * 32, avx2_i32x16_add(a1, b1));
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            avx2_store_i32x16_row(tmp, base + (k + 2) * 32, avx2_i32x16_add(a2, b2));
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            avx2_store_i32x16_row(tmp, base + (k + 3) * 32, avx2_i32x16_add(a3, b3));
+            avx2_store_i32x16_row(tmp, base + (8 + 7 - (k + 3)) * 32, avx2_i32x16_sub(a3, b3));
+            avx2_store_i32x16_row(tmp, base + (8 + 7 - (k + 2)) * 32, avx2_i32x16_sub(a2, b2));
+            avx2_store_i32x16_row(tmp, base + (8 + 7 - (k + 1)) * 32, avx2_i32x16_sub(a1, b1));
+            avx2_store_i32x16_row(tmp, base + (8 + 7 - k) * 32, avx2_i32x16_sub(a0, b0));
+        }};
+    }
+    store_group!(0usize);
+    store_group!(4usize);
 }
 
 #[inline]
@@ -2299,117 +2293,69 @@ fn avx2_dct32_i16x16_scratch16_stride_active_store<const STRIDE: usize, const AC
     let h1 = madd_pair!(8, 24, &crate::itx_2d::DCT32_KHP_X4, 1);
     let g0 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 0);
     let g1 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 1);
-    // --- Even half of the 32-point DCT, computed dav2d-style ---------------
-    //
-    // The previous implementation expressed the even half through nested
-    // `macro_rules!` (`e_at!`/`cc_at!`/`a_at!`) that were re-expanded at every
-    // output index. Each expansion textually re-emitted the underlying
-    // `madd_pair!` / add / sub sequence, so the shared butterfly nodes (the
-    // `d`, `f`, `e`, `cc` terms) were recomputed many times and relied on the
-    // optimizer's CSE to (maybe) fold them back together.
-    //
-    // dav2d instead computes each butterfly node exactly once and then only
-    // does cheap add/sub fan-out. We mirror that here by materializing every
-    // node into a single binding. The 32-point even half is a 16-point DCT, so
-    // there are exactly 8 distinct `a` results; outputs 8..15 are their mirror
-    // (`a[15-k]`) and fall straight out of the final ± fan-out below, exactly
-    // as before. This removes the redundant multiply/accumulate work without
-    // changing a single arithmetic result.
-
-    // f[0..4]: 4-point odd rotations feeding the cc stage (each = 2 madd_pair).
-    let f0 = f_at!(0usize);
-    let f1 = f_at!(1usize);
-    let f2 = f_at!(2usize);
-    let f3 = f_at!(3usize);
-
-    // e[0..4]: built from the g/h pairs (pure add/sub, no multiplies).
-    let e0 = avx2_i32x16_add(g0, h0);
-    let e1 = avx2_i32x16_add(g1, h1);
-    let e2 = avx2_i32x16_sub(g1, h1);
-    let e3 = avx2_i32x16_sub(g0, h0);
-
-    // cc[0..8]: e ± f butterfly (the dct8-even stage). cc[k] for k>=4 is the
-    // reflected difference, matching the old `cc_at!`'s `7 - k` indexing.
-    let cc0 = avx2_i32x16_add(e0, f0);
-    let cc1 = avx2_i32x16_add(e1, f1);
-    let cc2 = avx2_i32x16_add(e2, f2);
-    let cc3 = avx2_i32x16_add(e3, f3);
-    let cc4 = avx2_i32x16_sub(e3, f3);
-    let cc5 = avx2_i32x16_sub(e2, f2);
-    let cc6 = avx2_i32x16_sub(e1, f1);
-    let cc7 = avx2_i32x16_sub(e0, f0);
-
-    // d[0..8]: the dct16-even odd rotations (each = 4 madd_pair).
-    let d0 = d_at!(0usize);
-    let d1 = d_at!(1usize);
-    let d2 = d_at!(2usize);
-    let d3 = d_at!(3usize);
-    let d4 = d_at!(4usize);
-    let d5 = d_at!(5usize);
-    let d6 = d_at!(6usize);
-    let d7 = d_at!(7usize);
-
-    // a[0..8]: cc ± d butterfly. a[8..15] are the reflections a[15-k], obtained
-    // implicitly in the ± fan-out below (out_low uses a[k], out_high uses the
-    // same a[k] for the mirrored index), identical to the old `a_at!` for
-    // k >= 8 which evaluated `cc_at!(15-k) - d_at!(15-k)` — i.e. exactly these
-    // same eight values reused.
-    let a: [Avx2I32x16; 8] = [
-        avx2_i32x16_add(cc0, d0),
-        avx2_i32x16_add(cc1, d1),
-        avx2_i32x16_add(cc2, d2),
-        avx2_i32x16_add(cc3, d3),
-        avx2_i32x16_add(cc4, d4),
-        avx2_i32x16_add(cc5, d5),
-        avx2_i32x16_add(cc6, d6),
-        avx2_i32x16_add(cc7, d7),
-    ];
-    // a[8..15] = cc[15-k] - d[15-k] for k in 8..16, i.e. reflected indices.
-    let a_hi: [Avx2I32x16; 8] = [
-        avx2_i32x16_sub(cc7, d7),
-        avx2_i32x16_sub(cc6, d6),
-        avx2_i32x16_sub(cc5, d5),
-        avx2_i32x16_sub(cc4, d4),
-        avx2_i32x16_sub(cc3, d3),
-        avx2_i32x16_sub(cc2, d2),
-        avx2_i32x16_sub(cc1, d1),
-        avx2_i32x16_sub(cc0, d0),
-    ];
-
-    // Final ± fan-out with the odd half b[m]. Each of the 32 outputs is written
-    // exactly once. b_at!(m) is the 16-point odd part (8 madd_pair each); it is
-    // evaluated a single time per m here.
-    macro_rules! a_of {
+    macro_rules! e_at {
         ($k:expr) => {{
-            let k: usize = $k;
-            if k < 8 { a[k] } else { a_hi[k - 8] }
+            match $k {
+                0 => avx2_i32x16_add(g0, h0),
+                1 => avx2_i32x16_add(g1, h1),
+                2 => avx2_i32x16_sub(g1, h1),
+                _ => avx2_i32x16_sub(g0, h0),
+            }
         }};
     }
-    macro_rules! emit {
-        ($m:expr) => {{
-            let m: usize = $m;
-            let av = a_of!(m);
-            let bv = b_at!(m);
-            avx2_store_i32x16_row(tmp, base + m * 32, avx2_i32x16_add(av, bv));
-            avx2_store_i32x16_row(tmp, base + (31 - m) * 32, avx2_i32x16_sub(av, bv));
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                avx2_i32x16_add(e_at!(k), f_at!(k))
+            } else {
+                avx2_i32x16_sub(e_at!(7 - k), f_at!(7 - k))
+            }
         }};
     }
-    emit!(0usize);
-    emit!(1usize);
-    emit!(2usize);
-    emit!(3usize);
-    emit!(4usize);
-    emit!(5usize);
-    emit!(6usize);
-    emit!(7usize);
-    emit!(8usize);
-    emit!(9usize);
-    emit!(10usize);
-    emit!(11usize);
-    emit!(12usize);
-    emit!(13usize);
-    emit!(14usize);
-    emit!(15usize);
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 8 {
+                avx2_i32x16_add(cc_at!(k), d_at!(k))
+            } else {
+                avx2_i32x16_sub(cc_at!(15 - k), d_at!(15 - k))
+            }
+        }};
+    }
+    macro_rules! store_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
+            let l0 = avx2_i32x16_add(a0, b0);
+            let h0 = avx2_i32x16_sub(a0, b0);
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            let l1 = avx2_i32x16_add(a1, b1);
+            let h1 = avx2_i32x16_sub(a1, b1);
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            let l2 = avx2_i32x16_add(a2, b2);
+            let h2 = avx2_i32x16_sub(a2, b2);
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            let l3 = avx2_i32x16_add(a3, b3);
+            let h3 = avx2_i32x16_sub(a3, b3);
+            avx2_store_i32x16_row(tmp, base + k * 32, l0);
+            avx2_store_i32x16_row(tmp, base + (k + 1) * 32, l1);
+            avx2_store_i32x16_row(tmp, base + (k + 2) * 32, l2);
+            avx2_store_i32x16_row(tmp, base + (k + 3) * 32, l3);
+            avx2_store_i32x16_row(tmp, base + (16 + 15 - (k + 3)) * 32, h3);
+            avx2_store_i32x16_row(tmp, base + (16 + 15 - (k + 2)) * 32, h2);
+            avx2_store_i32x16_row(tmp, base + (16 + 15 - (k + 1)) * 32, h1);
+            avx2_store_i32x16_row(tmp, base + (16 + 15 - k) * 32, h0);
+        }};
+    }
+    store_group!(0usize);
+    store_group!(4usize);
+    store_group!(8usize);
+    store_group!(12usize);
 }
 
 #[inline]
@@ -2478,31 +2424,31 @@ fn avx2_dct16_i16x16_scratch16_stride_active_add_u8<const STRIDE: usize, const A
     let f1 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 1);
     let g0 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 0);
     let g1 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 1);
-
-    // Even half computed once (see scratch16 variant for the full rationale).
-    let cc0 = avx2_i32x16_add(g0, f0);
-    let cc1 = avx2_i32x16_add(g1, f1);
-    let cc2 = avx2_i32x16_sub(g1, f1);
-    let cc3 = avx2_i32x16_sub(g0, f0);
-    let d0 = d_at!(0usize);
-    let d1 = d_at!(1usize);
-    let d2 = d_at!(2usize);
-    let d3 = d_at!(3usize);
-    let a: [Avx2I32x16; 8] = [
-        avx2_i32x16_add(cc0, d0),
-        avx2_i32x16_add(cc1, d1),
-        avx2_i32x16_add(cc2, d2),
-        avx2_i32x16_add(cc3, d3),
-        avx2_i32x16_sub(cc3, d3),
-        avx2_i32x16_sub(cc2, d2),
-        avx2_i32x16_sub(cc1, d1),
-        avx2_i32x16_sub(cc0, d0),
-    ];
-    macro_rules! emit {
-        ($m:expr) => {{
-            let m: usize = $m;
-            let av = a[m];
-            let bv = b_at!(m);
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            match $k {
+                0 => avx2_i32x16_add(g0, f0),
+                1 => avx2_i32x16_add(g1, f1),
+                2 => avx2_i32x16_sub(g1, f1),
+                _ => avx2_i32x16_sub(g0, f0),
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                avx2_i32x16_add(cc_at!(k), d_at!(k))
+            } else {
+                avx2_i32x16_sub(cc_at!(7 - k), d_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! write_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
             avx2_writeback16_i32_u8::<STRIDE, 16>(
                 dst,
                 dst_off,
@@ -2510,8 +2456,50 @@ fn avx2_dct16_i16x16_scratch16_stride_active_add_u8<const STRIDE: usize, const A
                 out_w,
                 out_h,
                 base,
-                m,
-                avx2_i32x16_add(av, bv),
+                k,
+                avx2_i32x16_add(a0, b0),
+                rnd1,
+                sh1,
+            );
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                k + 1,
+                avx2_i32x16_add(a1, b1),
+                rnd1,
+                sh1,
+            );
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                k + 2,
+                avx2_i32x16_add(a2, b2),
+                rnd1,
+                sh1,
+            );
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                k + 3,
+                avx2_i32x16_add(a3, b3),
                 rnd1,
                 sh1,
             );
@@ -2522,21 +2510,51 @@ fn avx2_dct16_i16x16_scratch16_stride_active_add_u8<const STRIDE: usize, const A
                 out_w,
                 out_h,
                 base,
-                15 - m,
-                avx2_i32x16_sub(av, bv),
+                8 + 7 - (k + 3),
+                avx2_i32x16_sub(a3, b3),
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                8 + 7 - (k + 2),
+                avx2_i32x16_sub(a2, b2),
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                8 + 7 - (k + 1),
+                avx2_i32x16_sub(a1, b1),
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                8 + 7 - k,
+                avx2_i32x16_sub(a0, b0),
                 rnd1,
                 sh1,
             );
         }};
     }
-    emit!(0usize);
-    emit!(1usize);
-    emit!(2usize);
-    emit!(3usize);
-    emit!(4usize);
-    emit!(5usize);
-    emit!(6usize);
-    emit!(7usize);
+    write_group!(0usize);
+    write_group!(4usize);
 }
 
 #[inline]
@@ -2627,64 +2645,58 @@ fn avx2_dct32_i16x16_scratch16_stride_active_add_u8<const STRIDE: usize, const A
     let h1 = madd_pair!(8, 24, &crate::itx_2d::DCT32_KHP_X4, 1);
     let g0 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 0);
     let g1 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 1);
-
-    // Even half computed once (see the scratch16 variant for the full
-    // rationale): each d/f/e/cc/a butterfly node is materialized a single time.
-    let f0 = f_at!(0usize);
-    let f1 = f_at!(1usize);
-    let f2 = f_at!(2usize);
-    let f3 = f_at!(3usize);
-    let e0 = avx2_i32x16_add(g0, h0);
-    let e1 = avx2_i32x16_add(g1, h1);
-    let e2 = avx2_i32x16_sub(g1, h1);
-    let e3 = avx2_i32x16_sub(g0, h0);
-    let cc0 = avx2_i32x16_add(e0, f0);
-    let cc1 = avx2_i32x16_add(e1, f1);
-    let cc2 = avx2_i32x16_add(e2, f2);
-    let cc3 = avx2_i32x16_add(e3, f3);
-    let cc4 = avx2_i32x16_sub(e3, f3);
-    let cc5 = avx2_i32x16_sub(e2, f2);
-    let cc6 = avx2_i32x16_sub(e1, f1);
-    let cc7 = avx2_i32x16_sub(e0, f0);
-    let d0 = d_at!(0usize);
-    let d1 = d_at!(1usize);
-    let d2 = d_at!(2usize);
-    let d3 = d_at!(3usize);
-    let d4 = d_at!(4usize);
-    let d5 = d_at!(5usize);
-    let d6 = d_at!(6usize);
-    let d7 = d_at!(7usize);
-    let a: [Avx2I32x16; 8] = [
-        avx2_i32x16_add(cc0, d0),
-        avx2_i32x16_add(cc1, d1),
-        avx2_i32x16_add(cc2, d2),
-        avx2_i32x16_add(cc3, d3),
-        avx2_i32x16_add(cc4, d4),
-        avx2_i32x16_add(cc5, d5),
-        avx2_i32x16_add(cc6, d6),
-        avx2_i32x16_add(cc7, d7),
-    ];
-    let a_hi: [Avx2I32x16; 8] = [
-        avx2_i32x16_sub(cc7, d7),
-        avx2_i32x16_sub(cc6, d6),
-        avx2_i32x16_sub(cc5, d5),
-        avx2_i32x16_sub(cc4, d4),
-        avx2_i32x16_sub(cc3, d3),
-        avx2_i32x16_sub(cc2, d2),
-        avx2_i32x16_sub(cc1, d1),
-        avx2_i32x16_sub(cc0, d0),
-    ];
-    macro_rules! a_of {
+    macro_rules! e_at {
         ($k:expr) => {{
-            let k: usize = $k;
-            if k < 8 { a[k] } else { a_hi[k - 8] }
+            match $k {
+                0 => avx2_i32x16_add(g0, h0),
+                1 => avx2_i32x16_add(g1, h1),
+                2 => avx2_i32x16_sub(g1, h1),
+                _ => avx2_i32x16_sub(g0, h0),
+            }
         }};
     }
-    macro_rules! emit {
-        ($m:expr) => {{
-            let m: usize = $m;
-            let av = a_of!(m);
-            let bv = b_at!(m);
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                avx2_i32x16_add(e_at!(k), f_at!(k))
+            } else {
+                avx2_i32x16_sub(e_at!(7 - k), f_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 8 {
+                avx2_i32x16_add(cc_at!(k), d_at!(k))
+            } else {
+                avx2_i32x16_sub(cc_at!(15 - k), d_at!(15 - k))
+            }
+        }};
+    }
+    macro_rules! write_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
+            let l0 = avx2_i32x16_add(a0, b0);
+            let h0 = avx2_i32x16_sub(a0, b0);
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            let l1 = avx2_i32x16_add(a1, b1);
+            let h1 = avx2_i32x16_sub(a1, b1);
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            let l2 = avx2_i32x16_add(a2, b2);
+            let h2 = avx2_i32x16_sub(a2, b2);
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            let l3 = avx2_i32x16_add(a3, b3);
+            let h3 = avx2_i32x16_sub(a3, b3);
+            avx2_writeback16_i32_u8::<STRIDE, 32>(
+                dst, dst_off, dst_stride, out_w, out_h, base, k, l0, rnd1, sh1,
+            );
             avx2_writeback16_i32_u8::<STRIDE, 32>(
                 dst,
                 dst_off,
@@ -2692,8 +2704,8 @@ fn avx2_dct32_i16x16_scratch16_stride_active_add_u8<const STRIDE: usize, const A
                 out_w,
                 out_h,
                 base,
-                m,
-                avx2_i32x16_add(av, bv),
+                k + 1,
+                l1,
                 rnd1,
                 sh1,
             );
@@ -2704,29 +2716,77 @@ fn avx2_dct32_i16x16_scratch16_stride_active_add_u8<const STRIDE: usize, const A
                 out_w,
                 out_h,
                 base,
-                31 - m,
-                avx2_i32x16_sub(av, bv),
+                k + 2,
+                l2,
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 32>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                k + 3,
+                l3,
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 32>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                16 + 15 - (k + 3),
+                h3,
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 32>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                16 + 15 - (k + 2),
+                h2,
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 32>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                16 + 15 - (k + 1),
+                h1,
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 32>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                16 + 15 - k,
+                h0,
                 rnd1,
                 sh1,
             );
         }};
     }
-    emit!(0usize);
-    emit!(1usize);
-    emit!(2usize);
-    emit!(3usize);
-    emit!(4usize);
-    emit!(5usize);
-    emit!(6usize);
-    emit!(7usize);
-    emit!(8usize);
-    emit!(9usize);
-    emit!(10usize);
-    emit!(11usize);
-    emit!(12usize);
-    emit!(13usize);
-    emit!(14usize);
-    emit!(15usize);
+    write_group!(0usize);
+    write_group!(4usize);
+    write_group!(8usize);
+    write_group!(12usize);
 }
 
 #[inline]
@@ -4336,64 +4396,55 @@ fn avx2_dct32_i16x8_store_quads_from_coeff8_stride_const<
     let hh1 = madd_pair!(8, 24, &crate::itx_2d::DCT32_KHP_X4, 1);
     let gg0 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 0);
     let gg1 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 1);
-
-    let f0 = f_at!(0usize);
-    let f1 = f_at!(1usize);
-    let f2 = f_at!(2usize);
-    let f3 = f_at!(3usize);
-    let e0 = _mm256_add_epi32(gg0, hh0);
-    let e1 = _mm256_add_epi32(gg1, hh1);
-    let e2 = _mm256_sub_epi32(gg1, hh1);
-    let e3 = _mm256_sub_epi32(gg0, hh0);
-    let cc0 = _mm256_add_epi32(e0, f0);
-    let cc1 = _mm256_add_epi32(e1, f1);
-    let cc2 = _mm256_add_epi32(e2, f2);
-    let cc3 = _mm256_add_epi32(e3, f3);
-    let cc4 = _mm256_sub_epi32(e3, f3);
-    let cc5 = _mm256_sub_epi32(e2, f2);
-    let cc6 = _mm256_sub_epi32(e1, f1);
-    let cc7 = _mm256_sub_epi32(e0, f0);
-    let d0 = d_at!(0usize);
-    let d1 = d_at!(1usize);
-    let d2 = d_at!(2usize);
-    let d3 = d_at!(3usize);
-    let d4 = d_at!(4usize);
-    let d5 = d_at!(5usize);
-    let d6 = d_at!(6usize);
-    let d7 = d_at!(7usize);
-    let a: [__m256i; 16] = [
-        _mm256_add_epi32(cc0, d0),
-        _mm256_add_epi32(cc1, d1),
-        _mm256_add_epi32(cc2, d2),
-        _mm256_add_epi32(cc3, d3),
-        _mm256_add_epi32(cc4, d4),
-        _mm256_add_epi32(cc5, d5),
-        _mm256_add_epi32(cc6, d6),
-        _mm256_add_epi32(cc7, d7),
-        _mm256_sub_epi32(cc7, d7),
-        _mm256_sub_epi32(cc6, d6),
-        _mm256_sub_epi32(cc5, d5),
-        _mm256_sub_epi32(cc4, d4),
-        _mm256_sub_epi32(cc3, d3),
-        _mm256_sub_epi32(cc2, d2),
-        _mm256_sub_epi32(cc1, d1),
-        _mm256_sub_epi32(cc0, d0),
-    ];
+    macro_rules! e_at {
+        ($k:expr) => {{
+            match $k {
+                0 => _mm256_add_epi32(gg0, hh0),
+                1 => _mm256_add_epi32(gg1, hh1),
+                2 => _mm256_sub_epi32(gg1, hh1),
+                _ => _mm256_sub_epi32(gg0, hh0),
+            }
+        }};
+    }
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                _mm256_add_epi32(e_at!(k), f_at!(k))
+            } else {
+                _mm256_sub_epi32(e_at!(7 - k), f_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 8 {
+                _mm256_add_epi32(cc_at!(k), d_at!(k))
+            } else {
+                _mm256_sub_epi32(cc_at!(15 - k), d_at!(15 - k))
+            }
+        }};
+    }
     macro_rules! store_group {
         ($k:expr) => {{
             let k = $k;
+            let a0 = a_at!(k);
             let b0 = b_at!(k);
-            let l0 = _mm256_add_epi32(a[k], b0);
-            let h0 = _mm256_sub_epi32(a[k], b0);
+            let l0 = _mm256_add_epi32(a0, b0);
+            let h0 = _mm256_sub_epi32(a0, b0);
+            let a1 = a_at!(k + 1);
             let b1 = b_at!(k + 1);
-            let l1 = _mm256_add_epi32(a[k + 1], b1);
-            let h1 = _mm256_sub_epi32(a[k + 1], b1);
+            let l1 = _mm256_add_epi32(a1, b1);
+            let h1 = _mm256_sub_epi32(a1, b1);
+            let a2 = a_at!(k + 2);
             let b2 = b_at!(k + 2);
-            let l2 = _mm256_add_epi32(a[k + 2], b2);
-            let h2 = _mm256_sub_epi32(a[k + 2], b2);
+            let l2 = _mm256_add_epi32(a2, b2);
+            let h2 = _mm256_sub_epi32(a2, b2);
+            let a3 = a_at!(k + 3);
             let b3 = b_at!(k + 3);
-            let l3 = _mm256_add_epi32(a[k + 3], b3);
-            let h3 = _mm256_sub_epi32(a[k + 3], b3);
+            let l3 = _mm256_add_epi32(a3, b3);
+            let h3 = _mm256_sub_epi32(a3, b3);
             avx2_store4x8_i16_clip256::<STRIDE>(
                 scratch,
                 off + k,
@@ -4504,65 +4555,55 @@ fn avx2_dct32_i16x16_store_quads_from_coeff16_stride_const<
     let hh1 = madd_pair!(8, 24, &crate::itx_2d::DCT32_KHP_X4, 1);
     let gg0 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 0);
     let gg1 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 1);
-
-    // Even half computed once (dav2d-style); quad stores preserved exactly.
-    let f0 = f_at!(0usize);
-    let f1 = f_at!(1usize);
-    let f2 = f_at!(2usize);
-    let f3 = f_at!(3usize);
-    let e0 = avx2_i32x16_add(gg0, hh0);
-    let e1 = avx2_i32x16_add(gg1, hh1);
-    let e2 = avx2_i32x16_sub(gg1, hh1);
-    let e3 = avx2_i32x16_sub(gg0, hh0);
-    let cc0 = avx2_i32x16_add(e0, f0);
-    let cc1 = avx2_i32x16_add(e1, f1);
-    let cc2 = avx2_i32x16_add(e2, f2);
-    let cc3 = avx2_i32x16_add(e3, f3);
-    let cc4 = avx2_i32x16_sub(e3, f3);
-    let cc5 = avx2_i32x16_sub(e2, f2);
-    let cc6 = avx2_i32x16_sub(e1, f1);
-    let cc7 = avx2_i32x16_sub(e0, f0);
-    let d0 = d_at!(0usize);
-    let d1 = d_at!(1usize);
-    let d2 = d_at!(2usize);
-    let d3 = d_at!(3usize);
-    let d4 = d_at!(4usize);
-    let d5 = d_at!(5usize);
-    let d6 = d_at!(6usize);
-    let d7 = d_at!(7usize);
-    let a: [Avx2I32x16; 16] = [
-        avx2_i32x16_add(cc0, d0),
-        avx2_i32x16_add(cc1, d1),
-        avx2_i32x16_add(cc2, d2),
-        avx2_i32x16_add(cc3, d3),
-        avx2_i32x16_add(cc4, d4),
-        avx2_i32x16_add(cc5, d5),
-        avx2_i32x16_add(cc6, d6),
-        avx2_i32x16_add(cc7, d7),
-        avx2_i32x16_sub(cc7, d7),
-        avx2_i32x16_sub(cc6, d6),
-        avx2_i32x16_sub(cc5, d5),
-        avx2_i32x16_sub(cc4, d4),
-        avx2_i32x16_sub(cc3, d3),
-        avx2_i32x16_sub(cc2, d2),
-        avx2_i32x16_sub(cc1, d1),
-        avx2_i32x16_sub(cc0, d0),
-    ];
+    macro_rules! e_at {
+        ($k:expr) => {{
+            match $k {
+                0 => avx2_i32x16_add(gg0, hh0),
+                1 => avx2_i32x16_add(gg1, hh1),
+                2 => avx2_i32x16_sub(gg1, hh1),
+                _ => avx2_i32x16_sub(gg0, hh0),
+            }
+        }};
+    }
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                avx2_i32x16_add(e_at!(k), f_at!(k))
+            } else {
+                avx2_i32x16_sub(e_at!(7 - k), f_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 8 {
+                avx2_i32x16_add(cc_at!(k), d_at!(k))
+            } else {
+                avx2_i32x16_sub(cc_at!(15 - k), d_at!(15 - k))
+            }
+        }};
+    }
     macro_rules! store_group {
         ($k:expr) => {{
             let k = $k;
+            let a0 = a_at!(k);
             let b0 = b_at!(k);
-            let l0 = avx2_i32x16_add(a[k], b0);
-            let h0 = avx2_i32x16_sub(a[k], b0);
+            let l0 = avx2_i32x16_add(a0, b0);
+            let h0 = avx2_i32x16_sub(a0, b0);
+            let a1 = a_at!(k + 1);
             let b1 = b_at!(k + 1);
-            let l1 = avx2_i32x16_add(a[k + 1], b1);
-            let h1 = avx2_i32x16_sub(a[k + 1], b1);
+            let l1 = avx2_i32x16_add(a1, b1);
+            let h1 = avx2_i32x16_sub(a1, b1);
+            let a2 = a_at!(k + 2);
             let b2 = b_at!(k + 2);
-            let l2 = avx2_i32x16_add(a[k + 2], b2);
-            let h2 = avx2_i32x16_sub(a[k + 2], b2);
+            let l2 = avx2_i32x16_add(a2, b2);
+            let h2 = avx2_i32x16_sub(a2, b2);
+            let a3 = a_at!(k + 3);
             let b3 = b_at!(k + 3);
-            let l3 = avx2_i32x16_add(a[k + 3], b3);
-            let h3 = avx2_i32x16_sub(a[k + 3], b3);
+            let l3 = avx2_i32x16_add(a3, b3);
+            let h3 = avx2_i32x16_sub(a3, b3);
             avx2_store4x16_i16_clip256::<STRIDE>(
                 scratch,
                 off + k,
@@ -4662,41 +4703,45 @@ fn avx2_dct16_i16x8_store_quads_from_coeff8_stride_const<
     let f1 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 1);
     let g0 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 0);
     let g1 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 1);
-
-    // Even half computed once (dav2d-style); quad stores preserved exactly.
-    let cc0 = _mm256_add_epi32(g0, f0);
-    let cc1 = _mm256_add_epi32(g1, f1);
-    let cc2 = _mm256_sub_epi32(g1, f1);
-    let cc3 = _mm256_sub_epi32(g0, f0);
-    let d0 = d_at!(0usize);
-    let d1 = d_at!(1usize);
-    let d2 = d_at!(2usize);
-    let d3 = d_at!(3usize);
-    let a: [__m256i; 8] = [
-        _mm256_add_epi32(cc0, d0),
-        _mm256_add_epi32(cc1, d1),
-        _mm256_add_epi32(cc2, d2),
-        _mm256_add_epi32(cc3, d3),
-        _mm256_sub_epi32(cc3, d3),
-        _mm256_sub_epi32(cc2, d2),
-        _mm256_sub_epi32(cc1, d1),
-        _mm256_sub_epi32(cc0, d0),
-    ];
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            match $k {
+                0 => _mm256_add_epi32(g0, f0),
+                1 => _mm256_add_epi32(g1, f1),
+                2 => _mm256_sub_epi32(g1, f1),
+                _ => _mm256_sub_epi32(g0, f0),
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                _mm256_add_epi32(cc_at!(k), d_at!(k))
+            } else {
+                _mm256_sub_epi32(cc_at!(7 - k), d_at!(7 - k))
+            }
+        }};
+    }
     macro_rules! store_group {
         ($k:expr) => {{
             let k = $k;
+            let a0 = a_at!(k);
             let b0 = b_at!(k);
-            let l0 = _mm256_add_epi32(a[k], b0);
-            let h0 = _mm256_sub_epi32(a[k], b0);
+            let l0 = _mm256_add_epi32(a0, b0);
+            let h0 = _mm256_sub_epi32(a0, b0);
+            let a1 = a_at!(k + 1);
             let b1 = b_at!(k + 1);
-            let l1 = _mm256_add_epi32(a[k + 1], b1);
-            let h1 = _mm256_sub_epi32(a[k + 1], b1);
+            let l1 = _mm256_add_epi32(a1, b1);
+            let h1 = _mm256_sub_epi32(a1, b1);
+            let a2 = a_at!(k + 2);
             let b2 = b_at!(k + 2);
-            let l2 = _mm256_add_epi32(a[k + 2], b2);
-            let h2 = _mm256_sub_epi32(a[k + 2], b2);
+            let l2 = _mm256_add_epi32(a2, b2);
+            let h2 = _mm256_sub_epi32(a2, b2);
+            let a3 = a_at!(k + 3);
             let b3 = b_at!(k + 3);
-            let l3 = _mm256_add_epi32(a[k + 3], b3);
-            let h3 = _mm256_sub_epi32(a[k + 3], b3);
+            let l3 = _mm256_add_epi32(a3, b3);
+            let h3 = _mm256_sub_epi32(a3, b3);
             avx2_store4x8_i16_clip256::<STRIDE>(
                 scratch,
                 off + k,
@@ -4792,41 +4837,45 @@ fn avx2_dct16_i16x16_store_quads_from_coeff16_stride_const<
     let f1 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 1);
     let g0 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 0);
     let g1 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 1);
-
-    // Even half computed once (dav2d-style); quad stores preserved exactly.
-    let cc0 = avx2_i32x16_add(g0, f0);
-    let cc1 = avx2_i32x16_add(g1, f1);
-    let cc2 = avx2_i32x16_sub(g1, f1);
-    let cc3 = avx2_i32x16_sub(g0, f0);
-    let d0 = d_at!(0usize);
-    let d1 = d_at!(1usize);
-    let d2 = d_at!(2usize);
-    let d3 = d_at!(3usize);
-    let a: [Avx2I32x16; 8] = [
-        avx2_i32x16_add(cc0, d0),
-        avx2_i32x16_add(cc1, d1),
-        avx2_i32x16_add(cc2, d2),
-        avx2_i32x16_add(cc3, d3),
-        avx2_i32x16_sub(cc3, d3),
-        avx2_i32x16_sub(cc2, d2),
-        avx2_i32x16_sub(cc1, d1),
-        avx2_i32x16_sub(cc0, d0),
-    ];
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            match $k {
+                0 => avx2_i32x16_add(g0, f0),
+                1 => avx2_i32x16_add(g1, f1),
+                2 => avx2_i32x16_sub(g1, f1),
+                _ => avx2_i32x16_sub(g0, f0),
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                avx2_i32x16_add(cc_at!(k), d_at!(k))
+            } else {
+                avx2_i32x16_sub(cc_at!(7 - k), d_at!(7 - k))
+            }
+        }};
+    }
     macro_rules! store_group {
         ($k:expr) => {{
             let k = $k;
+            let a0 = a_at!(k);
             let b0 = b_at!(k);
-            let l0 = avx2_i32x16_add(a[k], b0);
-            let h0 = avx2_i32x16_sub(a[k], b0);
+            let l0 = avx2_i32x16_add(a0, b0);
+            let h0 = avx2_i32x16_sub(a0, b0);
+            let a1 = a_at!(k + 1);
             let b1 = b_at!(k + 1);
-            let l1 = avx2_i32x16_add(a[k + 1], b1);
-            let h1 = avx2_i32x16_sub(a[k + 1], b1);
+            let l1 = avx2_i32x16_add(a1, b1);
+            let h1 = avx2_i32x16_sub(a1, b1);
+            let a2 = a_at!(k + 2);
             let b2 = b_at!(k + 2);
-            let l2 = avx2_i32x16_add(a[k + 2], b2);
-            let h2 = avx2_i32x16_sub(a[k + 2], b2);
+            let l2 = avx2_i32x16_add(a2, b2);
+            let h2 = avx2_i32x16_sub(a2, b2);
+            let a3 = a_at!(k + 3);
             let b3 = b_at!(k + 3);
-            let l3 = avx2_i32x16_add(a[k + 3], b3);
-            let h3 = avx2_i32x16_sub(a[k + 3], b3);
+            let l3 = avx2_i32x16_add(a3, b3);
+            let h3 = avx2_i32x16_sub(a3, b3);
             avx2_store4x16_i16_clip256::<STRIDE>(
                 scratch,
                 off + k,
