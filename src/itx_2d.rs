@@ -36,6 +36,24 @@ use std::sync::OnceLock;
 pub(crate) const ITX_TMP_STRIDE: usize = 32;
 pub(crate) const ITX_TMP_PIXELS: usize = ITX_TMP_STRIDE * ITX_TMP_STRIDE;
 
+#[inline]
+pub(crate) fn clear_i16_coeff_active_rows<const N: usize>(coeff: &mut [i16], nrows: usize) {
+    debug_assert!(N == 16 || N == 32);
+    debug_assert!(nrows <= N);
+    debug_assert_eq!(nrows & 3, 0);
+    debug_assert!(coeff.len() >= N * N);
+    if nrows >= N {
+        coeff[..N * N].fill(0);
+    } else {
+        let mut x = 0usize;
+        while x < N {
+            let off = x * N;
+            coeff[off..off + nrows].fill(0);
+            x += 1;
+        }
+    }
+}
+
 // ITX entry bodies are expanded into the architecture modules so the large
 // row/column control flow stays inside the same feature-local function as the
 // AVX2/SSE4.1/NEON intrinsics. The helpers below are deliberately macro bodies,

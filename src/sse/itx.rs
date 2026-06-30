@@ -33,19 +33,11 @@ use std::arch::x86_64::*;
 
 use crate::itx_2d::ITX_TMP_PIXELS;
 
-use core::cell::RefCell;
-
-thread_local! {
-    static SSE41_ITX_I16_SCRATCH: RefCell<[i16; ITX_TMP_PIXELS]> = const { RefCell::new([0i16; ITX_TMP_PIXELS]) };
-}
-
 #[inline(always)]
 fn with_sse41_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -> R {
     assert!(len <= ITX_TMP_PIXELS);
-    SSE41_ITX_I16_SCRATCH.with(|cell| {
-        let mut scratch = cell.borrow_mut();
-        f(&mut scratch[..len])
-    })
+    let mut scratch = [0i16; ITX_TMP_PIXELS];
+    f(&mut scratch[..len])
 }
 
 #[inline]
@@ -314,109 +306,6 @@ fn sse41_store4x4_i16_clip<const STRIDE: usize>(
         _mm_storel_epi64(
             scratch.as_mut_ptr().add(off + 3 * STRIDE) as *mut __m128i,
             _mm_packs_epi32(r3, _mm_setzero_si128()),
-        );
-    }
-}
-
-#[inline]
-#[target_feature(enable = "sse4.1")]
-fn sse41_store8x8_i16_clip<const STRIDE: usize>(
-    scratch: &mut [i16],
-    off: usize,
-    v0lo: __m128i,
-    v0hi: __m128i,
-    v1lo: __m128i,
-    v1hi: __m128i,
-    v2lo: __m128i,
-    v2hi: __m128i,
-    v3lo: __m128i,
-    v3hi: __m128i,
-    v4lo: __m128i,
-    v4hi: __m128i,
-    v5lo: __m128i,
-    v5hi: __m128i,
-    v6lo: __m128i,
-    v6hi: __m128i,
-    v7lo: __m128i,
-    v7hi: __m128i,
-    rnd: __m128i,
-    sh: __m128i,
-    minv: __m128i,
-    maxv: __m128i,
-) {
-    unsafe {
-        debug_assert!(STRIDE == 8 || STRIDE == 16 || STRIDE == 32);
-        debug_assert!(off + 7 * STRIDE + 8 <= scratch.len());
-        macro_rules! clip {
-            ($x:expr) => {{
-                _mm_min_epi32(
-                    _mm_max_epi32(_mm_sra_epi32(_mm_add_epi32($x, rnd), sh), minv),
-                    maxv,
-                )
-            }};
-        }
-
-        let r0 = _mm_packs_epi32(clip!(v0lo), clip!(v0hi));
-        let r1 = _mm_packs_epi32(clip!(v1lo), clip!(v1hi));
-        let r2 = _mm_packs_epi32(clip!(v2lo), clip!(v2hi));
-        let r3 = _mm_packs_epi32(clip!(v3lo), clip!(v3hi));
-        let r4 = _mm_packs_epi32(clip!(v4lo), clip!(v4hi));
-        let r5 = _mm_packs_epi32(clip!(v5lo), clip!(v5hi));
-        let r6 = _mm_packs_epi32(clip!(v6lo), clip!(v6hi));
-        let r7 = _mm_packs_epi32(clip!(v7lo), clip!(v7hi));
-
-        let t0 = _mm_unpacklo_epi16(r0, r1);
-        let t1 = _mm_unpackhi_epi16(r0, r1);
-        let t2 = _mm_unpacklo_epi16(r2, r3);
-        let t3 = _mm_unpackhi_epi16(r2, r3);
-        let t4 = _mm_unpacklo_epi16(r4, r5);
-        let t5 = _mm_unpackhi_epi16(r4, r5);
-        let t6 = _mm_unpacklo_epi16(r6, r7);
-        let t7 = _mm_unpackhi_epi16(r6, r7);
-
-        let u0 = _mm_unpacklo_epi32(t0, t2);
-        let u1 = _mm_unpackhi_epi32(t0, t2);
-        let u2 = _mm_unpacklo_epi32(t1, t3);
-        let u3 = _mm_unpackhi_epi32(t1, t3);
-        let u4 = _mm_unpacklo_epi32(t4, t6);
-        let u5 = _mm_unpackhi_epi32(t4, t6);
-        let u6 = _mm_unpacklo_epi32(t5, t7);
-        let u7 = _mm_unpackhi_epi32(t5, t7);
-
-        let o0 = _mm_unpacklo_epi64(u0, u4);
-        let o1 = _mm_unpackhi_epi64(u0, u4);
-        let o2 = _mm_unpacklo_epi64(u1, u5);
-        let o3 = _mm_unpackhi_epi64(u1, u5);
-        let o4 = _mm_unpacklo_epi64(u2, u6);
-        let o5 = _mm_unpackhi_epi64(u2, u6);
-        let o6 = _mm_unpacklo_epi64(u3, u7);
-        let o7 = _mm_unpackhi_epi64(u3, u7);
-
-        _mm_storeu_si128(scratch.as_mut_ptr().add(off) as *mut __m128i, o0);
-        _mm_storeu_si128(scratch.as_mut_ptr().add(off + STRIDE) as *mut __m128i, o1);
-        _mm_storeu_si128(
-            scratch.as_mut_ptr().add(off + 2 * STRIDE) as *mut __m128i,
-            o2,
-        );
-        _mm_storeu_si128(
-            scratch.as_mut_ptr().add(off + 3 * STRIDE) as *mut __m128i,
-            o3,
-        );
-        _mm_storeu_si128(
-            scratch.as_mut_ptr().add(off + 4 * STRIDE) as *mut __m128i,
-            o4,
-        );
-        _mm_storeu_si128(
-            scratch.as_mut_ptr().add(off + 5 * STRIDE) as *mut __m128i,
-            o5,
-        );
-        _mm_storeu_si128(
-            scratch.as_mut_ptr().add(off + 6 * STRIDE) as *mut __m128i,
-            o6,
-        );
-        _mm_storeu_si128(
-            scratch.as_mut_ptr().add(off + 7 * STRIDE) as *mut __m128i,
-            o7,
         );
     }
 }
@@ -754,235 +643,6 @@ fn sse41_coeff_pair_from_scalars_i16(k0: i16, k1: i16) -> __m128i {
 fn sse41_coeff_pair_i16(table: &[i32], idx: usize) -> __m128i {
     debug_assert!(idx * 4 + 4 <= table.len());
     unsafe { _mm_loadu_si128(table.as_ptr().add(idx * 4) as *const __m128i) }
-}
-
-macro_rules! sse41_dct16_i16x4_all_body {
-    () => {{
-        let z = _mm_setzero_si128();
-        let mut b = [z; 8];
-        let mut m = 0usize;
-        while m < 8 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = _mm_add_epi32(
-                acc,
-                _mm_madd_epi16(
-                    _mm_unpacklo_epi16(load!(1), load!(3)),
-                    sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KBP_X4, base >> 1),
-                ),
-            );
-            acc = _mm_add_epi32(
-                acc,
-                _mm_madd_epi16(
-                    _mm_unpacklo_epi16(load!(5), load!(7)),
-                    sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 1),
-                ),
-            );
-            acc = _mm_add_epi32(
-                acc,
-                _mm_madd_epi16(
-                    _mm_unpacklo_epi16(load!(9), load!(11)),
-                    sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 2),
-                ),
-            );
-            acc = _mm_add_epi32(
-                acc,
-                _mm_madd_epi16(
-                    _mm_unpacklo_epi16(load!(13), load!(15)),
-                    sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 3),
-                ),
-            );
-            b[m] = acc;
-            m += 1;
-        }
-        let mut d = [z; 4];
-        m = 0;
-        while m < 4 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = _mm_add_epi32(
-                acc,
-                _mm_madd_epi16(
-                    _mm_unpacklo_epi16(load!(2), load!(6)),
-                    sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KDP_X4, base >> 1),
-                ),
-            );
-            acc = _mm_add_epi32(
-                acc,
-                _mm_madd_epi16(
-                    _mm_unpacklo_epi16(load!(10), load!(14)),
-                    sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KDP_X4, (base >> 1) + 1),
-                ),
-            );
-            d[m] = acc;
-            m += 1;
-        }
-        let f0 = _mm_add_epi32(
-            _mm_madd_epi16(
-                _mm_unpacklo_epi16(load!(4), load!(12)),
-                sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KFP_X4, 0),
-            ),
-            z,
-        );
-        let f1 = _mm_add_epi32(
-            _mm_madd_epi16(
-                _mm_unpacklo_epi16(load!(4), load!(12)),
-                sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KFP_X4, 1),
-            ),
-            z,
-        );
-        let g0 = _mm_madd_epi16(
-            _mm_unpacklo_epi16(load!(0), load!(8)),
-            sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KGP_X4, 0),
-        );
-        let g1 = _mm_madd_epi16(
-            _mm_unpacklo_epi16(load!(0), load!(8)),
-            sse41_coeff_pair_i16(&crate::itx_2d::DCT16_KGP_X4, 1),
-        );
-        let cc = [
-            _mm_add_epi32(g0, f0),
-            _mm_add_epi32(g1, f1),
-            _mm_sub_epi32(g1, f1),
-            _mm_sub_epi32(g0, f0),
-        ];
-        let mut a = [z; 8];
-        let mut i = 0usize;
-        while i < 4 {
-            a[i] = _mm_add_epi32(cc[i], d[i]);
-            i += 1;
-        }
-        while i < 8 {
-            a[i] = _mm_sub_epi32(cc[7 - i], d[7 - i]);
-            i += 1;
-        }
-        let mut out = [z; 16];
-        let mut k = 0usize;
-        while k < 8 {
-            out[k] = _mm_add_epi32(a[k], b[k]);
-            out[k + 8] = _mm_sub_epi32(a[7 - k], b[7 - k]);
-            k += 1;
-        }
-        out
-    }};
-}
-
-macro_rules! sse41_dct32_i16x4_all_body {
-    () => {{
-        let z = _mm_setzero_si128();
-        let mut b = [z; 16];
-        let mut m = 0usize;
-        while m < 16 {
-            let base = m * 16;
-            let mut acc = z;
-            let mut p = 0usize;
-            while p < 16 {
-                let cb = base + p;
-                let i0 = 2 * p + 1;
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(i0), load!(i0 + 2)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KBP_X4, cb >> 1),
-                    ),
-                );
-                p += 2;
-            }
-            b[m] = acc;
-            m += 1;
-        }
-        let mut d = [z; 8];
-        m = 0;
-        while m < 8 {
-            let base = m * 8;
-            let mut acc = z;
-            let mut p = 0usize;
-            while p < 8 {
-                let i0 = 4 * p + 2;
-                acc = _mm_add_epi32(
-                    acc,
-                    _mm_madd_epi16(
-                        _mm_unpacklo_epi16(load!(i0), load!(i0 + 4)),
-                        sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KDP_X4, (base + p) >> 1),
-                    ),
-                );
-                p += 2;
-            }
-            d[m] = acc;
-            m += 1;
-        }
-        let mut f = [z; 4];
-        m = 0;
-        while m < 4 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = _mm_add_epi32(
-                acc,
-                _mm_madd_epi16(
-                    _mm_unpacklo_epi16(load!(4), load!(12)),
-                    sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KFP_X4, base >> 1),
-                ),
-            );
-            acc = _mm_add_epi32(
-                acc,
-                _mm_madd_epi16(
-                    _mm_unpacklo_epi16(load!(20), load!(28)),
-                    sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KFP_X4, (base >> 1) + 1),
-                ),
-            );
-            f[m] = acc;
-            m += 1;
-        }
-        let h0 = _mm_madd_epi16(
-            _mm_unpacklo_epi16(load!(8), load!(24)),
-            sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KHP_X4, 0),
-        );
-        let h1 = _mm_madd_epi16(
-            _mm_unpacklo_epi16(load!(8), load!(24)),
-            sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KHP_X4, 1),
-        );
-        let g0 = _mm_madd_epi16(
-            _mm_unpacklo_epi16(load!(0), load!(16)),
-            sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KGP_X4, 0),
-        );
-        let g1 = _mm_madd_epi16(
-            _mm_unpacklo_epi16(load!(0), load!(16)),
-            sse41_coeff_pair_i16(&crate::itx_2d::DCT32_KGP_X4, 1),
-        );
-        let e = [
-            _mm_add_epi32(g0, h0),
-            _mm_add_epi32(g1, h1),
-            _mm_sub_epi32(g1, h1),
-            _mm_sub_epi32(g0, h0),
-        ];
-        let mut cc = [z; 8];
-        let mut i = 0usize;
-        while i < 4 {
-            cc[i] = _mm_add_epi32(e[i], f[i]);
-            i += 1;
-        }
-        while i < 8 {
-            cc[i] = _mm_sub_epi32(e[7 - i], f[7 - i]);
-            i += 1;
-        }
-        let mut a = [z; 16];
-        i = 0;
-        while i < 8 {
-            a[i] = _mm_add_epi32(cc[i], d[i]);
-            i += 1;
-        }
-        while i < 16 {
-            a[i] = _mm_sub_epi32(cc[15 - i], d[15 - i]);
-            i += 1;
-        }
-        let mut out = [z; 32];
-        let mut k = 0usize;
-        while k < 16 {
-            out[k] = _mm_add_epi32(a[k], b[k]);
-            out[k + 16] = _mm_sub_epi32(a[15 - k], b[15 - k]);
-            k += 1;
-        }
-        out
-    }};
 }
 
 #[inline]
@@ -1671,32 +1331,298 @@ fn sse41_dct32_i16x4_scratch4_stride_eob_add_u8<const STRIDE: usize>(
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn sse41_dct16_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
+fn sse41_dct16_i16x4_store_quads_from_coeff4_stride_const<
+    const IS_RECT2: bool,
+    const COEFF_STRIDE: usize,
+    const STRIDE: usize,
+>(
     coeff: &[i16],
-    base: usize,
-) -> [__m128i; 16] {
-    debug_assert!(base + 15 * STRIDE + 4 <= coeff.len());
+    coeff_base: usize,
+    scratch: &mut [i16],
+    off: usize,
+    rnd: __m128i,
+    sh: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+) {
+    debug_assert!(coeff_base + 15 * COEFF_STRIDE + 4 <= coeff.len());
     macro_rules! load {
         ($idx:expr) => {
-            sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
+            sse41_load4_i16_coeff_packed_const::<IS_RECT2>(
+                coeff,
+                coeff_base + ($idx) * COEFF_STRIDE,
+            )
         };
     }
-    sse41_dct16_i16x4_all_body!()
+    macro_rules! madd_pair {
+        ($a:expr, $b:expr, $tbl:expr, $idx:expr) => {
+            _mm_madd_epi16(
+                _mm_unpacklo_epi16(load!($a), load!($b)),
+                sse41_coeff_pair_i16($tbl, $idx),
+            )
+        };
+    }
+    macro_rules! b_at {
+        ($m:expr) => {{
+            let base = ($m) * 8;
+            let mut acc = _mm_setzero_si128();
+            acc = _mm_add_epi32(
+                acc,
+                madd_pair!(1, 3, &crate::itx_2d::DCT16_KBP_X4, base >> 1),
+            );
+            acc = _mm_add_epi32(
+                acc,
+                madd_pair!(5, 7, &crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 1),
+            );
+            acc = _mm_add_epi32(
+                acc,
+                madd_pair!(9, 11, &crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 2),
+            );
+            _mm_add_epi32(
+                acc,
+                madd_pair!(13, 15, &crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 3),
+            )
+        }};
+    }
+    macro_rules! d_at {
+        ($m:expr) => {{
+            let base = ($m) * 8;
+            _mm_add_epi32(
+                madd_pair!(2, 6, &crate::itx_2d::DCT16_KDP_X4, base >> 1),
+                madd_pair!(10, 14, &crate::itx_2d::DCT16_KDP_X4, (base >> 1) + 1),
+            )
+        }};
+    }
+    let f0 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 0);
+    let f1 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 1);
+    let g0 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 0);
+    let g1 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 1);
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            match $k {
+                0 => _mm_add_epi32(g0, f0),
+                1 => _mm_add_epi32(g1, f1),
+                2 => _mm_sub_epi32(g1, f1),
+                _ => _mm_sub_epi32(g0, f0),
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                _mm_add_epi32(cc_at!(k), d_at!(k))
+            } else {
+                _mm_sub_epi32(cc_at!(7 - k), d_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! store_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
+            let l0 = _mm_add_epi32(a0, b0);
+            let h0 = _mm_sub_epi32(a0, b0);
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            let l1 = _mm_add_epi32(a1, b1);
+            let h1 = _mm_sub_epi32(a1, b1);
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            let l2 = _mm_add_epi32(a2, b2);
+            let h2 = _mm_sub_epi32(a2, b2);
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            let l3 = _mm_add_epi32(a3, b3);
+            let h3 = _mm_sub_epi32(a3, b3);
+            sse41_store4x4_i16_clip::<STRIDE>(
+                scratch,
+                off + k,
+                l0,
+                l1,
+                l2,
+                l3,
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+            sse41_store4x4_i16_clip::<STRIDE>(
+                scratch,
+                off + 8 + 7 - (k + 3),
+                h3,
+                h2,
+                h1,
+                h0,
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+        }};
+    }
+    store_group!(0usize);
+    store_group!(4usize);
 }
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn sse41_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
+fn sse41_dct32_i16x4_store_quads_from_coeff4_stride_const<
+    const IS_RECT2: bool,
+    const COEFF_STRIDE: usize,
+    const STRIDE: usize,
+>(
     coeff: &[i16],
-    base: usize,
-) -> [__m128i; 32] {
-    debug_assert!(base + 31 * STRIDE + 4 <= coeff.len());
+    coeff_base: usize,
+    scratch: &mut [i16],
+    off: usize,
+    rnd: __m128i,
+    sh: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+) {
+    debug_assert!(coeff_base + 31 * COEFF_STRIDE + 4 <= coeff.len());
     macro_rules! load {
         ($idx:expr) => {
-            sse41_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
+            sse41_load4_i16_coeff_packed_const::<IS_RECT2>(
+                coeff,
+                coeff_base + ($idx) * COEFF_STRIDE,
+            )
         };
     }
-    sse41_dct32_i16x4_all_body!()
+    macro_rules! madd_pair {
+        ($a:expr, $b:expr, $tbl:expr, $idx:expr) => {
+            _mm_madd_epi16(
+                _mm_unpacklo_epi16(load!($a), load!($b)),
+                sse41_coeff_pair_i16($tbl, $idx),
+            )
+        };
+    }
+    macro_rules! b_at {
+        ($m:expr) => {{
+            let base = ($m) * 16;
+            let mut acc = _mm_setzero_si128();
+            let mut p = 0usize;
+            while p < 16 {
+                let i0 = 2 * p + 1;
+                acc = _mm_add_epi32(
+                    acc,
+                    madd_pair!(i0, i0 + 2, &crate::itx_2d::DCT32_KBP_X4, (base + p) >> 1),
+                );
+                p += 2;
+            }
+            acc
+        }};
+    }
+    macro_rules! d_at {
+        ($m:expr) => {{
+            let base = ($m) * 8;
+            let mut acc = _mm_setzero_si128();
+            let mut p = 0usize;
+            while p < 8 {
+                let i0 = 4 * p + 2;
+                acc = _mm_add_epi32(
+                    acc,
+                    madd_pair!(i0, i0 + 4, &crate::itx_2d::DCT32_KDP_X4, (base + p) >> 1),
+                );
+                p += 2;
+            }
+            acc
+        }};
+    }
+    macro_rules! f_at {
+        ($m:expr) => {{
+            let base = ($m) * 8;
+            _mm_add_epi32(
+                madd_pair!(4, 12, &crate::itx_2d::DCT32_KFP_X4, base >> 1),
+                madd_pair!(20, 28, &crate::itx_2d::DCT32_KFP_X4, (base >> 1) + 1),
+            )
+        }};
+    }
+    let h0 = madd_pair!(8, 24, &crate::itx_2d::DCT32_KHP_X4, 0);
+    let h1 = madd_pair!(8, 24, &crate::itx_2d::DCT32_KHP_X4, 1);
+    let g0 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 0);
+    let g1 = madd_pair!(0, 16, &crate::itx_2d::DCT32_KGP_X4, 1);
+    macro_rules! e_at {
+        ($k:expr) => {{
+            match $k {
+                0 => _mm_add_epi32(g0, h0),
+                1 => _mm_add_epi32(g1, h1),
+                2 => _mm_sub_epi32(g1, h1),
+                _ => _mm_sub_epi32(g0, h0),
+            }
+        }};
+    }
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                _mm_add_epi32(e_at!(k), f_at!(k))
+            } else {
+                _mm_sub_epi32(e_at!(7 - k), f_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 8 {
+                _mm_add_epi32(cc_at!(k), d_at!(k))
+            } else {
+                _mm_sub_epi32(cc_at!(15 - k), d_at!(15 - k))
+            }
+        }};
+    }
+    macro_rules! store_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
+            let l0 = _mm_add_epi32(a0, b0);
+            let h0 = _mm_sub_epi32(a0, b0);
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            let l1 = _mm_add_epi32(a1, b1);
+            let h1 = _mm_sub_epi32(a1, b1);
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            let l2 = _mm_add_epi32(a2, b2);
+            let h2 = _mm_sub_epi32(a2, b2);
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            let l3 = _mm_add_epi32(a3, b3);
+            let h3 = _mm_sub_epi32(a3, b3);
+            sse41_store4x4_i16_clip::<STRIDE>(
+                scratch,
+                off + k,
+                l0,
+                l1,
+                l2,
+                l3,
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+            sse41_store4x4_i16_clip::<STRIDE>(
+                scratch,
+                off + 16 + 15 - (k + 3),
+                h3,
+                h2,
+                h1,
+                h0,
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+        }};
+    }
+    store_group!(0usize);
+    store_group!(4usize);
+    store_group!(8usize);
+    store_group!(12usize);
 }
 
 #[target_feature(enable = "sse4.1")]
@@ -1710,61 +1636,17 @@ fn sse41_dct16_i16x4_coeff_rows_to_scratch<const IS_RECT2: bool, const COEFF_STR
     minv: __m128i,
     maxv: __m128i,
 ) -> usize {
-    while y + 8 <= nrows {
-        let lo = sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let hi =
-            sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 4);
-        let row_base = y * 16;
-        let mut m = 0usize;
-        while m < 16 {
-            sse41_store8x8_i16_clip::<16>(
-                scratch,
-                row_base + m,
-                lo[m],
-                hi[m],
-                lo[m + 1],
-                hi[m + 1],
-                lo[m + 2],
-                hi[m + 2],
-                lo[m + 3],
-                hi[m + 3],
-                lo[m + 4],
-                hi[m + 4],
-                lo[m + 5],
-                hi[m + 5],
-                lo[m + 6],
-                hi[m + 6],
-                lo[m + 7],
-                hi[m + 7],
-                rnd,
-                sh,
-                minv,
-                maxv,
-            );
-            m += 8;
-        }
-        y += 8;
-    }
-    if y + 4 <= nrows {
-        let out =
-            sse41_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let row_base = y * 16;
-        let mut m = 0usize;
-        while m < 16 {
-            sse41_store4x4_i16_clip::<16>(
-                scratch,
-                row_base + m,
-                out[m],
-                out[m + 1],
-                out[m + 2],
-                out[m + 3],
-                rnd,
-                sh,
-                minv,
-                maxv,
-            );
-            m += 4;
-        }
+    while y + 4 <= nrows {
+        sse41_dct16_i16x4_store_quads_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE, 16>(
+            coeff,
+            y,
+            scratch,
+            y * 16,
+            rnd,
+            sh,
+            minv,
+            maxv,
+        );
         y += 4;
     }
     y
@@ -1781,61 +1663,17 @@ fn sse41_dct32_i16x4_coeff_rows_to_scratch<const IS_RECT2: bool, const COEFF_STR
     minv: __m128i,
     maxv: __m128i,
 ) -> usize {
-    while y + 8 <= nrows {
-        let lo = sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let hi =
-            sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y + 4);
-        let row_base = y * 32;
-        let mut m = 0usize;
-        while m < 32 {
-            sse41_store8x8_i16_clip::<32>(
-                scratch,
-                row_base + m,
-                lo[m],
-                hi[m],
-                lo[m + 1],
-                hi[m + 1],
-                lo[m + 2],
-                hi[m + 2],
-                lo[m + 3],
-                hi[m + 3],
-                lo[m + 4],
-                hi[m + 4],
-                lo[m + 5],
-                hi[m + 5],
-                lo[m + 6],
-                hi[m + 6],
-                lo[m + 7],
-                hi[m + 7],
-                rnd,
-                sh,
-                minv,
-                maxv,
-            );
-            m += 8;
-        }
-        y += 8;
-    }
-    if y + 4 <= nrows {
-        let out =
-            sse41_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let row_base = y * 32;
-        let mut m = 0usize;
-        while m < 32 {
-            sse41_store4x4_i16_clip::<32>(
-                scratch,
-                row_base + m,
-                out[m],
-                out[m + 1],
-                out[m + 2],
-                out[m + 3],
-                rnd,
-                sh,
-                minv,
-                maxv,
-            );
-            m += 4;
-        }
+    while y + 4 <= nrows {
+        sse41_dct32_i16x4_store_quads_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE, 32>(
+            coeff,
+            y,
+            scratch,
+            y * 32,
+            rnd,
+            sh,
+            minv,
+            maxv,
+        );
         y += 4;
     }
     y
@@ -1905,7 +1743,6 @@ fn idct_dequant_dct_i16_sse41_impl_const<const N: usize, const IS_RECT2: bool>(
     let maxv = _mm_set1_epi32(row_clip_max);
 
     with_sse41_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
-        scratch.fill(0);
         let y = if N == 16 {
             sse41_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, 16>(
                 coeff, scratch, 0, ncols, rnd, sh, minv, maxv,
@@ -1917,7 +1754,7 @@ fn idct_dequant_dct_i16_sse41_impl_const<const N: usize, const IS_RECT2: bool>(
         };
         debug_assert_eq!(y, ncols);
 
-        coeff[..N * N].fill(0);
+        crate::itx_2d::clear_i16_coeff_active_rows::<N>(coeff, ncols);
 
         let mut x = 0usize;
         while x < N {
@@ -1963,7 +1800,6 @@ fn idct_dequant_dct_i16_sse41_fused_8bpc_impl_const<const N: usize, const IS_REC
     let maxv = _mm_set1_epi32(row_clip_max);
 
     with_sse41_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
-        scratch.fill(0);
         let y = if N == 16 {
             sse41_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, 16>(
                 coeff, scratch, 0, ncols, rnd, sh, minv, maxv,
@@ -1975,7 +1811,7 @@ fn idct_dequant_dct_i16_sse41_fused_8bpc_impl_const<const N: usize, const IS_REC
         };
         debug_assert_eq!(y, ncols);
 
-        coeff[..N * N].fill(0);
+        crate::itx_2d::clear_i16_coeff_active_rows::<N>(coeff, ncols);
 
         let rnd1 = _mm_set1_epi32((1 << shift1) >> 1);
         let sh1 = _mm_cvtsi32_si128(shift1);
@@ -2433,7 +2269,6 @@ fn tx_dequant_dense_sse41_i16_impl_const<
     let maxv = _mm_set1_epi32(row_clip_max);
 
     with_sse41_itx_i16_scratch(N, |scratch| unsafe {
-        scratch.fill(0);
         let mut y = 0usize;
 
         if first_kind == crate::itx_2d::TX_KIND_IDENTITY {
@@ -2979,24 +2814,22 @@ fn idct_dequant_32x32_sse41_i32_impl_const<const IS_RECT2: bool>(
         coeff[..1024].fill(0);
         let mut x = 0usize;
         while x < 32 {
-            let groups = [
-                sse41_dct32_i32x4_from_tmp4(tmp, x, 0),
-                sse41_dct32_i32x4_from_tmp4(tmp, x, 4),
-                sse41_dct32_i32x4_from_tmp4(tmp, x, 8),
-                sse41_dct32_i32x4_from_tmp4(tmp, x, 12),
-                sse41_dct32_i32x4_from_tmp4(tmp, x, 16),
-                sse41_dct32_i32x4_from_tmp4(tmp, x, 20),
-                sse41_dct32_i32x4_from_tmp4(tmp, x, 24),
-                sse41_dct32_i32x4_from_tmp4(tmp, x, 28),
-            ];
+            let mut stage = core::mem::MaybeUninit::<[i32; 32 * 4]>::uninit();
+            let stage_ptr = stage.as_mut_ptr().cast::<i32>();
             let mut m = 0usize;
             while m < 32 {
-                let g = &groups[m / 4];
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, g[0]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32) as *mut __m128i, g[1]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32) as *mut __m128i, g[2]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 3) * 32) as *mut __m128i, g[3]);
+                let g = sse41_dct32_i32x4_from_tmp4(tmp, x, m);
+                _mm_storeu_si128(stage_ptr.add(m * 4) as *mut __m128i, g[0]);
+                _mm_storeu_si128(stage_ptr.add((m + 1) * 4) as *mut __m128i, g[1]);
+                _mm_storeu_si128(stage_ptr.add((m + 2) * 4) as *mut __m128i, g[2]);
+                _mm_storeu_si128(stage_ptr.add((m + 3) * 4) as *mut __m128i, g[3]);
                 m += 4;
+            }
+            let mut m = 0usize;
+            while m < 32 {
+                let row = _mm_loadu_si128(stage_ptr.add(m * 4) as *const __m128i);
+                _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, row);
+                m += 1;
             }
             x += 4;
         }

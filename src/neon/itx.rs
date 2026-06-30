@@ -28,22 +28,14 @@
  */
 
 use crate::itx_2d::ITX_TMP_PIXELS;
-
-use core::cell::RefCell;
-
-thread_local! {
-    static NEON_ITX_I16_SCRATCH: RefCell<[i16; ITX_TMP_PIXELS]> = const { RefCell::new([0i16; ITX_TMP_PIXELS]) };
-}
+use std::arch::aarch64::*;
 
 #[inline(always)]
 fn with_neon_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -> R {
     assert!(len <= ITX_TMP_PIXELS);
-    NEON_ITX_I16_SCRATCH.with(|cell| {
-        let mut scratch = cell.borrow_mut();
-        f(&mut scratch[..len])
-    })
+    let mut scratch = [0i16; ITX_TMP_PIXELS];
+    f(&mut scratch[..len])
 }
-use std::arch::aarch64::*;
 
 // Concrete 32x32 DCT kernels. These do not route through DctSimd4/DctWide.
 
@@ -706,67 +698,6 @@ fn neon_load4_i16_coeff_packed_rdm_const<const IS_RECT2: bool>(
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn neon_load8_i16_coeff_packed_const<const IS_RECT2: bool>(src: &[i16], off: usize) -> int16x8_t {
-    debug_assert!(off + 8 <= src.len());
-    let v = unsafe { vld1q_s16(src.as_ptr().add(off)) };
-    if IS_RECT2 {
-        let lo = vshrq_n_s32::<8>(vmlal_n_s16(vdupq_n_s32(128), vget_low_s16(v), 181));
-        let hi = vshrq_n_s32::<8>(vmlal_n_s16(vdupq_n_s32(128), vget_high_s16(v), 181));
-        vcombine_s16(vqmovn_s32(lo), vqmovn_s32(hi))
-    } else {
-        v
-    }
-}
-
-#[inline]
-#[target_feature(enable = "rdm")]
-fn neon_load8_i16_coeff_packed_rdm_const<const IS_RECT2: bool>(
-    src: &[i16],
-    off: usize,
-) -> int16x8_t {
-    debug_assert!(off + 8 <= src.len());
-    let v = unsafe { vld1q_s16(src.as_ptr().add(off)) };
-    if IS_RECT2 {
-        vqrdmulhq_s16(v, vdupq_n_s16(0x5a80))
-    } else {
-        v
-    }
-}
-
-type NeonI32x4Pair = (int32x4_t, int32x4_t);
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn neon_pair_add(a: NeonI32x4Pair, b: NeonI32x4Pair) -> NeonI32x4Pair {
-    (vaddq_s32(a.0, b.0), vaddq_s32(a.1, b.1))
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn neon_pair_sub(a: NeonI32x4Pair, b: NeonI32x4Pair) -> NeonI32x4Pair {
-    (vsubq_s32(a.0, b.0), vsubq_s32(a.1, b.1))
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn neon_pair_vmlal_n(acc: NeonI32x4Pair, v: int16x8_t, c: i16) -> NeonI32x4Pair {
-    (
-        vmlal_n_s16(acc.0, vget_low_s16(v), c),
-        vmlal_n_s16(acc.1, vget_high_s16(v), c),
-    )
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn neon_pair_vmull_n(v: int16x8_t, c: i16) -> NeonI32x4Pair {
-    (
-        vmull_n_s16(vget_low_s16(v), c),
-        vmull_n_s16(vget_high_s16(v), c),
-    )
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
 fn neon_load4_i16_scratch(src: &[i16], off: usize) -> int16x4_t {
     debug_assert!(off + 4 <= src.len());
     unsafe { vld1_s16(src.as_ptr().add(off)) }
@@ -807,319 +738,6 @@ fn neon_store4x4_i16_clip<const STRIDE: usize>(
         vst1_s16(scratch.as_mut_ptr().add(off + 2 * STRIDE), vqmovn_s32(r2));
         vst1_s16(scratch.as_mut_ptr().add(off + 3 * STRIDE), vqmovn_s32(r3));
     }
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn neon_store8x8_i16_clip<const STRIDE: usize>(
-    scratch: &mut [i16],
-    off: usize,
-    v0lo: int32x4_t,
-    v0hi: int32x4_t,
-    v1lo: int32x4_t,
-    v1hi: int32x4_t,
-    v2lo: int32x4_t,
-    v2hi: int32x4_t,
-    v3lo: int32x4_t,
-    v3hi: int32x4_t,
-    v4lo: int32x4_t,
-    v4hi: int32x4_t,
-    v5lo: int32x4_t,
-    v5hi: int32x4_t,
-    v6lo: int32x4_t,
-    v6hi: int32x4_t,
-    v7lo: int32x4_t,
-    v7hi: int32x4_t,
-    rnd: int32x4_t,
-    nsh: int32x4_t,
-    minv: int32x4_t,
-    maxv: int32x4_t,
-) {
-    unsafe {
-        debug_assert!(STRIDE == 8 || STRIDE == 16 || STRIDE == 32);
-        debug_assert!(off + 7 * STRIDE + 8 <= scratch.len());
-        macro_rules! clip {
-            ($x:expr) => {{ vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32($x, rnd), nsh), minv), maxv) }};
-        }
-
-        let r0 = vcombine_s16(vqmovn_s32(clip!(v0lo)), vqmovn_s32(clip!(v0hi)));
-        let r1 = vcombine_s16(vqmovn_s32(clip!(v1lo)), vqmovn_s32(clip!(v1hi)));
-        let r2 = vcombine_s16(vqmovn_s32(clip!(v2lo)), vqmovn_s32(clip!(v2hi)));
-        let r3 = vcombine_s16(vqmovn_s32(clip!(v3lo)), vqmovn_s32(clip!(v3hi)));
-        let r4 = vcombine_s16(vqmovn_s32(clip!(v4lo)), vqmovn_s32(clip!(v4hi)));
-        let r5 = vcombine_s16(vqmovn_s32(clip!(v5lo)), vqmovn_s32(clip!(v5hi)));
-        let r6 = vcombine_s16(vqmovn_s32(clip!(v6lo)), vqmovn_s32(clip!(v6hi)));
-        let r7 = vcombine_s16(vqmovn_s32(clip!(v7lo)), vqmovn_s32(clip!(v7hi)));
-
-        let t01 = vtrnq_s16(r0, r1);
-        let t23 = vtrnq_s16(r2, r3);
-        let t45 = vtrnq_s16(r4, r5);
-        let t67 = vtrnq_s16(r6, r7);
-
-        let u02_0 = vtrnq_s32(vreinterpretq_s32_s16(t01.0), vreinterpretq_s32_s16(t23.0));
-        let u02_1 = vtrnq_s32(vreinterpretq_s32_s16(t01.1), vreinterpretq_s32_s16(t23.1));
-        let u46_0 = vtrnq_s32(vreinterpretq_s32_s16(t45.0), vreinterpretq_s32_s16(t67.0));
-        let u46_1 = vtrnq_s32(vreinterpretq_s32_s16(t45.1), vreinterpretq_s32_s16(t67.1));
-
-        macro_rules! join64 {
-            ($a:expr, $b:expr, $lane:ident) => {{
-                vreinterpretq_s16_s64(vcombine_s64(
-                    $lane(vreinterpretq_s64_s32($a)),
-                    $lane(vreinterpretq_s64_s32($b)),
-                ))
-            }};
-        }
-
-        let o0 = join64!(u02_0.0, u46_0.0, vget_low_s64);
-        let o1 = join64!(u02_1.0, u46_1.0, vget_low_s64);
-        let o2 = join64!(u02_0.1, u46_0.1, vget_low_s64);
-        let o3 = join64!(u02_1.1, u46_1.1, vget_low_s64);
-        let o4 = join64!(u02_0.0, u46_0.0, vget_high_s64);
-        let o5 = join64!(u02_1.0, u46_1.0, vget_high_s64);
-        let o6 = join64!(u02_0.1, u46_0.1, vget_high_s64);
-        let o7 = join64!(u02_1.1, u46_1.1, vget_high_s64);
-
-        vst1q_s16(scratch.as_mut_ptr().add(off), o0);
-        vst1q_s16(scratch.as_mut_ptr().add(off + STRIDE), o1);
-        vst1q_s16(scratch.as_mut_ptr().add(off + 2 * STRIDE), o2);
-        vst1q_s16(scratch.as_mut_ptr().add(off + 3 * STRIDE), o3);
-        vst1q_s16(scratch.as_mut_ptr().add(off + 4 * STRIDE), o4);
-        vst1q_s16(scratch.as_mut_ptr().add(off + 5 * STRIDE), o5);
-        vst1q_s16(scratch.as_mut_ptr().add(off + 6 * STRIDE), o6);
-        vst1q_s16(scratch.as_mut_ptr().add(off + 7 * STRIDE), o7);
-    }
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn neon_store8x8_i16_clip_pair<const STRIDE: usize>(
-    scratch: &mut [i16],
-    off: usize,
-    v0: NeonI32x4Pair,
-    v1: NeonI32x4Pair,
-    v2: NeonI32x4Pair,
-    v3: NeonI32x4Pair,
-    v4: NeonI32x4Pair,
-    v5: NeonI32x4Pair,
-    v6: NeonI32x4Pair,
-    v7: NeonI32x4Pair,
-    rnd: int32x4_t,
-    nsh: int32x4_t,
-    minv: int32x4_t,
-    maxv: int32x4_t,
-) {
-    neon_store8x8_i16_clip::<STRIDE>(
-        scratch, off, v0.0, v0.1, v1.0, v1.1, v2.0, v2.1, v3.0, v3.1, v4.0, v4.1, v5.0, v5.1, v6.0,
-        v6.1, v7.0, v7.1, rnd, nsh, minv, maxv,
-    );
-}
-
-macro_rules! neon_dct16_i16x8_all_body {
-    () => {{
-        let z = (vdupq_n_s32(0), vdupq_n_s32(0));
-        let mut b = [z; 8];
-        let mut m = 0usize;
-        while m < 8 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = neon_pair_vmlal_n(acc, load!(1), crate::itx_2d::DCT16_KBW[base]);
-            acc = neon_pair_vmlal_n(acc, load!(3), crate::itx_2d::DCT16_KBW[base + 1]);
-            acc = neon_pair_vmlal_n(acc, load!(5), crate::itx_2d::DCT16_KBW[base + 2]);
-            acc = neon_pair_vmlal_n(acc, load!(7), crate::itx_2d::DCT16_KBW[base + 3]);
-            acc = neon_pair_vmlal_n(acc, load!(9), crate::itx_2d::DCT16_KBW[base + 4]);
-            acc = neon_pair_vmlal_n(acc, load!(11), crate::itx_2d::DCT16_KBW[base + 5]);
-            acc = neon_pair_vmlal_n(acc, load!(13), crate::itx_2d::DCT16_KBW[base + 6]);
-            acc = neon_pair_vmlal_n(acc, load!(15), crate::itx_2d::DCT16_KBW[base + 7]);
-            b[m] = acc;
-            m += 1;
-        }
-        let mut d = [z; 4];
-        m = 0;
-        while m < 4 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = neon_pair_vmlal_n(acc, load!(2), crate::itx_2d::DCT16_KDW[base]);
-            acc = neon_pair_vmlal_n(acc, load!(6), crate::itx_2d::DCT16_KDW[base + 1]);
-            acc = neon_pair_vmlal_n(acc, load!(10), crate::itx_2d::DCT16_KDW[base + 2]);
-            acc = neon_pair_vmlal_n(acc, load!(14), crate::itx_2d::DCT16_KDW[base + 3]);
-            d[m] = acc;
-            m += 1;
-        }
-        let f0 = neon_pair_add(
-            neon_pair_vmull_n(load!(4), crate::itx_2d::DCT16_KFW[0]),
-            neon_pair_vmull_n(load!(12), crate::itx_2d::DCT16_KFW[1]),
-        );
-        let f1 = neon_pair_add(
-            neon_pair_vmull_n(load!(4), crate::itx_2d::DCT16_KFW[2]),
-            neon_pair_vmull_n(load!(12), crate::itx_2d::DCT16_KFW[3]),
-        );
-        let g0 = neon_pair_add(
-            neon_pair_vmull_n(load!(0), crate::itx_2d::DCT16_KGW[0]),
-            neon_pair_vmull_n(load!(8), crate::itx_2d::DCT16_KGW[1]),
-        );
-        let g1 = neon_pair_add(
-            neon_pair_vmull_n(load!(0), crate::itx_2d::DCT16_KGW[2]),
-            neon_pair_vmull_n(load!(8), crate::itx_2d::DCT16_KGW[3]),
-        );
-        let cc = [
-            neon_pair_add(g0, f0),
-            neon_pair_add(g1, f1),
-            neon_pair_sub(g1, f1),
-            neon_pair_sub(g0, f0),
-        ];
-        let mut a = [z; 8];
-        let mut i = 0usize;
-        while i < 4 {
-            a[i] = neon_pair_add(cc[i], d[i]);
-            i += 1;
-        }
-        while i < 8 {
-            a[i] = neon_pair_sub(cc[7 - i], d[7 - i]);
-            i += 1;
-        }
-        let mut out = [z; 16];
-        let mut k = 0usize;
-        while k < 8 {
-            out[k] = neon_pair_add(a[k], b[k]);
-            out[k + 8] = neon_pair_sub(a[7 - k], b[7 - k]);
-            k += 1;
-        }
-        out
-    }};
-}
-
-macro_rules! neon_dct32_i16x8_all_body {
-    () => {{
-        let z = (vdupq_n_s32(0), vdupq_n_s32(0));
-        let mut b = [z; 16];
-        let mut m = 0usize;
-        while m < 16 {
-            let base = m * 16;
-            let mut acc = z;
-            let mut grp = 0usize;
-            while grp < 2 {
-                let cb = base + grp * 8;
-                let k0 = grp * 8;
-                acc = neon_pair_vmlal_n(acc, load!(2 * k0 + 1), crate::itx_2d::DCT32_KBW[cb]);
-                acc = neon_pair_vmlal_n(
-                    acc,
-                    load!(2 * (k0 + 1) + 1),
-                    crate::itx_2d::DCT32_KBW[cb + 1],
-                );
-                acc = neon_pair_vmlal_n(
-                    acc,
-                    load!(2 * (k0 + 2) + 1),
-                    crate::itx_2d::DCT32_KBW[cb + 2],
-                );
-                acc = neon_pair_vmlal_n(
-                    acc,
-                    load!(2 * (k0 + 3) + 1),
-                    crate::itx_2d::DCT32_KBW[cb + 3],
-                );
-                acc = neon_pair_vmlal_n(
-                    acc,
-                    load!(2 * (k0 + 4) + 1),
-                    crate::itx_2d::DCT32_KBW[cb + 4],
-                );
-                acc = neon_pair_vmlal_n(
-                    acc,
-                    load!(2 * (k0 + 5) + 1),
-                    crate::itx_2d::DCT32_KBW[cb + 5],
-                );
-                acc = neon_pair_vmlal_n(
-                    acc,
-                    load!(2 * (k0 + 6) + 1),
-                    crate::itx_2d::DCT32_KBW[cb + 6],
-                );
-                acc = neon_pair_vmlal_n(
-                    acc,
-                    load!(2 * (k0 + 7) + 1),
-                    crate::itx_2d::DCT32_KBW[cb + 7],
-                );
-                grp += 1;
-            }
-            b[m] = acc;
-            m += 1;
-        }
-        let mut d = [z; 8];
-        m = 0;
-        while m < 8 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = neon_pair_vmlal_n(acc, load!(2), crate::itx_2d::DCT32_KDW[base]);
-            acc = neon_pair_vmlal_n(acc, load!(6), crate::itx_2d::DCT32_KDW[base + 1]);
-            acc = neon_pair_vmlal_n(acc, load!(10), crate::itx_2d::DCT32_KDW[base + 2]);
-            acc = neon_pair_vmlal_n(acc, load!(14), crate::itx_2d::DCT32_KDW[base + 3]);
-            acc = neon_pair_vmlal_n(acc, load!(18), crate::itx_2d::DCT32_KDW[base + 4]);
-            acc = neon_pair_vmlal_n(acc, load!(22), crate::itx_2d::DCT32_KDW[base + 5]);
-            acc = neon_pair_vmlal_n(acc, load!(26), crate::itx_2d::DCT32_KDW[base + 6]);
-            acc = neon_pair_vmlal_n(acc, load!(30), crate::itx_2d::DCT32_KDW[base + 7]);
-            d[m] = acc;
-            m += 1;
-        }
-        let mut f = [z; 4];
-        m = 0;
-        while m < 4 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = neon_pair_vmlal_n(acc, load!(4), crate::itx_2d::DCT32_KFW[base]);
-            acc = neon_pair_vmlal_n(acc, load!(12), crate::itx_2d::DCT32_KFW[base + 1]);
-            acc = neon_pair_vmlal_n(acc, load!(20), crate::itx_2d::DCT32_KFW[base + 2]);
-            acc = neon_pair_vmlal_n(acc, load!(28), crate::itx_2d::DCT32_KFW[base + 3]);
-            f[m] = acc;
-            m += 1;
-        }
-        let h0 = neon_pair_add(
-            neon_pair_vmull_n(load!(8), crate::itx_2d::DCT32_KHW[0]),
-            neon_pair_vmull_n(load!(24), crate::itx_2d::DCT32_KHW[1]),
-        );
-        let h1 = neon_pair_add(
-            neon_pair_vmull_n(load!(8), crate::itx_2d::DCT32_KHW[2]),
-            neon_pair_vmull_n(load!(24), crate::itx_2d::DCT32_KHW[3]),
-        );
-        let g0 = neon_pair_add(
-            neon_pair_vmull_n(load!(0), crate::itx_2d::DCT32_KGW[0]),
-            neon_pair_vmull_n(load!(16), crate::itx_2d::DCT32_KGW[1]),
-        );
-        let g1 = neon_pair_add(
-            neon_pair_vmull_n(load!(0), crate::itx_2d::DCT32_KGW[2]),
-            neon_pair_vmull_n(load!(16), crate::itx_2d::DCT32_KGW[3]),
-        );
-        let e = [
-            neon_pair_add(g0, h0),
-            neon_pair_add(g1, h1),
-            neon_pair_sub(g1, h1),
-            neon_pair_sub(g0, h0),
-        ];
-        let mut cc = [z; 8];
-        let mut i = 0usize;
-        while i < 4 {
-            cc[i] = neon_pair_add(e[i], f[i]);
-            i += 1;
-        }
-        while i < 8 {
-            cc[i] = neon_pair_sub(e[7 - i], f[7 - i]);
-            i += 1;
-        }
-        let mut a = [z; 16];
-        i = 0;
-        while i < 8 {
-            a[i] = neon_pair_add(cc[i], d[i]);
-            i += 1;
-        }
-        while i < 16 {
-            a[i] = neon_pair_sub(cc[15 - i], d[15 - i]);
-            i += 1;
-        }
-        let mut out = [z; 32];
-        let mut k = 0usize;
-        while k < 16 {
-            out[k] = neon_pair_add(a[k], b[k]);
-            out[k + 16] = neon_pair_sub(a[15 - k], b[15 - k]);
-            k += 1;
-        }
-        out
-    }};
 }
 
 macro_rules! neon_dct16_i16x4_all_body {
@@ -1616,66 +1234,6 @@ fn neon_dct32_i16x4_all_from_coeff4_rdm_stride_const<const IS_RECT2: bool, const
     neon_dct32_i16x4_all_body!()
 }
 
-#[inline]
-#[target_feature(enable = "neon")]
-fn neon_dct16_i16x8_all_from_coeff8_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
-    coeff: &[i16],
-    base: usize,
-) -> [NeonI32x4Pair; 16] {
-    debug_assert!(base + 15 * STRIDE + 8 <= coeff.len());
-    macro_rules! load {
-        ($idx:expr) => {
-            neon_load8_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
-        };
-    }
-    neon_dct16_i16x8_all_body!()
-}
-
-#[inline]
-#[target_feature(enable = "rdm")]
-fn neon_dct16_i16x8_all_from_coeff8_rdm_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
-    coeff: &[i16],
-    base: usize,
-) -> [NeonI32x4Pair; 16] {
-    debug_assert!(base + 15 * STRIDE + 8 <= coeff.len());
-    macro_rules! load {
-        ($idx:expr) => {
-            neon_load8_i16_coeff_packed_rdm_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
-        };
-    }
-    neon_dct16_i16x8_all_body!()
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn neon_dct32_i16x8_all_from_coeff8_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
-    coeff: &[i16],
-    base: usize,
-) -> [NeonI32x4Pair; 32] {
-    debug_assert!(base + 31 * STRIDE + 8 <= coeff.len());
-    macro_rules! load {
-        ($idx:expr) => {
-            neon_load8_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
-        };
-    }
-    neon_dct32_i16x8_all_body!()
-}
-
-#[inline]
-#[target_feature(enable = "rdm")]
-fn neon_dct32_i16x8_all_from_coeff8_rdm_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
-    coeff: &[i16],
-    base: usize,
-) -> [NeonI32x4Pair; 32] {
-    debug_assert!(base + 31 * STRIDE + 8 <= coeff.len());
-    macro_rules! load {
-        ($idx:expr) => {
-            neon_load8_i16_coeff_packed_rdm_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
-        };
-    }
-    neon_dct32_i16x8_all_body!()
-}
-
 #[target_feature(enable = "neon")]
 fn neon_dct16_i16x4_coeff_rows_to_scratch<const IS_RECT2: bool, const COEFF_STRIDE: usize>(
     coeff: &[i16],
@@ -1687,32 +1245,7 @@ fn neon_dct16_i16x4_coeff_rows_to_scratch<const IS_RECT2: bool, const COEFF_STRI
     minv: int32x4_t,
     maxv: int32x4_t,
 ) -> usize {
-    while y + 8 <= nrows {
-        let out = neon_dct16_i16x8_all_from_coeff8_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let row_base = y * 16;
-        neon_store8x8_i16_clip_pair::<16>(
-            scratch, row_base, out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], rnd,
-            nsh, minv, maxv,
-        );
-        neon_store8x8_i16_clip_pair::<16>(
-            scratch,
-            row_base + 8,
-            out[8],
-            out[9],
-            out[10],
-            out[11],
-            out[12],
-            out[13],
-            out[14],
-            out[15],
-            rnd,
-            nsh,
-            minv,
-            maxv,
-        );
-        y += 8;
-    }
-    if y + 4 <= nrows {
+    while y + 4 <= nrows {
         let out = neon_dct16_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
         let row_base = y * 16;
         let mut m = 0usize;
@@ -1747,32 +1280,7 @@ fn neon_dct32_i16x4_coeff_rows_to_scratch<const IS_RECT2: bool, const COEFF_STRI
     minv: int32x4_t,
     maxv: int32x4_t,
 ) -> usize {
-    while y + 8 <= nrows {
-        let out = neon_dct32_i16x8_all_from_coeff8_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let row_base = y * 32;
-        let mut m = 0usize;
-        while m < 32 {
-            neon_store8x8_i16_clip_pair::<32>(
-                scratch,
-                row_base + m,
-                out[m],
-                out[m + 1],
-                out[m + 2],
-                out[m + 3],
-                out[m + 4],
-                out[m + 5],
-                out[m + 6],
-                out[m + 7],
-                rnd,
-                nsh,
-                minv,
-                maxv,
-            );
-            m += 8;
-        }
-        y += 8;
-    }
-    if y + 4 <= nrows {
+    while y + 4 <= nrows {
         let out = neon_dct32_i16x4_all_from_coeff4_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
         let row_base = y * 32;
         let mut m = 0usize;
@@ -1807,33 +1315,7 @@ fn neon_dct16_i16x4_coeff_rows_to_scratch_rdm<const IS_RECT2: bool, const COEFF_
     minv: int32x4_t,
     maxv: int32x4_t,
 ) -> usize {
-    while y + 8 <= nrows {
-        let out =
-            neon_dct16_i16x8_all_from_coeff8_rdm_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let row_base = y * 16;
-        neon_store8x8_i16_clip_pair::<16>(
-            scratch, row_base, out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], rnd,
-            nsh, minv, maxv,
-        );
-        neon_store8x8_i16_clip_pair::<16>(
-            scratch,
-            row_base + 8,
-            out[8],
-            out[9],
-            out[10],
-            out[11],
-            out[12],
-            out[13],
-            out[14],
-            out[15],
-            rnd,
-            nsh,
-            minv,
-            maxv,
-        );
-        y += 8;
-    }
-    if y + 4 <= nrows {
+    while y + 4 <= nrows {
         let out =
             neon_dct16_i16x4_all_from_coeff4_rdm_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
         let row_base = y * 16;
@@ -1869,33 +1351,7 @@ fn neon_dct32_i16x4_coeff_rows_to_scratch_rdm<const IS_RECT2: bool, const COEFF_
     minv: int32x4_t,
     maxv: int32x4_t,
 ) -> usize {
-    while y + 8 <= nrows {
-        let out =
-            neon_dct32_i16x8_all_from_coeff8_rdm_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let row_base = y * 32;
-        let mut m = 0usize;
-        while m < 32 {
-            neon_store8x8_i16_clip_pair::<32>(
-                scratch,
-                row_base + m,
-                out[m],
-                out[m + 1],
-                out[m + 2],
-                out[m + 3],
-                out[m + 4],
-                out[m + 5],
-                out[m + 6],
-                out[m + 7],
-                rnd,
-                nsh,
-                minv,
-                maxv,
-            );
-            m += 8;
-        }
-        y += 8;
-    }
-    if y + 4 <= nrows {
+    while y + 4 <= nrows {
         let out =
             neon_dct32_i16x4_all_from_coeff4_rdm_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
         let row_base = y * 32;
@@ -2061,7 +1517,6 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
     let maxv = vdupq_n_s32(row_clip_max);
 
     with_neon_itx_i16_scratch(LEN, |scratch| unsafe {
-        scratch.fill(0);
         if N == 16 {
             let _ = neon_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, 16>(
                 coeff, scratch, 0, ncols, rnd, nsh, minv, maxv,
@@ -2097,7 +1552,7 @@ fn idct_dequant_dct_i16_neon_impl_const<const N: usize, const LEN: usize, const 
                 x += 4;
             }
         }
-        coeff[..N * N].fill(0);
+        crate::itx_2d::clear_i16_coeff_active_rows::<N>(coeff, ncols);
     });
 }
 
@@ -2170,7 +1625,6 @@ fn idct_dequant_dct_i16_neon_rdm_impl_const<
     let maxv = vdupq_n_s32(row_clip_max);
 
     with_neon_itx_i16_scratch(LEN, |scratch| unsafe {
-        scratch.fill(0);
         debug_assert!(N == 32);
         let _ = neon_dct32_i16x4_coeff_rows_to_scratch_rdm::<IS_RECT2, 32>(
             coeff, scratch, 0, ncols, rnd, nsh, minv, maxv,
@@ -2188,7 +1642,7 @@ fn idct_dequant_dct_i16_neon_rdm_impl_const<
             }
             x += 4;
         }
-        coeff[..N * N].fill(0);
+        crate::itx_2d::clear_i16_coeff_active_rows::<N>(coeff, ncols);
     });
 }
 
@@ -2564,7 +2018,6 @@ fn tx_dequant_dense_neon_i16_impl_const<
     let maxv = vdupq_n_s32(row_clip_max);
 
     with_neon_itx_i16_scratch(N, |scratch| unsafe {
-        scratch.fill(0);
         let mut y = 0usize;
 
         if first_kind == crate::itx_2d::TX_KIND_IDENTITY {
@@ -2876,7 +2329,6 @@ fn tx_dequant_dense_neon_i16_rdm_impl_const<
     let maxv = vdupq_n_s32(row_clip_max);
 
     with_neon_itx_i16_scratch(N, |scratch| unsafe {
-        scratch.fill(0);
         let mut y = 0usize;
         if first_kind == crate::itx_2d::TX_KIND_DCT && W == 16 {
             y = neon_dct16_i16x4_coeff_rows_to_scratch_rdm::<IS_RECT2, H>(
@@ -3360,24 +2812,22 @@ fn idct_dequant_32x32_neon_i32_impl_const<const IS_RECT2: bool>(
         coeff[..1024].fill(0);
         let mut x = 0usize;
         while x < 32 {
-            let groups = [
-                neon_dct32_i32x4_from_tmp4(tmp, x, 0),
-                neon_dct32_i32x4_from_tmp4(tmp, x, 4),
-                neon_dct32_i32x4_from_tmp4(tmp, x, 8),
-                neon_dct32_i32x4_from_tmp4(tmp, x, 12),
-                neon_dct32_i32x4_from_tmp4(tmp, x, 16),
-                neon_dct32_i32x4_from_tmp4(tmp, x, 20),
-                neon_dct32_i32x4_from_tmp4(tmp, x, 24),
-                neon_dct32_i32x4_from_tmp4(tmp, x, 28),
-            ];
+            let mut stage = core::mem::MaybeUninit::<[i32; 32 * 4]>::uninit();
+            let stage_ptr = stage.as_mut_ptr().cast::<i32>();
             let mut m = 0usize;
             while m < 32 {
-                let g = &groups[m / 4];
-                vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), g[0]);
-                vst1q_s32(tmp.as_mut_ptr().add(x + (m + 1) * 32), g[1]);
-                vst1q_s32(tmp.as_mut_ptr().add(x + (m + 2) * 32), g[2]);
-                vst1q_s32(tmp.as_mut_ptr().add(x + (m + 3) * 32), g[3]);
+                let g = neon_dct32_i32x4_from_tmp4(tmp, x, m);
+                vst1q_s32(stage_ptr.add(m * 4), g[0]);
+                vst1q_s32(stage_ptr.add((m + 1) * 4), g[1]);
+                vst1q_s32(stage_ptr.add((m + 2) * 4), g[2]);
+                vst1q_s32(stage_ptr.add((m + 3) * 4), g[3]);
                 m += 4;
+            }
+            let mut m = 0usize;
+            while m < 32 {
+                let row = vld1q_s32(stage_ptr.add(m * 4));
+                vst1q_s32(tmp.as_mut_ptr().add(x + m * 32), row);
+                m += 1;
             }
             x += 4;
         }
@@ -4062,9 +3512,6 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
     }
 
     with_neon_itx_i16_scratch(N, |scratch| {
-        // Row pass fully writes rows 0..nrows; column pass reads rows 0..H, so
-        // clear only the reused tail (nrows..H) rather than the whole buffer.
-        scratch[nrows * W..H * W].fill(0);
         let mut y = 0usize;
 
         if first_kind == crate::itx_2d::TX_KIND_IDENTITY {
@@ -4358,9 +3805,6 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_hot_impl_const<
     let maxv = vdupq_n_s32(row_clip_max);
 
     with_neon_itx_i16_scratch(N, |scratch| {
-        // Row pass fully writes rows 0..nrows; column pass reads rows 0..H, so
-        // clear only the reused tail (nrows..H) rather than the whole buffer.
-        scratch[nrows * W..H * W].fill(0);
         let mut y = 0usize;
 
         if FIRST_KIND == crate::itx_2d::TX_KIND_IDENTITY {
@@ -4823,9 +4267,6 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
     }
 
     with_neon_itx_i16_scratch(N, |scratch| {
-        // Row pass fully writes rows 0..nrows; column pass reads rows 0..H, so
-        // clear only the reused tail (nrows..H) rather than the whole buffer.
-        scratch[nrows * W..H * W].fill(0);
         let mut y = 0usize;
         if first_kind == crate::itx_2d::TX_KIND_DCT && W == 16 {
             y = neon_dct16_i16x4_coeff_rows_to_scratch_rdm::<IS_RECT2, H>(
@@ -5112,9 +4553,6 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_hot_impl_const<
     let maxv = vdupq_n_s32(row_clip_max);
 
     with_neon_itx_i16_scratch(N, |scratch| {
-        // Row pass fully writes rows 0..nrows; column pass reads rows 0..H, so
-        // clear only the reused tail (nrows..H) rather than the whole buffer.
-        scratch[nrows * W..H * W].fill(0);
         let mut y = 0usize;
         if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 16 {
             y = neon_dct16_i16x4_coeff_rows_to_scratch_rdm::<IS_RECT2, H>(
