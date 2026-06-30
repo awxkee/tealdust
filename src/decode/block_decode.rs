@@ -1756,9 +1756,9 @@ where
                 } else {
                     0
                 };
-                let diff = msac
-                    .decode_symbol_adapt(cdf_m.seg_id(ext_flag as usize, seg_ctx as usize), 7)
-                    + (ext_flag << 3);
+                let diff = msac.decode_symbol_adapt_n_padded::<7, 8>(
+                    cdf_m.seg_id(ext_flag as usize, seg_ctx as usize),
+                ) + (ext_flag << 3);
                 let last_active = fi.seg_last_active_segid as i32;
                 let mut sid = neg_deinterleave(diff as i32, pred_seg_id as i32, last_active + 1);
                 if sid > last_active {
@@ -1898,9 +1898,9 @@ where
                 } else {
                     0
                 };
-                let diff = msac
-                    .decode_symbol_adapt(cdf_m.seg_id(ext_flag as usize, seg_ctx as usize), 7)
-                    + (ext_flag << 3);
+                let diff = msac.decode_symbol_adapt_n_padded::<7, 8>(
+                    cdf_m.seg_id(ext_flag as usize, seg_ctx as usize),
+                ) + (ext_flag << 3);
                 let last_active = fi.seg_last_active_segid as i32;
                 let mut sid = neg_deinterleave(diff as i32, pred_seg_id as i32, last_active + 1);
                 if sid > last_active {
@@ -1982,9 +1982,10 @@ where
                     v = 1;
                 } else {
                     let rem = fi.cdef_n_strengths as i32 - 3;
-                    v = 1 + msac
-                        .decode_symbol_adapt(cdf_m.cdef_idx(rem as usize), (rem + 1) as usize)
-                        as i8;
+                    v = 1 + msac.decode_symbol_adapt_padded::<8>(
+                        cdf_m.cdef_idx(rem as usize),
+                        (rem + 1) as usize,
+                    ) as i8;
                 }
             }
             let splat_n = 1usize << imax(0, b_dim[2] as i32 - 4);
@@ -2061,7 +2062,7 @@ where
         let prev_qidx = recon.last_qidx;
         let have_delta_q = fi.delta_q_present && (bs != fi.root_bs || b.skip_txfm == 0);
         if have_delta_q {
-            let mut delta_q = msac.decode_symbol_adapt(cdf_m.delta_q(), 7) as i32;
+            let mut delta_q = msac.decode_symbol_adapt_n_padded::<7, 8>(cdf_m.delta_q()) as i32;
             if delta_q == 7 {
                 let n_bits = 1 + msac.decode_bools_bypass(3) as i32;
                 delta_q = msac.decode_bools_bypass(n_bits as u32) as i32 + 1 + (1 << n_bits);
@@ -2128,7 +2129,7 @@ where
             b.intra_data_mut().mrl_index = 0;
             b.intra_data_mut().multi_mrl = 0;
         } else {
-            let y_set = msac.decode_symbol_adapt(cdf_m.intra_y_set(), 3) as usize;
+            let y_set = msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_m.intra_y_set()) as usize;
             let y_mode_idx;
 
             if y_set == 0 {
@@ -2136,9 +2137,13 @@ where
                     (w4 == bw4 && a.midx[(bx4 + bw4 as usize).saturating_sub(1)] != 0xff) as usize
                         + (h4 == bh4 && l.midx[(by4 + bh4 as usize).saturating_sub(1)] != 0xff)
                             as usize;
-                let mut idx0 = msac.decode_symbol_adapt(cdf_m.intra_y_idx0(y_mode_ctx), 7) as usize;
+                let mut idx0 = msac
+                    .decode_symbol_adapt_n_padded::<7, 8>(cdf_m.intra_y_idx0(y_mode_ctx))
+                    as usize;
                 if idx0 == 7 {
-                    idx0 += msac.decode_symbol_adapt(cdf_m.intra_y_idx1(y_mode_ctx), 5) as usize;
+                    idx0 += msac
+                        .decode_symbol_adapt_n_padded::<5, 8>(cdf_m.intra_y_idx1(y_mode_ctx))
+                        as usize;
                 }
                 y_mode_idx = idx0;
             } else {
@@ -2262,7 +2267,7 @@ where
         b.intra_data_mut().multi_mrl = 0;
         if !dpcm && midx != 0xff && fi.mrls {
             let mrl_ctx = (nb_mrl[0] + nb_mrl[1]) as usize;
-            let mrl_idx = msac.decode_symbol_adapt(cdf_m.mrl_index(mrl_ctx), 3) as u8;
+            let mrl_idx = msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_m.mrl_index(mrl_ctx)) as u8;
             b.intra_data_mut().mrl_index = mrl_idx;
             if mrl_idx > 0 {
                 let mmrl_ctx = (nb_multi_mrl[0] + nb_multi_mrl[1]) as usize;
@@ -2345,20 +2350,25 @@ where
                         let intra = b.intra_data_mut();
                         intra.cfl_type = CFL_MHCCP;
                         intra.cfl.set_mh_dir(
-                            msac.decode_symbol_adapt(cdf_m.mhccp_filter_dir(sz_ctx), 2) as u8,
+                            msac.decode_symbol_adapt_n_padded::<2, 4>(
+                                cdf_m.mhccp_filter_dir(sz_ctx),
+                            ) as u8,
                         );
                     }
                 } else {
                     let cfl_type = msac.decode_bool_adapt(cdf_m.cfl_type()) as i8;
                     b.intra_data_mut().cfl_type = cfl_type;
                     if cfl_type == CFL_EXPLICIT {
-                        let sign = msac.decode_symbol_adapt(cdf_m.cfl_sign(), 7) as i32 + 1;
+                        let sign =
+                            msac.decode_symbol_adapt_n_padded::<7, 8>(cdf_m.cfl_sign()) as i32 + 1;
                         let sign_u = (sign * 0x56) >> 8;
                         let sign_v = sign - sign_u * 3;
                         if sign_u != 0 {
                             let ctx = (sign_u == 2) as usize * 3 + sign_v as usize;
-                            let mut alpha =
-                                msac.decode_symbol_adapt(cdf_m.cfl_alpha(ctx), 7) as i8 + 1;
+                            let mut alpha = msac
+                                .decode_symbol_adapt_n_padded::<7, 8>(cdf_m.cfl_alpha(ctx))
+                                as i8
+                                + 1;
                             if sign_u == 1 {
                                 alpha = -alpha;
                             }
@@ -2366,8 +2376,10 @@ where
                         }
                         if sign_v != 0 {
                             let ctx = (sign_v == 2) as usize * 3 + sign_u as usize;
-                            let mut alpha =
-                                msac.decode_symbol_adapt(cdf_m.cfl_alpha(ctx), 7) as i8 + 1;
+                            let mut alpha = msac
+                                .decode_symbol_adapt_n_padded::<7, 8>(cdf_m.cfl_alpha(ctx))
+                                as i8
+                                + 1;
                             if sign_v == 1 {
                                 alpha = -alpha;
                             }
@@ -2382,8 +2394,9 @@ where
                 // `decode_symbol_adapt(7)` returns 0..7; if 7, `bools_bypass(3)` adds
                 // 0..7 giving total range 0..14.
                 let uv_mode_ctx = (midx != 0xff) as usize;
-                let mut uv_mode_idx =
-                    msac.decode_symbol_adapt(cdf_m.intra_uv_mode(uv_mode_ctx), 7) as usize;
+                let mut uv_mode_idx = msac
+                    .decode_symbol_adapt_n_padded::<7, 8>(cdf_m.intra_uv_mode(uv_mode_ctx))
+                    as usize;
                 if uv_mode_idx == 7 {
                     uv_mode_idx += msac.decode_bools_bypass(3) as usize;
                 }
@@ -2486,7 +2499,7 @@ where
             let dip_flag = msac.decode_bool_adapt(cdf_m.dip(ctx)) != 0;
             if dip_flag {
                 let tp = msac.decode_bools_bypass(1) as u8;
-                let m = msac.decode_symbol_adapt(cdf_m.dip_mode(), 5) as u8;
+                let m = msac.decode_symbol_adapt_n_padded::<5, 8>(cdf_m.dip_mode()) as u8;
                 b.intra_data_mut().dip = (tp << 4) | (m + 1);
             }
         }
@@ -2814,7 +2827,9 @@ where
 
             let inter_mode: u8;
             if ref0 == ref1 {
-                let sym = msac.decode_symbol_adapt(cdf_m.comp_mode_sameref(comp_ctx), 3) as u8;
+                let sym = msac
+                    .decode_symbol_adapt_n_padded::<3, 4>(cdf_m.comp_mode_sameref(comp_ctx))
+                    as u8;
                 let mut m = CompInterPredMode::NearMvNearMv as u8 + sym;
                 if m > CompInterPredMode::NearMvNewMv as u8 {
                     m += 1;
@@ -2826,7 +2841,8 @@ where
                     inter_mode = CompInterPredMode::JointNewMv as u8;
                 } else {
                     inter_mode = CompInterPredMode::NearMvNearMv as u8
-                        + msac.decode_symbol_adapt(cdf_m.comp_mode(comp_ctx), 4) as u8;
+                        + msac.decode_symbol_adapt_n_padded::<4, 8>(cdf_m.comp_mode(comp_ctx))
+                            as u8;
                 }
             };
 
@@ -2881,9 +2897,9 @@ where
                 || final_inter_mode == CompInterPredMode::OpflJointNewMv as u8
             {
                 jmvd_scale_mode = if amvd_val != 0 {
-                    msac.decode_symbol_adapt(cdf_m.jmvd_amvd_scale_mode(), 2) as u8
+                    msac.decode_symbol_adapt_n_padded::<2, 4>(cdf_m.jmvd_amvd_scale_mode()) as u8
                 } else {
-                    msac.decode_symbol_adapt(cdf_m.jmvd_scale_mode(), 4) as u8
+                    msac.decode_symbol_adapt_n_padded::<4, 8>(cdf_m.jmvd_scale_mode()) as u8
                 };
             }
 
@@ -2976,9 +2992,9 @@ where
                 let ctx1 = ((mvprec1 & 1) + (mvprec2 & 1)) as usize;
                 if msac.decode_bool_adapt(cdf_m.mvprec_def(ctx1)) == 0 {
                     let ctx2 = ((mvprec1 | mvprec2) >> 1) as usize;
-                    let idx = msac
-                        .decode_symbol_adapt(cdf_m.mvprec_rem(ctx2, (mv_prec - 4) as usize), 2)
-                        as usize;
+                    let idx = msac.decode_symbol_adapt_n_padded::<2, 4>(
+                        cdf_m.mvprec_rem(ctx2, (mv_prec - 4) as usize),
+                    ) as usize;
                     mv_prec = MV_PREC_TBL[(mv_prec == 6) as usize][idx] as i32;
                     mvprec_def = 2;
                 }
@@ -3244,7 +3260,8 @@ where
                 } else {
                     N_SW as usize
                 };
-                b.inter_data_mut().filter = msac.decode_symbol_adapt(cdf_m.filter(fctx), 2) as u8;
+                b.inter_data_mut().filter =
+                    msac.decode_symbol_adapt_n_padded::<2, 4>(cdf_m.filter(fctx)) as u8;
             } else if fi.subpel_filter_mode == 4 {
                 b.inter_data_mut().filter = 0;
             } else {
@@ -3353,7 +3370,8 @@ where
                     }
                 } else {
                     inter_mode = InterPredMode::NearMv as u8
-                        + msac.decode_symbol_adapt(cdf_m.inter_mode(sngl_ctx), 2) as u8;
+                        + msac.decode_symbol_adapt_n_padded::<2, 4>(cdf_m.inter_mode(sngl_ctx))
+                            as u8;
                 }
             };
             b.inter_data_mut().inter_mode = inter_mode;
@@ -3413,8 +3431,9 @@ where
                         {
                             let inter = b.inter_data_mut();
                             inter.motion_mode = MotionMode::InterIntra as u8;
-                            inter.interintra_mode =
-                                msac.decode_symbol_adapt(cdf_m.interintra_mode(ctx), 3) as u8;
+                            inter.interintra_mode = msac
+                                .decode_symbol_adapt_n_padded::<3, 4>(cdf_m.interintra_mode(ctx))
+                                as u8;
                             inter.wedge_idx = -1;
                         }
                         if imin(bw4, bh4) > 1
@@ -3549,9 +3568,9 @@ where
                 let ctx1 = ((mvprec1 & 1) + (mvprec2 & 1)) as usize;
                 if msac.decode_bool_adapt(cdf_m.mvprec_def(ctx1)) == 0 {
                     let ctx2 = ((mvprec1 | mvprec2) >> 1) as usize;
-                    let idx = msac
-                        .decode_symbol_adapt(cdf_m.mvprec_rem(ctx2, (mv_prec - 4) as usize), 2)
-                        as usize;
+                    let idx = msac.decode_symbol_adapt_n_padded::<2, 4>(
+                        cdf_m.mvprec_rem(ctx2, (mv_prec - 4) as usize),
+                    ) as usize;
                     mv_prec = MV_PREC_TBL[(mv_prec == 6) as usize][idx] as i32;
                     mvprec_def = 2;
                 }
@@ -3636,9 +3655,13 @@ where
                     // -> n=0 -> idx 0, n=1 -> idx 1, n=2 -> idx 1, n=3 -> idx 0.
                     let ctx = ((n as u32).wrapping_sub(1) > 1) as usize;
                     let idx = (ctx == 0) as usize;
-                    let mut val = msac.decode_symbol_adapt(cdf_m.warp_delta_param(0, idx), 7) as i8;
+                    let mut val = msac
+                        .decode_symbol_adapt_n_padded::<7, 8>(cdf_m.warp_delta_param(0, idx))
+                        as i8;
                     if val == 7 && prec != 0 {
-                        val += msac.decode_symbol_adapt(cdf_m.warp_delta_param(1, idx), 7) as i8;
+                        val += msac
+                            .decode_symbol_adapt_n_padded::<7, 8>(cdf_m.warp_delta_param(1, idx))
+                            as i8;
                     }
                     if val != 0 {
                         if msac.decode_bool_adapt(cdf_m.warp_delta_sign()) != 0 {
@@ -3665,8 +3688,9 @@ where
                     {
                         let inter = b.inter_data_mut();
                         inter.warp_ii = 1;
-                        inter.interintra_mode =
-                            msac.decode_symbol_adapt(cdf_m.interintra_mode(ctx), 3) as u8;
+                        inter.interintra_mode = msac
+                            .decode_symbol_adapt_n_padded::<3, 4>(cdf_m.interintra_mode(ctx))
+                            as u8;
                         inter.wedge_idx = if msac.decode_bool_adapt(cdf_m.interintra_wedge()) != 0 {
                             read_wedge_idx(msac, cdf_m)
                         } else {
@@ -3706,7 +3730,7 @@ where
                             N_SW as usize
                         };
                     b.inter_data_mut().filter =
-                        msac.decode_symbol_adapt(cdf_m.filter(fctx), 2) as u8;
+                        msac.decode_symbol_adapt_n_padded::<2, 4>(cdf_m.filter(fctx)) as u8;
                 } else {
                     b.inter_data_mut().filter = 0; // REGULAR
                 }

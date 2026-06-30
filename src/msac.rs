@@ -303,7 +303,15 @@ pub(crate) trait MsacReader<const UPDATE_CDF: bool> {
     fn decode_bool_bypass(&mut self) -> u32;
     fn decode_unary_bypass(&mut self, max_bits: u32) -> u32;
     fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32;
-    fn decode_symbol_adapt_n<const N: usize>(&mut self, cdf: &mut [u16]) -> u32;
+    fn decode_symbol_adapt_padded<const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+        n_symbols: usize,
+    ) -> u32;
+    fn decode_symbol_adapt_n_padded<const N: usize, const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+    ) -> u32;
     fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32;
     fn decode_uniform(&mut self, n: u32) -> u32;
     fn decode_coefs<C: crate::pixel::Coeff>(
@@ -515,6 +523,24 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
     }
 
+    #[inline(always)]
+    pub(crate) fn decode_symbol_adapt_padded<const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+        n_symbols: usize,
+    ) -> u32 {
+        match n_symbols {
+            1 => self.decode_symbol_adapt_n_padded::<1, LANES>(cdf),
+            2 => self.decode_symbol_adapt_n_padded::<2, LANES>(cdf),
+            3 => self.decode_symbol_adapt_n_padded::<3, LANES>(cdf),
+            4 => self.decode_symbol_adapt_n_padded::<4, LANES>(cdf),
+            5 => self.decode_symbol_adapt_n_padded::<5, LANES>(cdf),
+            6 => self.decode_symbol_adapt_n_padded::<6, LANES>(cdf),
+            7 => self.decode_symbol_adapt_n_padded::<7, LANES>(cdf),
+            _ => unreachable!("invalid MSAC symbol count"),
+        }
+    }
+
     /// Fixed-symbol-count variant of [`Self::decode_symbol_adapt`].
     ///
     /// This keeps the public safe slice interface, but removes the hot runtime
@@ -591,6 +617,72 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         val_usize as u32
     }
 
+    fn decode_symbol_adapt_n_padded<const N: usize, const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+    ) -> u32 {
+        debug_assert!((1..=7).contains(&N));
+
+        if !UPDATE_CDF && N == 3 {
+            return self.decode_symbol_adapt3_no_update_scalar_l(cdf);
+        }
+
+        if LANES <= N {
+            return 0;
+        }
+
+        let min_prob = &MSAC_MIN_PROB[N - 1];
+        let c = (self.dif >> 48) as u32;
+        let r = self.rng >> 8;
+
+        let mut u = self.rng;
+        let mut v = 0u32;
+        let mut val_usize = N;
+
+        for i in 0..N {
+            let p = ((cdf[i] | 127) as u32) - min_prob[i] as u32;
+            let boundary = ((r * p) >> 10) << 3;
+
+            if c >= boundary {
+                v = boundary;
+                val_usize = i;
+                break;
+            }
+
+            u = boundary;
+        }
+
+        if val_usize == N {
+            debug_assert_eq!(min_prob[N], 65535);
+            v = 0;
+        }
+
+        debug_assert!(u <= self.rng);
+        debug_assert!(u >= v);
+        self.ctx_norm(self.dif - ((v as u64) << 48), u - v);
+
+        if UPDATE_CDF {
+            let pc = cdf[N];
+            let count = (pc & 0xFF) as u8;
+
+            debug_assert!(count <= 32);
+
+            let rate =
+                MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
+
+            for cdf_i in cdf[..val_usize].iter_mut() {
+                *cdf_i = cdf_i.wrapping_add((32768u16 - *cdf_i) >> rate);
+            }
+            for cdf_i in cdf[val_usize..N].iter_mut() {
+                *cdf_i = cdf_i.wrapping_sub(*cdf_i >> rate);
+            }
+
+            cdf[N] = pc + u16::from(count < 32);
+        }
+
+        val_usize as u32
+    }
+
     #[inline]
     pub(crate) fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
         let bit = self.decode_bool_raw(cdf[0] as u32);
@@ -608,6 +700,42 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
 
         bit
+    }
+
+    #[inline(always)]
+    pub(crate) fn decode_symbol_adapt3_no_update_scalar_l<const LANES: usize>(
+        &mut self,
+        cdf: &[u16; LANES],
+    ) -> u32 {
+        debug_assert!(!UPDATE_CDF);
+
+        let c = (self.dif >> 48) as u32;
+        let r = self.rng >> 8;
+
+        let p0 = ((cdf[0] | 127) as u32) - 31;
+        let b0 = ((r * p0) >> 10) << 3;
+        if c >= b0 {
+            self.ctx_norm(self.dif - ((b0 as u64) << 48), self.rng - b0);
+            return 0;
+        }
+
+        let p1 = ((cdf[1] | 127) as u32) - 63;
+        let b1 = ((r * p1) >> 10) << 3;
+        if c >= b1 {
+            self.ctx_norm(self.dif - ((b1 as u64) << 48), b0 - b1);
+            return 1;
+        }
+
+        let p2 = ((cdf[2] | 127) as u32) - 95;
+        let b2 = ((r * p2) >> 10) << 3;
+        if c >= b2 {
+            self.ctx_norm(self.dif - ((b2 as u64) << 48), b1 - b2);
+            return 2;
+        }
+
+        // Sentinel lane: v = 0, u = b2.
+        self.ctx_norm(self.dif, b2);
+        3
     }
 
     #[inline(always)]
@@ -694,8 +822,20 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextScalar<'a
     }
 
     #[inline(always)]
-    fn decode_symbol_adapt_n<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
-        MsacContextScalar::decode_symbol_adapt_n::<N>(self, cdf)
+    fn decode_symbol_adapt_padded<const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+        n_symbols: usize,
+    ) -> u32 {
+        MsacContextScalar::decode_symbol_adapt_padded(self, cdf, n_symbols)
+    }
+    
+    #[inline(always)]
+    fn decode_symbol_adapt_n_padded<const N: usize, const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+    ) -> u32 {
+        MsacContextScalar::decode_symbol_adapt_n_padded::<N, LANES>(self, cdf)
     }
 
     #[inline(always)]

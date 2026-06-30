@@ -27,6 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use crate::cdf::cdf_array_mut;
 use crate::headers::PixelLayout;
 use crate::intops::{apply_sign, iclip, imax, imin, ulog2, umin};
 use crate::levels::{IntraPredMode, Mv, N_BS_SIZES, RefPair, txtp};
@@ -1159,19 +1160,19 @@ macro_rules! decode_coefs_impl {
     let eob_ctx = if chroma { 2 } else { (!p.intra) as usize };
 
     let mut eob: i32 = match tx2dszctx {
-        0 => msac.decode_symbol_adapt_n::<4>(coef.eob_bin_16(eob_ctx)) as i32,
-        1 => msac.decode_symbol_adapt_n::<5>(coef.eob_bin_32(eob_ctx)) as i32,
-        2 => msac.decode_symbol_adapt_n::<6>(coef.eob_bin_64(eob_ctx)) as i32,
-        3 => msac.decode_symbol_adapt_n::<7>(coef.eob_bin_128(eob_ctx)) as i32,
+        0 => msac.decode_symbol_adapt_n_padded::<4, 8>(coef.eob_bin_16(eob_ctx)) as i32,
+        1 => msac.decode_symbol_adapt_n_padded::<5, 8>(coef.eob_bin_32(eob_ctx)) as i32,
+        2 => msac.decode_symbol_adapt_n_padded::<6, 8>(coef.eob_bin_64(eob_ctx)) as i32,
+        3 => msac.decode_symbol_adapt_n_padded::<7, 8>(coef.eob_bin_128(eob_ctx)) as i32,
         4 => {
-            let mut e = msac.decode_symbol_adapt_n::<7>(coef.eob_bin_256(eob_ctx)) as i32;
+            let mut e = msac.decode_symbol_adapt_n_padded::<7, 8>(coef.eob_bin_256(eob_ctx)) as i32;
             if e == 7 {
                 e += msac.decode_bool_bypass() as i32;
             }
             e
         }
         5 => {
-            let mut e = msac.decode_symbol_adapt_n::<7>(coef.eob_bin_512(eob_ctx)) as i32;
+            let mut e = msac.decode_symbol_adapt_n_padded::<7, 8>(coef.eob_bin_512(eob_ctx)) as i32;
             if e == 7 {
                 e += msac.decode_bools_bypass(2) as i32;
                 if e == 10 {
@@ -1181,7 +1182,7 @@ macro_rules! decode_coefs_impl {
             e
         }
         _ => {
-            let mut e = msac.decode_symbol_adapt_n::<7>(coef.eob_bin_1024(eob_ctx)) as i32;
+            let mut e = msac.decode_symbol_adapt_n_padded::<7, 8>(coef.eob_bin_1024(eob_ctx)) as i32;
             if e == 7 {
                 e += msac.decode_bools_bypass(2) as i32;
             }
@@ -1280,7 +1281,7 @@ macro_rules! decode_coefs_impl {
         } else if t_dim.max >= 3 {
             let long_dct = t_dim.max == 4 || msac.decode_bool_adapt(mode.txtp_long32_dct(0)) != 0;
             let short_idx =
-                msac.decode_symbol_adapt(mode.txtp_intra_short_1d(t_dim.min as usize), 3) as usize;
+                msac.decode_symbol_adapt_n_padded::<3, 4>(mode.txtp_intra_short_1d(t_dim.min as usize)) as usize;
             let wh = (t_dim.w < t_dim.h) as usize;
             *txtp = TXTP_LONG_TBL[long_dct as usize][wh][short_idx] as u16;
         } else if p.reduced_txtp_set == 2 {
@@ -1290,7 +1291,7 @@ macro_rules! decode_coefs_impl {
             let tx_idx = if p.reduced_txtp_set != 0 {
                 msac.decode_bool_adapt(mode.txtp_ext_reduced(t_dim.min as usize)) as usize
             } else {
-                msac.decode_symbol_adapt(mode.txtp_ext(t_dim.min as usize), 6) as usize
+                msac.decode_symbol_adapt_n_padded::<6, 8>(mode.txtp_ext(t_dim.min as usize)) as usize
             };
             *txtp = MD_IDX2TYPE[sz_ctx][p.y_mode][tx_idx] as u16;
         }
@@ -1321,7 +1322,7 @@ macro_rules! decode_coefs_impl {
                 let long_dct =
                     t_dim.max == 4 || msac.decode_bool_adapt(mode.txtp_long32_dct(1)) != 0;
                 let short_idx = msac
-                    .decode_symbol_adapt(mode.txtp_inter_short_1d(ctx, t_dim.min as usize), 3)
+                    .decode_symbol_adapt_n_padded::<3, 4>(mode.txtp_inter_short_1d(ctx, t_dim.min as usize))
                     as usize;
                 let wh = (t_dim.w < t_dim.h) as usize;
                 *txtp = TXTP_LONG_TBL[long_dct as usize][wh][short_idx] as u16;
@@ -1335,7 +1336,7 @@ macro_rules! decode_coefs_impl {
                 };
             } else if p.reduced_txtp_set == 3 {
                 let tx_idx = msac
-                    .decode_symbol_adapt(mode.txtp_inter_dct_idtx_iddct(ctx, t_dim.min as usize), 3)
+                    .decode_symbol_adapt_n_padded::<3, 4>(mode.txtp_inter_dct_idtx_iddct(ctx, t_dim.min as usize))
                     as usize;
                 static TXTP_DCT_IDTX_IDDCT: [u8; 4] =
                     [txtp::DCT_DCT, txtp::V_DCT, txtp::H_DCT, txtp::IDTX];
@@ -1346,11 +1347,11 @@ macro_rules! decode_coefs_impl {
                     msac.decode_bool_adapt(mode.txtp_inter_tx_set(setidx, ctx, t_dim.min as usize))
                         as usize;
                 let t = if set == 0 {
-                    msac.decode_symbol_adapt_n::<7>(mode.txtp_inter_set0(setidx, ctx)) as usize
+                    msac.decode_symbol_adapt_n_padded::<7, 8>(mode.txtp_inter_set0(setidx, ctx)) as usize
                 } else if setidx != 0 {
-                    msac.decode_symbol_adapt_n::<3>(mode.txtp_inter_set2(ctx)) as usize + 8
+                    msac.decode_symbol_adapt_n_padded::<3, 4>(mode.txtp_inter_set2(ctx)) as usize + 8
                 } else {
-                    msac.decode_symbol_adapt_n::<7>(mode.txtp_inter_set1(ctx)) as usize + 8
+                    msac.decode_symbol_adapt_n_padded::<7, 8>(mode.txtp_inter_set1(ctx)) as usize + 8
                 };
                 *txtp = TXTP_INV_TBL[setidx][t] as u16;
             }
@@ -1382,14 +1383,14 @@ macro_rules! decode_coefs_impl {
         }
         if stx_type != 0 {
             stx_type =
-                msac.decode_symbol_adapt(mode.stx((!p.intra) as usize, t_dim.min as usize), 3);
+                msac.decode_symbol_adapt_n_padded::<3, 4>(mode.stx((!p.intra) as usize, t_dim.min as usize));
             if stx_type != 0 && p.intra {
                 let mut stx_set: u32;
                 if t_dim.min >= 1 && *txtp as u8 == txtp::ADST_ADST {
-                    let s = msac.decode_symbol_adapt(mode.stx_set_adst(), 3) as usize;
+                    let s = msac.decode_symbol_adapt_n_padded::<3, 4>(mode.stx_set_adst()) as usize;
                     stx_set = INV_MAP_ADST[p.y_mode][s] as u32;
                 } else {
-                    let s = msac.decode_symbol_adapt(mode.stx_set(), 6) as usize;
+                    let s = msac.decode_symbol_adapt_n_padded::<6, 8>(mode.stx_set()) as usize;
                     stx_set = INV_MAP[p.y_mode][s] as u32;
                 }
                 stx_set += 7 * (*txtp as u8 == txtp::ADST_ADST) as u32;
@@ -1403,7 +1404,7 @@ macro_rules! decode_coefs_impl {
         && !p.lossless
         && (p.layout == PixelLayout::I420 || t_dim.min < 3)
     {
-        let cctx = msac.decode_symbol_adapt_n::<6>(mode.cctx());
+        let cctx = msac.decode_symbol_adapt_n_padded::<6, 8>(mode.cctx());
         *txtp |= (cctx << 8) as u16;
     }
 
@@ -1433,9 +1434,9 @@ macro_rules! decode_coefs_impl {
         let sz = (16 << tx2dszctx) - 1;
         let bob = sz - eob;
         let ctx = ((bob > 2 << tx2dszctx) as usize) + ((bob > 4 << tx2dszctx) as usize);
-        let mut tok = 1 + msac.decode_symbol_adapt_n::<2>(coef.bob_base_y_tok(sz_ctx, ctx)) as i32;
+        let mut tok = 1 + msac.decode_symbol_adapt_n_padded::<2, 4>(coef.bob_base_y_tok(sz_ctx, ctx)) as i32;
         if tok == 3 {
-            tok += msac.decode_symbol_adapt_n::<3>(coef.br_y_tok_idtx(sz_ctx, 0)) as i32;
+            tok += msac.decode_symbol_adapt_n_padded::<3, 4>(coef.br_y_tok_idtx(sz_ctx, 0)) as i32;
         }
         let shift = slh + 2;
         let mask = (4 << slh) - 1;
@@ -1453,9 +1454,9 @@ macro_rules! decode_coefs_impl {
             let mut hr_ctx = 0u32;
             let ctx = get_lo_ctx_idtx(levels, off, &mut hr_ctx, stride);
             let mut tok =
-                msac.decode_symbol_adapt_n::<3>(coef.base_y_tok_idtx(sz_ctx, ctx as usize)) as i32;
+                msac.decode_symbol_adapt_n_padded::<3, 4>(coef.base_y_tok_idtx(sz_ctx, ctx as usize)) as i32;
             if tok == 3 {
-                tok += msac.decode_symbol_adapt_n::<3>(coef.br_y_tok_idtx(sz_ctx, hr_ctx as usize))
+                tok += msac.decode_symbol_adapt_n_padded::<3, 4>(coef.br_y_tok_idtx(sz_ctx, hr_ctx as usize))
                     as i32;
             }
             cf[rc] = C::from_i32(tok);
@@ -1545,7 +1546,7 @@ macro_rules! decode_coefs_impl {
                 if eob >= hi_to_low_tx {
                     lim = 3;
                     if !chroma {
-                        tok = 1 + msac.decode_symbol_adapt_n::<2>(
+                        tok = 1 + msac.decode_symbol_adapt_n_padded::<2, 4>(
                             coef.eob_base_y_tok_hf(t_dim.ctx as usize, ctx_init as usize),
                         ) as i32;
                         hi_base = 1252;
@@ -1555,7 +1556,7 @@ macro_rules! decode_coefs_impl {
                         lo_nsym = 3;
                     } else {
                         tok = 1 + msac
-                            .decode_symbol_adapt_n::<2>(coef.eob_base_uv_tok_hf(ctx_init as usize))
+                            .decode_symbol_adapt_n_padded::<2, 4>(coef.eob_base_uv_tok_hf(ctx_init as usize))
                             as i32;
                         hi_base = 4508;
                         hi_stride = 4;
@@ -1567,7 +1568,7 @@ macro_rules! decode_coefs_impl {
                 } else {
                     lim = 5;
                     if !chroma {
-                        tok = 1 + msac.decode_symbol_adapt_n::<4>(
+                        tok = 1 + msac.decode_symbol_adapt_n_padded::<4, 8>(
                             coef.eob_base_y_tok_lf(t_dim.ctx as usize, ctx_init as usize),
                         ) as i32;
                         hi_base = 4080;
@@ -1577,7 +1578,7 @@ macro_rules! decode_coefs_impl {
                         lo_nsym = 5;
                     } else {
                         tok = 1 + msac
-                            .decode_symbol_adapt_n::<4>(coef.eob_base_uv_tok_lf(ctx_init as usize))
+                            .decode_symbol_adapt_n_padded::<4, 8>(coef.eob_base_uv_tok_lf(ctx_init as usize))
                             as i32;
                         hi_base = 0;
                         hi_stride = 0;
@@ -1608,7 +1609,11 @@ macro_rules! decode_coefs_impl {
                 if tok == lim && hi_cdf_valid {
                     let hi_idx = if lim == 5 { 7 } else { 0 };
                     let o = hi_base + hi_idx * hi_stride;
-                    tok += msac.decode_symbol_adapt_n::<3>(&mut coef.data[o..o + 4]) as i32;
+                    tok += msac
+                        .decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
+                            &mut coef.data,
+                            o,
+                        )) as i32;
                 }
                 tcq_state = tcq_next_state(tcq_state, tok);
                 cf[if is_stx { eob as usize } else { rc }] = C::from_i32(tok);
@@ -1679,14 +1684,24 @@ macro_rules! decode_coefs_impl {
                     let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
                     let o = lo_base + lo_cdf_idx * lo_stride;
                     let mut tok = if lo_nsym == 3 {
-                        msac.decode_symbol_adapt_n::<3>(&mut coef.data[o..o + 4]) as i32
+                        msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
+                            &mut coef.data,
+                            o,
+                        )) as i32
                     } else {
                         debug_assert_eq!(lo_nsym, 5);
-                        msac.decode_symbol_adapt_n::<5>(&mut coef.data[o..o + 8]) as i32
+                        msac.decode_symbol_adapt_n_padded::<5, 8>(cdf_array_mut::<8>(
+                            &mut coef.data,
+                            o,
+                        )) as i32
                     };
                     if tok == lim && hi_cdf_valid {
                         let o2 = hi_base + hr_ctx as usize * hi_stride;
-                        tok += msac.decode_symbol_adapt_n::<3>(&mut coef.data[o2..o2 + 4]) as i32;
+                        tok += msac
+                            .decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
+                                &mut coef.data,
+                                o2,
+                            )) as i32;
                     }
                     tcq_state = tcq_next_state(tcq_state, tok);
                     levels[off] = tok.min(5) as i8;
@@ -1711,14 +1726,24 @@ macro_rules! decode_coefs_impl {
                 let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
                 let o = lo_base + lo_cdf_idx * lo_stride;
                 dc_tok = if lo_nsym == 3 {
-                    msac.decode_symbol_adapt_n::<3>(&mut coef.data[o..o + 4]) as i32
+                    msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
+                        &mut coef.data,
+                        o,
+                    )) as i32
                 } else {
                     debug_assert_eq!(lo_nsym, 5);
-                    msac.decode_symbol_adapt_n::<5>(&mut coef.data[o..o + 8]) as i32
+                    msac.decode_symbol_adapt_n_padded::<5, 8>(cdf_array_mut::<8>(
+                        &mut coef.data,
+                        o,
+                    )) as i32
                 };
                 if dc_tok == lim && hi_cdf_valid {
                     let o2 = hi_base + hr_ctx as usize * hi_stride;
-                    dc_tok += msac.decode_symbol_adapt_n::<3>(&mut coef.data[o2..o2 + 4]) as i32;
+                    dc_tok += msac
+                        .decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
+                            &mut coef.data,
+                            o2,
+                        )) as i32;
                 }
 
                 // sign & dequant for AC
@@ -1813,13 +1838,13 @@ macro_rules! decode_coefs_impl {
             _ => unreachable!(),
         }
     } else if chroma {
-        dc_tok = 1 + msac.decode_symbol_adapt_n::<4>(coef.eob_base_uv_tok_lf(0)) as i32;
+        dc_tok = 1 + msac.decode_symbol_adapt_n_padded::<4, 8>(coef.eob_base_uv_tok_lf(0)) as i32;
     } else {
-        dc_tok = 1 + msac.decode_symbol_adapt_n::<4>(coef.eob_base_y_tok_lf(t_dim.ctx as usize, 0))
+        dc_tok = 1 + msac.decode_symbol_adapt_n_padded::<4, 8>(coef.eob_base_y_tok_lf(t_dim.ctx as usize, 0))
             as i32;
         if dc_tok == 5 {
             let hi_idx = if tx_class == 0 { 0 } else { 7 };
-            dc_tok += msac.decode_symbol_adapt_n::<3>(coef.br_y_tok_lf(hi_idx)) as i32;
+            dc_tok += msac.decode_symbol_adapt_n_padded::<3, 4>(coef.br_y_tok_lf(hi_idx)) as i32;
         }
     }
 

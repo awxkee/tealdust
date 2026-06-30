@@ -455,12 +455,13 @@ pub(crate) fn read_wedge_idx<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
     msac: &mut M,
     cdf_m: &mut CdfModeContext,
 ) -> i8 {
-    let quad = msac.decode_symbol_adapt(cdf_m.wedge_quad(), 3) as usize;
-    let angle = 5 * quad + msac.decode_symbol_adapt(cdf_m.wedge_angle(quad), 4) as usize;
+    let quad = msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_m.wedge_quad()) as usize;
+    let angle =
+        5 * quad + msac.decode_symbol_adapt_n_padded::<4, 8>(cdf_m.wedge_angle(quad)) as usize;
     let dist = if (angle.wrapping_sub(1)) >= 9 || angle == 5 {
-        1 + msac.decode_symbol_adapt(cdf_m.wedge_dist2(), 2) as usize
+        1 + msac.decode_symbol_adapt_n_padded::<2, 4>(cdf_m.wedge_dist2()) as usize
     } else {
-        msac.decode_symbol_adapt(cdf_m.wedge_dist(), 3) as usize
+        msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_m.wedge_dist()) as usize
     };
     WEDGE_ANGLE_DIST2IDX[angle][dist]
 }
@@ -498,7 +499,7 @@ pub(crate) fn read_mv_residual<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
         let h_syms2 = n_syms - h_syms;
         sh_class = h_syms
             + 1
-            + msac.decode_symbol_adapt(
+            + msac.decode_symbol_adapt_padded::<8>(
                 cdf_mv.shell_upper(mv_prec as usize),
                 imin(h_syms2, 7) as usize,
             ) as i32;
@@ -506,8 +507,9 @@ pub(crate) fn read_mv_residual<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
             sh_class += msac.decode_bool_adapt(shell_tip) as i32;
         }
     } else {
-        sh_class =
-            msac.decode_symbol_adapt(cdf_mv.shell_lower(mv_prec as usize), h_syms as usize) as i32;
+        sh_class = msac
+            .decode_symbol_adapt_padded::<8>(cdf_mv.shell_lower(mv_prec as usize), h_syms as usize)
+            as i32;
     }
 
     let mut sh_index;
@@ -590,18 +592,18 @@ pub(crate) fn read_amvd<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
     msac: &mut M,
     cdf_m: &mut CdfModeContext,
 ) -> Mv {
-    let joint = msac.decode_symbol_adapt(cdf_m.amvd_joint(), 3) as i32;
+    let joint = msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_m.amvd_joint()) as i32;
     if joint == 0 {
         return Mv::default();
     }
     let y = if joint & 2 != 0 {
-        let s = msac.decode_symbol_adapt(cdf_m.amvd_index(0), 7) as i32;
+        let s = msac.decode_symbol_adapt_n_padded::<7, 8>(cdf_m.amvd_index(0)) as i32;
         if s < 3 { 2 + s * 2 } else { 1 << s }
     } else {
         0
     };
     let x = if joint & 1 != 0 {
-        let s = msac.decode_symbol_adapt(cdf_m.amvd_index(1), 7) as i32;
+        let s = msac.decode_symbol_adapt_n_padded::<7, 8>(cdf_m.amvd_index(1)) as i32;
         if s < 3 { 2 + s * 2 } else { 1 << s }
     } else {
         0
@@ -629,7 +631,7 @@ pub(crate) fn read_pal_indices<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
     let pal_cdf_base = (pal_sz - 2) as usize;
     let nsym = (pal_sz - 1) as usize;
 
-    let mut copy = msac.decode_symbol_adapt(cdf_m.pal_idx_identity(3), 2) as i32;
+    let mut copy = msac.decode_symbol_adapt_n_padded::<2, 4>(cdf_m.pal_idx_identity(3)) as i32;
     if copy == 2 {
         return -1;
     }
@@ -642,7 +644,8 @@ pub(crate) fn read_pal_indices<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
     } else {
         let mut prev_h = prev_v;
         for m in 1..lim2 {
-            let v = msac.decode_symbol_adapt(cdf_m.pal_idx(pal_cdf_base, 0), nsym) as i32;
+            let v =
+                msac.decode_symbol_adapt_padded::<8>(cdf_m.pal_idx(pal_cdf_base, 0), nsym) as i32;
             prev_h = if v == 0 {
                 prev_h
             } else {
@@ -654,7 +657,8 @@ pub(crate) fn read_pal_indices<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
 
     let mut off: isize = strides[0];
     for _n in 1..lim1 {
-        copy = msac.decode_symbol_adapt(cdf_m.pal_idx_identity(copy as usize), 2) as i32;
+        copy =
+            msac.decode_symbol_adapt_n_padded::<2, 4>(cdf_m.pal_idx_identity(copy as usize)) as i32;
         if copy == 2 {
             for m in 0..lim2 {
                 let dst = (off + m as isize * strides[1]) as usize;
@@ -662,7 +666,8 @@ pub(crate) fn read_pal_indices<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                 scratch[dst] = scratch[src];
             }
         } else {
-            let v = msac.decode_symbol_adapt(cdf_m.pal_idx(pal_cdf_base, 0), nsym) as i32;
+            let v =
+                msac.decode_symbol_adapt_padded::<8>(cdf_m.pal_idx(pal_cdf_base, 0), nsym) as i32;
             let next_v = if v == 0 {
                 prev_v
             } else {
@@ -685,7 +690,9 @@ pub(crate) fn read_pal_indices<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                     } else {
                         1 + (prev_t == prev_tl || prev_l == prev_tl) as usize
                     };
-                    let v = msac.decode_symbol_adapt(cdf_m.pal_idx(pal_cdf_base, ctx), nsym) as i32;
+                    let v = msac
+                        .decode_symbol_adapt_padded::<8>(cdf_m.pal_idx(pal_cdf_base, ctx), nsym)
+                        as i32;
                     let p = match ctx {
                         1 => match v {
                             0 | 1 => {
@@ -775,7 +782,7 @@ pub(crate) fn read_pal_plane<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
     l_cache: i32,
     bpc: u32,
 ) -> u8 {
-    let pal_sz = msac.decode_symbol_adapt(cdf_m.pal_sz(), 6) as i32 + 2;
+    let pal_sz = msac.decode_symbol_adapt_n_padded::<6, 8>(cdf_m.pal_sz()) as i32 + 2;
 
     // find cached entries (but don't load them yet)
     let n_cache = l_cache + a_cache;
@@ -983,9 +990,11 @@ pub(crate) fn read_tx_part<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
         if is_split != 0 {
             if imin(bw4, bh4) >= 2 {
                 let ctx = TX_TYPE_GROUP_VH[bs_idx] as usize;
-                b.tx_part = 1 + msac
-                    .decode_symbol_adapt(cdf_m.tx_part_2d(b.fsc as usize, inter, ctx), 6)
-                    as u8;
+                b.tx_part = 1 + msac.decode_symbol_adapt_n_padded::<6, 8>(cdf_m.tx_part_2d(
+                    b.fsc as usize,
+                    inter,
+                    ctx,
+                )) as u8;
             } else if imax(bw4, bh4) >= 4 {
                 let ctx = (bw4 >= 4) as usize;
                 let tx_part_4way =

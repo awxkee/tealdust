@@ -27,6 +27,16 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use core::convert::TryInto;
+
+#[inline(always)]
+pub(crate) fn cdf_array_mut<const N: usize>(data: &mut [u16], offset: usize) -> &mut [u16; N] {
+    data.get_mut(offset..offset + N)
+        .expect("CDF accessor out of bounds")
+        .try_into()
+        .expect("CDF accessor length mismatch")
+}
+
 #[derive(Clone)]
 #[repr(C)]
 pub(crate) struct CdfModeContext {
@@ -52,84 +62,84 @@ impl Default for CdfCoefContext {
 }
 
 impl CdfCoefContext {
-    pub(crate) fn skip(&mut self, i: usize, j: usize, k: usize) -> &mut [u16] {
+    pub(crate) fn skip(&mut self, i: usize, j: usize, k: usize) -> &mut [u16; 2] {
         let o = i * 100 + j * 20 + k * 2;
-        &mut self.data[o..o + 2]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn skip_v(&mut self, k: usize) -> &mut [u16] {
+    pub(crate) fn skip_v(&mut self, k: usize) -> &mut [u16; 2] {
         let o = 4418 + k * 2;
-        &mut self.data[o..o + 2]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_bin_16(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_16(&mut self, i: usize) -> &mut [u16; 8] {
         let o = 200 + i * 8;
-        &mut self.data[o..o + 8]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_bin_32(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_32(&mut self, i: usize) -> &mut [u16; 8] {
         let o = 224 + i * 8;
-        &mut self.data[o..o + 8]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_bin_64(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_64(&mut self, i: usize) -> &mut [u16; 8] {
         let o = 248 + i * 8;
-        &mut self.data[o..o + 8]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_bin_128(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_128(&mut self, i: usize) -> &mut [u16; 8] {
         let o = 272 + i * 8;
-        &mut self.data[o..o + 8]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_bin_256(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_256(&mut self, i: usize) -> &mut [u16; 8] {
         let o = 296 + i * 8;
-        &mut self.data[o..o + 8]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_bin_512(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_512(&mut self, i: usize) -> &mut [u16; 8] {
         let o = 320 + i * 8;
-        &mut self.data[o..o + 8]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_bin_1024(&mut self, i: usize) -> &mut [u16] {
+    pub(crate) fn eob_bin_1024(&mut self, i: usize) -> &mut [u16; 8] {
         let o = 344 + i * 8;
-        &mut self.data[o..o + 8]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_hi_bit(&mut self) -> &mut [u16] {
-        &mut self.data[368..370]
+    pub(crate) fn eob_hi_bit(&mut self) -> &mut [u16; 2] {
+        cdf_array_mut(&mut self.data, 368)
     }
-    pub(crate) fn eob_base_y_tok_hf(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn eob_base_y_tok_hf(&mut self, i: usize, j: usize) -> &mut [u16; 4] {
         let o = 372 + i * 16 + j * 4;
-        &mut self.data[o..o + 4]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_base_y_tok_lf(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn eob_base_y_tok_lf(&mut self, i: usize, j: usize) -> &mut [u16; 8] {
         let o = 1280 + i * 32 + j * 8;
-        &mut self.data[o..o + 8]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn br_y_tok_lf(&mut self, j: usize) -> &mut [u16] {
+    pub(crate) fn br_y_tok_lf(&mut self, j: usize) -> &mut [u16; 4] {
         let o = 4080 + j * 4;
-        &mut self.data[o..o + 4]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn dc_sign(&mut self, i: usize, j: usize, k: usize) -> &mut [u16] {
+    pub(crate) fn dc_sign(&mut self, i: usize, j: usize, k: usize) -> &mut [u16; 2] {
         let o = 4136 + i * 12 + j * 6 + k * 2;
-        &mut self.data[o..o + 2]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn bob_base_y_tok(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn bob_base_y_tok(&mut self, i: usize, j: usize) -> &mut [u16; 4] {
         let o = 4160 + i * 12 + j * 4;
-        &mut self.data[o..o + 4]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn br_y_tok_idtx(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn br_y_tok_idtx(&mut self, i: usize, j: usize) -> &mut [u16; 4] {
         let o = 4196 + i * 28 + j * 4;
-        &mut self.data[o..o + 4]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn base_y_tok_idtx(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn base_y_tok_idtx(&mut self, i: usize, j: usize) -> &mut [u16; 4] {
         let o = 4280 + i * 28 + j * 4;
-        &mut self.data[o..o + 4]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn sign_idtx(&mut self, i: usize, j: usize) -> &mut [u16] {
+    pub(crate) fn sign_idtx(&mut self, i: usize, j: usize) -> &mut [u16; 2] {
         let o = 4364 + i * 18 + j * 2;
-        &mut self.data[o..o + 2]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_base_uv_tok_hf(&mut self, j: usize) -> &mut [u16] {
+    pub(crate) fn eob_base_uv_tok_hf(&mut self, j: usize) -> &mut [u16; 4] {
         let o = 4444 + j * 4;
-        &mut self.data[o..o + 4]
+        cdf_array_mut(&mut self.data, o)
     }
-    pub(crate) fn eob_base_uv_tok_lf(&mut self, j: usize) -> &mut [u16] {
+    pub(crate) fn eob_base_uv_tok_lf(&mut self, j: usize) -> &mut [u16; 8] {
         let o = 4528 + j * 8;
-        &mut self.data[o..o + 8]
+        cdf_array_mut(&mut self.data, o)
     }
 }
 
@@ -147,26 +157,26 @@ impl Default for CdfMvContext {
 
 macro_rules! cdf_acc {
     ($name:ident, $off:expr, $len:expr) => {
-        pub(crate) fn $name(&mut self) -> &mut [u16] {
-            &mut self.data[$off..$off + $len]
+        pub(crate) fn $name(&mut self) -> &mut [u16; $len] {
+            cdf_array_mut(&mut self.data, $off)
         }
     };
     ($name:ident, $off:expr, $stride:expr, $len:expr) => {
-        pub(crate) fn $name(&mut self, i: usize) -> &mut [u16] {
+        pub(crate) fn $name(&mut self, i: usize) -> &mut [u16; $len] {
             let o = $off + i * $stride;
-            &mut self.data[o..o + $len]
+            cdf_array_mut(&mut self.data, o)
         }
     };
     ($name:ident, $off:expr, $s1:expr, $s2:expr, $len:expr) => {
-        pub(crate) fn $name(&mut self, i: usize, j: usize) -> &mut [u16] {
+        pub(crate) fn $name(&mut self, i: usize, j: usize) -> &mut [u16; $len] {
             let o = $off + i * $s1 + j * $s2;
-            &mut self.data[o..o + $len]
+            cdf_array_mut(&mut self.data, o)
         }
     };
     ($name:ident, $off:expr, $s1:expr, $s2:expr, $s3:expr, $len:expr) => {
-        pub(crate) fn $name(&mut self, i: usize, j: usize, k: usize) -> &mut [u16] {
+        pub(crate) fn $name(&mut self, i: usize, j: usize, k: usize) -> &mut [u16; $len] {
             let o = $off + i * $s1 + j * $s2 + k * $s3;
-            &mut self.data[o..o + $len]
+            cdf_array_mut(&mut self.data, o)
         }
     };
 }

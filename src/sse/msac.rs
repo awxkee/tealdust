@@ -29,6 +29,8 @@
 
 #![cfg(target_arch = "x86_64")]
 
+use core::convert::TryInto;
+
 use crate::msac::{
     MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState, msac_load_be64_unchecked, msac_refill_eob,
 };
@@ -320,6 +322,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         self.cnt
     }
 
+    #[inline]
     #[target_feature(enable = "sse2")]
     fn decode_symbol_adapt_sse2(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
         match n_symbols {
@@ -334,6 +337,26 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         }
     }
 
+    #[inline]
+    #[target_feature(enable = "sse2")]
+    pub(crate) fn decode_symbol_adapt_padded_sse2<const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+        n_symbols: usize,
+    ) -> u32 {
+        match n_symbols {
+            1 => self.decode_symbol_adapt_n_padded_sse2::<1, LANES>(cdf),
+            2 => self.decode_symbol_adapt_n_padded_sse2::<2, LANES>(cdf),
+            3 => self.decode_symbol_adapt_n_padded_sse2::<3, LANES>(cdf),
+            4 => self.decode_symbol_adapt_n_padded_sse2::<4, LANES>(cdf),
+            5 => self.decode_symbol_adapt_n_padded_sse2::<5, LANES>(cdf),
+            6 => self.decode_symbol_adapt_n_padded_sse2::<6, LANES>(cdf),
+            7 => self.decode_symbol_adapt_n_padded_sse2::<7, LANES>(cdf),
+            _ => unreachable!("invalid MSAC symbol count"),
+        }
+    }
+
+    #[inline]
     #[target_feature(enable = "sse2")]
     pub(crate) fn decode_symbol_adapt_n_sse2<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
         debug_assert!((1..=7).contains(&N));
@@ -342,11 +365,48 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
             return 0;
         }
 
-        if N <= 2 || (N <= 4 && cdf.len() < 4) || (N > 4 && cdf.len() < 8) {
-            return self.decode_symbol_adapt_n_scalar::<N>(cdf);
+        if N <= 3 && cdf.len() >= 4 {
+            let cdf = (&mut cdf[..4])
+                .try_into()
+                .expect("4-lane CDF accessor must expose 4 values");
+            return msac_decode_symbol_adapt_sse2::<UPDATE_CDF, N, 4>(self, cdf);
         }
 
-        msac_decode_symbol_adapt_sse2::<UPDATE_CDF, N>(self, cdf)
+        if N >= 4 && cdf.len() >= 8 {
+            let cdf = (&mut cdf[..8])
+                .try_into()
+                .expect("8-lane CDF accessor must expose 8 values");
+            return msac_decode_symbol_adapt_sse2::<UPDATE_CDF, N, 8>(self, cdf);
+        }
+
+        self.decode_symbol_adapt_n_scalar::<N>(cdf)
+    }
+
+    #[inline]
+    #[target_feature(enable = "sse2")]
+    pub(crate) fn decode_symbol_adapt_n_padded_sse2<const N: usize, const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+    ) -> u32 {
+        debug_assert!((1..=7).contains(&N));
+        debug_assert!(LANES == 2 || LANES == 4 || LANES == 8);
+        debug_assert!(N < LANES);
+
+        if N <= 3 && LANES >= 4 {
+            let cdf = (&mut cdf[..4])
+                .try_into()
+                .expect("4-lane CDF accessor must expose 4 values");
+            return msac_decode_symbol_adapt_sse2::<UPDATE_CDF, N, 4>(self, cdf);
+        }
+
+        if N >= 4 && LANES >= 8 {
+            let cdf = (&mut cdf[..8])
+                .try_into()
+                .expect("8-lane CDF accessor must expose 8 values");
+            return msac_decode_symbol_adapt_sse2::<UPDATE_CDF, N, 8>(self, cdf);
+        }
+
+        self.decode_symbol_adapt_n_scalar::<N>(&mut cdf[..])
     }
 }
 
@@ -378,9 +438,22 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
     }
 
     #[inline(always)]
-    fn decode_symbol_adapt_n<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
+    fn decode_symbol_adapt_padded<const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+        n_symbols: usize,
+    ) -> u32 {
         // SAFETY: SSE2 is baseline on x86_64.
-        unsafe { MsacContextSse::decode_symbol_adapt_n_sse2::<N>(self, cdf) }
+        unsafe { MsacContextSse::decode_symbol_adapt_padded_sse2::<LANES>(self, cdf, n_symbols) }
+    }
+
+    #[inline(always)]
+    fn decode_symbol_adapt_n_padded<const N: usize, const LANES: usize>(
+        &mut self,
+        cdf: &mut [u16; LANES],
+    ) -> u32 {
+        // SAFETY: SSE2 is baseline on x86_64.
+        unsafe { MsacContextSse::decode_symbol_adapt_n_padded_sse2::<N, LANES>(self, cdf) }
     }
 
     #[inline(always)]
@@ -431,9 +504,10 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
 
 #[inline]
 #[target_feature(enable = "sse2")]
-fn load_cdf<const N: usize>(cdf: &[u16]) -> __m128i {
+fn load_cdf<const LANES: usize>(cdf: &[u16; LANES]) -> __m128i {
+    debug_assert!(LANES == 4 || LANES == 8);
     unsafe {
-        if N <= 4 {
+        if LANES == 4 {
             _mm_loadl_epi64(cdf.as_ptr().cast::<__m128i>())
         } else {
             _mm_loadu_si128(cdf.as_ptr().cast::<__m128i>())
@@ -443,10 +517,11 @@ fn load_cdf<const N: usize>(cdf: &[u16]) -> __m128i {
 
 #[inline]
 #[target_feature(enable = "sse2")]
-fn load_min_prob<const N: usize>() -> __m128i {
+fn load_min_prob<const LANES: usize, const N: usize>() -> __m128i {
+    debug_assert!(LANES == 4 || LANES == 8);
     let ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
     unsafe {
-        if N <= 4 {
+        if LANES == 4 {
             _mm_loadl_epi64(ptr)
         } else {
             _mm_loadu_si128(ptr)
@@ -457,14 +532,17 @@ fn load_min_prob<const N: usize>() -> __m128i {
 #[repr(C, align(16))]
 pub(crate) struct AlignedSse9(pub(crate) [u16; 9]);
 
-#[repr(C, align(16))]
-pub(crate) struct AlignedSse8(pub(crate) [u16; 8]);
-
 #[inline]
 #[target_feature(enable = "sse2")]
-fn update_cdf_sse2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m128i, rate: u8) {
+fn update_cdf_sse2<const N: usize, const LANES: usize>(
+    cdf: &mut [u16; LANES],
+    cdf_v: __m128i,
+    ge_mask: __m128i,
+    rate: u8,
+) {
     debug_assert!((1..=7).contains(&N));
-    debug_assert!(cdf.len() > N);
+    debug_assert!(LANES == 4 || LANES == 8);
+    debug_assert!(N < LANES);
 
     let shift = _mm_cvtsi32_si128(rate as i32);
     let half = _mm_set1_epi16(0x8000u16 as i16);
@@ -482,19 +560,26 @@ fn update_cdf_sse2<const N: usize>(cdf: &mut [u16], cdf_v: __m128i, ge_mask: __m
         _mm_andnot_si128(ge_mask, add_path),
     );
 
-    let mut tmp = core::mem::MaybeUninit::<AlignedSse8>::uninit();
-    unsafe { _mm_store_si128(tmp.as_mut_ptr().cast(), updated) };
-    let initialized = (unsafe { tmp.assume_init() }).0;
-    cdf[..N].copy_from_slice(&initialized[..N]);
+    unsafe {
+        if LANES == 4 {
+            _mm_storel_epi64(cdf.as_mut_ptr().cast::<__m128i>(), updated);
+        } else {
+            _mm_storeu_si128(cdf.as_mut_ptr().cast::<__m128i>(), updated);
+        }
+    }
 }
 
+#[inline]
 #[target_feature(enable = "sse2")]
-fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize>(
+fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const LANES: usize>(
     s: &mut MsacContextSse<'_, UPDATE_CDF>,
-    cdf: &mut [u16],
+    cdf: &mut [u16; LANES],
 ) -> u32 {
-    let cdf_v = load_cdf::<N>(cdf);
-    let min_prob = load_min_prob::<N>();
+    debug_assert!(LANES == 4 || LANES == 8);
+    debug_assert!(N < LANES);
+
+    let cdf_v = load_cdf::<LANES>(cdf);
+    let min_prob = load_min_prob::<LANES, N>();
     let c = (s.dif >> 48) as u16;
     let r = s.rng >> 8;
 
@@ -506,7 +591,7 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize>(
         _mm_setzero_si128(),
     );
 
-    let mask_lanes = if N == 4 { N } else { N + 1 };
+    let mask_lanes = N + 1;
     let mask = ((_mm_movemask_epi8(cmp) as u32) & 0x5555) & ((1u32 << (mask_lanes * 2)) - 1);
 
     let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
@@ -518,16 +603,11 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize>(
 
     let initialized = (unsafe { bounds.assume_init() }).0;
 
-    let (val, v, u) = if N == 4 && mask == 0 {
-        // cdf[4] was not loaded; its min_prob sentinel would have produced v=0.
-        let u = initialized[N] as u32;
-        (N, 0, u)
-    } else {
-        let i = (mask.trailing_zeros() >> 1) as usize;
-        let u = initialized[i] as u32;
-        let v = initialized[i + 1] as u32;
-        (i, v, u)
-    };
+    debug_assert!(mask != 0);
+    let i = (mask.trailing_zeros() >> 1) as usize;
+    let u = initialized[i] as u32;
+    let v = initialized[i + 1] as u32;
+    let val = i;
 
     debug_assert!(u <= s.rng);
     debug_assert!(u >= v);
@@ -539,7 +619,7 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize>(
         debug_assert!(count <= 32);
         let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
 
-        update_cdf_sse2::<N>(cdf, cdf_v, cmp, rate);
+        update_cdf_sse2::<N, LANES>(cdf, cdf_v, cmp, rate);
         cdf[N] = pc + u16::from(count < 32);
     }
 
