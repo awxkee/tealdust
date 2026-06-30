@@ -29,7 +29,7 @@
 
 use crate::gdf_tables::{GDF_ALPHA, GDF_BIAS, GDF_WEIGHT};
 use crate::headers::{FhRestorationPlane, PixelLayout};
-use crate::intops::{apply_sign, iclip, imax, imin};
+use crate::intops::{iclip, iclip64to32, imax, imin};
 use crate::lf_mask::{Av2Filter, Av2Restoration};
 use crate::tables::PC_WIENER_LUT_TO_CLASS;
 
@@ -51,20 +51,28 @@ static MODE_WEIGHTS: [[i16; 3]; 4] = [
 
 static MODE_OFFSETS: [i16; 4] = [-547, -21565, -573, -680];
 
-pub(crate) fn get_qval_given_tskip(
-    mut qstep: i32,
-    tskip: i32,
-    i: usize,
-    bitdepth_min_8: i32,
-) -> i32 {
-    qstep = (qstep + ((1 << bitdepth_min_8) >> 1)) >> bitdepth_min_8;
+pub(crate) fn get_qval_given_tskip(qstep: i32, tskip: i32, i: usize, bitdepth_min_8: i32) -> i32 {
+    let shift = bitdepth_min_8.clamp(0, 30) as u32;
+    let tskip = tskip as i64;
+    let qstep = (qstep as i64 + ((1i64 << shift) >> 1)) >> shift;
     let prod = (tskip * qstep + 128) >> 8;
-    let qval = MODE_WEIGHTS[i][0] as i32 * (tskip << 5)
-        + MODE_WEIGHTS[i][1] as i32 * qstep
-        + MODE_WEIGHTS[i][2] as i32 * prod;
+    let qval = MODE_WEIGHTS[i][0] as i64 * (tskip << 5)
+        + MODE_WEIGHTS[i][1] as i64 * qstep
+        + MODE_WEIGHTS[i][2] as i64 * prod;
     let abs_qval = qval.abs();
-    let qval = apply_sign((abs_qval + (1 << 12)) >> 13, qval);
-    255 * (MODE_OFFSETS[i] as i32 + qval)
+    let qval = if qval < 0 {
+        -((abs_qval + (1 << 12)) >> 13)
+    } else {
+        (abs_qval + (1 << 12)) >> 13
+    };
+
+    iclip64to32(255 * (MODE_OFFSETS[i] as i64 + qval), i32::MIN, i32::MAX)
+}
+
+#[inline(always)]
+fn get_qval_lut_bin(qval: i32) -> i32 {
+    let qval = (imax(0, qval).saturating_add(1 << 13)) >> 14;
+    imin(qval, 255) >> 5
 }
 
 /// Backup a row with edge extension. `dst` and `src` are indexed with `o` as the
@@ -342,12 +350,10 @@ pub(crate) fn get_class_lut_idx_8bpc(
     }
     s *= PC_WIENER_NORMALIZER[3] as i32;
 
-    let mut qval = (imax(0, get_qval_given_tskip(base_q, s, 0, 0)) + (1 << 13)) >> 14;
-    qval = imin(qval, 255) >> 5;
+    let mut qval = get_qval_lut_bin(get_qval_given_tskip(base_q, s, 0, 0));
     let mut lut_idx = qval << 9;
     for i in 0..3 {
-        qval = (imax(0, f[i] + get_qval_given_tskip(base_q, s, i + 1, 0)) + (1 << 13)) >> 14;
-        qval = imin(qval, 255) >> 5;
+        qval = get_qval_lut_bin(f[i].saturating_add(get_qval_given_tskip(base_q, s, i + 1, 0)));
         lut_idx |= qval << (3 * (2 - i));
     }
     lut_idx
@@ -2812,16 +2818,15 @@ pub(crate) fn get_class_lut_idx_hbd(
     }
     s *= PC_WIENER_NORMALIZER[3] as i32;
 
-    let mut qval = (imax(0, get_qval_given_tskip(base_q, s, 0, bitdepth_min_8)) + (1 << 13)) >> 14;
-    qval = imin(qval, 255) >> 5;
+    let mut qval = get_qval_lut_bin(get_qval_given_tskip(base_q, s, 0, bitdepth_min_8));
     let mut lut_idx = qval << 9;
     for i in 0..3 {
-        qval = (imax(
-            0,
-            f[i] + get_qval_given_tskip(base_q, s, i + 1, bitdepth_min_8),
-        ) + (1 << 13))
-            >> 14;
-        qval = imin(qval, 255) >> 5;
+        qval = get_qval_lut_bin(f[i].saturating_add(get_qval_given_tskip(
+            base_q,
+            s,
+            i + 1,
+            bitdepth_min_8,
+        )));
         lut_idx |= qval << (3 * (2 - i));
     }
     lut_idx

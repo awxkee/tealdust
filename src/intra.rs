@@ -87,6 +87,76 @@ fn repeat_pad_i32(buf: &mut [i32; 16], valid: usize, len: usize) {
         .for_each(|(dst, src)| *dst = src);
 }
 
+#[inline]
+fn plane_row_range(
+    plane_len: usize,
+    stride: usize,
+    x: i32,
+    y: i32,
+    n: usize,
+) -> Option<core::ops::Range<usize>> {
+    if stride == 0 || x < 0 || y < 0 {
+        return None;
+    }
+
+    let x = x as usize;
+    if x.checked_add(n)? > stride {
+        return None;
+    }
+
+    let start = (y as usize).checked_mul(stride)?.checked_add(x)?;
+    let end = start.checked_add(n)?;
+    if end <= plane_len {
+        Some(start..end)
+    } else {
+        None
+    }
+}
+
+#[inline]
+fn copy_strided_samples_i32<P: Copy + Into<i32>>(
+    plane: &[P],
+    stride: usize,
+    x: i32,
+    y: i32,
+    n: usize,
+    dst: &mut [i32],
+) -> bool {
+    if n == 0 {
+        return true;
+    }
+    if stride == 0 || x < 0 || y < 0 || dst.len() < n {
+        return false;
+    }
+
+    let x = x as usize;
+    if x >= stride {
+        return false;
+    }
+
+    let Some(mut off) = (y as usize)
+        .checked_mul(stride)
+        .and_then(|row| row.checked_add(x))
+    else {
+        return false;
+    };
+
+    for (i, dst_px) in dst.iter_mut().take(n).enumerate() {
+        let Some(&px) = plane.get(off) else {
+            return false;
+        };
+        *dst_px = px.into();
+        if i + 1 != n {
+            off = match off.checked_add(stride) {
+                Some(next) => next,
+                None => return false,
+            };
+        }
+    }
+
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
     bd: BD,
@@ -101,14 +171,31 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
     right: i32,
     bottom: i32,
 ) {
-    let w = (bw4 * 4) as usize;
-    let h = (bh4 * 4) as usize;
-    if w == 0 || h == 0 {
+    if bw4 <= 0 || bh4 <= 0 || stride == 0 {
         return;
     }
 
-    let dpx = bx * 4;
-    let dpy = by * 4;
+    let stride_i32 = stride.min(i32::MAX as usize) as i32;
+    let plane_h = plane.len() / stride;
+    let plane_h_i32 = plane_h.min(i32::MAX as usize) as i32;
+    let right = right.clamp(0, stride_i32);
+    let bottom = bottom.clamp(0, plane_h_i32);
+
+    let Some(w_i32) = bw4.checked_mul(4) else {
+        return;
+    };
+    let Some(h_i32) = bh4.checked_mul(4) else {
+        return;
+    };
+    let w = w_i32 as usize;
+    let h = h_i32 as usize;
+
+    let Some(dpx) = bx.checked_mul(4) else {
+        return;
+    };
+    let Some(dpy) = by.checked_mul(4) else {
+        return;
+    };
     if dpx < 0 || dpy < 0 || dpx >= right || dpy >= bottom {
         return;
     }
@@ -117,15 +204,26 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
     // `intrabc_pred`; the fractional part affects the block copy/filter, but
     // AVM's morph/BAWP template fit samples the integer-position reference
     // template.
-    let sx = dpx + (mvx >> 3);
-    let sy = dpy + (mvy >> 3);
+    let Some(sx) = dpx.checked_add(mvx >> 3) else {
+        return;
+    };
+    let Some(sy) = dpy.checked_add(mvy >> 3) else {
+        return;
+    };
 
-    let ref_w = if dpx + w as i32 >= right {
+    let Some(dst_right) = dpx.checked_add(w_i32) else {
+        return;
+    };
+    let Some(dst_bottom) = dpy.checked_add(h_i32) else {
+        return;
+    };
+
+    let ref_w = if dst_right >= right {
         (right - dpx).max(0) as usize
     } else {
         w
     };
-    let ref_h = if dpy + h as i32 >= bottom {
+    let ref_h = if dst_bottom >= bottom {
         (bottom - dpy).max(0) as usize
     } else {
         h
@@ -139,8 +237,12 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
     let width = bawp_blk_size_from_samples(bw);
     let height = bawp_blk_size_from_samples(bh);
 
-    let above_valid = dpy > 0 && sy > 0 && sx >= 0 && sx + bw as i32 <= right;
-    let left_valid = dpx > 0 && sx > 0 && sy >= 0 && sy + bh as i32 <= bottom;
+    let src_right = sx.checked_add(bw as i32);
+    let src_bottom = sy.checked_add(bh as i32);
+    let above_valid =
+        dpy > 0 && sy > 0 && sy <= bottom && sx >= 0 && matches!(src_right, Some(v) if v <= right);
+    let left_valid =
+        dpx > 0 && sx > 0 && sx <= right && sy >= 0 && matches!(src_bottom, Some(v) if v <= bottom);
     let (numb_up, numb_left) =
         derive_number_ref_samples_bawp(above_valid, left_valid, width, height);
 
@@ -155,72 +257,62 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
 
     if let Some(step) = width.checked_div(numb_up) {
         let start = if step == 1 { 0 } else { step >> 1 };
-        let ref_top_off = (sy as usize - 1) * stride + sx as usize;
-        let recon_top_off = (dpy as usize - 1) * stride + dpx as usize;
+        let plane_ro: &[BD::Pixel] = &*plane;
+        let ref_top = plane_row_range(plane_ro.len(), stride, sx, sy - 1, bw)
+            .and_then(|range| plane_ro.get(range));
+        let recon_top = plane_row_range(plane_ro.len(), stride, dpx, dpy - 1, bw)
+            .and_then(|range| plane_ro.get(range));
 
-        ref_pad[..bw]
-            .iter_mut()
-            .zip(recon_pad[..bw].iter_mut())
-            .zip(
-                plane[ref_top_off..ref_top_off + bw]
-                    .iter()
-                    .zip(plane[recon_top_off..recon_top_off + bw].iter()),
-            )
-            .for_each(|((ref_dst, recon_dst), (&ref_px, &recon_px))| {
-                *ref_dst = ref_px.into();
-                *recon_dst = recon_px.into();
-            });
+        if let (Some(ref_top), Some(recon_top)) = (ref_top, recon_top) {
+            ref_pad[..bw]
+                .iter_mut()
+                .zip(recon_pad[..bw].iter_mut())
+                .zip(ref_top.iter().zip(recon_top.iter()))
+                .for_each(|((ref_dst, recon_dst), (&ref_px, &recon_px))| {
+                    *ref_dst = ref_px.into();
+                    *recon_dst = recon_px.into();
+                });
 
-        repeat_pad_i32(&mut ref_pad, bw, width);
-        repeat_pad_i32(&mut recon_pad, bw, width);
+            repeat_pad_i32(&mut ref_pad, bw, width);
+            repeat_pad_i32(&mut recon_pad, bw, width);
 
-        ref_pad[start..width]
-            .iter()
-            .step_by(step)
-            .zip(recon_pad[start..width].iter().step_by(step))
-            .for_each(|(&x, &y)| {
-                sum_x += x;
-                sum_y += y;
-                sum_xy += x * y;
-                sum_xx += x * x;
-            });
-        count += numb_up;
+            ref_pad[start..width]
+                .iter()
+                .step_by(step)
+                .zip(recon_pad[start..width].iter().step_by(step))
+                .for_each(|(&x, &y)| {
+                    sum_x += x;
+                    sum_y += y;
+                    sum_xy += x * y;
+                    sum_xx += x * x;
+                });
+            count += numb_up;
+        }
     }
 
     if let Some(step) = height.checked_div(numb_left) {
         let start = if step == 1 { 0 } else { step >> 1 };
-        let ref_left_off = sy as usize * stride + sx as usize - 1;
-        let recon_left_off = dpy as usize * stride + dpx as usize - 1;
+        let plane_ro: &[BD::Pixel] = &*plane;
+        let copied_ref = copy_strided_samples_i32(plane_ro, stride, sx - 1, sy, bh, &mut ref_pad);
+        let copied_recon =
+            copy_strided_samples_i32(plane_ro, stride, dpx - 1, dpy, bh, &mut recon_pad);
 
-        ref_pad[..bh]
-            .iter_mut()
-            .zip(recon_pad[..bh].iter_mut())
-            .zip(
-                plane[ref_left_off..]
-                    .iter()
-                    .step_by(stride)
-                    .zip(plane[recon_left_off..].iter().step_by(stride))
-                    .take(bh),
-            )
-            .for_each(|((ref_dst, recon_dst), (&ref_px, &recon_px))| {
-                *ref_dst = ref_px.into();
-                *recon_dst = recon_px.into();
-            });
+        if copied_ref && copied_recon {
+            repeat_pad_i32(&mut ref_pad, bh, height);
+            repeat_pad_i32(&mut recon_pad, bh, height);
 
-        repeat_pad_i32(&mut ref_pad, bh, height);
-        repeat_pad_i32(&mut recon_pad, bh, height);
-
-        ref_pad[start..height]
-            .iter()
-            .step_by(step)
-            .zip(recon_pad[start..height].iter().step_by(step))
-            .for_each(|(&x, &y)| {
-                sum_x += x;
-                sum_y += y;
-                sum_xy += x * y;
-                sum_xx += x * x;
-            });
-        count += numb_left;
+            ref_pad[start..height]
+                .iter()
+                .step_by(step)
+                .zip(recon_pad[start..height].iter().step_by(step))
+                .for_each(|(&x, &y)| {
+                    sum_x += x;
+                    sum_y += y;
+                    sum_xy += x * y;
+                    sum_xx += x * x;
+                });
+            count += numb_left;
+        }
     }
 
     let (alpha, beta) = if count != 0 {
@@ -237,7 +329,7 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
 
     let dst_off = dpy as usize * stride + dpx as usize;
     if dst_off < plane.len() {
-        crate::mc::morph(bd, &mut plane[dst_off..], stride, alpha, beta, w, h);
+        crate::mc::morph(bd, &mut plane[dst_off..], stride, alpha, beta, ref_w, ref_h);
     }
 }
 
