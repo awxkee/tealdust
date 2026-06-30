@@ -429,8 +429,7 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
 
     #[inline(always)]
     fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
-        // SAFETY: SSE2 is baseline on x86_64.
-        unsafe { MsacContextSse::decode_symbol_adapt_sse2(self, cdf, n_symbols) }
+        MsacContextSse::decode_symbol_adapt_sse2(self, cdf, n_symbols)
     }
 
     #[inline(always)]
@@ -439,8 +438,7 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
         cdf: &mut [u16; LANES],
         n_symbols: usize,
     ) -> u32 {
-        // SAFETY: SSE2 is baseline on x86_64.
-        unsafe { MsacContextSse::decode_symbol_adapt_padded_sse2::<LANES>(self, cdf, n_symbols) }
+        MsacContextSse::decode_symbol_adapt_padded_sse2::<LANES>(self, cdf, n_symbols)
     }
 
     #[inline(always)]
@@ -448,8 +446,7 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
         &mut self,
         cdf: &mut [u16; LANES],
     ) -> u32 {
-        // SAFETY: SSE2 is baseline on x86_64.
-        unsafe { MsacContextSse::decode_symbol_adapt_n_padded_sse2::<N, LANES>(self, cdf) }
+        MsacContextSse::decode_symbol_adapt_n_padded_sse2::<N, LANES>(self, cdf)
     }
 
     #[inline(always)]
@@ -576,70 +573,102 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
     s: &mut MsacContextSse<'_, UPDATE_CDF>,
     cdf: &mut [u16; LANES],
 ) -> u32 {
-    debug_assert!(LANES == 4 || LANES == 8);
-    debug_assert!(N < LANES);
-
-    let cdf_v = load_cdf::<LANES>(cdf);
-    let min_prob = load_min_prob::<LANES, N>();
-    let r = s.rng >> 8;
-
-    // (4) Broadcast c = (dif >> 48) straight from an XMM holding dif.
-    // dif>>48 is the top u16 of the low 64 bits, i.e. word lane 3 of dif.
-    // movq dif into xmm, broadcast word 3 across all 8 lanes.
-    let dif_xmm = unsafe { _mm_cvtsi64_si128(s.dif as i64) };
-    // pshuflw picks lane 3 of the low quadword into all four low words,
-    // then pshufd broadcasts the low quadword to the whole register.
-    let c_v = unsafe {
-        let lo = _mm_shufflelo_epi16::<0b11_11_11_11>(dif_xmm);
-        _mm_shuffle_epi32::<0b00_00_00_00>(lo)
-    };
-
-    // p = max((cdf | 127) - min_prob, 0)   (subs saturates to 0)
-    let p = unsafe { _mm_subs_epu16(_mm_or_si128(cdf_v, pw_127()), min_prob) };
-
-    // boundary = ((r * p) >> 10) << 3, done as ((p * (r<<6))>>16) << 3 via mulhi.
-    let scale = unsafe { _mm_set1_epi16(((r << 6) & 0xffff) as i16) };
-    let boundaries_v = unsafe { _mm_slli_epi16::<3>(_mm_mulhi_epu16(p, scale)) };
-
-    // cmp lane j = 0xFFFF iff c >= boundary[j]  (subs_epu16 == 0 means b<=c).
-    let cmp = unsafe { _mm_cmpeq_epi16(_mm_subs_epu16(boundaries_v, c_v), _mm_setzero_si128()) };
-
-    // (3) No `& 0x5555`. pcmpeqw gives paired bytes per word lane, so the raw
-    // byte mask shifted right by 1 indexes word lanes directly via tzcnt.
-    // We OR in a sentinel "always-set" pair just past lane N so that a
-    // fall-through (c < every real boundary) resolves to i == N deterministically
-    // and we never read a stale upper lane. The sentinel bit is placed at byte
-    // position 2*N (word lane N).
-    let raw = unsafe { _mm_movemask_epi8(cmp) as u32 };
-    let sentinel = 1u32 << (2 * N); // low byte of word lane N
-    let mask = raw | sentinel;
-
-    let i = (mask.trailing_zeros() >> 1) as usize;
-
-    let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
-    let bounds_ptr = bounds.as_mut_ptr().cast::<u16>();
     unsafe {
-        bounds_ptr.write(s.rng as u16);
-        _mm_storeu_si128(bounds_ptr.add(1).cast(), boundaries_v);
+        debug_assert!(LANES == 4 || LANES == 8);
+        debug_assert!(N < LANES);
+
+        unsafe {
+            // m0 = cdf
+            let cdf_v = if LANES == 4 {
+                _mm_loadl_epi64(cdf.as_ptr().cast())
+            } else {
+                _mm_loadu_si128(cdf.as_ptr().cast())
+            };
+            let mp_ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
+            let min_prob = if LANES == 4 {
+                _mm_loadl_epi64(mp_ptr)
+            } else {
+                _mm_loadu_si128(mp_ptr)
+            };
+
+            // m2 = rng broadcast into 16-bit lanes (pshuflw q0000 [+ punpcklqdq for 8]).
+            // Reused for BOTH the spill's lane "-1" and the mulhi scale.
+            let rng_x = _mm_cvtsi32_si128(s.rng as i32);
+            let mut rng_bc = _mm_shufflelo_epi16::<0>(rng_x);
+            if LANES == 8 {
+                rng_bc = _mm_unpacklo_epi64(rng_bc, rng_bc);
+            }
+
+            // Renorm-spill buffer: [rng, b0, b1, ...]; u = arr[i], v = arr[i+1].
+            // (This is exactly the asm's [buf+14..] window with rng at the head.)
+            let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
+            let bp = bounds.as_mut_ptr().cast::<u16>();
+            bp.write(s.rng as u16);
+
+            // p = max((cdf | 127) - min_prob, 0)
+            let pw = _mm_load_si128(PW_127.0.as_ptr().cast());
+            let p = _mm_subs_epu16(_mm_or_si128(cdf_v, pw), min_prob);
+
+            // scale = (rng >> 8) << 6, derived from the SAME rng broadcast.
+            let scale = _mm_slli_epi16::<6>(_mm_srli_epi16::<8>(rng_bc));
+            // boundaries = (p *hi scale) << 3
+            let bnd = _mm_slli_epi16::<3>(_mm_mulhi_epu16(p, scale));
+
+            // c = (dif >> 48) broadcast from dif XMM via pshuflw q3333 [+ punpck].
+            let dif_x = _mm_cvtsi64_si128(s.dif as i64);
+            let mut c_bc = _mm_shufflelo_epi16::<0xFF>(dif_x);
+            if LANES == 8 {
+                c_bc = _mm_unpacklo_epi64(c_bc, c_bc);
+            }
+
+            // Spill boundaries (issued before the CDF update so the store hides).
+            _mm_storeu_si128(bp.add(1).cast(), bnd);
+
+            // cmp lane j = 0xFFFF iff c >= b_j   (subs_epu16(b,c)==0).
+            let cmp = _mm_cmpeq_epi16(_mm_subs_epu16(bnd, c_bc), _mm_setzero_si128());
+
+            if UPDATE_CDF {
+                let pc = cdf[N];
+                let count = (pc & 0xff) as u8;
+                debug_assert!(count <= 32);
+                let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize]
+                    + if N > 2 { 1 } else { 0 };
+                let sh = _mm_cvtsi32_si128(rate as i32);
+
+                // dav2d pavgw update:
+                //   sel  = avg(0xFFFF, cmp)  -> 65535 (j>=val) / 32768 (j<val)
+                //   out  = (cdf - (cmp>>rate)) + ((sel - cdf) >> rate)
+                // which expands to the two AV1 half-updates with no mask select.
+                let ones = _mm_cmpeq_epi16(cmp, cmp);
+                let sel = _mm_avg_epu16(ones, cmp);
+                let shifted_mask = _mm_srl_epi16(cmp, sh);
+                let toward = _mm_sub_epi16(sel, cdf_v);
+                let base = _mm_sub_epi16(cdf_v, shifted_mask);
+                let delta = _mm_srl_epi16(toward, sh);
+                let out = _mm_add_epi16(base, delta);
+
+                if LANES == 4 {
+                    _mm_storel_epi64(cdf.as_mut_ptr().cast(), out);
+                } else {
+                    _mm_storeu_si128(cdf.as_mut_ptr().cast(), out);
+                }
+                cdf[N] = pc + u16::from(count < 32);
+            }
+
+            // renorm: i = first set lane; OR-sentinel bounds i to N (fall-through).
+            let raw = _mm_movemask_epi8(cmp) as u32;
+            let mask = raw | (1u32 << (2 * N));
+            let i = (mask.trailing_zeros() >> 1) as usize;
+
+            let initialized = bounds.assume_init().0;
+            let u = initialized[i] as u32;
+            let v = initialized[i + 1] as u32;
+
+            debug_assert!(u <= s.rng);
+            debug_assert!(u >= v);
+            s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
+
+            i as u32
+        }
     }
-    let initialized = (unsafe { bounds.assume_init() }).0;
-
-    let u = initialized[i] as u32;
-    let v = initialized[i + 1] as u32;
-
-    debug_assert!(u <= s.rng);
-    debug_assert!(u >= v);
-    s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
-
-    if UPDATE_CDF {
-        let pc = cdf[N];
-        let count = (pc & 0xff) as u8;
-        debug_assert!(count <= 32);
-        let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
-
-        update_cdf_sse2::<N, LANES>(cdf, cdf_v, cmp, rate);
-        cdf[N] = pc + u16::from(count < 32);
-    }
-
-    i as u32
 }
