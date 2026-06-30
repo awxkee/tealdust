@@ -159,67 +159,89 @@ fn iadst_dequant_16x16_avx2_i32_impl_const<const IS_RECT2: bool>(
     first_kind: usize,
     second_kind: usize,
 ) {
-    unsafe {
-        debug_assert!(coeff.len() >= 256);
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(coeff.len() >= 256);
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let ncols = ngrp * 4;
-        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
-        let sh = _mm_cvtsi32_si128(shift0);
-        let minv = _mm_set1_epi32(row_clip_min);
-        let maxv = _mm_set1_epi32(row_clip_max);
-        let mut y = 0usize;
-        while y + 4 <= ncols {
-            let mut s = [_mm_setzero_si128(); 16];
-            let mut j = 0usize;
-            while j < 16 {
-                let mut v = _mm_loadu_si128(coeff.as_ptr().add(y + j * 16) as *const __m128i);
-                if IS_RECT2 {
-                    v = _mm_srai_epi32::<8>(_mm_add_epi32(
-                        _mm_mullo_epi32(v, _mm_set1_epi32(181)),
-                        _mm_set1_epi32(128),
-                    ));
-                }
-                s[j] = v;
-                j += 1;
+    }
+    let ncols = ngrp * 4;
+    let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+    let sh = _mm_cvtsi32_si128(shift0);
+    let minv = _mm_set1_epi32(row_clip_min);
+    let maxv = _mm_set1_epi32(row_clip_max);
+    let rnd256 = _mm256_set1_epi32((1 << shift0) >> 1);
+    let minv256 = _mm256_set1_epi32(row_clip_min);
+    let maxv256 = _mm256_set1_epi32(row_clip_max);
+
+    let mut y = 0usize;
+    while y + 8 <= ncols {
+        let out = avx2_tx16_i32x8_from_coeff8_const::<IS_RECT2>(coeff, y, 16, first_kind);
+        avx2_store8x8_i32_clip(
+            tmp,
+            y * 32,
+            array_ref8_i32x8(&out, 0),
+            rnd256,
+            sh,
+            minv256,
+            maxv256,
+        );
+        avx2_store8x8_i32_clip(
+            tmp,
+            y * 32 + 8,
+            array_ref8_i32x8(&out, 8),
+            rnd256,
+            sh,
+            minv256,
+            maxv256,
+        );
+        y += 8;
+    }
+    if y + 4 <= ncols {
+        let mut s = [_mm_setzero_si128(); 16];
+        let mut j = 0usize;
+        while j < 16 {
+            let mut v =
+                unsafe { _mm_loadu_si128(coeff.as_ptr().add(y + j * 16) as *const __m128i) };
+            if IS_RECT2 {
+                v = _mm_srai_epi32::<8>(_mm_add_epi32(
+                    _mm_mullo_epi32(v, _mm_set1_epi32(181)),
+                    _mm_set1_epi32(128),
+                ));
             }
-            let out = avx2_tx16_i32x4_impl(&s, first_kind);
-            let mut x = 0usize;
-            while x < 16 {
-                let g = [out[x], out[x + 1], out[x + 2], out[x + 3]];
-                avx2_store4x4_i32_clip(tmp, y * 32 + x, &g, rnd, sh, minv, maxv);
-                x += 4;
-            }
-            y += 4;
+            s[j] = v;
+            j += 1;
         }
-        while y < 16 {
-            tmp[y * 32..y * 32 + 16].fill(0);
-            y += 1;
-        }
-        coeff[..256].fill(0);
+        let out = avx2_tx16_i32x4_impl(&s, first_kind);
         let mut x = 0usize;
         while x < 16 {
-            let mut s = [_mm_setzero_si128(); 16];
-            let mut j = 0usize;
-            while j < 16 {
-                s[j] = _mm_loadu_si128(tmp.as_ptr().add(x + j * 32) as *const __m128i);
-                j += 1;
-            }
-            let out = avx2_tx16_i32x4_impl(&s, second_kind);
-            j = 0;
-            while j < 16 {
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + j * 32) as *mut __m128i, out[j]);
-                j += 1;
-            }
+            let g = [out[x], out[x + 1], out[x + 2], out[x + 3]];
+            avx2_store4x4_i32_clip(tmp, y * 32 + x, &g, rnd, sh, minv, maxv);
             x += 4;
         }
+        y += 4;
+    }
+    while y < 16 {
+        tmp[y * 32..y * 32 + 16].fill(0);
+        y += 1;
+    }
+    coeff[..256].fill(0);
+
+    let mut x = 0usize;
+    while x + 8 <= 16 {
+        let out = avx2_tx16_i32x8_from_tmp8(tmp, x, second_kind);
+        let mut m = 0usize;
+        while m < 16 {
+            unsafe {
+                _mm256_storeu_si256(tmp.as_mut_ptr().add(x + m * 32) as *mut __m256i, out[m]);
+            }
+            m += 1;
+        }
+        x += 8;
     }
 }
 
@@ -260,6 +282,107 @@ fn avx2_store4x4_i32_clip(
         _mm_storeu_si128(tmp_ptr(dst, off + 64), r2);
         _mm_storeu_si128(tmp_ptr(dst, off + 96), r3);
     }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_store8x8_i32_clip(
+    dst: &mut [i32; ITX_TMP_PIXELS],
+    off: usize,
+    v: &[__m256i; 8],
+    rnd: __m256i,
+    sh: __m128i,
+    minv: __m256i,
+    maxv: __m256i,
+) {
+    unsafe {
+        debug_assert!(off + 7 * 32 + 8 <= dst.len());
+        macro_rules! clip {
+            ($x:expr) => {{
+                _mm256_min_epi32(
+                    _mm256_max_epi32(_mm256_sra_epi32(_mm256_add_epi32($x, rnd), sh), minv),
+                    maxv,
+                )
+            }};
+        }
+        let r0 = clip!(v[0]);
+        let r1 = clip!(v[1]);
+        let r2 = clip!(v[2]);
+        let r3 = clip!(v[3]);
+        let r4 = clip!(v[4]);
+        let r5 = clip!(v[5]);
+        let r6 = clip!(v[6]);
+        let r7 = clip!(v[7]);
+
+        let t0 = _mm256_unpacklo_epi32(r0, r1);
+        let t1 = _mm256_unpackhi_epi32(r0, r1);
+        let t2 = _mm256_unpacklo_epi32(r2, r3);
+        let t3 = _mm256_unpackhi_epi32(r2, r3);
+        let t4 = _mm256_unpacklo_epi32(r4, r5);
+        let t5 = _mm256_unpackhi_epi32(r4, r5);
+        let t6 = _mm256_unpacklo_epi32(r6, r7);
+        let t7 = _mm256_unpackhi_epi32(r6, r7);
+
+        let u0 = _mm256_unpacklo_epi64(t0, t2);
+        let u1 = _mm256_unpackhi_epi64(t0, t2);
+        let u2 = _mm256_unpacklo_epi64(t1, t3);
+        let u3 = _mm256_unpackhi_epi64(t1, t3);
+        let u4 = _mm256_unpacklo_epi64(t4, t6);
+        let u5 = _mm256_unpackhi_epi64(t4, t6);
+        let u6 = _mm256_unpacklo_epi64(t5, t7);
+        let u7 = _mm256_unpackhi_epi64(t5, t7);
+
+        let ptr = dst.as_mut_ptr().add(off) as *mut __m256i;
+        _mm256_storeu_si256(ptr, _mm256_permute2x128_si256::<0x20>(u0, u4));
+        _mm256_storeu_si256(ptr.add(32 / 8), _mm256_permute2x128_si256::<0x20>(u1, u5));
+        _mm256_storeu_si256(
+            ptr.add((2 * 32) / 8),
+            _mm256_permute2x128_si256::<0x20>(u2, u6),
+        );
+        _mm256_storeu_si256(
+            ptr.add((3 * 32) / 8),
+            _mm256_permute2x128_si256::<0x20>(u3, u7),
+        );
+        _mm256_storeu_si256(
+            ptr.add((4 * 32) / 8),
+            _mm256_permute2x128_si256::<0x31>(u0, u4),
+        );
+        _mm256_storeu_si256(
+            ptr.add((5 * 32) / 8),
+            _mm256_permute2x128_si256::<0x31>(u1, u5),
+        );
+        _mm256_storeu_si256(
+            ptr.add((6 * 32) / 8),
+            _mm256_permute2x128_si256::<0x31>(u2, u6),
+        );
+        _mm256_storeu_si256(
+            ptr.add((7 * 32) / 8),
+            _mm256_permute2x128_si256::<0x31>(u3, u7),
+        );
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_store_i32x8_rows(tmp: &mut [i32; ITX_TMP_PIXELS], base: usize, out: &[__m256i; 8]) {
+    unsafe {
+        debug_assert!(base + 7 * 32 + 8 <= tmp.len());
+        let ptr = tmp.as_mut_ptr();
+        _mm256_storeu_si256(ptr.add(base) as *mut __m256i, out[0]);
+        _mm256_storeu_si256(ptr.add(base + 32) as *mut __m256i, out[1]);
+        _mm256_storeu_si256(ptr.add(base + 2 * 32) as *mut __m256i, out[2]);
+        _mm256_storeu_si256(ptr.add(base + 3 * 32) as *mut __m256i, out[3]);
+        _mm256_storeu_si256(ptr.add(base + 4 * 32) as *mut __m256i, out[4]);
+        _mm256_storeu_si256(ptr.add(base + 5 * 32) as *mut __m256i, out[5]);
+        _mm256_storeu_si256(ptr.add(base + 6 * 32) as *mut __m256i, out[6]);
+        _mm256_storeu_si256(ptr.add(base + 7 * 32) as *mut __m256i, out[7]);
+    }
+}
+
+#[inline(always)]
+fn array_ref8_i32x8(src: &[__m256i], off: usize) -> &[__m256i; 8] {
+    debug_assert!(off + 8 <= src.len());
+    unsafe { &*(src.as_ptr().add(off) as *const [__m256i; 8]) }
 }
 
 #[inline]
@@ -354,6 +477,270 @@ fn tmp_ptr(dst: &mut [i32; ITX_TMP_PIXELS], off: usize) -> *mut __m128i {
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn avx2_load8_i32_coeff_const<const IS_RECT2: bool>(src: &[i32], off: usize) -> __m256i {
+    debug_assert!(off + 8 <= src.len());
+    let mut v = unsafe { _mm256_loadu_si256(src.as_ptr().add(off) as *const __m256i) };
+    if IS_RECT2 {
+        v = _mm256_srai_epi32::<8>(_mm256_add_epi32(
+            _mm256_mullo_epi32(v, _mm256_set1_epi32(181)),
+            _mm256_set1_epi32(128),
+        ));
+    }
+    v
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_dct16_i32x8_impl(s: &[__m256i; 16]) -> [__m256i; 16] {
+    let z = _mm256_setzero_si256();
+    let mut out = [z; 16];
+    let mut m = 0usize;
+    while m < 16 {
+        let mut acc = z;
+        let mut j = 0usize;
+        while j < 16 {
+            let k = _mm256_set1_epi32(crate::itx_2d::DCT16_DENSE_KERNEL[j * 16 + m]);
+            acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(s[j], k));
+            j += 1;
+        }
+        out[m] = acc;
+        m += 1;
+    }
+    out
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_adst16_i32x8_impl(s: &[__m256i; 16], flip: bool) -> [__m256i; 16] {
+    let rows = if flip {
+        &crate::itx_1d::FLIPADST16_KERNEL_ROWS
+    } else {
+        &crate::itx_1d::ADST16_KERNEL_ROWS
+    };
+    let z = _mm256_setzero_si256();
+    let mut out = [z; 16];
+    let mut m = 0usize;
+    while m < 16 {
+        let row = &rows[m];
+        let mut acc = z;
+        let mut j = 0usize;
+        while j < 16 {
+            let k = _mm256_set1_epi32(row[j] as i32);
+            acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(s[j], k));
+            j += 1;
+        }
+        out[m] = acc;
+        m += 1;
+    }
+    out
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_tx16_i32x8_impl(s: &[__m256i; 16], kind: usize) -> [__m256i; 16] {
+    match kind {
+        crate::itx_2d::TX_KIND_DCT => avx2_dct16_i32x8_impl(s),
+        crate::itx_2d::TX_KIND_ADST => avx2_adst16_i32x8_impl(s, false),
+        crate::itx_2d::TX_KIND_FLIPADST => avx2_adst16_i32x8_impl(s, true),
+        _ => unreachable!(),
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_tx16_i32x8_from_coeff8_const<const IS_RECT2: bool>(
+    coeff: &[i32],
+    base: usize,
+    stride: usize,
+    kind: usize,
+) -> [__m256i; 16] {
+    let z = _mm256_setzero_si256();
+    let mut s = [z; 16];
+    let mut j = 0usize;
+    while j < 16 {
+        s[j] = avx2_load8_i32_coeff_const::<IS_RECT2>(coeff, base + j * stride);
+        j += 1;
+    }
+    avx2_tx16_i32x8_impl(&s, kind)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_tx16_i32x4_from_coeff4_const<const IS_RECT2: bool>(
+    coeff: &[i32],
+    base: usize,
+    stride: usize,
+    kind: usize,
+) -> [__m128i; 16] {
+    let z = _mm_setzero_si128();
+    let mut s = [z; 16];
+    let rect_mul = _mm_set1_epi32(181);
+    let rect_rnd = _mm_set1_epi32(128);
+    let mut j = 0usize;
+    while j < 16 {
+        let mut v =
+            unsafe { _mm_loadu_si128(coeff.as_ptr().add(base + j * stride) as *const __m128i) };
+        if IS_RECT2 {
+            v = _mm_srai_epi32::<8>(_mm_add_epi32(_mm_mullo_epi32(v, rect_mul), rect_rnd));
+        }
+        s[j] = v;
+        j += 1;
+    }
+    avx2_tx16_i32x4_impl(&s, kind)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_tx16_i32x8_from_tmp8(
+    tmp: &[i32; ITX_TMP_PIXELS],
+    base: usize,
+    kind: usize,
+) -> [__m256i; 16] {
+    let z = _mm256_setzero_si256();
+    let mut s = [z; 16];
+    let mut j = 0usize;
+    while j < 16 {
+        unsafe {
+            s[j] = _mm256_loadu_si256(tmp.as_ptr().add(base + j * 32) as *const __m256i);
+        }
+        j += 1;
+    }
+    avx2_tx16_i32x8_impl(&s, kind)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_dct32_i32x8_from_coeff8_const<const IS_RECT2: bool>(
+    coeff: &[i32],
+    base: usize,
+    m: usize,
+) -> [__m256i; 8] {
+    let z = _mm256_setzero_si256();
+    let mut out = [z; 8];
+    let mut j = 0usize;
+    while j < 32 {
+        let v = avx2_load8_i32_coeff_const::<IS_RECT2>(coeff, base + j * 32);
+        let mut lane = 0usize;
+        while lane < 8 {
+            let k = _mm256_set1_epi32(crate::itx_2d::DCT32_DENSE_KERNEL[j * 32 + m + lane]);
+            out[lane] = _mm256_add_epi32(out[lane], _mm256_mullo_epi32(v, k));
+            lane += 1;
+        }
+        j += 1;
+    }
+    out
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_dct32_i32x8_from_tmp8(tmp: &[i32; ITX_TMP_PIXELS], base: usize, m: usize) -> [__m256i; 8] {
+    let z = _mm256_setzero_si256();
+    let mut out = [z; 8];
+    let mut j = 0usize;
+    while j < 32 {
+        let v = unsafe { _mm256_loadu_si256(tmp.as_ptr().add(base + j * 32) as *const __m256i) };
+        let mut lane = 0usize;
+        while lane < 8 {
+            let k = _mm256_set1_epi32(crate::itx_2d::DCT32_DENSE_KERNEL[j * 32 + m + lane]);
+            out[lane] = _mm256_add_epi32(out[lane], _mm256_mullo_epi32(v, k));
+            lane += 1;
+        }
+        j += 1;
+    }
+    out
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_tx8_i32x8_from_coeff8_const<const IS_RECT2: bool>(
+    coeff: &[i32],
+    base: usize,
+    kind: usize,
+) -> [__m256i; 8] {
+    let z = _mm256_setzero_si256();
+    let mut out = [z; 8];
+    let mut j = 0usize;
+    while j < 8 {
+        let v = avx2_load8_i32_coeff_const::<IS_RECT2>(coeff, base + j * 8);
+        let mut lane = 0usize;
+        while lane < 8 {
+            let k = _mm256_set1_epi32(tx8_coeff(kind, lane, j));
+            out[lane] = _mm256_add_epi32(out[lane], _mm256_mullo_epi32(v, k));
+            lane += 1;
+        }
+        j += 1;
+    }
+    out
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_tx8_i32x8_from_tmp8(tmp: &[i32; ITX_TMP_PIXELS], base: usize, kind: usize) -> [__m256i; 8] {
+    let z = _mm256_setzero_si256();
+    let mut out = [z; 8];
+    let mut j = 0usize;
+    while j < 8 {
+        let v = unsafe { _mm256_loadu_si256(tmp.as_ptr().add(base + j * 32) as *const __m256i) };
+        let mut lane = 0usize;
+        while lane < 8 {
+            let k = _mm256_set1_epi32(tx8_coeff(kind, lane, j));
+            out[lane] = _mm256_add_epi32(out[lane], _mm256_mullo_epi32(v, k));
+            lane += 1;
+        }
+        j += 1;
+    }
+    out
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_tx_dense_i32x8_from_coeff8_const<const IS_RECT2: bool, const W: usize, const H: usize>(
+    coeff: &[i32],
+    base: usize,
+    kind: usize,
+    m: usize,
+) -> [__m256i; 8] {
+    let z = _mm256_setzero_si256();
+    let mut out = [z; 8];
+    let mut j = 0usize;
+    while j < W {
+        let v = avx2_load8_i32_coeff_const::<IS_RECT2>(coeff, base + j * H);
+        let mut lane = 0usize;
+        while lane < 8 {
+            let k = _mm256_set1_epi32(avx2_tx_dense_coeff(kind, W, m + lane, j));
+            out[lane] = _mm256_add_epi32(out[lane], _mm256_mullo_epi32(v, k));
+            lane += 1;
+        }
+        j += 1;
+    }
+    out
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_tx_dense_i32x8_from_tmp8<const H: usize>(
+    vin: &[__m256i; H],
+    kind: usize,
+    m: usize,
+) -> [__m256i; 8] {
+    let z = _mm256_setzero_si256();
+    let mut out = [z; 8];
+    let mut j = 0usize;
+    while j < H {
+        let v = vin[j];
+        let mut lane = 0usize;
+        while lane < 8 {
+            let k = _mm256_set1_epi32(avx2_tx_dense_coeff(kind, H, m + lane, j));
+            out[lane] = _mm256_add_epi32(out[lane], _mm256_mullo_epi32(v, k));
+            lane += 1;
+        }
+        j += 1;
+    }
+    out
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn avx2_dct32_i32x4_from_coeff4_const<const IS_RECT2: bool>(
     coeff: &[i32],
     base: usize,
@@ -373,52 +760,6 @@ fn avx2_dct32_i32x4_from_coeff4_const<const IS_RECT2: bool>(
             if IS_RECT2 {
                 v = _mm_srai_epi32::<8>(_mm_add_epi32(_mm_mullo_epi32(v, rect_mul), rect_rnd));
             }
-            a0 = _mm_add_epi32(
-                a0,
-                _mm_mullo_epi32(
-                    v,
-                    _mm_set1_epi32(crate::itx_2d::DCT32_DENSE_KERNEL[j * 32 + m]),
-                ),
-            );
-            a1 = _mm_add_epi32(
-                a1,
-                _mm_mullo_epi32(
-                    v,
-                    _mm_set1_epi32(crate::itx_2d::DCT32_DENSE_KERNEL[j * 32 + m + 1]),
-                ),
-            );
-            a2 = _mm_add_epi32(
-                a2,
-                _mm_mullo_epi32(
-                    v,
-                    _mm_set1_epi32(crate::itx_2d::DCT32_DENSE_KERNEL[j * 32 + m + 2]),
-                ),
-            );
-            a3 = _mm_add_epi32(
-                a3,
-                _mm_mullo_epi32(
-                    v,
-                    _mm_set1_epi32(crate::itx_2d::DCT32_DENSE_KERNEL[j * 32 + m + 3]),
-                ),
-            );
-            j += 1;
-        }
-        [a0, a1, a2, a3]
-    }
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn avx2_dct32_i32x4_from_tmp4(tmp: &[i32; ITX_TMP_PIXELS], base: usize, m: usize) -> [__m128i; 4] {
-    unsafe {
-        let z = _mm_setzero_si128();
-        let mut a0 = z;
-        let mut a1 = z;
-        let mut a2 = z;
-        let mut a3 = z;
-        let mut j = 0usize;
-        while j < 32 {
-            let v = _mm_loadu_si128(tmp.as_ptr().add(base + j * 32) as *const __m128i);
             a0 = _mm_add_epi32(
                 a0,
                 _mm_mullo_epi32(
@@ -475,45 +816,6 @@ fn avx2_tx8_i32x4_from_coeff4_const<const IS_RECT2: bool>(
             if IS_RECT2 {
                 v = _mm_srai_epi32::<8>(_mm_add_epi32(_mm_mullo_epi32(v, rect_mul), rect_rnd));
             }
-            a0 = _mm_add_epi32(
-                a0,
-                _mm_mullo_epi32(v, _mm_set1_epi32(tx8_coeff(kind, m, j))),
-            );
-            a1 = _mm_add_epi32(
-                a1,
-                _mm_mullo_epi32(v, _mm_set1_epi32(tx8_coeff(kind, m + 1, j))),
-            );
-            a2 = _mm_add_epi32(
-                a2,
-                _mm_mullo_epi32(v, _mm_set1_epi32(tx8_coeff(kind, m + 2, j))),
-            );
-            a3 = _mm_add_epi32(
-                a3,
-                _mm_mullo_epi32(v, _mm_set1_epi32(tx8_coeff(kind, m + 3, j))),
-            );
-            j += 1;
-        }
-        [a0, a1, a2, a3]
-    }
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn avx2_tx8_i32x4_from_tmp4(
-    tmp: &[i32; ITX_TMP_PIXELS],
-    base: usize,
-    kind: usize,
-    m: usize,
-) -> [__m128i; 4] {
-    unsafe {
-        let z = _mm_setzero_si128();
-        let mut a0 = z;
-        let mut a1 = z;
-        let mut a2 = z;
-        let mut a3 = z;
-        let mut j = 0usize;
-        while j < 8 {
-            let v = _mm_loadu_si128(tmp.as_ptr().add(base + j * 32) as *const __m128i);
             a0 = _mm_add_epi32(
                 a0,
                 _mm_mullo_epi32(v, _mm_set1_epi32(tx8_coeff(kind, m, j))),
@@ -4206,14 +4508,31 @@ fn tx_dequant_dense_avx2_i32_impl_const<
         }
         let nrows = ngrp * 4;
         let z = _mm_setzero_si128();
+        let z256 = _mm256_setzero_si256();
         let rect_mul = _mm_set1_epi32(181);
         let rect_rnd = _mm_set1_epi32(128);
         let rnd = _mm_set1_epi32((1 << shift0) >> 1);
         let sh = _mm_cvtsi32_si128(shift0);
         let minv = _mm_set1_epi32(row_clip_min);
         let maxv = _mm_set1_epi32(row_clip_max);
+        let rnd256 = _mm256_set1_epi32((1 << shift0) >> 1);
+        let minv256 = _mm256_set1_epi32(row_clip_min);
+        let maxv256 = _mm256_set1_epi32(row_clip_max);
 
         let mut y = 0usize;
+        if W >= 8 {
+            while y + 8 <= nrows {
+                let mut m = 0usize;
+                while m + 8 <= W {
+                    let g = avx2_tx_dense_i32x8_from_coeff8_const::<IS_RECT2, W, H>(
+                        coeff, y, first_kind, m,
+                    );
+                    avx2_store8x8_i32_clip(tmp, y * 32 + m, &g, rnd256, sh, minv256, maxv256);
+                    m += 8;
+                }
+                y += 8;
+            }
+        }
         while y + 4 <= nrows {
             let mut m = 0usize;
             while m < W {
@@ -4273,6 +4592,23 @@ fn tx_dequant_dense_avx2_i32_impl_const<
         coeff[..W * H].fill(0);
 
         let mut x = 0usize;
+        if H >= 8 {
+            while x + 8 <= W {
+                let mut vin = [z256; H];
+                let mut j = 0usize;
+                while j < H {
+                    vin[j] = _mm256_loadu_si256(tmp.as_ptr().add(x + j * 32) as *const __m256i);
+                    j += 1;
+                }
+                let mut m = 0usize;
+                while m + 8 <= H {
+                    let g = avx2_tx_dense_i32x8_from_tmp8::<H>(&vin, second_kind, m);
+                    avx2_store_i32x8_rows(tmp, x + m * 32, &g);
+                    m += 8;
+                }
+                x += 8;
+            }
+        }
         while x < W {
             // Snapshot the H input rows for this column group before computing
             // outputs: the loop below stores results back into tmp, which would
@@ -5966,53 +6302,48 @@ fn tx_dequant_8x8_avx2_i32_impl_const<const IS_RECT2: bool>(
     first_kind: usize,
     second_kind: usize,
 ) {
-    unsafe {
-        debug_assert!(coeff.len() >= 64);
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < 2 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
-        }
-        let ncols = ngrp * 4;
-        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
-        let sh = _mm_cvtsi32_si128(shift0);
-        let minv = _mm_set1_epi32(row_clip_min);
-        let maxv = _mm_set1_epi32(row_clip_max);
-        let mut y = 0usize;
-        while y + 4 <= ncols {
-            let mut x = 0usize;
-            while x < 8 {
-                let g = avx2_tx8_i32x4_from_coeff4_const::<IS_RECT2>(coeff, y, first_kind, x);
-                avx2_store4x4_i32_clip(tmp, y * 32 + x, &g, rnd, sh, minv, maxv);
-                x += 4;
-            }
-            y += 4;
-        }
-        while y < 8 {
-            tmp[y * 32..y * 32 + 8].fill(0);
-            y += 1;
-        }
-        coeff[..64].fill(0);
-        let mut x = 0usize;
-        while x < 8 {
-            // Compute both output-row groups from the pristine row-pass result
-            // BEFORE storing either: storing m=0 first would overwrite rows 0-3,
-            // which the m=4 group still needs to read (in-place aliasing).
-            let g_lo = avx2_tx8_i32x4_from_tmp4(tmp, x, second_kind, 0);
-            let g_hi = avx2_tx8_i32x4_from_tmp4(tmp, x, second_kind, 4);
-            for (m, g) in [(0usize, &g_lo), (4usize, &g_hi)] {
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, g[0]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32) as *mut __m128i, g[1]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32) as *mut __m128i, g[2]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 3) * 32) as *mut __m128i, g[3]);
-            }
-            x += 4;
+    debug_assert!(coeff.len() >= 64);
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < 2 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
     }
+    let ncols = ngrp * 4;
+    let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+    let sh = _mm_cvtsi32_si128(shift0);
+    let minv = _mm_set1_epi32(row_clip_min);
+    let maxv = _mm_set1_epi32(row_clip_max);
+    let rnd256 = _mm256_set1_epi32((1 << shift0) >> 1);
+    let minv256 = _mm256_set1_epi32(row_clip_min);
+    let maxv256 = _mm256_set1_epi32(row_clip_max);
+
+    let mut y = 0usize;
+    while y + 8 <= ncols {
+        let out = avx2_tx8_i32x8_from_coeff8_const::<IS_RECT2>(coeff, y, first_kind);
+        avx2_store8x8_i32_clip(tmp, y * 32, &out, rnd256, sh, minv256, maxv256);
+        y += 8;
+    }
+    if y + 4 <= ncols {
+        let mut x = 0usize;
+        while x < 8 {
+            let g = avx2_tx8_i32x4_from_coeff4_const::<IS_RECT2>(coeff, y, first_kind, x);
+            avx2_store4x4_i32_clip(tmp, y * 32 + x, &g, rnd, sh, minv, maxv);
+            x += 4;
+        }
+        y += 4;
+    }
+    while y < 8 {
+        tmp[y * 32..y * 32 + 8].fill(0);
+        y += 1;
+    }
+    coeff[..64].fill(0);
+
+    let out = avx2_tx8_i32x8_from_tmp8(tmp, 0, second_kind);
+    avx2_store_i32x8_rows(tmp, 0, &out);
 }
 
 #[inline]
@@ -6061,153 +6392,77 @@ fn idct_dequant_16x16_avx2_i32_impl_const<const IS_RECT2: bool>(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    unsafe {
-        debug_assert!(coeff.len() >= 256);
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < 4 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(coeff.len() >= 256);
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < 4 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let ncols = ngrp * 4;
-        let z = _mm_setzero_si128();
-        let rect_mul = _mm_set1_epi32(181);
-        let rect_rnd = _mm_set1_epi32(128);
-        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
-        let sh = _mm_cvtsi32_si128(shift0);
-        let minv = _mm_set1_epi32(row_clip_min);
-        let maxv = _mm_set1_epi32(row_clip_max);
+    }
+    let ncols = ngrp * 4;
+    let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+    let sh = _mm_cvtsi32_si128(shift0);
+    let minv = _mm_set1_epi32(row_clip_min);
+    let maxv = _mm_set1_epi32(row_clip_max);
+    let rnd256 = _mm256_set1_epi32((1 << shift0) >> 1);
+    let minv256 = _mm256_set1_epi32(row_clip_min);
+    let maxv256 = _mm256_set1_epi32(row_clip_max);
 
-        macro_rules! load4_i32_coeff {
-            ($base:expr, $j:expr) => {{
-                let mut v = _mm_loadu_si128(coeff.as_ptr().add($base + $j * 16) as *const __m128i);
-                if IS_RECT2 {
-                    v = _mm_srai_epi32::<8>(_mm_add_epi32(_mm_mullo_epi32(v, rect_mul), rect_rnd));
-                }
-                v
-            }};
-        }
-        macro_rules! dct16x4_coeff {
-            ($base:expr, $m:expr) => {{
-                let mut a0 = z;
-                let mut a1 = z;
-                let mut a2 = z;
-                let mut a3 = z;
-                let mut j = 0usize;
-                while j < 16 {
-                    let v = load4_i32_coeff!($base, j);
-                    a0 = _mm_add_epi32(
-                        a0,
-                        _mm_mullo_epi32(
-                            v,
-                            _mm_set1_epi32(crate::itx_2d::DCT16_DENSE_KERNEL[j * 16 + $m]),
-                        ),
-                    );
-                    a1 = _mm_add_epi32(
-                        a1,
-                        _mm_mullo_epi32(
-                            v,
-                            _mm_set1_epi32(crate::itx_2d::DCT16_DENSE_KERNEL[j * 16 + $m + 1]),
-                        ),
-                    );
-                    a2 = _mm_add_epi32(
-                        a2,
-                        _mm_mullo_epi32(
-                            v,
-                            _mm_set1_epi32(crate::itx_2d::DCT16_DENSE_KERNEL[j * 16 + $m + 2]),
-                        ),
-                    );
-                    a3 = _mm_add_epi32(
-                        a3,
-                        _mm_mullo_epi32(
-                            v,
-                            _mm_set1_epi32(crate::itx_2d::DCT16_DENSE_KERNEL[j * 16 + $m + 3]),
-                        ),
-                    );
-                    j += 1;
-                }
-                [a0, a1, a2, a3]
-            }};
-        }
-        macro_rules! dct16x4_tmp {
-            ($base:expr, $m:expr) => {{
-                let mut a0 = z;
-                let mut a1 = z;
-                let mut a2 = z;
-                let mut a3 = z;
-                let mut j = 0usize;
-                while j < 16 {
-                    let v = _mm_loadu_si128(tmp.as_ptr().add($base + j * 32) as *const __m128i);
-                    a0 = _mm_add_epi32(
-                        a0,
-                        _mm_mullo_epi32(
-                            v,
-                            _mm_set1_epi32(crate::itx_2d::DCT16_DENSE_KERNEL[j * 16 + $m]),
-                        ),
-                    );
-                    a1 = _mm_add_epi32(
-                        a1,
-                        _mm_mullo_epi32(
-                            v,
-                            _mm_set1_epi32(crate::itx_2d::DCT16_DENSE_KERNEL[j * 16 + $m + 1]),
-                        ),
-                    );
-                    a2 = _mm_add_epi32(
-                        a2,
-                        _mm_mullo_epi32(
-                            v,
-                            _mm_set1_epi32(crate::itx_2d::DCT16_DENSE_KERNEL[j * 16 + $m + 2]),
-                        ),
-                    );
-                    a3 = _mm_add_epi32(
-                        a3,
-                        _mm_mullo_epi32(
-                            v,
-                            _mm_set1_epi32(crate::itx_2d::DCT16_DENSE_KERNEL[j * 16 + $m + 3]),
-                        ),
-                    );
-                    j += 1;
-                }
-                [a0, a1, a2, a3]
-            }};
-        }
-
-        let mut y = 0usize;
-        while y + 4 <= ncols {
-            let mut x = 0usize;
-            while x < 16 {
-                let g = dct16x4_coeff!(y, x);
-                avx2_store4x4_i32_clip(tmp, y * 32 + x, &g, rnd, sh, minv, maxv);
-                x += 4;
-            }
-            y += 4;
-        }
-        while y < 16 {
-            tmp[y * 32..y * 32 + 16].fill(0);
-            y += 1;
-        }
-        coeff[..256].fill(0);
-
+    let mut y = 0usize;
+    while y + 8 <= ncols {
+        let out =
+            avx2_tx16_i32x8_from_coeff8_const::<IS_RECT2>(coeff, y, 16, crate::itx_2d::TX_KIND_DCT);
+        avx2_store8x8_i32_clip(
+            tmp,
+            y * 32,
+            array_ref8_i32x8(&out, 0),
+            rnd256,
+            sh,
+            minv256,
+            maxv256,
+        );
+        avx2_store8x8_i32_clip(
+            tmp,
+            y * 32 + 8,
+            array_ref8_i32x8(&out, 8),
+            rnd256,
+            sh,
+            minv256,
+            maxv256,
+        );
+        y += 8;
+    }
+    if y + 4 <= ncols {
+        let out =
+            avx2_tx16_i32x4_from_coeff4_const::<IS_RECT2>(coeff, y, 16, crate::itx_2d::TX_KIND_DCT);
         let mut x = 0usize;
         while x < 16 {
-            // Compute all 4 output-row groups from the pristine row-pass result
-            // before storing any (in-place aliasing: storing m=0 overwrites rows
-            // 0-3 that later groups still need to read).
-            let g0 = dct16x4_tmp!(x, 0);
-            let g4 = dct16x4_tmp!(x, 4);
-            let g8 = dct16x4_tmp!(x, 8);
-            let g12 = dct16x4_tmp!(x, 12);
-            for (m, g) in [(0usize, &g0), (4, &g4), (8, &g8), (12, &g12)] {
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, g[0]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32) as *mut __m128i, g[1]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32) as *mut __m128i, g[2]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 3) * 32) as *mut __m128i, g[3]);
-            }
+            let g = [out[x], out[x + 1], out[x + 2], out[x + 3]];
+            avx2_store4x4_i32_clip(tmp, y * 32 + x, &g, rnd, sh, minv, maxv);
             x += 4;
         }
+        y += 4;
+    }
+    while y < 16 {
+        tmp[y * 32..y * 32 + 16].fill(0);
+        y += 1;
+    }
+    coeff[..256].fill(0);
+
+    let mut x = 0usize;
+    while x + 8 <= 16 {
+        let out = avx2_tx16_i32x8_from_tmp8(tmp, x, crate::itx_2d::TX_KIND_DCT);
+        let mut m = 0usize;
+        while m < 16 {
+            unsafe {
+                _mm256_storeu_si256(tmp.as_mut_ptr().add(x + m * 32) as *mut __m256i, out[m]);
+            }
+            m += 1;
+        }
+        x += 8;
     }
 }
 
@@ -6255,62 +6510,76 @@ fn idct_dequant_32x32_avx2_i32_impl_const<const IS_RECT2: bool>(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    unsafe {
-        debug_assert!(coeff.len() >= 1024);
-        let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
-        let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
-        let mut ngrp = 0usize;
-        while ngrp < 8 {
-            ngrp += 1;
-            if eob <= last_eob[ngrp - 1] as i32 {
-                break;
-            }
+    debug_assert!(coeff.len() >= 1024);
+    let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
+    let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
+    let mut ngrp = 0usize;
+    while ngrp < 8 {
+        ngrp += 1;
+        if eob <= last_eob[ngrp - 1] as i32 {
+            break;
         }
-        let ncols = ngrp * 4;
-        let rnd = _mm_set1_epi32((1 << shift0) >> 1);
-        let sh = _mm_cvtsi32_si128(shift0);
-        let minv = _mm_set1_epi32(row_clip_min);
-        let maxv = _mm_set1_epi32(row_clip_max);
-        let mut y = 0usize;
-        while y + 4 <= ncols {
-            let mut x = 0usize;
-            while x < 32 {
-                let g = avx2_dct32_i32x4_from_coeff4_const::<IS_RECT2>(coeff, y, x);
-                avx2_store4x4_i32_clip(tmp, y * 32 + x, &g, rnd, sh, minv, maxv);
-                x += 4;
-            }
-            y += 4;
-        }
-        while y < 32 {
-            tmp[y * 32..y * 32 + 32].fill(0);
-            y += 1;
-        }
-        coeff[..1024].fill(0);
+    }
+    let ncols = ngrp * 4;
+    let rnd = _mm_set1_epi32((1 << shift0) >> 1);
+    let sh = _mm_cvtsi32_si128(shift0);
+    let minv = _mm_set1_epi32(row_clip_min);
+    let maxv = _mm_set1_epi32(row_clip_max);
+    let rnd256 = _mm256_set1_epi32((1 << shift0) >> 1);
+    let minv256 = _mm256_set1_epi32(row_clip_min);
+    let maxv256 = _mm256_set1_epi32(row_clip_max);
+
+    let mut y = 0usize;
+    while y + 8 <= ncols {
         let mut x = 0usize;
         while x < 32 {
-            // Compute all 8 output-row groups from pristine row-pass result before
-            // storing any (in-place aliasing).
-            let groups = [
-                avx2_dct32_i32x4_from_tmp4(tmp, x, 0),
-                avx2_dct32_i32x4_from_tmp4(tmp, x, 4),
-                avx2_dct32_i32x4_from_tmp4(tmp, x, 8),
-                avx2_dct32_i32x4_from_tmp4(tmp, x, 12),
-                avx2_dct32_i32x4_from_tmp4(tmp, x, 16),
-                avx2_dct32_i32x4_from_tmp4(tmp, x, 20),
-                avx2_dct32_i32x4_from_tmp4(tmp, x, 24),
-                avx2_dct32_i32x4_from_tmp4(tmp, x, 28),
-            ];
-            let mut m = 0usize;
-            while m < 32 {
-                let g = &groups[m / 4];
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32) as *mut __m128i, g[0]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32) as *mut __m128i, g[1]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32) as *mut __m128i, g[2]);
-                _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 3) * 32) as *mut __m128i, g[3]);
-                m += 4;
-            }
+            let g = avx2_dct32_i32x8_from_coeff8_const::<IS_RECT2>(coeff, y, x);
+            avx2_store8x8_i32_clip(tmp, y * 32 + x, &g, rnd256, sh, minv256, maxv256);
+            x += 8;
+        }
+        y += 8;
+    }
+    if y + 4 <= ncols {
+        let mut x = 0usize;
+        while x < 32 {
+            let g = avx2_dct32_i32x4_from_coeff4_const::<IS_RECT2>(coeff, y, x);
+            avx2_store4x4_i32_clip(tmp, y * 32 + x, &g, rnd, sh, minv, maxv);
             x += 4;
         }
+        y += 4;
+    }
+    while y < 32 {
+        tmp[y * 32..y * 32 + 32].fill(0);
+        y += 1;
+    }
+    coeff[..1024].fill(0);
+
+    let mut x = 0usize;
+    while x + 8 <= 32 {
+        // Compute all output-row groups from pristine row-pass result before
+        // storing any (in-place aliasing).
+        let groups = [
+            avx2_dct32_i32x8_from_tmp8(tmp, x, 0),
+            avx2_dct32_i32x8_from_tmp8(tmp, x, 8),
+            avx2_dct32_i32x8_from_tmp8(tmp, x, 16),
+            avx2_dct32_i32x8_from_tmp8(tmp, x, 24),
+        ];
+        let mut m = 0usize;
+        while m < 32 {
+            let g = &groups[m / 8];
+            let mut lane = 0usize;
+            while lane < 8 {
+                unsafe {
+                    _mm256_storeu_si256(
+                        tmp.as_mut_ptr().add(x + (m + lane) * 32) as *mut __m256i,
+                        g[lane],
+                    );
+                }
+                lane += 1;
+            }
+            m += 8;
+        }
+        x += 8;
     }
 }
 
