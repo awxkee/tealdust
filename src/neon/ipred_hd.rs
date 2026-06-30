@@ -1390,38 +1390,35 @@ fn ipred_z1_hbd_neon_impl(
     let mut y = 0usize;
     let mut ypos = dx * (1 + mrl_idx as i32);
     while y + 1 < h {
-        let rows = &mut dst[y * stride..];
-        let (row0, rest) = rows.split_at_mut(stride);
+        let row0_off = y * stride;
         if let Some(fill) = z1_row_hbd_neon(
             &filt,
             top_off,
             max_base_x,
             is_luma,
             ypos,
-            &mut row0[..w],
+            &mut dst[row0_off..row0_off + w],
             w,
             bitdepth_max,
         ) {
-            row0[..w].fill(fill);
-            for row in rest.chunks_mut(stride).take(h - y - 1) {
+            for row in dst[row0_off..].chunks_mut(stride).take(h - y) {
                 row[..w].fill(fill);
             }
             return;
         }
         ypos += dx;
-        let (row1, tail) = rest.split_at_mut(stride);
+        let row1_off = row0_off + stride;
         if let Some(fill) = z1_row_hbd_neon(
             &filt,
             top_off,
             max_base_x,
             is_luma,
             ypos,
-            &mut row1[..w],
+            &mut dst[row1_off..row1_off + w],
             w,
             bitdepth_max,
         ) {
-            row1[..w].fill(fill);
-            for row in tail.chunks_mut(stride).take(h - y - 2) {
+            for row in dst[row1_off..].chunks_mut(stride).take(h - y - 1) {
                 row[..w].fill(fill);
             }
             return;
