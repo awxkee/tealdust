@@ -958,124 +958,6 @@ fn avx2_tx_dense_coeff_pair(kind: usize, n: usize, out: usize, input: usize) -> 
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn avx2_store16x8_i16_clip256<const STRIDE: usize>(
-    scratch: &mut [i16],
-    off: usize,
-    v0: __m256i,
-    v1: __m256i,
-    v2: __m256i,
-    v3: __m256i,
-    v4: __m256i,
-    v5: __m256i,
-    v6: __m256i,
-    v7: __m256i,
-    v8: __m256i,
-    v9: __m256i,
-    v10: __m256i,
-    v11: __m256i,
-    v12: __m256i,
-    v13: __m256i,
-    v14: __m256i,
-    v15: __m256i,
-    rnd: __m128i,
-    sh: __m128i,
-    minv: __m128i,
-    maxv: __m128i,
-) {
-    unsafe {
-        debug_assert!(STRIDE == 16 || STRIDE == 32);
-        debug_assert!(off + 7 * STRIDE + 16 <= scratch.len());
-
-        let rnd256 = _mm256_broadcastsi128_si256(rnd);
-        let min256 = _mm256_broadcastsi128_si256(minv);
-        let max256 = _mm256_broadcastsi128_si256(maxv);
-        macro_rules! clip_pack {
-            ($x:expr) => {{
-                let c = _mm256_min_epi32(
-                    _mm256_max_epi32(_mm256_sra_epi32(_mm256_add_epi32($x, rnd256), sh), min256),
-                    max256,
-                );
-                _mm_packs_epi32(_mm256_castsi256_si128(c), _mm256_extracti128_si256::<1>(c))
-            }};
-        }
-
-        let r0 = clip_pack!(v0);
-        let r1 = clip_pack!(v1);
-        let r2 = clip_pack!(v2);
-        let r3 = clip_pack!(v3);
-        let r4 = clip_pack!(v4);
-        let r5 = clip_pack!(v5);
-        let r6 = clip_pack!(v6);
-        let r7 = clip_pack!(v7);
-        let r8 = clip_pack!(v8);
-        let r9 = clip_pack!(v9);
-        let r10 = clip_pack!(v10);
-        let r11 = clip_pack!(v11);
-        let r12 = clip_pack!(v12);
-        let r13 = clip_pack!(v13);
-        let r14 = clip_pack!(v14);
-        let r15 = clip_pack!(v15);
-
-        macro_rules! transpose8_named {
-            (
-                $a0:expr, $a1:expr, $a2:expr, $a3:expr,
-                $a4:expr, $a5:expr, $a6:expr, $a7:expr =>
-                $o0:ident, $o1:ident, $o2:ident, $o3:ident,
-                $o4:ident, $o5:ident, $o6:ident, $o7:ident
-            ) => {
-                let t0 = _mm_unpacklo_epi16($a0, $a1);
-                let t1 = _mm_unpackhi_epi16($a0, $a1);
-                let t2 = _mm_unpacklo_epi16($a2, $a3);
-                let t3 = _mm_unpackhi_epi16($a2, $a3);
-                let t4 = _mm_unpacklo_epi16($a4, $a5);
-                let t5 = _mm_unpackhi_epi16($a4, $a5);
-                let t6 = _mm_unpacklo_epi16($a6, $a7);
-                let t7 = _mm_unpackhi_epi16($a6, $a7);
-
-                let u0 = _mm_unpacklo_epi32(t0, t2);
-                let u1 = _mm_unpackhi_epi32(t0, t2);
-                let u2 = _mm_unpacklo_epi32(t1, t3);
-                let u3 = _mm_unpackhi_epi32(t1, t3);
-                let u4 = _mm_unpacklo_epi32(t4, t6);
-                let u5 = _mm_unpackhi_epi32(t4, t6);
-                let u6 = _mm_unpacklo_epi32(t5, t7);
-                let u7 = _mm_unpackhi_epi32(t5, t7);
-
-                let $o0 = _mm_unpacklo_epi64(u0, u4);
-                let $o1 = _mm_unpackhi_epi64(u0, u4);
-                let $o2 = _mm_unpacklo_epi64(u1, u5);
-                let $o3 = _mm_unpackhi_epi64(u1, u5);
-                let $o4 = _mm_unpacklo_epi64(u2, u6);
-                let $o5 = _mm_unpackhi_epi64(u2, u6);
-                let $o6 = _mm_unpacklo_epi64(u3, u7);
-                let $o7 = _mm_unpackhi_epi64(u3, u7);
-            };
-        }
-
-        transpose8_named!(r0, r1, r2, r3, r4, r5, r6, r7 => l0, l1, l2, l3, l4, l5, l6, l7);
-        transpose8_named!(r8, r9, r10, r11, r12, r13, r14, r15 => h0, h1, h2, h3, h4, h5, h6, h7);
-        let ptr = scratch.as_mut_ptr();
-        _mm_storeu_si128(ptr.add(off) as *mut __m128i, l0);
-        _mm_storeu_si128(ptr.add(off + 8) as *mut __m128i, h0);
-        _mm_storeu_si128(ptr.add(off + STRIDE) as *mut __m128i, l1);
-        _mm_storeu_si128(ptr.add(off + STRIDE + 8) as *mut __m128i, h1);
-        _mm_storeu_si128(ptr.add(off + 2 * STRIDE) as *mut __m128i, l2);
-        _mm_storeu_si128(ptr.add(off + 2 * STRIDE + 8) as *mut __m128i, h2);
-        _mm_storeu_si128(ptr.add(off + 3 * STRIDE) as *mut __m128i, l3);
-        _mm_storeu_si128(ptr.add(off + 3 * STRIDE + 8) as *mut __m128i, h3);
-        _mm_storeu_si128(ptr.add(off + 4 * STRIDE) as *mut __m128i, l4);
-        _mm_storeu_si128(ptr.add(off + 4 * STRIDE + 8) as *mut __m128i, h4);
-        _mm_storeu_si128(ptr.add(off + 5 * STRIDE) as *mut __m128i, l5);
-        _mm_storeu_si128(ptr.add(off + 5 * STRIDE + 8) as *mut __m128i, h5);
-        _mm_storeu_si128(ptr.add(off + 6 * STRIDE) as *mut __m128i, l6);
-        _mm_storeu_si128(ptr.add(off + 6 * STRIDE + 8) as *mut __m128i, h6);
-        _mm_storeu_si128(ptr.add(off + 7 * STRIDE) as *mut __m128i, l7);
-        _mm_storeu_si128(ptr.add(off + 7 * STRIDE + 8) as *mut __m128i, h7);
-    }
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
 fn avx2_store4x8_i16_clip256<const STRIDE: usize>(
     scratch: &mut [i16],
     off: usize,
@@ -1230,129 +1112,6 @@ fn avx2_store4x16_i16_clip256<const STRIDE: usize>(
         }
         transpose4x8_store!(0usize, r0_lo, r1_lo, r2_lo, r3_lo);
         transpose4x8_store!(8usize, r0_hi, r1_hi, r2_hi, r3_hi);
-    }
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn avx2_store16x16_i16_clip256<const STRIDE: usize, const N: usize, const M: usize>(
-    scratch: &mut [i16],
-    off: usize,
-    out: &[Avx2I32x16; N],
-    rnd: __m128i,
-    sh: __m128i,
-    minv: __m128i,
-    maxv: __m128i,
-) {
-    unsafe {
-        debug_assert!(STRIDE == 16 || STRIDE == 32);
-        debug_assert!(M + 16 <= N);
-        debug_assert!(off + 15 * STRIDE + 16 <= scratch.len());
-
-        let rnd256 = _mm256_broadcastsi128_si256(rnd);
-        let min256 = _mm256_broadcastsi128_si256(minv);
-        let max256 = _mm256_broadcastsi128_si256(maxv);
-        macro_rules! clip_pack16 {
-            ($x:expr) => {{
-                let x = $x;
-                let l = _mm256_min_epi32(
-                    _mm256_max_epi32(_mm256_sra_epi32(_mm256_add_epi32(x.lo, rnd256), sh), min256),
-                    max256,
-                );
-                let h = _mm256_min_epi32(
-                    _mm256_max_epi32(_mm256_sra_epi32(_mm256_add_epi32(x.hi, rnd256), sh), min256),
-                    max256,
-                );
-                let lo = _mm256_permute2x128_si256::<0x20>(l, h);
-                let hi = _mm256_permute2x128_si256::<0x31>(l, h);
-                _mm256_permute4x64_epi64::<0xd8>(_mm256_packs_epi32(lo, hi))
-            }};
-        }
-
-        let r0 = clip_pack16!(out[M]);
-        let r1 = clip_pack16!(out[M + 1]);
-        let r2 = clip_pack16!(out[M + 2]);
-        let r3 = clip_pack16!(out[M + 3]);
-        let r4 = clip_pack16!(out[M + 4]);
-        let r5 = clip_pack16!(out[M + 5]);
-        let r6 = clip_pack16!(out[M + 6]);
-        let r7 = clip_pack16!(out[M + 7]);
-        let r8 = clip_pack16!(out[M + 8]);
-        let r9 = clip_pack16!(out[M + 9]);
-        let r10 = clip_pack16!(out[M + 10]);
-        let r11 = clip_pack16!(out[M + 11]);
-        let r12 = clip_pack16!(out[M + 12]);
-        let r13 = clip_pack16!(out[M + 13]);
-        let r14 = clip_pack16!(out[M + 14]);
-        let r15 = clip_pack16!(out[M + 15]);
-
-        macro_rules! transpose8x16_named {
-            (
-                $a0:expr, $a1:expr, $a2:expr, $a3:expr,
-                $a4:expr, $a5:expr, $a6:expr, $a7:expr =>
-                $o0:ident, $o1:ident, $o2:ident, $o3:ident,
-                $o4:ident, $o5:ident, $o6:ident, $o7:ident
-            ) => {
-                let t0 = _mm256_unpacklo_epi16($a0, $a1);
-                let t1 = _mm256_unpackhi_epi16($a0, $a1);
-                let t2 = _mm256_unpacklo_epi16($a2, $a3);
-                let t3 = _mm256_unpackhi_epi16($a2, $a3);
-                let t4 = _mm256_unpacklo_epi16($a4, $a5);
-                let t5 = _mm256_unpackhi_epi16($a4, $a5);
-                let t6 = _mm256_unpacklo_epi16($a6, $a7);
-                let t7 = _mm256_unpackhi_epi16($a6, $a7);
-
-                let u0 = _mm256_unpacklo_epi32(t0, t2);
-                let u1 = _mm256_unpackhi_epi32(t0, t2);
-                let u2 = _mm256_unpacklo_epi32(t1, t3);
-                let u3 = _mm256_unpackhi_epi32(t1, t3);
-                let u4 = _mm256_unpacklo_epi32(t4, t6);
-                let u5 = _mm256_unpackhi_epi32(t4, t6);
-                let u6 = _mm256_unpacklo_epi32(t5, t7);
-                let u7 = _mm256_unpackhi_epi32(t5, t7);
-
-                let $o0 = _mm256_unpacklo_epi64(u0, u4);
-                let $o1 = _mm256_unpackhi_epi64(u0, u4);
-                let $o2 = _mm256_unpacklo_epi64(u1, u5);
-                let $o3 = _mm256_unpackhi_epi64(u1, u5);
-                let $o4 = _mm256_unpacklo_epi64(u2, u6);
-                let $o5 = _mm256_unpackhi_epi64(u2, u6);
-                let $o6 = _mm256_unpacklo_epi64(u3, u7);
-                let $o7 = _mm256_unpackhi_epi64(u3, u7);
-            };
-        }
-
-        transpose8x16_named!(r0, r1, r2, r3, r4, r5, r6, r7 => a0, a1, a2, a3, a4, a5, a6, a7);
-        transpose8x16_named!(r8, r9, r10, r11, r12, r13, r14, r15 => b0, b1, b2, b3, b4, b5, b6, b7);
-
-        macro_rules! row_lo {
-            ($a:expr, $b:expr) => {
-                _mm256_permute2x128_si256::<0x20>($a, $b)
-            };
-        }
-        macro_rules! row_hi {
-            ($a:expr, $b:expr) => {
-                _mm256_permute2x128_si256::<0x31>($a, $b)
-            };
-        }
-
-        let ptr = scratch.as_mut_ptr();
-        _mm256_storeu_si256(ptr.add(off) as *mut __m256i, row_lo!(a0, b0));
-        _mm256_storeu_si256(ptr.add(off + STRIDE) as *mut __m256i, row_lo!(a1, b1));
-        _mm256_storeu_si256(ptr.add(off + 2 * STRIDE) as *mut __m256i, row_lo!(a2, b2));
-        _mm256_storeu_si256(ptr.add(off + 3 * STRIDE) as *mut __m256i, row_lo!(a3, b3));
-        _mm256_storeu_si256(ptr.add(off + 4 * STRIDE) as *mut __m256i, row_lo!(a4, b4));
-        _mm256_storeu_si256(ptr.add(off + 5 * STRIDE) as *mut __m256i, row_lo!(a5, b5));
-        _mm256_storeu_si256(ptr.add(off + 6 * STRIDE) as *mut __m256i, row_lo!(a6, b6));
-        _mm256_storeu_si256(ptr.add(off + 7 * STRIDE) as *mut __m256i, row_lo!(a7, b7));
-        _mm256_storeu_si256(ptr.add(off + 8 * STRIDE) as *mut __m256i, row_hi!(a0, b0));
-        _mm256_storeu_si256(ptr.add(off + 9 * STRIDE) as *mut __m256i, row_hi!(a1, b1));
-        _mm256_storeu_si256(ptr.add(off + 10 * STRIDE) as *mut __m256i, row_hi!(a2, b2));
-        _mm256_storeu_si256(ptr.add(off + 11 * STRIDE) as *mut __m256i, row_hi!(a3, b3));
-        _mm256_storeu_si256(ptr.add(off + 12 * STRIDE) as *mut __m256i, row_hi!(a4, b4));
-        _mm256_storeu_si256(ptr.add(off + 13 * STRIDE) as *mut __m256i, row_hi!(a5, b5));
-        _mm256_storeu_si256(ptr.add(off + 14 * STRIDE) as *mut __m256i, row_hi!(a6, b6));
-        _mm256_storeu_si256(ptr.add(off + 15 * STRIDE) as *mut __m256i, row_hi!(a7, b7));
     }
 }
 
@@ -1695,110 +1454,6 @@ macro_rules! avx2_dct32_i16x4_all_body {
     }};
 }
 
-macro_rules! avx2_dct16_i16x8_all_body {
-    () => {{
-        let z = _mm256_setzero_si256();
-        let mut b = [z; 8];
-        let mut m = 0usize;
-        while m < 8 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = _mm256_add_epi32(
-                acc,
-                _mm256_madd_epi16(
-                    avx2_pair8_i16_from_rows(load!(1), load!(3)),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KBP_X4, base >> 1),
-                ),
-            );
-            acc = _mm256_add_epi32(
-                acc,
-                _mm256_madd_epi16(
-                    avx2_pair8_i16_from_rows(load!(5), load!(7)),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 1),
-                ),
-            );
-            acc = _mm256_add_epi32(
-                acc,
-                _mm256_madd_epi16(
-                    avx2_pair8_i16_from_rows(load!(9), load!(11)),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 2),
-                ),
-            );
-            acc = _mm256_add_epi32(
-                acc,
-                _mm256_madd_epi16(
-                    avx2_pair8_i16_from_rows(load!(13), load!(15)),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 3),
-                ),
-            );
-            b[m] = acc;
-            m += 1;
-        }
-        let mut d = [z; 4];
-        m = 0;
-        while m < 4 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = _mm256_add_epi32(
-                acc,
-                _mm256_madd_epi16(
-                    avx2_pair8_i16_from_rows(load!(2), load!(6)),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KDP_X4, base >> 1),
-                ),
-            );
-            acc = _mm256_add_epi32(
-                acc,
-                _mm256_madd_epi16(
-                    avx2_pair8_i16_from_rows(load!(10), load!(14)),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KDP_X4, (base >> 1) + 1),
-                ),
-            );
-            d[m] = acc;
-            m += 1;
-        }
-        let f0 = _mm256_madd_epi16(
-            avx2_pair8_i16_from_rows(load!(4), load!(12)),
-            avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KFP_X4, 0),
-        );
-        let f1 = _mm256_madd_epi16(
-            avx2_pair8_i16_from_rows(load!(4), load!(12)),
-            avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KFP_X4, 1),
-        );
-        let g0 = _mm256_madd_epi16(
-            avx2_pair8_i16_from_rows(load!(0), load!(8)),
-            avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KGP_X4, 0),
-        );
-        let g1 = _mm256_madd_epi16(
-            avx2_pair8_i16_from_rows(load!(0), load!(8)),
-            avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KGP_X4, 1),
-        );
-        let cc = [
-            _mm256_add_epi32(g0, f0),
-            _mm256_add_epi32(g1, f1),
-            _mm256_sub_epi32(g1, f1),
-            _mm256_sub_epi32(g0, f0),
-        ];
-        let mut a = [z; 8];
-        let mut i = 0usize;
-        while i < 4 {
-            a[i] = _mm256_add_epi32(cc[i], d[i]);
-            i += 1;
-        }
-        while i < 8 {
-            a[i] = _mm256_sub_epi32(cc[7 - i], d[7 - i]);
-            i += 1;
-        }
-        let mut out = [z; 16];
-        let mut k = 0usize;
-        while k < 8 {
-            out[k] = _mm256_add_epi32(a[k], b[k]);
-            out[k + 8] = _mm256_sub_epi32(a[7 - k], b[7 - k]);
-            k += 1;
-        }
-        out
-    }};
-}
-
 #[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_residual_add_u8x8(dst: *mut u8, v: __m256i, rnd: __m256i, sh: __m128i) {
@@ -1811,120 +1466,6 @@ fn avx2_residual_add_u8x8(dst: *mut u8, v: __m256i, rnd: __m256i, sh: __m128i) {
         let out = _mm_packus_epi16(sum, _mm_setzero_si128());
         _mm_storel_epi64(dst as *mut __m128i, out);
     }
-}
-
-macro_rules! avx2_dct16_i16x16_all_body {
-    () => {{
-        let z = avx2_i32x16_zero();
-        let mut b = [z; 8];
-        let mut m = 0usize;
-        while m < 8 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = avx2_i32x16_add(
-                acc,
-                avx2_madd_i16x16_pair(
-                    load!(1),
-                    load!(3),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KBP_X4, base >> 1),
-                ),
-            );
-            acc = avx2_i32x16_add(
-                acc,
-                avx2_madd_i16x16_pair(
-                    load!(5),
-                    load!(7),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 1),
-                ),
-            );
-            acc = avx2_i32x16_add(
-                acc,
-                avx2_madd_i16x16_pair(
-                    load!(9),
-                    load!(11),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 2),
-                ),
-            );
-            acc = avx2_i32x16_add(
-                acc,
-                avx2_madd_i16x16_pair(
-                    load!(13),
-                    load!(15),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 3),
-                ),
-            );
-            b[m] = acc;
-            m += 1;
-        }
-        let mut d = [z; 4];
-        m = 0;
-        while m < 4 {
-            let base = m * 8;
-            let mut acc = z;
-            acc = avx2_i32x16_add(
-                acc,
-                avx2_madd_i16x16_pair(
-                    load!(2),
-                    load!(6),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KDP_X4, base >> 1),
-                ),
-            );
-            acc = avx2_i32x16_add(
-                acc,
-                avx2_madd_i16x16_pair(
-                    load!(10),
-                    load!(14),
-                    avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KDP_X4, (base >> 1) + 1),
-                ),
-            );
-            d[m] = acc;
-            m += 1;
-        }
-        let f0 = avx2_madd_i16x16_pair(
-            load!(4),
-            load!(12),
-            avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KFP_X4, 0),
-        );
-        let f1 = avx2_madd_i16x16_pair(
-            load!(4),
-            load!(12),
-            avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KFP_X4, 1),
-        );
-        let g0 = avx2_madd_i16x16_pair(
-            load!(0),
-            load!(8),
-            avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KGP_X4, 0),
-        );
-        let g1 = avx2_madd_i16x16_pair(
-            load!(0),
-            load!(8),
-            avx2_coeff_pair_i16x8(&crate::itx_2d::DCT16_KGP_X4, 1),
-        );
-        let cc = [
-            avx2_i32x16_add(g0, f0),
-            avx2_i32x16_add(g1, f1),
-            avx2_i32x16_sub(g1, f1),
-            avx2_i32x16_sub(g0, f0),
-        ];
-        let mut a = [z; 8];
-        let mut i = 0usize;
-        while i < 4 {
-            a[i] = avx2_i32x16_add(cc[i], d[i]);
-            i += 1;
-        }
-        while i < 8 {
-            a[i] = avx2_i32x16_sub(cc[7 - i], d[7 - i]);
-            i += 1;
-        }
-        let mut out = [z; 16];
-        let mut k = 0usize;
-        while k < 8 {
-            out[k] = avx2_i32x16_add(a[k], b[k]);
-            out[k + 8] = avx2_i32x16_sub(a[7 - k], b[7 - k]);
-            k += 1;
-        }
-        out
-    }};
 }
 
 macro_rules! avx2_dct32_i16x16_all_body {
@@ -2304,12 +1845,89 @@ fn avx2_dct16_i16x16_scratch16_stride_active_store<const STRIDE: usize, const AC
             }
         };
     }
-    let out = avx2_dct16_i16x16_all_body!();
-    let mut k = 0usize;
-    while k < 16 {
-        avx2_store_i32x16_row(tmp, base + k * 32, out[k]);
-        k += 1;
+    macro_rules! madd_pair {
+        ($a:expr, $b:expr, $tbl:expr, $idx:expr) => {
+            avx2_madd_i16x16_pair(load!($a), load!($b), avx2_coeff_pair_i16x8($tbl, $idx))
+        };
     }
+    macro_rules! b_at {
+        ($m:expr) => {{
+            let kbase = ($m) * 8;
+            let mut acc = avx2_i32x16_zero();
+            acc = avx2_i32x16_add(
+                acc,
+                madd_pair!(1, 3, &crate::itx_2d::DCT16_KBP_X4, kbase >> 1),
+            );
+            acc = avx2_i32x16_add(
+                acc,
+                madd_pair!(5, 7, &crate::itx_2d::DCT16_KBP_X4, (kbase >> 1) + 1),
+            );
+            acc = avx2_i32x16_add(
+                acc,
+                madd_pair!(9, 11, &crate::itx_2d::DCT16_KBP_X4, (kbase >> 1) + 2),
+            );
+            avx2_i32x16_add(
+                acc,
+                madd_pair!(13, 15, &crate::itx_2d::DCT16_KBP_X4, (kbase >> 1) + 3),
+            )
+        }};
+    }
+    macro_rules! d_at {
+        ($m:expr) => {{
+            let kbase = ($m) * 8;
+            avx2_i32x16_add(
+                madd_pair!(2, 6, &crate::itx_2d::DCT16_KDP_X4, kbase >> 1),
+                madd_pair!(10, 14, &crate::itx_2d::DCT16_KDP_X4, (kbase >> 1) + 1),
+            )
+        }};
+    }
+    let f0 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 0);
+    let f1 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 1);
+    let g0 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 0);
+    let g1 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 1);
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            match $k {
+                0 => avx2_i32x16_add(g0, f0),
+                1 => avx2_i32x16_add(g1, f1),
+                2 => avx2_i32x16_sub(g1, f1),
+                _ => avx2_i32x16_sub(g0, f0),
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                avx2_i32x16_add(cc_at!(k), d_at!(k))
+            } else {
+                avx2_i32x16_sub(cc_at!(7 - k), d_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! store_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
+            avx2_store_i32x16_row(tmp, base + k * 32, avx2_i32x16_add(a0, b0));
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            avx2_store_i32x16_row(tmp, base + (k + 1) * 32, avx2_i32x16_add(a1, b1));
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            avx2_store_i32x16_row(tmp, base + (k + 2) * 32, avx2_i32x16_add(a2, b2));
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            avx2_store_i32x16_row(tmp, base + (k + 3) * 32, avx2_i32x16_add(a3, b3));
+            avx2_store_i32x16_row(tmp, base + (8 + 7 - (k + 3)) * 32, avx2_i32x16_sub(a3, b3));
+            avx2_store_i32x16_row(tmp, base + (8 + 7 - (k + 2)) * 32, avx2_i32x16_sub(a2, b2));
+            avx2_store_i32x16_row(tmp, base + (8 + 7 - (k + 1)) * 32, avx2_i32x16_sub(a1, b1));
+            avx2_store_i32x16_row(tmp, base + (8 + 7 - k) * 32, avx2_i32x16_sub(a0, b0));
+        }};
+    }
+    store_group!(0usize);
+    store_group!(4usize);
 }
 
 #[inline]
@@ -2366,14 +1984,177 @@ fn avx2_dct16_i16x16_scratch16_stride_active_add_u8<const STRIDE: usize, const A
             }
         };
     }
-    let out = avx2_dct16_i16x16_all_body!();
-    let mut k = 0usize;
-    while k < 16 {
-        avx2_writeback16_i32_u8::<STRIDE, 16>(
-            dst, dst_off, dst_stride, out_w, out_h, base, k, out[k], rnd1, sh1,
-        );
-        k += 1;
+    macro_rules! madd_pair {
+        ($a:expr, $b:expr, $tbl:expr, $idx:expr) => {
+            avx2_madd_i16x16_pair(load!($a), load!($b), avx2_coeff_pair_i16x8($tbl, $idx))
+        };
     }
+    macro_rules! b_at {
+        ($m:expr) => {{
+            let kbase = ($m) * 8;
+            let mut acc = avx2_i32x16_zero();
+            acc = avx2_i32x16_add(
+                acc,
+                madd_pair!(1, 3, &crate::itx_2d::DCT16_KBP_X4, kbase >> 1),
+            );
+            acc = avx2_i32x16_add(
+                acc,
+                madd_pair!(5, 7, &crate::itx_2d::DCT16_KBP_X4, (kbase >> 1) + 1),
+            );
+            acc = avx2_i32x16_add(
+                acc,
+                madd_pair!(9, 11, &crate::itx_2d::DCT16_KBP_X4, (kbase >> 1) + 2),
+            );
+            avx2_i32x16_add(
+                acc,
+                madd_pair!(13, 15, &crate::itx_2d::DCT16_KBP_X4, (kbase >> 1) + 3),
+            )
+        }};
+    }
+    macro_rules! d_at {
+        ($m:expr) => {{
+            let kbase = ($m) * 8;
+            avx2_i32x16_add(
+                madd_pair!(2, 6, &crate::itx_2d::DCT16_KDP_X4, kbase >> 1),
+                madd_pair!(10, 14, &crate::itx_2d::DCT16_KDP_X4, (kbase >> 1) + 1),
+            )
+        }};
+    }
+    let f0 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 0);
+    let f1 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 1);
+    let g0 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 0);
+    let g1 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 1);
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            match $k {
+                0 => avx2_i32x16_add(g0, f0),
+                1 => avx2_i32x16_add(g1, f1),
+                2 => avx2_i32x16_sub(g1, f1),
+                _ => avx2_i32x16_sub(g0, f0),
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                avx2_i32x16_add(cc_at!(k), d_at!(k))
+            } else {
+                avx2_i32x16_sub(cc_at!(7 - k), d_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! write_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                k,
+                avx2_i32x16_add(a0, b0),
+                rnd1,
+                sh1,
+            );
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                k + 1,
+                avx2_i32x16_add(a1, b1),
+                rnd1,
+                sh1,
+            );
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                k + 2,
+                avx2_i32x16_add(a2, b2),
+                rnd1,
+                sh1,
+            );
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                k + 3,
+                avx2_i32x16_add(a3, b3),
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                8 + 7 - (k + 3),
+                avx2_i32x16_sub(a3, b3),
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                8 + 7 - (k + 2),
+                avx2_i32x16_sub(a2, b2),
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                8 + 7 - (k + 1),
+                avx2_i32x16_sub(a1, b1),
+                rnd1,
+                sh1,
+            );
+            avx2_writeback16_i32_u8::<STRIDE, 16>(
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                base,
+                8 + 7 - k,
+                avx2_i32x16_sub(a0, b0),
+                rnd1,
+                sh1,
+            );
+        }};
+    }
+    write_group!(0usize);
+    write_group!(4usize);
 }
 
 #[inline]
@@ -3941,36 +3722,6 @@ fn avx2_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STR
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn avx2_dct16_i16x8_all_from_coeff8_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
-    coeff: &[i16],
-    base: usize,
-) -> [__m256i; 16] {
-    debug_assert!(base + 15 * STRIDE + 8 <= coeff.len());
-    macro_rules! load {
-        ($idx:expr) => {
-            avx2_load8_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
-        };
-    }
-    avx2_dct16_i16x8_all_body!()
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn avx2_dct16_i16x16_all_from_coeff16_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
-    coeff: &[i16],
-    base: usize,
-) -> [Avx2I32x16; 16] {
-    debug_assert!(base + 15 * STRIDE + 16 <= coeff.len());
-    macro_rules! load {
-        ($idx:expr) => {
-            avx2_load16_i16_coeff_packed_const::<IS_RECT2>(coeff, base + ($idx) * STRIDE)
-        };
-    }
-    avx2_dct16_i16x16_all_body!()
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x8_store_quads_from_coeff8_stride_const<
     const IS_RECT2: bool,
     const COEFF_STRIDE: usize,
@@ -4289,6 +4040,276 @@ fn avx2_dct32_i16x16_store_quads_from_coeff16_stride_const<
     store_group!(12usize);
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_dct16_i16x8_store_quads_from_coeff8_stride_const<
+    const IS_RECT2: bool,
+    const COEFF_STRIDE: usize,
+    const STRIDE: usize,
+>(
+    coeff: &[i16],
+    coeff_base: usize,
+    scratch: &mut [i16],
+    off: usize,
+    rnd: __m128i,
+    sh: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+) {
+    debug_assert!(coeff_base + 15 * COEFF_STRIDE + 8 <= coeff.len());
+    macro_rules! load {
+        ($idx:expr) => {
+            avx2_load8_i16_coeff_packed_const::<IS_RECT2>(coeff, coeff_base + ($idx) * COEFF_STRIDE)
+        };
+    }
+    macro_rules! pair {
+        ($a:expr, $b:expr) => {
+            avx2_pair8_i16_from_rows(load!($a), load!($b))
+        };
+    }
+    macro_rules! madd_pair {
+        ($a:expr, $b:expr, $tbl:expr, $idx:expr) => {
+            _mm256_madd_epi16(pair!($a, $b), avx2_coeff_pair_i16x8($tbl, $idx))
+        };
+    }
+    macro_rules! b_at {
+        ($m:expr) => {{
+            let base = ($m) * 8;
+            let mut acc = _mm256_setzero_si256();
+            acc = _mm256_add_epi32(
+                acc,
+                madd_pair!(1, 3, &crate::itx_2d::DCT16_KBP_X4, base >> 1),
+            );
+            acc = _mm256_add_epi32(
+                acc,
+                madd_pair!(5, 7, &crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 1),
+            );
+            acc = _mm256_add_epi32(
+                acc,
+                madd_pair!(9, 11, &crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 2),
+            );
+            _mm256_add_epi32(
+                acc,
+                madd_pair!(13, 15, &crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 3),
+            )
+        }};
+    }
+    macro_rules! d_at {
+        ($m:expr) => {{
+            let base = ($m) * 8;
+            _mm256_add_epi32(
+                madd_pair!(2, 6, &crate::itx_2d::DCT16_KDP_X4, base >> 1),
+                madd_pair!(10, 14, &crate::itx_2d::DCT16_KDP_X4, (base >> 1) + 1),
+            )
+        }};
+    }
+    let f0 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 0);
+    let f1 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 1);
+    let g0 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 0);
+    let g1 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 1);
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            match $k {
+                0 => _mm256_add_epi32(g0, f0),
+                1 => _mm256_add_epi32(g1, f1),
+                2 => _mm256_sub_epi32(g1, f1),
+                _ => _mm256_sub_epi32(g0, f0),
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                _mm256_add_epi32(cc_at!(k), d_at!(k))
+            } else {
+                _mm256_sub_epi32(cc_at!(7 - k), d_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! store_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
+            let l0 = _mm256_add_epi32(a0, b0);
+            let h0 = _mm256_sub_epi32(a0, b0);
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            let l1 = _mm256_add_epi32(a1, b1);
+            let h1 = _mm256_sub_epi32(a1, b1);
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            let l2 = _mm256_add_epi32(a2, b2);
+            let h2 = _mm256_sub_epi32(a2, b2);
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            let l3 = _mm256_add_epi32(a3, b3);
+            let h3 = _mm256_sub_epi32(a3, b3);
+            avx2_store4x8_i16_clip256::<STRIDE>(
+                scratch,
+                off + k,
+                l0,
+                l1,
+                l2,
+                l3,
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+            avx2_store4x8_i16_clip256::<STRIDE>(
+                scratch,
+                off + 8 + 7 - (k + 3),
+                h3,
+                h2,
+                h1,
+                h0,
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+        }};
+    }
+    store_group!(0usize);
+    store_group!(4usize);
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn avx2_dct16_i16x16_store_quads_from_coeff16_stride_const<
+    const IS_RECT2: bool,
+    const COEFF_STRIDE: usize,
+    const STRIDE: usize,
+>(
+    coeff: &[i16],
+    coeff_base: usize,
+    scratch: &mut [i16],
+    off: usize,
+    rnd: __m128i,
+    sh: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+) {
+    debug_assert!(coeff_base + 15 * COEFF_STRIDE + 16 <= coeff.len());
+    macro_rules! load {
+        ($idx:expr) => {
+            avx2_load16_i16_coeff_packed_const::<IS_RECT2>(
+                coeff,
+                coeff_base + ($idx) * COEFF_STRIDE,
+            )
+        };
+    }
+    macro_rules! madd_pair {
+        ($a:expr, $b:expr, $tbl:expr, $idx:expr) => {
+            avx2_madd_i16x16_pair(load!($a), load!($b), avx2_coeff_pair_i16x8($tbl, $idx))
+        };
+    }
+    macro_rules! b_at {
+        ($m:expr) => {{
+            let base = ($m) * 8;
+            let mut acc = avx2_i32x16_zero();
+            acc = avx2_i32x16_add(
+                acc,
+                madd_pair!(1, 3, &crate::itx_2d::DCT16_KBP_X4, base >> 1),
+            );
+            acc = avx2_i32x16_add(
+                acc,
+                madd_pair!(5, 7, &crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 1),
+            );
+            acc = avx2_i32x16_add(
+                acc,
+                madd_pair!(9, 11, &crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 2),
+            );
+            avx2_i32x16_add(
+                acc,
+                madd_pair!(13, 15, &crate::itx_2d::DCT16_KBP_X4, (base >> 1) + 3),
+            )
+        }};
+    }
+    macro_rules! d_at {
+        ($m:expr) => {{
+            let base = ($m) * 8;
+            avx2_i32x16_add(
+                madd_pair!(2, 6, &crate::itx_2d::DCT16_KDP_X4, base >> 1),
+                madd_pair!(10, 14, &crate::itx_2d::DCT16_KDP_X4, (base >> 1) + 1),
+            )
+        }};
+    }
+    let f0 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 0);
+    let f1 = madd_pair!(4, 12, &crate::itx_2d::DCT16_KFP_X4, 1);
+    let g0 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 0);
+    let g1 = madd_pair!(0, 8, &crate::itx_2d::DCT16_KGP_X4, 1);
+    macro_rules! cc_at {
+        ($k:expr) => {{
+            match $k {
+                0 => avx2_i32x16_add(g0, f0),
+                1 => avx2_i32x16_add(g1, f1),
+                2 => avx2_i32x16_sub(g1, f1),
+                _ => avx2_i32x16_sub(g0, f0),
+            }
+        }};
+    }
+    macro_rules! a_at {
+        ($k:expr) => {{
+            let k = $k;
+            if k < 4 {
+                avx2_i32x16_add(cc_at!(k), d_at!(k))
+            } else {
+                avx2_i32x16_sub(cc_at!(7 - k), d_at!(7 - k))
+            }
+        }};
+    }
+    macro_rules! store_group {
+        ($k:expr) => {{
+            let k = $k;
+            let a0 = a_at!(k);
+            let b0 = b_at!(k);
+            let l0 = avx2_i32x16_add(a0, b0);
+            let h0 = avx2_i32x16_sub(a0, b0);
+            let a1 = a_at!(k + 1);
+            let b1 = b_at!(k + 1);
+            let l1 = avx2_i32x16_add(a1, b1);
+            let h1 = avx2_i32x16_sub(a1, b1);
+            let a2 = a_at!(k + 2);
+            let b2 = b_at!(k + 2);
+            let l2 = avx2_i32x16_add(a2, b2);
+            let h2 = avx2_i32x16_sub(a2, b2);
+            let a3 = a_at!(k + 3);
+            let b3 = b_at!(k + 3);
+            let l3 = avx2_i32x16_add(a3, b3);
+            let h3 = avx2_i32x16_sub(a3, b3);
+            avx2_store4x16_i16_clip256::<STRIDE>(
+                scratch,
+                off + k,
+                l0,
+                l1,
+                l2,
+                l3,
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+            avx2_store4x16_i16_clip256::<STRIDE>(
+                scratch,
+                off + 8 + 7 - (k + 3),
+                h3,
+                h2,
+                h1,
+                h0,
+                rnd,
+                sh,
+                minv,
+                maxv,
+            );
+        }};
+    }
+    store_group!(0usize);
+    store_group!(4usize);
+}
+
 #[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x4_coeff_rows_to_scratch<const IS_RECT2: bool, const COEFF_STRIDE: usize>(
     coeff: &[i16],
@@ -4301,18 +4322,27 @@ fn avx2_dct16_i16x4_coeff_rows_to_scratch<const IS_RECT2: bool, const COEFF_STRI
     maxv: __m128i,
 ) -> usize {
     while y + 16 <= nrows {
-        let out =
-            avx2_dct16_i16x16_all_from_coeff16_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let row_base = y * 16;
-        avx2_store16x16_i16_clip256::<16, 16, 0>(scratch, row_base, &out, rnd, sh, minv, maxv);
+        avx2_dct16_i16x16_store_quads_from_coeff16_stride_const::<IS_RECT2, COEFF_STRIDE, 16>(
+            coeff,
+            y,
+            scratch,
+            y * 16,
+            rnd,
+            sh,
+            minv,
+            maxv,
+        );
         y += 16;
     }
     while y + 8 <= nrows {
-        let out = avx2_dct16_i16x8_all_from_coeff8_stride_const::<IS_RECT2, COEFF_STRIDE>(coeff, y);
-        let row_base = y * 16;
-        avx2_store16x8_i16_clip256::<16>(
-            scratch, row_base, out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7],
-            out[8], out[9], out[10], out[11], out[12], out[13], out[14], out[15], rnd, sh, minv,
+        avx2_dct16_i16x8_store_quads_from_coeff8_stride_const::<IS_RECT2, COEFF_STRIDE, 16>(
+            coeff,
+            y,
+            scratch,
+            y * 16,
+            rnd,
+            sh,
+            minv,
             maxv,
         );
         y += 8;
