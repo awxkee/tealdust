@@ -510,7 +510,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
         ) {
             #[cfg(all(target_arch = "x86_64", feature = "avx"))]
             {
-                if std::is_x86_feature_detected!("avx2") {
+                if crate::itx_1d::x86_itx_has_avx2() {
                     if tx == txsz::TX_16X16 {
                         unsafe {
                             crate::avx::idct_dequant_16x16_i16_avx2_fused_8bpc(
@@ -549,7 +549,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
             }
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             {
-                if std::is_x86_feature_detected!("sse4.1") {
+                if crate::itx_1d::x86_itx_has_sse41() {
                     if tx == txsz::TX_16X16 {
                         unsafe {
                             crate::sse::idct_dequant_16x16_i16_sse41_fused_8bpc(
@@ -606,7 +606,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 C::try_as_i16_slice_mut(coeff),
                 <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst),
             ) {
-                if std::is_x86_feature_detected!("avx2") {
+                if crate::itx_1d::x86_itx_has_avx2() {
                     let handled = unsafe {
                         crate::avx::itx_dequant_i16_avx2_fused_8bpc(
                             coeff16,

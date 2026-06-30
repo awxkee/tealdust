@@ -29,6 +29,8 @@
 
 use crate::levels::{N_TX_1D_TYPES, N_TX_SIZES};
 use std::convert::TryInto;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct I32x8([i32; 8]);
@@ -963,6 +965,46 @@ pub(crate) static TX1D_FNS_X8: [[Option<Itx1dFnX8>; N_TX_1D_TYPES - 1]; N_TX_SIZ
 
 pub(crate) type Itx1dFnX8U = unsafe fn(&mut [i32], usize, usize);
 
+pub(crate) type Itx1dFnX8Table = [[Option<Itx1dFnX8U>; N_TX_1D_TYPES - 1]; N_TX_SIZES];
+
+pub(crate) static TX1D_FNS_X8_SCALAR_TBL: Itx1dFnX8Table = {
+    const DCT: usize = 0;
+    const IDENTITY: usize = 1;
+    const ADST: usize = 2;
+    const FLIPADST: usize = 3;
+    const DDT: usize = 4;
+    const FLIPDDT: usize = 5;
+    const NONE: Option<Itx1dFnX8U> = None;
+
+    let mut t = [[NONE; N_TX_1D_TYPES - 1]; N_TX_SIZES];
+
+    t[0][DCT] = Some(inv_dct4_1d_x8 as Itx1dFnX8U);
+    t[0][IDENTITY] = Some(inv_identity4_1d_x8 as Itx1dFnX8U);
+    t[0][ADST] = Some(inv_adst4_1d_x8 as Itx1dFnX8U);
+    t[0][FLIPADST] = Some(inv_flipadst4_1d_x8 as Itx1dFnX8U);
+
+    t[1][DCT] = Some(inv_dct8_1d_x8 as Itx1dFnX8U);
+    t[1][IDENTITY] = Some(inv_identity8_1d_x8 as Itx1dFnX8U);
+    t[1][ADST] = Some(inv_adst8_1d_x8 as Itx1dFnX8U);
+    t[1][FLIPADST] = Some(inv_flipadst8_1d_x8 as Itx1dFnX8U);
+    t[1][DDT] = Some(inv_ddt8_1d_x8 as Itx1dFnX8U);
+    t[1][FLIPDDT] = Some(inv_flipddt8_1d_x8 as Itx1dFnX8U);
+
+    t[2][DCT] = Some(inv_dct16_1d_x8 as Itx1dFnX8U);
+    t[2][IDENTITY] = Some(inv_identity16_1d_x8 as Itx1dFnX8U);
+    t[2][ADST] = Some(inv_adst16_1d_x8 as Itx1dFnX8U);
+    t[2][FLIPADST] = Some(inv_flipadst16_1d_x8 as Itx1dFnX8U);
+    t[2][DDT] = Some(inv_ddt16_1d_x8 as Itx1dFnX8U);
+    t[2][FLIPDDT] = Some(inv_flipddt16_1d_x8 as Itx1dFnX8U);
+
+    t[3][DCT] = Some(inv_dct32_1d_x8 as Itx1dFnX8U);
+    t[3][IDENTITY] = Some(inv_identity32_1d_x8 as Itx1dFnX8U);
+
+    t[4][DCT] = Some(inv_dct32_1d_x8 as Itx1dFnX8U);
+
+    t
+};
+
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_dct4_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
@@ -1162,7 +1204,7 @@ pub(crate) fn inv_flipddt16_1d_x8_sse41(c: &mut [i32], base: usize, stride: usiz
 }
 
 #[cfg(target_arch = "x86_64")]
-pub(crate) static TX1D_FNS_X8_AVX2_TBL: [[Option<Itx1dFnX8U>; N_TX_1D_TYPES - 1]; N_TX_SIZES] = {
+pub(crate) static TX1D_FNS_X8_AVX2_TBL: Itx1dFnX8Table = {
     const DCT: usize = 0;
     const IDENTITY: usize = 1;
     const ADST: usize = 2;
@@ -1194,7 +1236,7 @@ pub(crate) static TX1D_FNS_X8_AVX2_TBL: [[Option<Itx1dFnX8U>; N_TX_1D_TYPES - 1]
 };
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-pub(crate) static TX1D_FNS_X8_SSE41_TBL: [[Option<Itx1dFnX8U>; N_TX_1D_TYPES - 1]; N_TX_SIZES] = {
+pub(crate) static TX1D_FNS_X8_SSE41_TBL: Itx1dFnX8Table = {
     const DCT: usize = 0;
     const IDENTITY: usize = 1;
     const ADST: usize = 2;
@@ -1225,24 +1267,79 @@ pub(crate) static TX1D_FNS_X8_SSE41_TBL: [[Option<Itx1dFnX8U>; N_TX_1D_TYPES - 1
     t
 };
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum X86ItxLevel {
+    Scalar,
+    Sse41,
+    Avx2,
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+static X86_ITX_LEVEL: OnceLock<X86ItxLevel> = OnceLock::new();
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+static X86_TX1D_X8_TABLE: OnceLock<&'static Itx1dFnX8Table> = OnceLock::new();
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn x86_tx1d_x8_table() -> &'static Itx1dFnX8Table {
+    X86_TX1D_X8_TABLE.get_or_init(|| match x86_itx_level() {
+        X86ItxLevel::Avx2 => &TX1D_FNS_X8_AVX2_TBL,
+        X86ItxLevel::Sse41 => &TX1D_FNS_X8_SSE41_TBL,
+        X86ItxLevel::Scalar => &TX1D_FNS_X8_SCALAR_TBL,
+    })
+}
+
+#[cfg(all(target_arch = "x86", not(target_arch = "x86_64")))]
+#[inline(always)]
+fn x86_tx1d_x8_table() -> &'static Itx1dFnX8Table {
+    X86_TX1D_X8_TABLE.get_or_init(|| match x86_itx_level() {
+        X86ItxLevel::Sse41 | X86ItxLevel::Avx2 => &TX1D_FNS_X8_SSE41_TBL,
+        X86ItxLevel::Scalar => &TX1D_FNS_X8_SCALAR_TBL,
+    })
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+pub(crate) fn x86_itx_level() -> X86ItxLevel {
+    *X86_ITX_LEVEL.get_or_init(|| {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                return X86ItxLevel::Avx2;
+            }
+        }
+        if std::is_x86_feature_detected!("sse4.1") {
+            X86ItxLevel::Sse41
+        } else {
+            X86ItxLevel::Scalar
+        }
+    })
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+pub(crate) fn x86_itx_has_sse41() -> bool {
+    matches!(x86_itx_level(), X86ItxLevel::Sse41 | X86ItxLevel::Avx2)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+pub(crate) fn x86_itx_has_avx2() -> bool {
+    x86_itx_level() == X86ItxLevel::Avx2
+}
+
 #[inline(always)]
 pub(crate) fn tx1d_x8_dispatch(tx_size: usize, kind: usize) -> Option<Itx1dFnX8U> {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        if std::is_x86_feature_detected!("avx2") {
-            return TX1D_FNS_X8_AVX2_TBL[tx_size][kind];
-        }
-        if std::is_x86_feature_detected!("sse4.1") {
-            return TX1D_FNS_X8_SSE41_TBL[tx_size][kind];
-        }
+        return x86_tx1d_x8_table()[tx_size][kind];
     }
-    #[cfg(all(target_arch = "x86", not(target_arch = "x86_64")))]
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     {
-        if std::is_x86_feature_detected!("sse4.1") {
-            return TX1D_FNS_X8_SSE41_TBL[tx_size][kind];
-        }
+        TX1D_FNS_X8_SCALAR_TBL[tx_size][kind]
     }
-    TX1D_FNS_X8[tx_size][kind].map(|f| f as Itx1dFnX8U)
 }
 
 pub(crate) fn inv_wht4_1d(c: &mut [i32], stride: usize) {

@@ -2002,13 +2002,13 @@ pub(crate) fn idct_dequant_4x4(_hbd: bool) -> IdctDequantFn<16> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_4x4_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_4x4_avx2;
             }
         }
@@ -2026,13 +2026,13 @@ pub(crate) fn idct_dequant_8x8(_hbd: bool) -> IdctDequantFn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_8x8_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_8x8_avx2;
             }
         }
@@ -2050,13 +2050,13 @@ pub(crate) fn idct_dequant_16x16(_hbd: bool) -> IdctDequantFn<256> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_16x16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_16x16_avx2;
             }
         }
@@ -2078,13 +2078,13 @@ pub(crate) fn idct_dequant_32x32(_hbd: bool) -> IdctDequantFn<1024> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_32x32_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_32x32_avx2;
             }
         }
@@ -2102,13 +2102,13 @@ pub(crate) fn idct_dequant_64x64(_hbd: bool) -> IdctDequantFn<1024> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_64x64_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_64x64_avx2;
             }
         }
@@ -2126,13 +2126,13 @@ pub(crate) fn iadst_dequant_4x4(_hbd: bool) -> IadstDequantFn<16> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_4x4_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_4x4_avx2;
             }
         }
@@ -2150,13 +2150,13 @@ pub(crate) fn iadst_dequant_8x8(_hbd: bool) -> IadstDequantFn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_8x8_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_8x8_avx2;
             }
         }
@@ -2174,13 +2174,13 @@ pub(crate) fn iadst_dequant_16x16(_hbd: bool) -> IadstDequantFn<256> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_16x16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_16x16_avx2;
             }
         }
@@ -2215,13 +2215,13 @@ pub(crate) fn idct_dequant_4x8(_hbd: bool) -> IdctDequantFn<32> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_4x8_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_4x8_avx2;
             }
         }
@@ -2243,13 +2243,13 @@ pub(crate) fn idct_dequant_8x4(_hbd: bool) -> IdctDequantFn<32> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_8x4_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_8x4_avx2;
             }
         }
@@ -2271,13 +2271,13 @@ pub(crate) fn idct_dequant_8x16(_hbd: bool) -> IdctDequantFn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_8x16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_8x16_avx2;
             }
         }
@@ -2299,13 +2299,13 @@ pub(crate) fn idct_dequant_16x8(_hbd: bool) -> IdctDequantFn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_16x8_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_16x8_avx2;
             }
         }
@@ -2327,13 +2327,13 @@ pub(crate) fn idct_dequant_16x32(_hbd: bool) -> IdctDequantFn<512> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_16x32_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_16x32_avx2;
             }
         }
@@ -2355,13 +2355,13 @@ pub(crate) fn idct_dequant_32x16(_hbd: bool) -> IdctDequantFn<512> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_32x16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_32x16_avx2;
             }
         }
@@ -2383,13 +2383,13 @@ pub(crate) fn idct_dequant_4x16(_hbd: bool) -> IdctDequantFn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_4x16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_4x16_avx2;
             }
         }
@@ -2411,13 +2411,13 @@ pub(crate) fn idct_dequant_16x4(_hbd: bool) -> IdctDequantFn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_16x4_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_16x4_avx2;
             }
         }
@@ -2439,13 +2439,13 @@ pub(crate) fn idct_dequant_8x32(_hbd: bool) -> IdctDequantFn<256> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_8x32_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_8x32_avx2;
             }
         }
@@ -2467,13 +2467,13 @@ pub(crate) fn idct_dequant_32x8(_hbd: bool) -> IdctDequantFn<256> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_32x8_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_32x8_avx2;
             }
         }
@@ -2495,13 +2495,13 @@ pub(crate) fn idct_dequant_4x32(_hbd: bool) -> IdctDequantFn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_4x32_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_4x32_avx2;
             }
         }
@@ -2523,13 +2523,13 @@ pub(crate) fn idct_dequant_32x4(_hbd: bool) -> IdctDequantFn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_32x4_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_32x4_avx2;
             }
         }
@@ -2558,13 +2558,13 @@ pub(crate) fn iadst_dequant_4x8(_hbd: bool) -> IadstDequantFn<32> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_4x8_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_4x8_avx2;
             }
         }
@@ -2586,13 +2586,13 @@ pub(crate) fn iadst_dequant_8x4(_hbd: bool) -> IadstDequantFn<32> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_8x4_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_8x4_avx2;
             }
         }
@@ -2614,13 +2614,13 @@ pub(crate) fn iadst_dequant_8x16(_hbd: bool) -> IadstDequantFn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_8x16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_8x16_avx2;
             }
         }
@@ -2642,13 +2642,13 @@ pub(crate) fn iadst_dequant_16x8(_hbd: bool) -> IadstDequantFn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_16x8_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_16x8_avx2;
             }
         }
@@ -2670,13 +2670,13 @@ pub(crate) fn iadst_dequant_4x16(_hbd: bool) -> IadstDequantFn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_4x16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_4x16_avx2;
             }
         }
@@ -2698,13 +2698,13 @@ pub(crate) fn iadst_dequant_16x4(_hbd: bool) -> IadstDequantFn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_16x4_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_16x4_avx2;
             }
         }
@@ -2752,13 +2752,13 @@ pub(crate) fn idct_dequant_4x4_i16() -> IdctDequantI16Fn<16> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_4x4_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_4x4_i16_avx2;
             }
         }
@@ -2776,13 +2776,13 @@ pub(crate) fn idct_dequant_8x8_i16() -> IdctDequantI16Fn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_8x8_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_8x8_i16_avx2;
             }
         }
@@ -2800,13 +2800,13 @@ pub(crate) fn idct_dequant_16x16_i16() -> IdctDequantI16Fn<256> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_16x16_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_16x16_i16_avx2;
             }
         }
@@ -2828,13 +2828,13 @@ pub(crate) fn idct_dequant_32x32_i16() -> IdctDequantI16Fn<1024> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_32x32_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_32x32_i16_avx2;
             }
         }
@@ -2852,13 +2852,13 @@ pub(crate) fn idct_dequant_64x64_i16() -> IdctDequantI16Fn<1024> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_64x64_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_64x64_i16_avx2;
             }
         }
@@ -2876,13 +2876,13 @@ pub(crate) fn iadst_dequant_4x4_i16() -> IadstDequantI16Fn<16> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_4x4_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_4x4_i16_avx2;
             }
         }
@@ -2900,13 +2900,13 @@ pub(crate) fn iadst_dequant_8x8_i16() -> IadstDequantI16Fn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_8x8_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_8x8_i16_avx2;
             }
         }
@@ -2924,13 +2924,13 @@ pub(crate) fn iadst_dequant_16x16_i16() -> IadstDequantI16Fn<256> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_16x16_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_16x16_i16_avx2;
             }
         }
@@ -2952,13 +2952,13 @@ pub(crate) fn idct_dequant_4x8_i16() -> IdctDequantI16Fn<32> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_4x8_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_4x8_i16_avx2;
             }
         }
@@ -2980,13 +2980,13 @@ pub(crate) fn idct_dequant_8x4_i16() -> IdctDequantI16Fn<32> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_8x4_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_8x4_i16_avx2;
             }
         }
@@ -3008,13 +3008,13 @@ pub(crate) fn idct_dequant_8x16_i16() -> IdctDequantI16Fn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_8x16_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_8x16_i16_avx2;
             }
         }
@@ -3036,13 +3036,13 @@ pub(crate) fn idct_dequant_16x8_i16() -> IdctDequantI16Fn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_16x8_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_16x8_i16_avx2;
             }
         }
@@ -3064,13 +3064,13 @@ pub(crate) fn idct_dequant_16x32_i16() -> IdctDequantI16Fn<512> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_16x32_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_16x32_i16_avx2;
             }
         }
@@ -3092,13 +3092,13 @@ pub(crate) fn idct_dequant_32x16_i16() -> IdctDequantI16Fn<512> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_32x16_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_32x16_i16_avx2;
             }
         }
@@ -3120,13 +3120,13 @@ pub(crate) fn idct_dequant_4x16_i16() -> IdctDequantI16Fn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_4x16_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_4x16_i16_avx2;
             }
         }
@@ -3148,13 +3148,13 @@ pub(crate) fn idct_dequant_16x4_i16() -> IdctDequantI16Fn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_16x4_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_16x4_i16_avx2;
             }
         }
@@ -3176,13 +3176,13 @@ pub(crate) fn idct_dequant_8x32_i16() -> IdctDequantI16Fn<256> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_8x32_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_8x32_i16_avx2;
             }
         }
@@ -3204,13 +3204,13 @@ pub(crate) fn idct_dequant_32x8_i16() -> IdctDequantI16Fn<256> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_32x8_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_32x8_i16_avx2;
             }
         }
@@ -3232,13 +3232,13 @@ pub(crate) fn idct_dequant_4x32_i16() -> IdctDequantI16Fn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_4x32_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_4x32_i16_avx2;
             }
         }
@@ -3260,13 +3260,13 @@ pub(crate) fn idct_dequant_32x4_i16() -> IdctDequantI16Fn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::idct_dequant_32x4_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::idct_dequant_32x4_i16_avx2;
             }
         }
@@ -3288,13 +3288,13 @@ pub(crate) fn iadst_dequant_4x8_i16() -> IadstDequantI16Fn<32> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_4x8_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_4x8_i16_avx2;
             }
         }
@@ -3316,13 +3316,13 @@ pub(crate) fn iadst_dequant_8x4_i16() -> IadstDequantI16Fn<32> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_8x4_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_8x4_i16_avx2;
             }
         }
@@ -3344,13 +3344,13 @@ pub(crate) fn iadst_dequant_8x16_i16() -> IadstDequantI16Fn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_8x16_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_8x16_i16_avx2;
             }
         }
@@ -3372,13 +3372,13 @@ pub(crate) fn iadst_dequant_16x8_i16() -> IadstDequantI16Fn<128> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_16x8_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_16x8_i16_avx2;
             }
         }
@@ -3400,13 +3400,13 @@ pub(crate) fn iadst_dequant_4x16_i16() -> IadstDequantI16Fn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_4x16_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_4x16_i16_avx2;
             }
         }
@@ -3428,13 +3428,13 @@ pub(crate) fn iadst_dequant_16x4_i16() -> IadstDequantI16Fn<64> {
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            if std::is_x86_feature_detected!("sse4.1") {
+            if crate::itx_1d::x86_itx_has_sse41() {
                 _f = crate::sse::iadst_dequant_16x4_i16_sse41;
             }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
-            if std::is_x86_feature_detected!("avx2") {
+            if crate::itx_1d::x86_itx_has_avx2() {
                 _f = crate::avx::iadst_dequant_16x4_i16_avx2;
             }
         }
