@@ -568,49 +568,8 @@ fn pw_127() -> __m128i {
     unsafe { _mm_load_si128(PW_127.0.as_ptr().cast()) }
 }
 
-#[inline(always)]
-fn extract_uv<const N: usize>(boundaries_v: __m128i, rng: u32, i: usize) -> (u32, u32) {
-    // v = boundary[i], but for the sentinel lane (i == N, "fell through") v = 0.
-    // u = boundary[i-1], with boundary[-1] == rng.
-    //
-    // We index with constants. `_mm_extract_epi16::<IMM>` zero-extends a u16.
-    unsafe {
-        macro_rules! b {
-            ($idx:expr) => {
-                _mm_extract_epi16::<$idx>(boundaries_v) as u32
-            };
-        }
-
-        // u: previous lane (or rng for i==0)
-        let u = match i {
-            0 => rng,
-            1 => b!(0),
-            2 => b!(1),
-            3 => b!(2),
-            4 => b!(3),
-            5 => b!(4),
-            6 => b!(5),
-            _ => b!(6), // i == 7
-        };
-
-        // v: current lane, or 0 if we fell through all N boundaries (i == N).
-        let v = if i >= N {
-            0
-        } else {
-            match i {
-                0 => b!(0),
-                1 => b!(1),
-                2 => b!(2),
-                3 => b!(3),
-                4 => b!(4),
-                5 => b!(5),
-                _ => b!(6),
-            }
-        };
-
-        (u, v)
-    }
-}
+#[repr(C, align(16))]
+pub(crate) struct AlignedSse9(pub(crate) [u16; 9]);
 
 #[inline(always)]
 fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const LANES: usize>(
@@ -657,8 +616,16 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
 
     let i = (mask.trailing_zeros() >> 1) as usize;
 
-    // (1) Extract u, v from registers — no stack spill, no store-forward stall.
-    let (u, v) = extract_uv::<N>(boundaries_v, s.rng, i);
+    let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
+    let bounds_ptr = bounds.as_mut_ptr().cast::<u16>();
+    unsafe {
+        bounds_ptr.write(s.rng as u16);
+        _mm_storeu_si128(bounds_ptr.add(1).cast(), boundaries_v);
+    }
+    let initialized = (unsafe { bounds.assume_init() }).0;
+
+    let u = initialized[i] as u32;
+    let v = initialized[i + 1] as u32;
 
     debug_assert!(u <= s.rng);
     debug_assert!(u >= v);
@@ -670,9 +637,6 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
         debug_assert!(count <= 32);
         let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
 
-        // ge_mask for the update must be "lane >= i". `cmp` is "c >= boundary",
-        // which is exactly that predicate per lane, so it is reused directly —
-        // same as the original.
         update_cdf_sse2::<N, LANES>(cdf, cdf_v, cmp, rate);
         cdf[N] = pc + u16::from(count < 32);
     }
