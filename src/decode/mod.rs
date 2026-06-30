@@ -37,8 +37,8 @@ use crate::msac::{MsacBackend, MsacReader};
 
 use crate::pixel::{BitDepth, Pixel};
 use crate::quantizer::dq_lookup;
-use crate::refmvs;
 use crate::tables::{NS_WIENER_COEF_RANGE_UV, NS_WIENER_COEF_RANGE_Y};
+use crate::{TealdustError, refmvs};
 
 mod block_decode;
 mod frame_setup;
@@ -3403,7 +3403,7 @@ pub fn decode_frame(
     in_cdf: Option<&crate::cdf::CdfContext>,
     qcat: usize,
     pool: Option<&crate::mtpool::ThreadPool>,
-) -> Result<(), ()> {
+) -> Result<(), TealdustError> {
     let frame_hdr = fc.frame_hdr.clone();
     let seq_hdr = fc.seq_hdr.clone();
 
@@ -3424,7 +3424,8 @@ pub fn decode_frame(
         fc.bw,
         fc.bh,
         n_tc,
-    )?;
+    )
+    .map_err(|_| TealdustError::FrameSetupFailed)?;
 
     if frame_hdr.tip.frame_mode != 2 {
         let r = decode_frame_init_cdf(
@@ -3439,13 +3440,13 @@ pub fn decode_frame(
             n_tc,
             pool,
         );
-        r?;
+        r.map_err(|_| TealdustError::CdfInitFailed)?;
     } else {
         decode_tip_frame_init(&mut fc.ts, &frame_hdr, fc.sb_shift, fc.bw, fc.bh, n_tc);
     }
 
     let r = decode_frame_main(fc, n_passes, n_tc, pool);
-    r?;
+    r.map_err(|_| TealdustError::InvalidTileData)?;
 
     // path the update tile's adapted CDF becomes `out_cdf` with its symbol counts
     // reset. avg_cdf_type (tile CDF shift/accumulate) is not exercised by the
@@ -3464,12 +3465,15 @@ pub fn decode_frame(
 }
 
 /// Build a `FrameContext` from the decoder context's parsed headers and tile
-/// data, then run the decode.
+/// data, then run to decode.
 ///
 /// The context is moved out for the duration of the decode (so it borrows
 /// independently of `c`, e.g. `c.pool`) and always moved back afterward — even on
 /// error — so its scratch allocations survive to the next frame.
-pub fn submit_frame(c: &mut crate::internal::DecoderContext, n_tc: i32) -> Result<(), ()> {
+pub fn submit_frame(
+    c: &mut crate::internal::DecoderContext,
+    n_tc: i32,
+) -> Result<(), TealdustError> {
     let mut fc = std::mem::take(&mut c.fc);
     let r = submit_frame_inner(c, &mut fc, n_tc);
     c.fc = fc;
@@ -3480,11 +3484,17 @@ fn submit_frame_inner(
     c: &mut crate::internal::DecoderContext,
     fc: &mut crate::internal::FrameContext,
     n_tc: i32,
-) -> Result<(), ()> {
+) -> Result<(), TealdustError> {
     use crate::headers::PixelLayout;
 
-    let seq_hdr = c.seq_hdr.clone().ok_or(())?;
-    let frame_hdr = c.frame_hdr.clone().ok_or(())?;
+    let seq_hdr = c
+        .seq_hdr
+        .clone()
+        .ok_or(TealdustError::MissingSequenceHeader)?;
+    let frame_hdr = c
+        .frame_hdr
+        .clone()
+        .ok_or(TealdustError::MissingFrameHeader)?;
 
     let sb128 = frame_hdr.sb128 as i32;
     let layout = seq_hdr.layout;
@@ -3505,7 +3515,7 @@ fn submit_frame_inner(
     fc.b4_stride = ((fc.bw + 63) & !63) as isize;
     let bpc = 8 + seq_hdr.hbd as i32 * 2;
     fc.bitdepth_max = (1 << bpc) - 1;
-    // Intra neighbours have no reference direction; -1 sentinel (mirrors C
+    // Intra neighbors have no reference direction; -1 sentinel (mirrors C
     // lib.c init) so compound/ref context lookups treat them correctly.
     fc.refdir_intra = -1;
 
@@ -3526,7 +3536,7 @@ fn submit_frame_inner(
         Some(frame_hdr.clone()),
         allocator,
     )
-    .ok_or(())?;
+    .ok_or(TealdustError::OutOfMemory)?;
 
     // Attach display metadata that was parsed from metadata OBUs before this frame.
     fc.cur_pic.content_light_level = c.content_light;
@@ -3541,14 +3551,17 @@ fn submit_frame_inner(
     let is_inter_or_switch = frame_hdr.is_inter_or_switch();
     let allow_intrabc = frame_hdr.allow_intrabc != 0;
 
-    // Validate each signalled reference, share its picture into `fc.refp[i]`,
+    // Validate each signaled reference, share its picture into `fc.refp[i]`,
     // and compute the per-ref scaling / global-warp-allowed flags. Single-ref
     // bring-up: scaled references (svc != 0) are validated but the scaled-MC
     // path is a follow-up; an unequal-dimension ref triggers the deferral note.
     let mut ref_coded_width = [0i32; 7];
     if is_inter_or_switch {
         for i in 0..7 {
-            let refidx = frame_hdr.refidx[i] as usize;
+            let refidx = usize::try_from(frame_hdr.refidx[i])
+                .ok()
+                .filter(|&idx| idx < c.refs.len())
+                .ok_or(TealdustError::InvalidReferenceFrame)?;
             let rp = &c.refs[refidx].p;
             let rpic = rp.pic.as_ref();
             let valid = rpic.is_some_and(|p| {
@@ -3562,7 +3575,7 @@ fn submit_frame_inner(
                     && bpc == p.p.bpc
             });
             if !valid {
-                return Err(());
+                return Err(TealdustError::InvalidReferenceFrame);
             }
             let p = rpic.unwrap();
             fc.refp[i].pic = Some(p.clone());
@@ -3605,9 +3618,21 @@ fn submit_frame_inner(
             && seq_hdr.avg_cdf_type == 0
             && frame_hdr.tip.frame_mode != 2;
         fc.use_pri_sec_cdf = use_pri_sec as i32;
-        let pri_ref = frame_hdr.refidx[p_ref_idx as usize] as usize;
+        let pri_ref = frame_hdr
+            .refidx
+            .get(p_ref_idx as usize)
+            .copied()
+            .and_then(|idx| usize::try_from(idx).ok())
+            .filter(|&idx| idx < c.refs.len())
+            .ok_or(TealdustError::InvalidReferenceFrame)?;
         if use_pri_sec {
-            let sec_ref = frame_hdr.refidx[s_ref_idx as usize] as usize;
+            let sec_ref = frame_hdr
+                .refidx
+                .get(s_ref_idx as usize)
+                .copied()
+                .and_then(|idx| usize::try_from(idx).ok())
+                .filter(|&idx| idx < c.refs.len())
+                .ok_or(TealdustError::InvalidReferenceFrame)?;
             let default_cdf = crate::cdf::CdfContext::init_from_defaults(qcat);
             let src1 = c.refs[pri_ref].cdf.as_deref().unwrap_or(&default_cdf);
             let src2 = c.refs[sec_ref].cdf.as_deref().unwrap_or(&default_cdf);
@@ -3662,7 +3687,10 @@ fn submit_frame_inner(
             let bw = ((frame_hdr.width + 7) >> 3) << 1;
             let bh = ((frame_hdr.height + 7) >> 3) << 1;
             for i in 0..7 {
-                let refidx = frame_hdr.refidx[i] as usize;
+                let refidx = usize::try_from(frame_hdr.refidx[i])
+                    .ok()
+                    .filter(|&idx| idx < c.refs.len())
+                    .ok_or(TealdustError::InvalidReferenceFrame)?;
                 let ref_w = ((ref_coded_width[i] + 7) >> 3) << 1;
                 let ref_h = ((fc.refp[i].pic.as_ref().map(|p| p.p.h).unwrap_or(0) + 7) >> 3) << 1;
                 if c.refs[refidx].refmvs.is_some() && ref_w == bw && ref_h == bh {
@@ -3684,12 +3712,19 @@ fn submit_frame_inner(
         && (frame_hdr.segmentation.temporal != 0 || frame_hdr.segmentation.update_map == 0)
     {
         let pri = frame_hdr.primary_ref_frame as usize;
+        if pri >= ref_coded_width.len() {
+            return Err(TealdustError::InvalidReferenceFrame);
+        }
         let ref_w = ((ref_coded_width[pri] + 7) >> 3) << 1;
         let ref_h = ((fc.refp[pri].pic.as_ref().map(|p| p.p.h).unwrap_or(0) + 7) >> 3) << 1;
         let bw = ((frame_hdr.width + 7) >> 3) << 1;
         let bh = ((frame_hdr.height + 7) >> 3) << 1;
         if ref_w == bw && ref_h == bh {
-            fc.prev_segmap = c.refs[frame_hdr.refidx[pri] as usize].segmap.clone();
+            let refidx = usize::try_from(frame_hdr.refidx[pri])
+                .ok()
+                .filter(|&idx| idx < c.refs.len())
+                .ok_or(TealdustError::InvalidReferenceFrame)?;
+            fc.prev_segmap = c.refs[refidx].segmap.clone();
         }
     }
 
@@ -3698,11 +3733,14 @@ fn submit_frame_inner(
         for p in 0..3 {
             let cp = &frame_hdr.ccso.p[p];
             if cp.enabled != 0 && cp.sb_reuse != 0 {
-                let refidx = frame_hdr.refidx[cp.refidx as usize];
-                if refidx < 0 {
-                    return Err(());
-                }
-                fc.prev_ccsomap[p] = c.refs[refidx as usize].ccsomap.clone();
+                let refidx = frame_hdr
+                    .refidx
+                    .get(cp.refidx as usize)
+                    .copied()
+                    .and_then(|idx| usize::try_from(idx).ok())
+                    .filter(|&idx| idx < c.refs.len())
+                    .ok_or(TealdustError::InvalidReferenceFrame)?;
+                fc.prev_ccsomap[p] = c.refs[refidx].ccsomap.clone();
             }
         }
     }
@@ -3743,12 +3781,12 @@ fn submit_frame_inner(
             in_cdf_ref.map(std::sync::Arc::new)
         };
     let cur_segmap_arc: Option<Vec<u8>> = if !fc.cur_segmap.is_empty() {
-        Some(try_clone_vec(&fc.cur_segmap)?)
+        Some(try_clone_vec(&fc.cur_segmap).map_err(|_| TealdustError::OutOfMemory)?)
     } else {
         None
     };
     let cur_ccsomap_arc: Option<Vec<u8>> = if !fc.cur_ccsomap.is_empty() {
-        Some(try_clone_vec(&fc.cur_ccsomap)?)
+        Some(try_clone_vec(&fc.cur_ccsomap).map_err(|_| TealdustError::OutOfMemory)?)
     } else {
         None
     };
@@ -3768,7 +3806,7 @@ fn submit_frame_inner(
                 c.refs[i].refmvs = if fc.rf.rp.is_empty() {
                     None
                 } else {
-                    Some(try_clone_vec(&fc.rf.rp)?)
+                    Some(try_clone_vec(&fc.rf.rp).map_err(|_| TealdustError::OutOfMemory)?)
                 };
             }
             c.refs[i].ccsomap = cur_ccsomap_arc.clone();
@@ -3784,7 +3822,9 @@ fn submit_frame_inner(
     // any other mutation copies on write, so the shared storage is never
     // observed changing.
     let out = shared.shallow_clone();
-    c.frame_out.try_reserve_exact(1).map_err(|_| ())?;
+    c.frame_out
+        .try_reserve_exact(1)
+        .map_err(|_| TealdustError::OutOfMemory)?;
     c.frame_out.push(out);
     Ok(())
 }

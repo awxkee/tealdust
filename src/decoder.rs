@@ -287,7 +287,7 @@ impl Decoder {
                 Ok(consumed) => {
                     if consumed > self.input.len() {
                         self.input.unref();
-                        return Err(TealdustError::InvalidData);
+                        return Err(TealdustError::InvalidObu);
                     }
                     self.input.consume(consumed);
                     if self.input.is_empty() {
@@ -314,13 +314,13 @@ impl Decoder {
                         }
                     }
                 }
-                Err(_e) => {
+                Err(e) => {
                     // A malformed OBU can force large transient frame/tile/scratch
                     // allocations before the parser eventually rejects it. Do not
                     // keep those capacities around for the next fuzz iteration or
                     // next untrusted packet on the same decoder.
                     self.flush();
-                    return Err(TealdustError::InvalidData);
+                    return Err(e);
                 }
             }
 

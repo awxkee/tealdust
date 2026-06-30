@@ -27,7 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-use crate::gdf_tables::{GDF_ALPHA, GDF_BIAS, GDF_INTER_ERROR, GDF_INTRA_ERROR, GDF_WEIGHT};
+use crate::gdf_tables::{GDF_ALPHA, GDF_BIAS, GDF_WEIGHT};
 use crate::headers::{FhRestorationPlane, PixelLayout};
 use crate::intops::{apply_sign, iclip, imax, imin};
 use crate::lf_mask::{Av2Filter, Av2Restoration};
@@ -435,27 +435,6 @@ pub(crate) fn gdf_add_hbd(
 
 pub(crate) const REST_UNIT_STRIDE: usize = 76;
 const ROW_ORIGIN: usize = 6;
-
-pub(crate) static GDF_COORDS: [[i8; 2]; 18] = [
-    [6, 0],
-    [5, 0],
-    [4, 0],
-    [3, 0],
-    [2, 1],
-    [2, 0],
-    [2, -1],
-    [1, 2],
-    [1, 1],
-    [1, 0],
-    [1, -1],
-    [1, -2],
-    [0, 6],
-    [0, 5],
-    [0, 4],
-    [0, 3],
-    [0, 2],
-    [0, 1],
-];
 
 const GRADIENT_BUF_STRIDE: usize = 33;
 
@@ -1615,6 +1594,7 @@ pub(crate) fn gdf_prep_8bpc(
             grad_bit ^= 1;
         }
 
+        let refs: [&[u8]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u8]);
         let mut x1 = 0usize;
         while x1 < w {
             let mut grad_sums = [0i32; 4];
@@ -1641,39 +1621,32 @@ pub(crate) fn gdf_prep_8bpc(
                 }
             }
 
-            for x2 in 0..2 {
-                let x = x1 + x2;
-                let mut idx_vals = shared_vals;
-                let m = row_buffers[ptrs[6]][o + x] as i32;
-                for k in 0..18 {
-                    let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
-                    let dy = GDF_COORDS[k][0] as i32;
-                    let dx = GDF_COORDS[k][1] as i32;
-                    let a = row_buffers[ptrs[(6 - dy) as usize]]
-                        [(o as i32 + x as i32 - dx) as usize] as i32;
-                    let b = row_buffers[ptrs[(6 + dy) as usize]]
-                        [(o as i32 + x as i32 + dx) as usize] as i32;
-                    let above = iclip((a - m) << 2, -alpha, alpha);
-                    let below = iclip((b - m) << 2, -alpha, alpha);
-                    let v = iclip(above + below, -512, 511);
-                    for idx in 0..3 {
-                        idx_vals[idx] +=
-                            v * GDF_WEIGHT[weight_base + idx * 88 + k * 4 + cls] as i32;
-                    }
-                }
-
-                let mut full_idx = 0usize;
-                for idx in 0..3 {
-                    let sv = idx_vals[idx] * scale;
-                    let v = apply_sign((sv.abs() + (1 << 14)) >> 15, sv);
-                    let sub_idx = (iclip(v, -scale, scale - 1) + scale) as usize;
-                    full_idx = full_idx * (scale as usize * 2) + sub_idx;
-                }
-                if ref_dst_idx == 0 {
-                    dst[y * dst_stride + x] = GDF_INTRA_ERROR[error_lut_base + full_idx];
-                } else {
-                    dst[y * dst_stride + x] = GDF_INTER_ERROR[error_lut_base + full_idx];
-                }
+            if x1 + 1 < w {
+                let err_pair = crate::filter::gdf_prep_pair_8bpc(
+                    refs,
+                    o + x1,
+                    cls,
+                    shared_vals,
+                    alpha_base,
+                    weight_base,
+                    error_lut_base,
+                    scale,
+                    ref_dst_idx,
+                );
+                dst[y * dst_stride + x1] = err_pair[0];
+                dst[y * dst_stride + x1 + 1] = err_pair[1];
+            } else {
+                dst[y * dst_stride + x1] = crate::filter::gdf_prep_pixel_8bpc(
+                    refs,
+                    o + x1,
+                    cls,
+                    shared_vals,
+                    alpha_base,
+                    weight_base,
+                    error_lut_base,
+                    scale,
+                    ref_dst_idx,
+                );
             }
             x1 += 2;
         }

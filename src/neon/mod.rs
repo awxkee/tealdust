@@ -83,8 +83,8 @@ pub(crate) use filmgrain::{
 };
 pub(crate) use filter::{
     avg_row_8bpc_neon, blend_row_8bpc_neon, cctx_row_i16_neon, cctx_row_neon, dc_add_row_8bpc_neon,
-    gdf_add_run_8bpc_neon, gdf_gradient_group_neon, mask_row_8bpc_neon, morph_row_8bpc_neon,
-    residual_add_row_8bpc_neon, row_clip_neon, w_avg_row_8bpc_neon,
+    gdf_add_run_8bpc_neon, gdf_gradient_group_neon, gdf_prep_pair_8bpc_neon, mask_row_8bpc_neon,
+    morph_row_8bpc_neon, residual_add_row_8bpc_neon, row_clip_neon, w_avg_row_8bpc_neon,
 };
 pub(crate) use filter_hd::{
     avg_row_hbd_neon, blend_row_hbd_neon, dc_add_row_hbd_neon, gdf_add_run_hbd_neon,

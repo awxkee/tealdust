@@ -51,6 +51,27 @@ const GDF_PREP_COORDS: [[i8; 2]; 18] = [
     [0, -3],
 ];
 
+const GDF_PREP_COORDS_8BPC: [[i8; 2]; 18] = [
+    [6, 0],
+    [5, 0],
+    [4, 0],
+    [3, 0],
+    [2, 1],
+    [2, 0],
+    [2, -1],
+    [1, 2],
+    [1, 1],
+    [1, 0],
+    [1, -1],
+    [1, -2],
+    [0, 6],
+    [0, 5],
+    [0, 4],
+    [0, 3],
+    [0, 2],
+    [0, 1],
+];
+
 pub(crate) type ResidualAddFn = unsafe fn(&mut [u8], &[i32], usize, i32, i32);
 
 pub(crate) fn residual_add_row_8bpc_scalar(
@@ -1211,6 +1232,123 @@ fn gdf_prep_lookup_error(ref_dst_idx: usize, error_lut_base: usize, full_idx: us
         GDF_INTRA_ERROR[error_lut_base + full_idx]
     } else {
         GDF_INTER_ERROR[error_lut_base + full_idx]
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gdf_prep_pixel_8bpc(
+    rows: [&[u8]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    ref_dst_idx: usize,
+) -> i8 {
+    let mut idx_vals = shared_vals;
+    let m = rows[6][col] as i32;
+    for (k, &[dy, dx]) in GDF_PREP_COORDS_8BPC.iter().enumerate() {
+        let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
+        let a = rows[(6 - dy as i32) as usize][(col as i32 - dx as i32) as usize] as i32;
+        let b = rows[(6 + dy as i32) as usize][(col as i32 + dx as i32) as usize] as i32;
+        let above = ((a - m) << 2).clamp(-alpha, alpha);
+        let below = ((b - m) << 2).clamp(-alpha, alpha);
+        let v = (above + below).clamp(-512, 511);
+        for idx in 0..3 {
+            idx_vals[idx] += v * GDF_WEIGHT[weight_base + idx * 88 + k * 4 + cls] as i32;
+        }
+    }
+
+    let mut full_idx = 0usize;
+    for &idx_val in &idx_vals {
+        let v = gdf_prep_apply_sign(idx_val * scale);
+        let sub_idx = (v.clamp(-scale, scale - 1) + scale) as usize;
+        full_idx = full_idx * (scale as usize * 2) + sub_idx;
+    }
+    gdf_prep_lookup_error(ref_dst_idx, error_lut_base, full_idx)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gdf_prep_pair_8bpc_scalar(
+    rows: [&[u8]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    ref_dst_idx: usize,
+) -> [i8; 2] {
+    let mut out = [0i8; 2];
+    for (x2, out) in out.iter_mut().enumerate() {
+        *out = gdf_prep_pixel_8bpc(
+            rows,
+            col + x2,
+            cls,
+            shared_vals,
+            alpha_base,
+            weight_base,
+            error_lut_base,
+            scale,
+            ref_dst_idx,
+        );
+    }
+    out
+}
+
+pub(crate) type GdfPrepPair8bpcFn =
+    unsafe fn([&[u8]; 13], usize, usize, [i32; 3], usize, usize, usize, i32, usize) -> [i8; 2];
+
+static GDF_PREP_PAIR_8BPC: OnceLock<GdfPrepPair8bpcFn> = OnceLock::new();
+
+#[inline]
+fn resolve_gdf_prep_pair_8bpc() -> GdfPrepPair8bpcFn {
+    *GDF_PREP_PAIR_8BPC.get_or_init(|| {
+        let mut _f = gdf_prep_pair_8bpc_scalar as GdfPrepPair8bpcFn;
+        #[cfg(target_arch = "aarch64")]
+        {
+            _f = crate::neon::gdf_prep_pair_8bpc_neon as GdfPrepPair8bpcFn;
+        }
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::gdf_prep_pair_8bpc_avx2 as GdfPrepPair8bpcFn;
+            }
+        }
+        _f
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn gdf_prep_pair_8bpc(
+    rows: [&[u8]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    ref_dst_idx: usize,
+) -> [i8; 2] {
+    // SAFETY: the resolver only selects target-feature implementations when
+    // the CPU supports them; otherwise it keeps the scalar implementation.
+    unsafe {
+        resolve_gdf_prep_pair_8bpc()(
+            rows,
+            col,
+            cls,
+            shared_vals,
+            alpha_base,
+            weight_base,
+            error_lut_base,
+            scale,
+            ref_dst_idx,
+        )
     }
 }
 

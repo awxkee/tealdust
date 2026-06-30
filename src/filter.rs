@@ -758,6 +758,60 @@ pub(crate) fn gdf_gradient_group_hbd(
     );
 }
 
+/// GDF prep inner 2-pixel pair.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn gdf_prep_pair_8bpc(
+    rows: [&[u8]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    ref_dst_idx: usize,
+) -> [i8; 2] {
+    crate::rowops_dispatch::gdf_prep_pair_8bpc(
+        rows,
+        col,
+        cls,
+        shared_vals,
+        alpha_base,
+        weight_base,
+        error_lut_base,
+        scale,
+        ref_dst_idx,
+    )
+}
+
+/// Scalar GDF prep for a single 8-bit tail pixel.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub(crate) fn gdf_prep_pixel_8bpc(
+    rows: [&[u8]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    ref_dst_idx: usize,
+) -> i8 {
+    crate::rowops_dispatch::gdf_prep_pixel_8bpc(
+        rows,
+        col,
+        cls,
+        shared_vals,
+        alpha_base,
+        weight_base,
+        error_lut_base,
+        scale,
+        ref_dst_idx,
+    )
+}
+
 /// High-bit-depth GDF prep inner 2-pixel pair.
 #[allow(clippy::too_many_arguments)]
 #[inline]

@@ -70,27 +70,89 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-/// Maximum number of items accepted from an `iinf` box.
-const MAX_ITEMS: u32 = 1024;
-/// Maximum number of property entries accepted from an `ipco` box.
-const MAX_IPCO_PROPS: usize = 256;
-/// Maximum number of `ipma` entry associations per item.
-const MAX_IPMA_ENTRIES: u32 = 4096;
-/// Maximum extents per `iloc` item.
-const MAX_EXTENTS_PER_ITEM: u16 = 32;
-/// Maximum total OBU bytes assembled from `iloc` extents before feeding the
+/// Default number of items accepted from an `iinf` box.
+pub const DEFAULT_AVIF_MAX_ITEMS: u32 = 1024;
+/// Default number of property entries accepted from an `ipco` box.
+pub const DEFAULT_AVIF_MAX_IPCO_PROPS: usize = 256;
+/// Default number of `ipma` entry associations per item.
+pub const DEFAULT_AVIF_MAX_IPMA_ENTRIES: u32 = 4096;
+/// Default extents per `iloc` item.
+pub const DEFAULT_AVIF_MAX_EXTENTS_PER_ITEM: u16 = 32;
+/// Default total OBU bytes assembled from `iloc` extents before feeding the
 /// decoder.
-const MAX_OBU_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
-/// Maximum image dimension accepted from `ispe`.
-const MAX_IMAGE_DIMENSION: u32 = 65536;
-/// Maximum allowed `iloc` item count (v0/v1 = u16, v2 = u32; cap both).
-const MAX_ILOC_ITEMS: u32 = 1024;
-/// Maximum number of `ftyp` compatible brands scanned (prevents O(n) on junk).
-const MAX_COMPAT_BRANDS: usize = 64;
-/// Maximum byte length of an `auxC` URN string accepted from the bitstream.
-const MAX_AUXC_URN_LEN: usize = 512;
-/// Maximum number of item references consumed from one `iref` type-ref box.
-const MAX_IREF_REFS: u16 = 256;
+pub const DEFAULT_AVIF_MAX_OBU_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
+/// Default image dimension accepted from `ispe`.
+pub const DEFAULT_AVIF_MAX_IMAGE_DIMENSION: u32 = 65536;
+/// Default allowed `iloc` item count (v0/v1 = u16, v2 = u32; cap both).
+pub const DEFAULT_AVIF_MAX_ILOC_ITEMS: u32 = 1024;
+/// Default number of `ftyp` compatible brands scanned (prevents O(n) on junk).
+pub const DEFAULT_AVIF_MAX_COMPAT_BRANDS: usize = 64;
+/// Default byte length of an `auxC` URN string accepted from the bitstream.
+pub const DEFAULT_AVIF_MAX_AUXC_URN_LEN: usize = 512;
+/// Default number of item references consumed from one `iref` type-ref box.
+pub const DEFAULT_AVIF_MAX_IREF_REFS: u16 = 256;
+
+/// High-level AVIF parser/decoder configuration.
+///
+/// This wraps the AV2 [`Settings`] used internally by [`Decoder`] and the
+/// container-level caps that protect AVIF box parsing and OBU assembly. The
+/// default is suitable for untrusted still images: it keeps the existing parser
+/// limits, enables reconstruction, and uses the host's available parallelism.
+/// Set an individual limit to `0` to disable that specific container cap.
+#[derive(Debug, Clone)]
+pub struct AvifSettings {
+    /// Settings passed to the underlying AV2 decoder.
+    ///
+    /// [`Settings::run_decode`] is forced to `true` while decoding AVIF because
+    /// the high-level API always returns pixels. Other fields, including
+    /// `n_threads`, `frame_size_limit`, filters, strictness, and grain policy are
+    /// passed through as provided.
+    pub decoder_settings: Settings,
+    /// Maximum total OBU bytes assembled from codec-config OBUs plus item extents.
+    pub max_obu_bytes: usize,
+    /// Maximum image width or height accepted from `ispe`.
+    pub max_image_dimension: u32,
+    /// Maximum number of items accepted from an `iinf` box.
+    pub max_items: u32,
+    /// Maximum number of property entries accepted from an `ipco` box.
+    pub max_ipco_props: usize,
+    /// Maximum number of `ipma` entries accepted.
+    pub max_ipma_entries: u32,
+    /// Maximum number of extents accepted for a single `iloc` item.
+    pub max_extents_per_item: u16,
+    /// Maximum number of items accepted from an `iloc` box.
+    pub max_iloc_items: u32,
+    /// Maximum number of compatible brands scanned in `ftyp`.
+    pub max_compat_brands: usize,
+    /// Maximum byte length of an `auxC` URN.
+    pub max_auxc_urn_len: usize,
+    /// Maximum number of references consumed from one `iref` type-ref box.
+    pub max_iref_refs: u16,
+}
+
+impl Default for AvifSettings {
+    fn default() -> Self {
+        let mut decoder_settings = Settings::default();
+        decoder_settings.n_threads = std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1);
+        decoder_settings.run_decode = true;
+
+        Self {
+            decoder_settings,
+            max_obu_bytes: DEFAULT_AVIF_MAX_OBU_BYTES,
+            max_image_dimension: DEFAULT_AVIF_MAX_IMAGE_DIMENSION,
+            max_items: DEFAULT_AVIF_MAX_ITEMS,
+            max_ipco_props: DEFAULT_AVIF_MAX_IPCO_PROPS,
+            max_ipma_entries: DEFAULT_AVIF_MAX_IPMA_ENTRIES,
+            max_extents_per_item: DEFAULT_AVIF_MAX_EXTENTS_PER_ITEM,
+            max_iloc_items: DEFAULT_AVIF_MAX_ILOC_ITEMS,
+            max_compat_brands: DEFAULT_AVIF_MAX_COMPAT_BRANDS,
+            max_auxc_urn_len: DEFAULT_AVIF_MAX_AUXC_URN_LEN,
+            max_iref_refs: DEFAULT_AVIF_MAX_IREF_REFS,
+        }
+    }
+}
 
 /// Errors that can occur when parsing or decoding an AVIF file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,9 +314,9 @@ impl CodecConfig {
 /// Image dimensions from the `ispe` item property.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SpatialExtents {
-    /// Image width in pixels (1 – MAX_IMAGE_DIMENSION).
+    /// Image width in pixels (bounded by [`AvifSettings::max_image_dimension`]).
     pub width: u32,
-    /// Image height in pixels (1 – MAX_IMAGE_DIMENSION).
+    /// Image height in pixels (bounded by [`AvifSettings::max_image_dimension`]).
     pub height: u32,
 }
 
@@ -774,6 +836,13 @@ impl AvifParser {
     ///
     /// No pixel decoding occurs here; only the box structure is walked.
     pub fn parse(data: &[u8]) -> Result<AvifContainer> {
+        Self::parse_with_settings(data, &AvifSettings::default())
+    }
+
+    /// Parse an AVIF file with explicit parser limits.
+    ///
+    /// No pixel decoding occurs here; only the box structure is walked.
+    pub fn parse_with_settings(data: &[u8], settings: &AvifSettings) -> Result<AvifContainer> {
         let mut r = Reader::new(data);
 
         let mut brand = [0u8; 4];
@@ -812,10 +881,14 @@ impl AvifParser {
 
                         let mut avif_brand = is_avif_brand(&brand);
 
-                        // FUZZ: cap the compatible-brand scan to MAX_COMPAT_BRANDS
-                        // so a huge ftyp box cannot cause O(n) scanning.
+                        // FUZZ: cap the compatible-brand scan so a huge ftyp
+                        // box cannot cause O(n) scanning. A zero setting disables
+                        // this parser cap for trusted inputs.
                         let mut brand_count = 0usize;
-                        while payload.remaining() >= 4 && brand_count < MAX_COMPAT_BRANDS {
+                        while payload.remaining() >= 4
+                            && (settings.max_compat_brands == 0
+                                || brand_count < settings.max_compat_brands)
+                        {
                             let compat = payload.read_bytes::<4>()?;
                             if is_avif_brand(&compat) {
                                 avif_brand = true;
@@ -841,6 +914,7 @@ impl AvifParser {
                         &mut ipco_props,
                         &mut ipma_raw,
                         &mut iref_raw,
+                        settings,
                     )?;
                 }
 
@@ -857,19 +931,19 @@ impl AvifParser {
         // Resolve iloc offsets into absolute file positions.
         if let Some(iloc_bytes) = iloc_raw {
             // FUZZ: pass the real file length so extent validation is exact.
-            Self::apply_iloc(&iloc_bytes, &mut items, data.len() as u64)?;
+            Self::apply_iloc(&iloc_bytes, &mut items, data.len() as u64, settings)?;
         }
 
         // Apply ipco properties to items via ipma associations.
         if !ipco_props.is_empty() {
             if let Some(ipma_bytes) = ipma_raw {
-                Self::apply_ipma(&ipma_bytes, &ipco_props, &mut items)?;
+                Self::apply_ipma(&ipma_bytes, &ipco_props, &mut items, settings)?;
             }
         }
 
         // Resolve iref references to find the alpha item for the primary item.
         let alpha_item_id = if let Some(iref_bytes) = iref_raw {
-            Self::resolve_alpha_from_iref(&iref_bytes, primary_item_id, &mut items)?
+            Self::resolve_alpha_from_iref(&iref_bytes, primary_item_id, &mut items, settings)?
         } else {
             None
         };
@@ -890,6 +964,7 @@ impl AvifParser {
         ipco_props: &mut Vec<([u8; 4], Vec<u8>)>,
         ipma_raw: &mut Option<Vec<u8>>,
         iref_raw: &mut Option<Vec<u8>>,
+        settings: &AvifSettings,
     ) -> Result<()> {
         // FUZZ: track which critical singleton boxes have been seen; a second
         // occurrence is rejected to prevent state-confusion attacks.
@@ -930,7 +1005,7 @@ impl AvifParser {
                     };
 
                     // FUZZ: cap item count before allocating or looping.
-                    if raw_count > MAX_ITEMS {
+                    if settings.max_items != 0 && raw_count > settings.max_items {
                         return Err(AvifError::LimitExceeded);
                     }
                     let count = raw_count;
@@ -977,7 +1052,7 @@ impl AvifParser {
 
                 b"iprp" if !seen_iprp => {
                     seen_iprp = true;
-                    Self::parse_iprp(&mut payload, ipco_props, ipma_raw)?;
+                    Self::parse_iprp(&mut payload, ipco_props, ipma_raw, settings)?;
                 }
 
                 b"iref" if !seen_iref => {
@@ -999,6 +1074,7 @@ impl AvifParser {
         r: &mut Reader<'_>,
         ipco_props: &mut Vec<([u8; 4], Vec<u8>)>,
         ipma_raw: &mut Option<Vec<u8>>,
+        settings: &AvifSettings,
     ) -> Result<()> {
         let mut seen_ipco = false;
         let mut seen_ipma = false;
@@ -1024,7 +1100,9 @@ impl AvifParser {
                         // prevent unbounded Vec growth.  The Vec<u8> payloads
                         // are already bounded by the sub-reader, so this is a
                         // count-not-bytes limit.
-                        if ipco_props.len() >= MAX_IPCO_PROPS {
+                        if settings.max_ipco_props != 0
+                            && ipco_props.len() >= settings.max_ipco_props
+                        {
                             return Err(AvifError::LimitExceeded);
                         }
 
@@ -1049,6 +1127,7 @@ impl AvifParser {
         iloc_bytes: &[u8],
         items: &mut HashMap<u16, AvifItem>,
         file_len: u64,
+        settings: &AvifSettings,
     ) -> Result<()> {
         let mut r = Reader::new(iloc_bytes);
         let (ver, _flags) = read_fullbox_header(&mut r)?;
@@ -1078,7 +1157,7 @@ impl AvifParser {
         };
 
         // FUZZ: cap item count before looping.
-        if raw_item_count > MAX_ILOC_ITEMS {
+        if settings.max_iloc_items != 0 && raw_item_count > settings.max_iloc_items {
             return Err(AvifError::LimitExceeded);
         }
 
@@ -1103,7 +1182,7 @@ impl AvifParser {
                     // FUZZ: reject over-large skipped entries too. Capping here
                     // would leave unread extent records in this iloc entry and
                     // desynchronize the parser for the next item.
-                    if ec > MAX_EXTENTS_PER_ITEM {
+                    if settings.max_extents_per_item != 0 && ec > settings.max_extents_per_item {
                         return Err(AvifError::LimitExceeded);
                     }
                     for _ in 0..ec {
@@ -1123,7 +1202,7 @@ impl AvifParser {
 
             // FUZZ: cap extents per item; prevents large allocations via
             // Vec::with_capacity and limits the inner loop iterations.
-            if extent_count > MAX_EXTENTS_PER_ITEM {
+            if settings.max_extents_per_item != 0 && extent_count > settings.max_extents_per_item {
                 return Err(AvifError::LimitExceeded);
             }
 
@@ -1170,6 +1249,7 @@ impl AvifParser {
         ipma_bytes: &[u8],
         ipco_props: &[([u8; 4], Vec<u8>)],
         items: &mut HashMap<u16, AvifItem>,
+        settings: &AvifSettings,
     ) -> Result<()> {
         let mut r = Reader::new(ipma_bytes);
         let (ver, flags) = read_fullbox_header(&mut r)?;
@@ -1177,7 +1257,7 @@ impl AvifParser {
         let entry_count = r.read_u32_be()?;
 
         // FUZZ: cap entry count before looping.
-        if entry_count > MAX_IPMA_ENTRIES {
+        if settings.max_ipma_entries != 0 && entry_count > settings.max_ipma_entries {
             return Err(AvifError::LimitExceeded);
         }
 
@@ -1219,14 +1299,19 @@ impl AvifParser {
 
                 let (fourcc, raw_prop) = &ipco_props[idx];
                 if let Some(item) = items.get_mut(&item_id) {
-                    Self::apply_property(item, fourcc, raw_prop)?;
+                    Self::apply_property(item, fourcc, raw_prop, settings)?;
                 }
             }
         }
         Ok(())
     }
 
-    fn apply_property(item: &mut AvifItem, fourcc: &[u8; 4], raw: &[u8]) -> Result<()> {
+    fn apply_property(
+        item: &mut AvifItem,
+        fourcc: &[u8; 4],
+        raw: &[u8],
+        settings: &AvifSettings,
+    ) -> Result<()> {
         match fourcc {
             b"ispe" => {
                 // ispe: FullBox (version=0, flags=0), image_width u32, image_height u32.
@@ -1243,7 +1328,10 @@ impl AvifParser {
                 if width == 0 || height == 0 {
                     return Err(AvifError::InvalidBox);
                 }
-                if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+                if settings.max_image_dimension != 0
+                    && (width > settings.max_image_dimension
+                        || height > settings.max_image_dimension)
+                {
                     return Err(AvifError::LimitExceeded);
                 }
 
@@ -1371,7 +1459,7 @@ impl AvifParser {
                 let urn_bytes = &raw[4..];
 
                 // FUZZ: cap URN length before cloning into AuxiliaryType::Other.
-                if urn_bytes.len() > MAX_AUXC_URN_LEN {
+                if settings.max_auxc_urn_len != 0 && urn_bytes.len() > settings.max_auxc_urn_len {
                     return Err(AvifError::LimitExceeded);
                 }
 
@@ -1488,13 +1576,14 @@ impl AvifParser {
     /// - `iref` is a FullBox; version drives the item-ID field width (0 → u16,
     ///   1 → u32, down-cast to u16).
     /// - The reference count inside each typed-reference sub-box is u16 (up to
-    ///   65535 per spec); we cap it at `MAX_IREF_REFS`.
+    ///   65535 per spec); we cap it with [`AvifSettings::max_iref_refs`].
     /// - Unknown reference types are skipped by consuming their payload via the
     ///   sub-reader (already bounded by box size).
     fn resolve_alpha_from_iref(
         iref_bytes: &[u8],
         primary_item_id: u16,
         items: &mut HashMap<u16, AvifItem>,
+        settings: &AvifSettings,
     ) -> Result<Option<u16>> {
         let mut r = Reader::new(iref_bytes);
         let (ver, _flags) = read_fullbox_header(&mut r)?;
@@ -1530,7 +1619,7 @@ impl AvifParser {
             let ref_count = payload.read_u16_be()?;
 
             // FUZZ: cap reference count per entry.
-            if ref_count > MAX_IREF_REFS {
+            if settings.max_iref_refs != 0 && ref_count > settings.max_iref_refs {
                 return Err(AvifError::LimitExceeded);
             }
 
@@ -1675,6 +1764,7 @@ impl fmt::Debug for AvifImage {
 pub struct AvifDecoder<'a> {
     file: &'a [u8],
     container: AvifContainer,
+    settings: AvifSettings,
 }
 
 impl<'a> AvifDecoder<'a> {
@@ -1682,10 +1772,19 @@ impl<'a> AvifDecoder<'a> {
     ///
     /// This is a fast metadata-only pass; no pixel decoding happens here.
     pub fn new(data: &'a [u8]) -> Result<Self> {
-        let container = AvifParser::parse(data)?;
+        Self::with_settings(data, AvifSettings::default())
+    }
+
+    /// Parse the AVIF container from `data` with explicit parser and decoder
+    /// settings.
+    ///
+    /// This is a fast metadata-only pass; no pixel decoding happens here.
+    pub fn with_settings(data: &'a [u8], settings: AvifSettings) -> Result<Self> {
+        let container = AvifParser::parse_with_settings(data, &settings)?;
         Ok(Self {
             file: data,
             container,
+            settings,
         })
     }
 
@@ -1763,7 +1862,7 @@ impl<'a> AvifDecoder<'a> {
             return Err(AvifError::MissingBox("mdat"));
         }
 
-        let picture = Self::run_decoder(primary_obu)?;
+        let picture = self.run_decoder(primary_obu)?;
 
         let layout = picture.p.layout;
         let bpc = u8::try_from(picture.p.bpc).map_err(|_| AvifError::InvalidCodecConfig)?;
@@ -1837,7 +1936,7 @@ impl<'a> AvifDecoder<'a> {
                 return Err(AvifError::MissingBox("alpha mdat"));
             }
 
-            let alpha_picture = Self::run_decoder(alpha_obu)?;
+            let alpha_picture = self.run_decoder(alpha_obu)?;
 
             // Validate decoded dimensions against the declared extents.
             if alpha_picture.p.w as u32 != extents.width
@@ -1921,13 +2020,18 @@ impl<'a> AvifDecoder<'a> {
         &self.container
     }
 
+    /// Return the parser/decoder settings used by this decoder.
+    pub fn settings(&self) -> &AvifSettings {
+        &self.settings
+    }
+
     fn item_content_light_level(&self, item: &AvifItem) -> Result<Option<ContentLightLevel>> {
         let obu_data = self.assemble_obu(item)?;
         scan_content_light_level_from_obus(&obu_data)
     }
 
     /// Assemble a contiguous OBU byte stream from an item's `configOBUs` and
-    /// `iloc` extents, subject to `MAX_OBU_BYTES`.
+    /// `iloc` extents, subject to [`AvifSettings::max_obu_bytes`].
     fn assemble_obu(&self, item: &AvifItem) -> Result<Vec<u8>> {
         let cfg = item
             .codec_config
@@ -1946,7 +2050,7 @@ impl<'a> AvifDecoder<'a> {
             .checked_add(sample_len)
             .ok_or(AvifError::InvalidBox)?;
 
-        if total_obu_len > MAX_OBU_BYTES as u64 {
+        if self.settings.max_obu_bytes != 0 && total_obu_len > self.settings.max_obu_bytes as u64 {
             return Err(AvifError::LimitExceeded);
         }
 
@@ -1973,11 +2077,8 @@ impl<'a> AvifDecoder<'a> {
     }
 
     /// Open an AV2 decoder, feed it `obu_data`, drain one [`Picture`].
-    fn run_decoder(obu_data: Vec<u8>) -> Result<Picture> {
-        let mut settings = Settings::default();
-        settings.n_threads = std::thread::available_parallelism()
-            .map(|n| n.get() as u32)
-            .unwrap_or(1);
+    fn run_decoder(&self, obu_data: Vec<u8>) -> Result<Picture> {
+        let mut settings = self.settings.decoder_settings.clone();
         settings.run_decode = true;
 
         let mut decoder = Decoder::open(&settings).map_err(AvifError::DecodeError)?;

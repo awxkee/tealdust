@@ -1334,7 +1334,7 @@ pub(crate) fn x86_itx_has_avx2() -> bool {
 pub(crate) fn tx1d_x8_dispatch(tx_size: usize, kind: usize) -> Option<Itx1dFnX8U> {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        return x86_tx1d_x8_table()[tx_size][kind];
+        x86_tx1d_x8_table()[tx_size][kind]
     }
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
     {

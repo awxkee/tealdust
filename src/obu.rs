@@ -51,7 +51,7 @@ fn ref_slot(refs: &[RefState; 8], idx: i32) -> Result<&RefState> {
     usize::try_from(idx)
         .ok()
         .and_then(|i| refs.get(i))
-        .ok_or(TealdustError::InvalidData)
+        .ok_or(TealdustError::InvalidReferenceFrame)
 }
 
 static LAYOUTS: [PixelLayout; 4] = [
@@ -65,7 +65,7 @@ fn check_trailing_bits(gb: &mut GetBits, strict: bool) -> Result<()> {
     let trailing_one = gb.get_bit();
 
     if gb.has_error() {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidTrailingBits);
     }
 
     if !strict {
@@ -73,7 +73,7 @@ fn check_trailing_bits(gb: &mut GetBits, strict: bool) -> Result<()> {
     }
 
     if trailing_one == 0 {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidTrailingBits);
     }
 
     Ok(())
@@ -154,7 +154,7 @@ fn parse_tile_info(
             extra -= 1;
         }
         if sbx < fsbw {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidTileInfo);
         }
 
         thdr.min_log2_rows = imax(min_log2_tiles - thdr.log2_cols as i32, 0) as u8;
@@ -174,7 +174,7 @@ fn parse_tile_info(
             extra -= 1;
         }
         if sby < fsbh {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidTileInfo);
         }
     } else {
         let mut widest_tile = 0;
@@ -194,7 +194,7 @@ fn parse_tile_info(
             thdr.cols += 1;
         }
         if sbx < sbw {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidTileInfo);
         }
         thdr.log2_cols = tile_log2(1, thdr.cols as i32) as u8;
 
@@ -219,18 +219,17 @@ fn parse_tile_info(
             thdr.rows += 1;
         }
         if sby < sbh {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidTileInfo);
         }
         thdr.log2_rows = tile_log2(1, thdr.rows as i32) as u8;
     }
     if thdr.cols == 0 || thdr.rows == 0 {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidTileInfo);
     }
     thdr.col_start_sb[thdr.cols as usize] = sbw as u16;
     thdr.row_start_sb[thdr.rows as usize] = sbh as u16;
     Ok(())
 }
-
 pub fn parse_tile_info_frmhdr(
     hdr: &mut FrameHeader,
     seqhdr: &SequenceHeader,
@@ -320,7 +319,7 @@ pub fn parse_film_grain_data(gb: &mut GetBits, layout: PixelLayout) -> Result<Fi
     for pl in 0..num_pl {
         fgd.num_points[pl] = gb.get_bits(4) as i32;
         if fgd.num_points[pl] > 14 {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidFilmGrainData);
         }
         if fgd.num_points[pl] == 0 {
             continue;
@@ -331,7 +330,7 @@ pub fn parse_film_grain_data(gb: &mut GetBits, layout: PixelLayout) -> Result<Fi
         for i in 0..fgd.num_points[pl] as usize {
             base += gb.get_bits(index_bits);
             if base > 255 {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidFilmGrainData);
             }
             fgd.points[pl][i][0] = base as u8;
             fgd.points[pl][i][1] = gb.get_bits(scaling_bits) as u8;
@@ -339,7 +338,7 @@ pub fn parse_film_grain_data(gb: &mut GetBits, layout: PixelLayout) -> Result<Fi
     }
 
     if layout == PixelLayout::I420 && (fgd.num_points[1] != 0) != (fgd.num_points[2] != 0) {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidFilmGrainData);
     }
 
     fgd.scaling_shift = gb.get_bits(2) as i32 + 8;
@@ -373,7 +372,7 @@ pub fn parse_film_grain_data(gb: &mut GetBits, layout: PixelLayout) -> Result<Fi
     fgd.block_size = gb.get_bit() as i32;
 
     if gb.has_error() {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidFilmGrainData);
     }
 
     Ok(fgd)
@@ -413,7 +412,7 @@ pub fn parse_seq_hdr(gb: &mut GetBits, strict: bool) -> Result<SequenceHeader> {
     // AV2 defines profiles 0–8; the original check (> 2) matches AV1 which only
     // has profiles 0-2. Relax to 8 so real AV2 encoders (e.g. profile 4) pass.
     if hdr.profile > 8 {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidSequenceHeader);
     }
     hdr.reduced_still_picture_header = gb.get_bit() != 0;
     hdr.level = gb.get_bits(5) as u8;
@@ -423,7 +422,7 @@ pub fn parse_seq_hdr(gb: &mut GetBits, strict: bool) -> Result<SequenceHeader> {
 
     let layout_idx = gb.get_vlc();
     if layout_idx > 3 {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidSequenceHeader);
     }
     hdr.layout = LAYOUTS[layout_idx as usize];
     match hdr.layout {
@@ -440,7 +439,7 @@ pub fn parse_seq_hdr(gb: &mut GetBits, strict: bool) -> Result<SequenceHeader> {
 
     hdr.hbd = gb.get_vlc() as u8;
     if hdr.hbd > 2 {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidSequenceHeader);
     }
     if hdr.hbd < 2 {
         hdr.hbd ^= 1;
@@ -597,7 +596,7 @@ pub fn parse_seq_hdr(gb: &mut GetBits, strict: bool) -> Result<SequenceHeader> {
             8
         };
         if hdr.ref_frames > 8 {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidSequenceHeader);
         }
         hdr.ref_frames_log2 = if hdr.ref_frames <= 2 {
             hdr.ref_frames - 1
@@ -788,7 +787,7 @@ pub fn parse_seq_hdr(gb: &mut GetBits, strict: bool) -> Result<SequenceHeader> {
     hdr.film_grain_present = gb.get_bit() != 0;
 
     if gb.has_error() {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidSequenceHeader);
     }
 
     if !strict {
@@ -833,7 +832,7 @@ pub fn parse_frame_hdr(
     if hdr.show_existing_frame != 0 {
         hdr.existing_frame_idx = gb.get_bits(seqhdr.ref_frames_log2 as i32) as i8;
         if hdr.existing_frame_idx as u8 >= seqhdr.ref_frames {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidFrameHeader);
         }
         // consumed by the reference at this point; match it.
         return Ok(hdr);
@@ -871,7 +870,7 @@ pub fn parse_frame_hdr(
         {
             hdr.n_ref_frames = gb.get_bits(3) as u8;
             if hdr.n_ref_frames == 0 || hdr.n_ref_frames as usize > REFS_PER_FRAME {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidFrameHeader);
             }
             for n in 0..hdr.n_ref_frames as usize {
                 hdr.refidx[n] = gb.get_bits(seqhdr.number_of_bits_for_lt_frame_id as i32) as i8;
@@ -920,7 +919,7 @@ pub fn parse_frame_hdr(
         if refresh {
             let refresh_idx = gb.get_bits(seqhdr.ref_frames_log2 as i32);
             if refresh_idx >= seqhdr.ref_frames as u32 {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidFrameHeader);
             }
             hdr.refresh_frame_flags = 1 << refresh_idx;
         }
@@ -934,26 +933,26 @@ pub fn parse_frame_hdr(
         if hdr.frame_type == FrameType::Switch || seqhdr.explicit_ref_frame_map {
             hdr.n_ref_frames = gb.get_bits(3) as u8;
             if hdr.n_ref_frames as i32 > imin(7, seqhdr.ref_frames as i32) {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidFrameHeader);
             }
             if hdr.n_ref_frames == 0 || hdr.n_ref_frames as usize > REFS_PER_FRAME {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidFrameHeader);
             }
             for n in 0..hdr.n_ref_frames as usize {
                 hdr.refidx[n] = gb.get_bits(seqhdr.ref_frames_log2 as i32) as i8;
                 if hdr.refidx[n] as u8 >= seqhdr.ref_frames {
-                    return Err(TealdustError::InvalidData);
+                    return Err(TealdustError::InvalidFrameHeader);
                 }
             }
         } else {
             hdr.n_ref_frames = get_ref_frames(&mut hdr, seqhdr, refs, false) as u8;
             if hdr.n_ref_frames == 0 {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidFrameHeader);
             }
         }
         let poc = hdr.frame_offset as i32;
         if hdr.primary_ref_frame != PRIMARY_REF_NONE && hdr.primary_ref_frame >= hdr.n_ref_frames {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidFrameHeader);
         }
 
         for n in 0..hdr.n_ref_frames as usize {
@@ -961,7 +960,7 @@ pub fn parse_frame_hdr(
                 .p
                 .frame_hdr
                 .as_ref()
-                .ok_or(TealdustError::InvalidData)?;
+                .ok_or(TealdustError::InvalidFrameHeader)?;
             let pocdiff = get_poc_diff(
                 seqhdr.order_hint_n_bits as i32,
                 poc,
@@ -979,7 +978,7 @@ pub fn parse_frame_hdr(
         if hdr.frame_type == FrameType::Inter && !seqhdr.explicit_ref_frame_map {
             hdr.n_ref_frames = get_ref_frames(&mut hdr, seqhdr, refs, true) as u8;
             if hdr.n_ref_frames == 0 {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidFrameHeader);
             }
         }
 
@@ -1071,21 +1070,21 @@ pub fn parse_frame_hdr(
                 let tip_ref0 = *hdr
                     .refidx
                     .get(hdr.tip.r#ref[0] as usize)
-                    .ok_or(TealdustError::InvalidData)?;
+                    .ok_or(TealdustError::InvalidFrameHeader)?;
                 let tip_ref1 = *hdr
                     .refidx
                     .get(hdr.tip.r#ref[1] as usize)
-                    .ok_or(TealdustError::InvalidData)?;
+                    .ok_or(TealdustError::InvalidFrameHeader)?;
                 let ref1hdr = ref_slot(refs, tip_ref0 as i32)?
                     .p
                     .frame_hdr
                     .as_ref()
-                    .ok_or(TealdustError::InvalidData)?;
+                    .ok_or(TealdustError::InvalidFrameHeader)?;
                 let ref2hdr = ref_slot(refs, tip_ref1 as i32)?
                     .p
                     .frame_hdr
                     .as_ref()
-                    .ok_or(TealdustError::InvalidData)?;
+                    .ok_or(TealdustError::InvalidFrameHeader)?;
                 hdr.quant.yac = (ref1hdr.quant.yac + ref2hdr.quant.yac + 1) >> 1;
             }
 
@@ -1195,7 +1194,7 @@ pub fn parse_frame_hdr(
                     as u16;
             }
             if hdr.tiling.update >= hdr.tiling.t.cols as u16 * hdr.tiling.t.rows as u16 {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidFrameHeader);
             }
             hdr.tiling.n_bytes = gb.get_bits(2) as u8 + 1;
         }
@@ -1448,20 +1447,20 @@ pub fn parse_frame_hdr(
                                 r#ref = gb.get_bits(n_bits_ref) as u8;
                                 pd.refidx = r#ref;
                                 if r#ref >= hdr.n_ref_frames {
-                                    return Err(TealdustError::InvalidData);
+                                    return Err(TealdustError::InvalidFrameHeader);
                                 }
                             }
                             let refhdr = ref_slot(refs, hdr.refidx[r#ref as usize] as i32)?
                                 .p
                                 .frame_hdr
                                 .as_ref()
-                                .ok_or(TealdustError::InvalidData)?;
+                                .ok_or(TealdustError::InvalidFrameHeader)?;
                             let mut rpd = &refhdr.restoration.p[p].ns;
                             if rpd.frame_filters_on == 0 && p != 0 {
                                 rpd = &refhdr.restoration.p[3 - p].ns;
                             }
                             if rpd.frame_filters_on == 0 {
-                                return Err(TealdustError::InvalidData);
+                                return Err(TealdustError::InvalidFrameHeader);
                             }
                             pd.num_classes_idx = rpd.num_classes_idx;
                             pd.num_classes = rpd.num_classes;
@@ -1500,7 +1499,7 @@ pub fn parse_frame_hdr(
                     hdr.restoration.unit_size[1] -= 2 + (hdr.sb128 == 0 && gb.get_bit() == 0) as u8;
                 }
                 if hdr.restoration.unit_size[1] < 6 - seqhdr.ss_ver {
-                    return Err(TealdustError::InvalidData);
+                    return Err(TealdustError::InvalidFrameHeader);
                 }
             }
 
@@ -1519,12 +1518,15 @@ pub fn parse_frame_hdr(
                 };
 
                 if hdr.restoration.p[p].ns.temporal != 0 {
-                    let ref_hdr = refs
-                        [hdr.refidx[hdr.restoration.p[p].ns.refidx as usize] as usize]
+                    let ref_idx = *hdr
+                        .refidx
+                        .get(hdr.restoration.p[p].ns.refidx as usize)
+                        .ok_or(TealdustError::InvalidFrameHeader)?;
+                    let ref_hdr = ref_slot(refs, ref_idx as i32)?
                         .p
                         .frame_hdr
                         .as_ref()
-                        .ok_or(TealdustError::InvalidData)?;
+                        .ok_or(TealdustError::InvalidReferenceFrame)?;
                     let mut rpd = &ref_hdr.restoration.p[p].ns;
                     if rpd.frame_filters_on == 0 {
                         rpd = &ref_hdr.restoration.p[3 - p].ns;
@@ -1543,7 +1545,7 @@ pub fn parse_frame_hdr(
                         .p
                         .frame_hdr
                         .as_ref()
-                        .ok_or(TealdustError::InvalidData)?;
+                        .ok_or(TealdustError::InvalidFrameHeader)?;
                     let dirs: &[i8] = &[0, 1, -1];
                     let mut dir = dirs[if p == 0 {
                         0
@@ -1706,21 +1708,21 @@ pub fn parse_frame_hdr(
                                 r#ref = gb.get_bits(n_bits_ref) as u8;
                                 hdr.ccso.p[p].refidx = r#ref;
                                 if r#ref >= hdr.n_ref_frames {
-                                    return Err(TealdustError::InvalidData);
+                                    return Err(TealdustError::InvalidFrameHeader);
                                 }
                             }
                             let refhdr = ref_slot(refs, hdr.refidx[r#ref as usize] as i32)?
                                 .p
                                 .frame_hdr
                                 .as_ref()
-                                .ok_or(TealdustError::InvalidData)?;
+                                .ok_or(TealdustError::InvalidFrameHeader)?;
                             if hdr.ccso.p[p].reuse != 0 {
                                 let w4 = (hdr.width + 3) >> 2;
                                 let h4 = (hdr.height + 3) >> 2;
                                 let rw4 = (refhdr.width + 3) >> 2;
                                 let rh4 = (refhdr.height + 3) >> 2;
                                 if w4 != rw4 || h4 != rh4 || refhdr.ccso.p[p].enabled == 0 {
-                                    return Err(TealdustError::InvalidData);
+                                    return Err(TealdustError::InvalidFrameHeader);
                                 }
                             }
                         }
@@ -1734,7 +1736,7 @@ pub fn parse_frame_hdr(
                             hdr.ccso.p[p].quant_idx = gb.get_bits(2) as u8;
                             hdr.ccso.p[p].ext_filter_support = gb.get_bits(3) as u8;
                             if hdr.ccso.p[p].ext_filter_support == 7 {
-                                return Err(TealdustError::InvalidData);
+                                return Err(TealdustError::InvalidFrameHeader);
                             }
                             let si = hdr.ccso.p[p].scale_idx as usize;
                             let qi = hdr.ccso.p[p].quant_idx as usize;
@@ -1770,12 +1772,12 @@ pub fn parse_frame_hdr(
                         let ccso_ref = *hdr
                             .refidx
                             .get(hdr.ccso.p[p].refidx as usize)
-                            .ok_or(TealdustError::InvalidData)?;
+                            .ok_or(TealdustError::InvalidFrameHeader)?;
                         let refhdr = ref_slot(refs, ccso_ref as i32)?
                             .p
                             .frame_hdr
                             .as_ref()
-                            .ok_or(TealdustError::InvalidData)?;
+                            .ok_or(TealdustError::InvalidFrameHeader)?;
                         let rp = &refhdr.ccso.p[p];
                         hdr.ccso.p[p].bo_only = rp.bo_only;
                         hdr.ccso.p[p].scale_idx = rp.scale_idx;
@@ -1818,7 +1820,7 @@ pub fn parse_frame_hdr(
         }
         if hdr.is_inter_or_switch() && seqhdr.global_motion && gb.get_bit() != 0 {
             if hdr.n_ref_frames == 0 {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidFrameHeader);
             }
             hdr.gmv.r#ref = gb.get_uniform(hdr.n_ref_frames as u32 + 1) as u8;
             let (ref_base_mat, in_dist);
@@ -1829,12 +1831,12 @@ pub fn parse_frame_hdr(
                 let refidx = *hdr
                     .refidx
                     .get(hdr.gmv.r#ref as usize)
-                    .ok_or(TealdustError::InvalidData)?;
+                    .ok_or(TealdustError::InvalidFrameHeader)?;
                 let refhdr = ref_slot(refs, refidx as i32)?
                     .p
                     .frame_hdr
                     .as_ref()
-                    .ok_or(TealdustError::InvalidData)?;
+                    .ok_or(TealdustError::InvalidFrameHeader)?;
                 if refhdr.n_ref_frames == 0 {
                     ref_base_mat = DEFAULT_WM_PARAMS.matrix;
                     in_dist = 1;
@@ -1872,7 +1874,7 @@ pub fn parse_frame_hdr(
                         .p
                         .frame_hdr
                         .as_ref()
-                        .ok_or(TealdustError::InvalidData)?
+                        .ok_or(TealdustError::InvalidFrameHeader)?
                         .frame_offset as i32,
                 );
                 rescale_matrix(&mut ref_mat, &ref_base_mat, in_dist, out_dist);
@@ -1906,7 +1908,7 @@ pub fn parse_frame_hdr(
     }
 
     if gb.has_error() {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidFrameHeader);
     }
 
     Ok(hdr)
@@ -1919,7 +1921,7 @@ pub(crate) fn parse_tile_hdr(
 ) -> Result<()> {
     let n_tiles = hdr.tiling.t.cols as i32 * hdr.tiling.t.rows as i32;
     if n_tiles <= 0 {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidTileInfo);
     }
     let have_tile_pos = if n_tiles > 1 {
         gb.get_bit() != 0
@@ -1936,7 +1938,7 @@ pub(crate) fn parse_tile_hdr(
     }
 
     if tile.start < 0 || tile.end < tile.start || tile.end >= n_tiles {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidTileInfo);
     }
 
     Ok(())
@@ -1949,11 +1951,11 @@ pub fn parse_fgm_hdr(
     let mask = gb.get_bits(8) as u8;
     let layout_idx = gb.get_vlc();
     if layout_idx > 3 {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidFilmGrainData);
     }
     let layout = LAYOUTS[layout_idx as usize];
     if layout != seq_layout {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidFilmGrainData);
     }
 
     let mut result: [Option<FilmGrainData>; 8] = Default::default();
@@ -1965,7 +1967,7 @@ pub fn parse_fgm_hdr(
     }
 
     if gb.has_error() {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidFilmGrainData);
     }
 
     Ok(result)
@@ -2176,20 +2178,20 @@ pub fn parse_ci_hdr(ci: &mut ContentInterpretation, gb: &mut GetBits) -> Result<
         ci.timing.num_units_in_display_tick = gb.get_bits(32);
         ci.timing.time_scale = gb.get_bits(32);
         if ci.timing.num_units_in_display_tick == 0 || ci.timing.time_scale == 0 {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidContentInterpretation);
         }
         ci.timing.equal_elemental_interval = gb.get_bit() as u8;
         if ci.timing.equal_elemental_interval != 0 {
             let t = gb.get_vlc();
             if t == u32::MAX {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidContentInterpretation);
             }
             ci.timing.num_ticks_per_elemental_duration = t + 1;
         }
     }
 
     if gb.has_error() {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidContentInterpretation);
     }
 
     Ok(())
@@ -2284,7 +2286,7 @@ pub fn read_frame_size(
                     .p
                     .frame_hdr
                     .as_ref()
-                    .ok_or(TealdustError::InvalidData)?;
+                    .ok_or(TealdustError::InvalidReferenceFrame)?;
                 hdr.width = refhdr.width;
                 hdr.height = refhdr.height;
                 return Ok(());
@@ -2299,7 +2301,7 @@ pub fn read_frame_size(
         // height <= max_height. Reject otherwise so an over-large dimension
         // cannot flow into downstream buffer sizing.
         if hdr.width > seqhdr.max_width || hdr.height > seqhdr.max_height {
-            return Err(TealdustError::InvalidData);
+            return Err(TealdustError::InvalidFrameHeader);
         }
     } else {
         hdr.width = seqhdr.max_width;
@@ -2505,7 +2507,7 @@ pub fn find_tip_ref_frames(
             .p
             .frame_hdr
             .as_ref()
-            .ok_or(TealdustError::InvalidData)?
+            .ok_or(TealdustError::InvalidReferenceFrame)?
             .frame_offset;
         let dist = get_poc_diff(nbits, refpoc as i32, poc);
         refdist[n] = dist as i8;
@@ -2629,7 +2631,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
     let len = hdr_gb.get_uleb128() as usize;
     hdr_gb.bytealign();
     if hdr_gb.has_error() || len > hdr_gb.remaining_bytes() {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidObu);
     }
     let body_start = hdr_gb.byte_pos();
     let total_consumed = body_start + len;
@@ -2649,7 +2651,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
     }
 
     if gb.has_error() {
-        return Err(TealdustError::InvalidData);
+        return Err(TealdustError::InvalidObu);
     }
 
     let obu_type = u32_to_obu_type(obu_type_raw);
@@ -2707,7 +2709,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
             let seqhdr = c
                 .seq_hdr
                 .as_ref()
-                .ok_or(TealdustError::InvalidData)?
+                .ok_or(TealdustError::MissingSequenceHeader)?
                 .clone();
 
             let first_tile = matches!(obu_type, ObuType::Sef | ObuType::Tip | ObuType::Bridge)
@@ -2745,7 +2747,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                 let fh = c
                     .frame_hdr
                     .as_ref()
-                    .ok_or(TealdustError::InvalidData)?
+                    .ok_or(TealdustError::MissingFrameHeader)?
                     .clone();
                 let mut tg = TileGroup {
                     data: Vec::new(),
@@ -2755,7 +2757,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                 parse_tile_hdr(&fh, &mut tg, &mut gb)?;
                 gb.bytealign();
                 if gb.has_error() {
-                    return Err(TealdustError::InvalidData);
+                    return Err(TealdustError::InvalidTileInfo);
                 }
                 let rem = gb.remaining_slice();
                 tg.data
@@ -2767,7 +2769,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                     c.tile.clear();
                     c.n_tile_data = 0;
                     c.n_tiles = 0;
-                    return Err(TealdustError::InvalidData);
+                    return Err(TealdustError::InvalidTileInfo);
                 }
                 c.n_tiles += 1 + tg.end - tg.start;
                 c.tile
@@ -2782,7 +2784,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
             let seqhdr = c
                 .seq_hdr
                 .as_ref()
-                .ok_or(TealdustError::InvalidData)?
+                .ok_or(TealdustError::MissingSequenceHeader)?
                 .clone();
             let fgm = parse_fgm_hdr(&mut gb, seqhdr.layout)?;
             for (i, entry) in fgm.into_iter().enumerate() {
@@ -2803,7 +2805,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
         Some(ObuType::Metadata) => {
             let meta_type = gb.get_uleb128();
             if gb.has_error() {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidObu);
             }
             match meta_type {
                 v if v == ObuMetaType::HdrCll as u32 => {
@@ -2839,15 +2841,15 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
         if fh.show_existing_frame != 0 {
             let idx = fh.existing_frame_idx as usize;
             if c.refs[idx].p.frame_hdr.is_none() {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidReferenceFrame);
             }
             // (`c->refs[idx].p.p.data[0]`) to be present before it can be queued.
             let ref_pic = match c.refs[idx].p.pic.as_ref() {
                 Some(p) if p.has_data() => p.clone(),
-                _ => return Err(TealdustError::InvalidData),
+                _ => return Err(TealdustError::InvalidReferenceFrame),
             };
             if c.strict_std_compliance && !c.refs[idx].p.showable {
-                return Err(TealdustError::InvalidData);
+                return Err(TealdustError::InvalidReferenceFrame);
             }
             // referenced stored picture. With output_invisible_frames this is a
             // owned clone of the referenced reconstruction onto the output queue.
@@ -2883,7 +2885,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
             let frame_without_data = fh.tip.frame_mode == 2;
             if c.n_tiles == total_tiles || frame_without_data {
                 if !frame_without_data && c.n_tile_data == 0 {
-                    return Err(TealdustError::InvalidData);
+                    return Err(TealdustError::InvalidTileData);
                 }
                 // Run the single-threaded frame decode (entropy pass; recon,
                 // filters and output are wired in subsequent milestones). Gated
@@ -2893,7 +2895,7 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                     // Best-effort during bring-up: a frame that cannot be decoded
                     // yet (e.g. inter frames) must not abort header parsing.
                     let n_tc = c.n_tc as i32;
-                    let _ = crate::decode::submit_frame(c, n_tc);
+                    crate::decode::submit_frame(c, n_tc)?;
                 }
                 c.frame_hdr = None;
                 c.n_tiles = 0;

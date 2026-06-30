@@ -34,7 +34,35 @@ use std::fmt;
 pub enum TealdustError {
     Eof,
     Again,
+    /// Generic malformed-bitstream fallback kept for API compatibility and for
+    /// call sites that have not yet been split into a more specific reason.
     InvalidData,
+    /// Malformed OBU envelope or payload dispatch state.
+    InvalidObu,
+    /// Malformed sequence header syntax or unsupported header combination.
+    InvalidSequenceHeader,
+    /// Malformed frame header syntax or invalid frame-header-derived state.
+    InvalidFrameHeader,
+    /// Invalid tiling layout or tile-group header.
+    InvalidTileInfo,
+    /// Tile payload decoded to invalid block/coefficient/reconstruction state.
+    InvalidTileData,
+    /// Invalid, missing, or incompatible reference frame state.
+    InvalidReferenceFrame,
+    /// Invalid film-grain syntax/state.
+    InvalidFilmGrainData,
+    /// Invalid content-interpretation metadata syntax/state.
+    InvalidContentInterpretation,
+    /// Strict trailing-bit validation failed.
+    InvalidTrailingBits,
+    /// Decoder reached frame parsing before a sequence header was available.
+    MissingSequenceHeader,
+    /// Decoder reached tile/frame submission before a frame header was available.
+    MissingFrameHeader,
+    /// Frame-context/scratch/picture setup failed before tile decode started.
+    FrameSetupFailed,
+    /// Per-tile entropy/CDF setup failed before the main decode loop.
+    CdfInitFailed,
     FrameTooLarge,
     InvalidParam,
     OutOfMemory,
@@ -46,6 +74,21 @@ impl fmt::Display for TealdustError {
             Self::Eof => write!(f, "end of stream"),
             Self::Again => write!(f, "need more data"),
             Self::InvalidData => write!(f, "invalid or corrupt bitstream data"),
+            Self::InvalidObu => write!(f, "invalid or corrupt OBU"),
+            Self::InvalidSequenceHeader => write!(f, "invalid sequence header"),
+            Self::InvalidFrameHeader => write!(f, "invalid frame header"),
+            Self::InvalidTileInfo => write!(f, "invalid tile layout or tile header"),
+            Self::InvalidTileData => write!(f, "invalid or corrupt tile data"),
+            Self::InvalidReferenceFrame => write!(f, "invalid or missing reference frame"),
+            Self::InvalidFilmGrainData => write!(f, "invalid film-grain data"),
+            Self::InvalidContentInterpretation => {
+                write!(f, "invalid content-interpretation metadata")
+            }
+            Self::InvalidTrailingBits => write!(f, "invalid trailing bits"),
+            Self::MissingSequenceHeader => write!(f, "missing sequence header"),
+            Self::MissingFrameHeader => write!(f, "missing frame header"),
+            Self::FrameSetupFailed => write!(f, "frame setup failed"),
+            Self::CdfInitFailed => write!(f, "CDF/tile entropy initialization failed"),
             Self::FrameTooLarge => write!(f, "frame dimensions exceed limit"),
             Self::InvalidParam => write!(f, "invalid parameter"),
             Self::OutOfMemory => write!(f, "out of memory"),

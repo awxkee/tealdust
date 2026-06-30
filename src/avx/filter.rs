@@ -29,6 +29,29 @@
 
 use std::arch::x86_64::*;
 
+use crate::gdf_tables::{GDF_ALPHA, GDF_INTER_ERROR, GDF_INTRA_ERROR, GDF_WEIGHT};
+
+static GDF_PREP_COORDS_8BPC: [[i8; 2]; 18] = [
+    [6, 0],
+    [5, 0],
+    [4, 0],
+    [3, 0],
+    [2, 1],
+    [2, 0],
+    [2, -1],
+    [1, 2],
+    [1, 1],
+    [1, 0],
+    [1, -1],
+    [1, -2],
+    [0, 6],
+    [0, 5],
+    [0, 4],
+    [0, 3],
+    [0, 2],
+    [0, 1],
+];
+
 #[inline(always)]
 fn load_i32x8(a: &[i32; 8]) -> __m256i {
     unsafe { _mm256_loadu_si256(a.as_ptr().cast()) }
@@ -820,6 +843,127 @@ pub(crate) fn gdf_gradient_group_avx2(
     for k in 0..ncells {
         dst[base_cell + k][d] = out[k] as u16;
     }
+}
+
+#[inline]
+fn gdf_prep_apply_sign(v: i32) -> i32 {
+    if v < 0 {
+        -((v.wrapping_neg() + (1 << 14)) >> 15)
+    } else {
+        (v + (1 << 14)) >> 15
+    }
+}
+
+#[inline]
+fn gdf_prep_lookup_error(ref_dst_idx: usize, error_lut_base: usize, full_idx: usize) -> i8 {
+    if ref_dst_idx == 0 {
+        GDF_INTRA_ERROR[error_lut_base + full_idx]
+    } else {
+        GDF_INTER_ERROR[error_lut_base + full_idx]
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gdf_load_pair_u8_i32(row: &[u8], col: usize) -> __m128i {
+    let raw = unsafe { _mm_loadu_si16(row[col..].as_ptr().cast()) };
+    _mm_cvtepu8_epi32(raw)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gdf_clip_i32x4(v: __m128i, lo: __m128i, hi: __m128i) -> __m128i {
+    _mm_min_epi32(_mm_max_epi32(v, lo), hi)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn gdf_store_i32x4(v: __m128i) -> [i32; 4] {
+    let mut out = [0i32; 4];
+    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), v) };
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "avx2")]
+pub(crate) fn gdf_prep_pair_8bpc_avx2(
+    rows: [&[u8]; 13],
+    col: usize,
+    cls: usize,
+    shared_vals: [i32; 3],
+    alpha_base: usize,
+    weight_base: usize,
+    error_lut_base: usize,
+    scale: i32,
+    ref_dst_idx: usize,
+) -> [i8; 2] {
+    let m = gdf_load_pair_u8_i32(rows[6], col);
+    let v_lo = _mm_set1_epi32(-512);
+    let v_hi = _mm_set1_epi32(511);
+    let mut acc0 = _mm_set1_epi32(shared_vals[0]);
+    let mut acc1 = _mm_set1_epi32(shared_vals[1]);
+    let mut acc2 = _mm_set1_epi32(shared_vals[2]);
+
+    for (k, &[dy, dx]) in GDF_PREP_COORDS_8BPC.iter().enumerate() {
+        let dy = dy as i32;
+        let dx = dx as i32;
+        let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
+        let alpha_v = _mm_set1_epi32(alpha);
+        let neg_alpha_v = _mm_set1_epi32(-alpha);
+        let a_col = (col as i32 - dx) as usize;
+        let b_col = (col as i32 + dx) as usize;
+        let a = gdf_load_pair_u8_i32(rows[(6 - dy) as usize], a_col);
+        let b = gdf_load_pair_u8_i32(rows[(6 + dy) as usize], b_col);
+        let above = gdf_clip_i32x4(
+            _mm_slli_epi32::<2>(_mm_sub_epi32(a, m)),
+            neg_alpha_v,
+            alpha_v,
+        );
+        let below = gdf_clip_i32x4(
+            _mm_slli_epi32::<2>(_mm_sub_epi32(b, m)),
+            neg_alpha_v,
+            alpha_v,
+        );
+        let v = gdf_clip_i32x4(_mm_add_epi32(above, below), v_lo, v_hi);
+        acc0 = _mm_add_epi32(
+            acc0,
+            _mm_mullo_epi32(
+                v,
+                _mm_set1_epi32(GDF_WEIGHT[weight_base + k * 4 + cls] as i32),
+            ),
+        );
+        acc1 = _mm_add_epi32(
+            acc1,
+            _mm_mullo_epi32(
+                v,
+                _mm_set1_epi32(GDF_WEIGHT[weight_base + 88 + k * 4 + cls] as i32),
+            ),
+        );
+        acc2 = _mm_add_epi32(
+            acc2,
+            _mm_mullo_epi32(
+                v,
+                _mm_set1_epi32(GDF_WEIGHT[weight_base + 176 + k * 4 + cls] as i32),
+            ),
+        );
+    }
+
+    let vals = [
+        gdf_store_i32x4(acc0),
+        gdf_store_i32x4(acc1),
+        gdf_store_i32x4(acc2),
+    ];
+    let mut out = [0i8; 2];
+    for (lane, out) in out.iter_mut().enumerate() {
+        let mut full_idx = 0usize;
+        for idx_vals in &vals {
+            let v = gdf_prep_apply_sign(idx_vals[lane] * scale);
+            let sub_idx = (v.clamp(-scale, scale - 1) + scale) as usize;
+            full_idx = full_idx * (scale as usize * 2) + sub_idx;
+        }
+        *out = gdf_prep_lookup_error(ref_dst_idx, error_lut_base, full_idx);
+    }
+    out
 }
 
 /// cctx rotate+clip over two i16 coefficient planes, widening only inside the SIMD arithmetic.

@@ -6130,6 +6130,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_hot_impl_const<
             );
         }
 
+        #[allow(clippy::if_same_then_else)]
         if FIRST_KIND == crate::itx_2d::TX_KIND_DCT && W == 16 {
             y = avx2_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, H>(
                 coeff, scratch, y, nrows, rnd, sh, minv, maxv,
