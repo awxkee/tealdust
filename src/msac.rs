@@ -829,7 +829,7 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextScalar<'a
     ) -> u32 {
         MsacContextScalar::decode_symbol_adapt_padded(self, cdf, n_symbols)
     }
-    
+
     #[inline(always)]
     fn decode_symbol_adapt_n_padded<const N: usize, const LANES: usize>(
         &mut self,

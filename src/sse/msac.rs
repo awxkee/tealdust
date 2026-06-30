@@ -322,8 +322,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         self.cnt
     }
 
-    #[inline]
-    #[target_feature(enable = "sse2")]
+    #[inline(always)]
     fn decode_symbol_adapt_sse2(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
         match n_symbols {
             1 => self.decode_symbol_adapt_n_sse2::<1>(cdf),
@@ -337,8 +336,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         }
     }
 
-    #[inline]
-    #[target_feature(enable = "sse2")]
+    #[inline(always)]
     pub(crate) fn decode_symbol_adapt_padded_sse2<const LANES: usize>(
         &mut self,
         cdf: &mut [u16; LANES],
@@ -356,8 +354,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         }
     }
 
-    #[inline]
-    #[target_feature(enable = "sse2")]
+    #[inline(always)]
     pub(crate) fn decode_symbol_adapt_n_sse2<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
         debug_assert!((1..=7).contains(&N));
 
@@ -382,8 +379,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         self.decode_symbol_adapt_n_scalar::<N>(cdf)
     }
 
-    #[inline]
-    #[target_feature(enable = "sse2")]
+    #[inline(always)]
     pub(crate) fn decode_symbol_adapt_n_padded_sse2<const N: usize, const LANES: usize>(
         &mut self,
         cdf: &mut [u16; LANES],
@@ -502,8 +498,7 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
     }
 }
 
-#[inline]
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn load_cdf<const LANES: usize>(cdf: &[u16; LANES]) -> __m128i {
     debug_assert!(LANES == 4 || LANES == 8);
     unsafe {
@@ -515,8 +510,7 @@ fn load_cdf<const LANES: usize>(cdf: &[u16; LANES]) -> __m128i {
     }
 }
 
-#[inline]
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn load_min_prob<const LANES: usize, const N: usize>() -> __m128i {
     debug_assert!(LANES == 4 || LANES == 8);
     let ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
@@ -529,11 +523,7 @@ fn load_min_prob<const LANES: usize, const N: usize>() -> __m128i {
     }
 }
 
-#[repr(C, align(16))]
-pub(crate) struct AlignedSse9(pub(crate) [u16; 9]);
-
-#[inline]
-#[target_feature(enable = "sse2")]
+#[inline(always)]
 fn update_cdf_sse2<const N: usize, const LANES: usize>(
     cdf: &mut [u16; LANES],
     cdf_v: __m128i,
@@ -544,23 +534,23 @@ fn update_cdf_sse2<const N: usize, const LANES: usize>(
     debug_assert!(LANES == 4 || LANES == 8);
     debug_assert!(N < LANES);
 
-    let shift = _mm_cvtsi32_si128(rate as i32);
-    let half = _mm_set1_epi16(0x8000u16 as i16);
-
-    let add_delta = _mm_srl_epi16(_mm_sub_epi16(half, cdf_v), shift);
-    let sub_delta = _mm_srl_epi16(cdf_v, shift);
-    let add_path = _mm_add_epi16(cdf_v, add_delta);
-    let sub_path = _mm_sub_epi16(cdf_v, sub_delta);
-
-    // ge_mask is all-ones for lanes i >= decoded symbol and zero for lanes
-    // i < decoded symbol.  That exactly matches the two AV1 CDF update halves:
-    // before val move toward 32768, at/after val move toward zero.
-    let updated = _mm_or_si128(
-        _mm_and_si128(ge_mask, sub_path),
-        _mm_andnot_si128(ge_mask, add_path),
-    );
-
     unsafe {
+        let shift = _mm_cvtsi32_si128(rate as i32);
+        let half = _mm_set1_epi16(0x8000u16 as i16);
+
+        let add_delta = _mm_srl_epi16(_mm_sub_epi16(half, cdf_v), shift);
+        let sub_delta = _mm_srl_epi16(cdf_v, shift);
+        let add_path = _mm_add_epi16(cdf_v, add_delta);
+        let sub_path = _mm_sub_epi16(cdf_v, sub_delta);
+
+        // ge_mask is all-ones for lanes i >= decoded symbol and zero for lanes
+        // i < decoded symbol.  That exactly matches the two AV1 CDF update halves:
+        // before val move toward 32768, at/after val move toward zero.
+        let updated = _mm_or_si128(
+            _mm_and_si128(ge_mask, sub_path),
+            _mm_andnot_si128(ge_mask, add_path),
+        );
+
         if LANES == 4 {
             _mm_storel_epi64(cdf.as_mut_ptr().cast::<__m128i>(), updated);
         } else {
@@ -568,9 +558,61 @@ fn update_cdf_sse2<const N: usize, const LANES: usize>(
         }
     }
 }
+#[repr(C, align(16))]
+struct AlignedU16x8([u16; 8]);
 
-#[inline]
-#[target_feature(enable = "sse2")]
+static PW_127: AlignedU16x8 = AlignedU16x8([127; 8]);
+
+#[inline(always)]
+fn pw_127() -> __m128i {
+    unsafe { _mm_load_si128(PW_127.0.as_ptr().cast()) }
+}
+
+#[inline(always)]
+fn extract_uv<const N: usize>(boundaries_v: __m128i, rng: u32, i: usize) -> (u32, u32) {
+    // v = boundary[i], but for the sentinel lane (i == N, "fell through") v = 0.
+    // u = boundary[i-1], with boundary[-1] == rng.
+    //
+    // We index with constants. `_mm_extract_epi16::<IMM>` zero-extends a u16.
+    unsafe {
+        macro_rules! b {
+            ($idx:expr) => {
+                _mm_extract_epi16::<$idx>(boundaries_v) as u32
+            };
+        }
+
+        // u: previous lane (or rng for i==0)
+        let u = match i {
+            0 => rng,
+            1 => b!(0),
+            2 => b!(1),
+            3 => b!(2),
+            4 => b!(3),
+            5 => b!(4),
+            6 => b!(5),
+            _ => b!(6), // i == 7
+        };
+
+        // v: current lane, or 0 if we fell through all N boundaries (i == N).
+        let v = if i >= N {
+            0
+        } else {
+            match i {
+                0 => b!(0),
+                1 => b!(1),
+                2 => b!(2),
+                3 => b!(3),
+                4 => b!(4),
+                5 => b!(5),
+                _ => b!(6),
+            }
+        };
+
+        (u, v)
+    }
+}
+
+#[inline(always)]
 fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const LANES: usize>(
     s: &mut MsacContextSse<'_, UPDATE_CDF>,
     cdf: &mut [u16; LANES],
@@ -580,34 +622,43 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
 
     let cdf_v = load_cdf::<LANES>(cdf);
     let min_prob = load_min_prob::<LANES, N>();
-    let c = (s.dif >> 48) as u16;
     let r = s.rng >> 8;
 
-    let p = _mm_subs_epu16(_mm_or_si128(cdf_v, _mm_set1_epi16(127)), min_prob);
-    let scale = _mm_set1_epi16(((r << 6) & 0xffff) as i16);
-    let boundaries_v = _mm_slli_epi16(_mm_mulhi_epu16(p, scale), 3);
-    let cmp = _mm_cmpeq_epi16(
-        _mm_subs_epu16(boundaries_v, _mm_set1_epi16(c as i16)),
-        _mm_setzero_si128(),
-    );
+    // (4) Broadcast c = (dif >> 48) straight from an XMM holding dif.
+    // dif>>48 is the top u16 of the low 64 bits, i.e. word lane 3 of dif.
+    // movq dif into xmm, broadcast word 3 across all 8 lanes.
+    let dif_xmm = unsafe { _mm_cvtsi64_si128(s.dif as i64) };
+    // pshuflw picks lane 3 of the low quadword into all four low words,
+    // then pshufd broadcasts the low quadword to the whole register.
+    let c_v = unsafe {
+        let lo = _mm_shufflelo_epi16::<0b11_11_11_11>(dif_xmm);
+        _mm_shuffle_epi32::<0b00_00_00_00>(lo)
+    };
 
-    let mask_lanes = N + 1;
-    let mask = ((_mm_movemask_epi8(cmp) as u32) & 0x5555) & ((1u32 << (mask_lanes * 2)) - 1);
+    // p = max((cdf | 127) - min_prob, 0)   (subs saturates to 0)
+    let p = unsafe { _mm_subs_epu16(_mm_or_si128(cdf_v, pw_127()), min_prob) };
 
-    let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
-    let bounds_ptr = bounds.as_mut_ptr().cast::<u16>();
-    unsafe {
-        bounds_ptr.write(s.rng as u16);
-        _mm_storeu_si128(bounds_ptr.add(1).cast(), boundaries_v);
-    }
+    // boundary = ((r * p) >> 10) << 3, done as ((p * (r<<6))>>16) << 3 via mulhi.
+    let scale = unsafe { _mm_set1_epi16(((r << 6) & 0xffff) as i16) };
+    let boundaries_v = unsafe { _mm_slli_epi16::<3>(_mm_mulhi_epu16(p, scale)) };
 
-    let initialized = (unsafe { bounds.assume_init() }).0;
+    // cmp lane j = 0xFFFF iff c >= boundary[j]  (subs_epu16 == 0 means b<=c).
+    let cmp = unsafe { _mm_cmpeq_epi16(_mm_subs_epu16(boundaries_v, c_v), _mm_setzero_si128()) };
 
-    debug_assert!(mask != 0);
+    // (3) No `& 0x5555`. pcmpeqw gives paired bytes per word lane, so the raw
+    // byte mask shifted right by 1 indexes word lanes directly via tzcnt.
+    // We OR in a sentinel "always-set" pair just past lane N so that a
+    // fall-through (c < every real boundary) resolves to i == N deterministically
+    // and we never read a stale upper lane. The sentinel bit is placed at byte
+    // position 2*N (word lane N).
+    let raw = unsafe { _mm_movemask_epi8(cmp) as u32 };
+    let sentinel = 1u32 << (2 * N); // low byte of word lane N
+    let mask = raw | sentinel;
+
     let i = (mask.trailing_zeros() >> 1) as usize;
-    let u = initialized[i] as u32;
-    let v = initialized[i + 1] as u32;
-    let val = i;
+
+    // (1) Extract u, v from registers — no stack spill, no store-forward stall.
+    let (u, v) = extract_uv::<N>(boundaries_v, s.rng, i);
 
     debug_assert!(u <= s.rng);
     debug_assert!(u >= v);
@@ -619,9 +670,12 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
         debug_assert!(count <= 32);
         let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize] + if N > 2 { 1 } else { 0 };
 
+        // ge_mask for the update must be "lane >= i". `cmp` is "c >= boundary",
+        // which is exactly that predicate per lane, so it is reused directly —
+        // same as the original.
         update_cdf_sse2::<N, LANES>(cdf, cdf_v, cmp, rate);
         cdf[N] = pc + u16::from(count < 32);
     }
 
-    val as u32
+    i as u32
 }

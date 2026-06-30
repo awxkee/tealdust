@@ -409,7 +409,7 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextAvx<'a, U
         // SAFETY: this backend is only constructed after the runtime guard.
         unsafe { MsacContextAvx::decode_symbol_adapt_avx2(self, &mut cdf[..], n_symbols) }
     }
-    
+
     #[inline(always)]
     fn decode_symbol_adapt_n_padded<const N: usize, const LANES: usize>(
         &mut self,
