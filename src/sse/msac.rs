@@ -585,22 +585,14 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
                 _mm_loadu_si128(cdf.as_ptr().cast())
             };
             let mp_ptr = MSAC_MIN_PROB[N - 1].as_ptr().cast::<__m128i>();
-            let min_prob = if LANES == 4 {
-                _mm_loadl_epi64(mp_ptr)
-            } else {
-                _mm_loadu_si128(mp_ptr)
-            };
+            let min_prob = _mm_load_si128(mp_ptr);
 
-            // m2 = rng broadcast into 16-bit lanes (pshuflw q0000 [+ punpcklqdq for 8]).
-            // Reused for BOTH the spill's lane "-1" and the mulhi scale.
             let rng_x = _mm_cvtsi32_si128(s.rng as i32);
             let mut rng_bc = _mm_shufflelo_epi16::<0>(rng_x);
             if LANES == 8 {
                 rng_bc = _mm_unpacklo_epi64(rng_bc, rng_bc);
             }
 
-            // Renorm-spill buffer: [rng, b0, b1, ...]; u = arr[i], v = arr[i+1].
-            // (This is exactly the asm's [buf+14..] window with rng at the head.)
             let mut bounds = core::mem::MaybeUninit::<AlignedSse9>::uninit();
             let bp = bounds.as_mut_ptr().cast::<u16>();
             bp.write(s.rng as u16);
@@ -635,10 +627,6 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
                     + if N > 2 { 1 } else { 0 };
                 let sh = _mm_cvtsi32_si128(rate as i32);
 
-                // dav2d pavgw update:
-                //   sel  = avg(0xFFFF, cmp)  -> 65535 (j>=val) / 32768 (j<val)
-                //   out  = (cdf - (cmp>>rate)) + ((sel - cdf) >> rate)
-                // which expands to the two AV1 half-updates with no mask select.
                 let ones = _mm_cmpeq_epi16(cmp, cmp);
                 let sel = _mm_avg_epu16(ones, cmp);
                 let shifted_mask = _mm_srl_epi16(cmp, sh);
@@ -655,7 +643,6 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
                 cdf[N] = pc + u16::from(count < 32);
             }
 
-            // renorm: i = first set lane; OR-sentinel bounds i to N (fall-through).
             let raw = _mm_movemask_epi8(cmp) as u32;
             let mask = raw | (1u32 << (2 * N));
             let i = (mask.trailing_zeros() >> 1) as usize;
