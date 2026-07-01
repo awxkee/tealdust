@@ -2325,7 +2325,7 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
         let mut mf = (cwp_idx as i32) << 2;
         mf |= if use_local { 2 } else { 1 };
         let mut s_src = crate::refmvs::Block {
-            r#ref: crate::levels::RefPair::from_refs(ref0, ref1),
+            reference: crate::levels::RefPair::from_refs(ref0, ref1),
             bs: bs as u8,
             mf: mf as i8,
             subpel_filter: b.inter_data().filter,
@@ -2353,7 +2353,7 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
             + mat2[1] as i64
             + (mat2[5] as i64 - 0x10000) * (by as i64 + 1) * 4;
         let mut t_src = crate::refmvs::TemporalBlock::default();
-        t_src.r#ref = crate::levels::RefPair::from_refs(
+        t_src.reference = crate::levels::RefPair::from_refs(
             if t_swap { ref1 } else { ref0 },
             if t_swap { ref0 } else { ref1 },
         );
@@ -2371,7 +2371,7 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
         if write_temporal {
             let t_stride = recon.rf.rp_stride;
             let t_off = (by >> 1) as isize * t_stride + (bx >> 1) as isize;
-            crate::refmvs::splat_comp_warpmv(
+            refmvs::splat_comp_warpmv(
                 &mut recon.rt.r[s_off..],
                 &mut s_src,
                 Some(&mut recon.cur_mvs[t_off as usize..]),
@@ -2390,7 +2390,7 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
                 w_swap,
             );
         } else {
-            crate::refmvs::splat_comp_warpmv(
+            refmvs::splat_comp_warpmv(
                 &mut recon.rt.r[s_off..],
                 &mut s_src,
                 None,
@@ -2418,7 +2418,7 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
 
     let mut s_src = crate::refmvs::Block {
         mv: blk_mv,
-        r#ref: crate::levels::RefPair::from_refs(ref0, ref1),
+        reference: crate::levels::RefPair::from_refs(ref0, ref1),
         bs: bs as u8,
         mf,
         subpel_filter: b.inter_data().filter,
@@ -2426,7 +2426,7 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
     };
 
     let mut t_src = crate::refmvs::TemporalBlock::default();
-    t_src.r#ref = crate::levels::RefPair::from_refs(
+    t_src.reference = crate::levels::RefPair::from_refs(
         if t_swap { ref1 } else { ref0 },
         if t_swap { ref0 } else { ref1 },
     );
@@ -2459,7 +2459,7 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
         let t_stride = recon.rf.rp_stride;
         let m0n = t_src.mv.mv_at(0).bits();
         let m1n = t_src.mv.mv_at(1).bits();
-        let r = t_src.r#ref.refs();
+        let r = t_src.reference.refs();
         let mask_w = (bw4 >> 1) as usize;
         let mut row = 0i32;
         while row < bh4 {
@@ -2476,7 +2476,7 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
                         let idx = (!((d != 0) ^ w_swap)) as usize;
                         let m = t_src.mv.mv_at(idx).bits();
                         dst.mv = crate::refmvs::TemporalBlockMv::from_packed(m as u32 * 0x10001);
-                        dst.r#ref = RefPair::from_pair(if m == crate::refmvs::INVALID_TRAJ {
+                        dst.reference = RefPair::from_pair(if m == crate::refmvs::INVALID_TRAJ {
                             -1
                         } else {
                             (r[idx] as u8 as i16).wrapping_mul(0x101)
@@ -2486,15 +2486,16 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
                             dst.mv = crate::refmvs::TemporalBlockMv::from_packed(
                                 crate::refmvs::INVALID_TRAJ as u32 * 0x10001,
                             );
-                            dst.r#ref = RefPair::from_pair(-1);
+                            dst.reference = RefPair::from_pair(-1);
                         } else {
                             dst.mv =
                                 crate::refmvs::TemporalBlockMv::from_packed(m1n as u32 * 0x10001);
-                            dst.r#ref = RefPair::from_pair((r[1] as u8 as i16).wrapping_mul(0x101));
+                            dst.reference =
+                                RefPair::from_pair((r[1] as u8 as i16).wrapping_mul(0x101));
                         }
                     } else if m1n == crate::refmvs::INVALID_TRAJ {
                         dst.mv = crate::refmvs::TemporalBlockMv::from_packed(m0n as u32 * 0x10001);
-                        dst.r#ref = RefPair::from_pair((r[0] as u8 as i16).wrapping_mul(0x101));
+                        dst.reference = RefPair::from_pair((r[0] as u8 as i16).wrapping_mul(0x101));
                     } else {
                         *dst = t_src;
                     }
@@ -2507,17 +2508,17 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
         {
             let m0 = t_src.mv.mv_at(0);
             let m1 = t_src.mv.mv_at(1);
-            let r = t_src.r#ref.refs();
+            let r = t_src.reference.refs();
             if m0.bits() == crate::refmvs::INVALID_TRAJ {
                 if m1.bits() == crate::refmvs::INVALID_TRAJ {
-                    t_src.r#ref = crate::levels::RefPair::from_pair(-1);
+                    t_src.reference = crate::levels::RefPair::from_pair(-1);
                 } else {
                     t_src.mv.set_mv(0, m1);
-                    t_src.r#ref = crate::levels::RefPair::from_refs(r[1], r[1]);
+                    t_src.reference = crate::levels::RefPair::from_refs(r[1], r[1]);
                 }
             } else if m1.bits() == crate::refmvs::INVALID_TRAJ {
                 t_src.mv.set_mv(1, m0);
-                t_src.r#ref = crate::levels::RefPair::from_refs(r[0], r[0]);
+                t_src.reference = crate::levels::RefPair::from_refs(r[0], r[0]);
             }
         }
         let t_stride = recon.rf.rp_stride;
@@ -2935,7 +2936,7 @@ where
                     if r2.ox4 != 0 || r2.oy4 != 0 {
                         continue;
                     }
-                    let s_ref0 = r2.r#ref.ref_at(0);
+                    let s_ref0 = r2.reference.ref_at(0);
                     if s_ref0 < 0 || s_ref0 as usize >= 7 {
                         continue;
                     }

@@ -88,8 +88,8 @@ fn gather_decode_edge_ctx(
             0
         };
         ibc_vals[0] = l.intrabc[off];
-        r0[0] = l.r#ref[0][off];
-        r1[0] = l.r#ref[1][off];
+        r0[0] = l.reference[0][off];
+        r1[0] = l.reference[1][off];
         amvd_v[0] = l.amvd[off];
         ct[0] = l.comp_type[off];
         xoff[0] = off;
@@ -105,8 +105,8 @@ fn gather_decode_edge_ctx(
             0
         };
         ibc_vals[idx] = a.intrabc[off];
-        r0[idx] = a.r#ref[0][off];
-        r1[idx] = a.r#ref[1][off];
+        r0[idx] = a.reference[0][off];
+        r1[idx] = a.reference[1][off];
         amvd_v[idx] = a.amvd[off];
         ct[idx] = a.comp_type[off];
         xoff[idx] = off;
@@ -121,8 +121,8 @@ fn gather_decode_edge_ctx(
             0
         };
         ibc_vals[idx] = l.intrabc[by4];
-        r0[idx] = l.r#ref[0][by4];
-        r1[idx] = l.r#ref[1][by4];
+        r0[idx] = l.reference[0][by4];
+        r1[idx] = l.reference[1][by4];
         amvd_v[idx] = l.amvd[by4];
         ct[idx] = l.comp_type[by4];
         xoff[idx] = by4;
@@ -137,8 +137,8 @@ fn gather_decode_edge_ctx(
             0
         };
         ibc_vals[idx] = a.intrabc[bx4];
-        r0[idx] = a.r#ref[0][bx4];
-        r1[idx] = a.r#ref[1][bx4];
+        r0[idx] = a.reference[0][bx4];
+        r1[idx] = a.reference[1][bx4];
         amvd_v[idx] = a.amvd[bx4];
         ct[idx] = a.comp_type[bx4];
         xoff[idx] = bx4;
@@ -250,8 +250,8 @@ fn gather_decode_nb_ctx(
         mp[0] = l.morph_pred[off];
         dp[0] = l.dip[off];
         boff[0] = off as i32;
-        nref0[0] = l.r#ref[0][off];
-        nref1[0] = l.r#ref[1][off];
+        nref0[0] = l.reference[0][off];
+        nref1[0] = l.reference[1][off];
         nflt[0] = l.filter[off];
         idx += 1;
     }
@@ -267,8 +267,8 @@ fn gather_decode_nb_ctx(
         mp[idx] = a.morph_pred[off];
         dp[idx] = a.dip[off];
         boff[idx] = off as i32;
-        nref0[idx] = a.r#ref[0][off];
-        nref1[idx] = a.r#ref[1][off];
+        nref0[idx] = a.reference[0][off];
+        nref1[idx] = a.reference[1][off];
         nflt[idx] = a.filter[off];
         idx += 1;
     }
@@ -283,8 +283,8 @@ fn gather_decode_nb_ctx(
         mp[idx] = l.morph_pred[by4];
         dp[idx] = l.dip[by4];
         boff[idx] = by4 as i32;
-        nref0[idx] = l.r#ref[0][by4];
-        nref1[idx] = l.r#ref[1][by4];
+        nref0[idx] = l.reference[0][by4];
+        nref1[idx] = l.reference[1][by4];
         nflt[idx] = l.filter[by4];
         idx += 1;
     }
@@ -299,8 +299,8 @@ fn gather_decode_nb_ctx(
         mp[idx] = a.morph_pred[bx4];
         dp[idx] = a.dip[bx4];
         boff[idx] = bx4 as i32;
-        nref0[idx] = a.r#ref[0][bx4];
-        nref1[idx] = a.r#ref[1][bx4];
+        nref0[idx] = a.reference[0][bx4];
+        nref1[idx] = a.reference[1][bx4];
         nflt[idx] = a.filter[bx4];
         if idx == 0 {
             fsc[1] = fsc[0];
@@ -372,8 +372,8 @@ fn write_inter_block_context(
         a.mrl[bx4..bx4 + aw].fill(0);
         a.multi_mrl[bx4..bx4 + aw].fill(0);
         a.dip[bx4..bx4 + aw].fill(0);
-        a.r#ref[0][bx4..bx4 + aw].fill(refs[0]);
-        a.r#ref[1][bx4..bx4 + aw].fill(refs[1]);
+        a.reference[0][bx4..bx4 + aw].fill(refs[0]);
+        a.reference[1][bx4..bx4 + aw].fill(refs[1]);
         a.motion_mode[bx4..bx4 + aw].fill(motion_mode);
         a.amvd[bx4..bx4 + aw].fill(amvd as u8);
         a.mvprec[bx4..bx4 + aw].fill(mvprec_def);
@@ -393,8 +393,8 @@ fn write_inter_block_context(
         l.mrl[by4..by4 + lh].fill(0);
         l.multi_mrl[by4..by4 + lh].fill(0);
         l.dip[by4..by4 + lh].fill(0);
-        l.r#ref[0][by4..by4 + lh].fill(refs[0]);
-        l.r#ref[1][by4..by4 + lh].fill(refs[1]);
+        l.reference[0][by4..by4 + lh].fill(refs[0]);
+        l.reference[1][by4..by4 + lh].fill(refs[1]);
         l.motion_mode[by4..by4 + lh].fill(motion_mode);
         l.amvd[by4..by4 + lh].fill(amvd as u8);
         l.mvprec[by4..by4 + lh].fill(mvprec_def);
@@ -454,8 +454,8 @@ fn write_intra_block_context(
             a.mvprec[bx4..bx4 + aw].fill(0);
             a.motion_mode[bx4..bx4 + aw].fill(0);
             a.comp_type[bx4..bx4 + aw].fill(0);
-            a.r#ref[0][bx4..bx4 + aw].fill(-1);
-            a.r#ref[1][bx4..bx4 + aw].fill(-1);
+            a.reference[0][bx4..bx4 + aw].fill(-1);
+            a.reference[1][bx4..bx4 + aw].fill(-1);
         }
 
         l.fsc[by4..by4 + lh].fill(b.fsc);
@@ -476,8 +476,8 @@ fn write_intra_block_context(
             l.mvprec[by4..by4 + lh].fill(0);
             l.motion_mode[by4..by4 + lh].fill(0);
             l.comp_type[by4..by4 + lh].fill(0);
-            l.r#ref[0][by4..by4 + lh].fill(-1);
-            l.r#ref[1][by4..by4 + lh].fill(-1);
+            l.reference[0][by4..by4 + lh].fill(-1);
+            l.reference[1][by4..by4 + lh].fill(-1);
         }
     }
 
@@ -531,8 +531,8 @@ fn write_intrabc_block_context(
             a.mvprec[bx4..bx4 + aw].fill(0);
             a.comp_type[bx4..bx4 + aw].fill(0);
             a.motion_mode[bx4..bx4 + aw].fill(0);
-            a.r#ref[0][bx4..bx4 + aw].fill(-1);
-            a.r#ref[1][bx4..bx4 + aw].fill(-1);
+            a.reference[0][bx4..bx4 + aw].fill(-1);
+            a.reference[1][bx4..bx4 + aw].fill(-1);
         }
 
         l.fsc[by4..by4 + lh].fill(0);
@@ -553,8 +553,8 @@ fn write_intrabc_block_context(
             l.mvprec[by4..by4 + lh].fill(0);
             l.comp_type[by4..by4 + lh].fill(0);
             l.motion_mode[by4..by4 + lh].fill(0);
-            l.r#ref[0][by4..by4 + lh].fill(-1);
-            l.r#ref[1][by4..by4 + lh].fill(-1);
+            l.reference[0][by4..by4 + lh].fill(-1);
+            l.reference[1][by4..by4 + lh].fill(-1);
         }
     }
 
@@ -851,7 +851,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                         },
                     },
                 ],
-                r#ref: RefPair::from_pair(-1),
+                reference: RefPair::from_pair(-1),
                 bs: bs as u8,
                 mf: 0,
                 ..Default::default()
@@ -906,7 +906,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                         },
                     },
                 ],
-                r#ref: RefPair::from_pair(-1),
+                reference: RefPair::from_pair(-1),
                 bs: bs as u8,
                 mf: 0,
                 ..Default::default()
@@ -918,7 +918,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                 mv: crate::refmvs::TemporalBlockMv::from_packed(
                     crate::refmvs::INVALID_TRAJ as u32 * 0x10001,
                 ),
-                r#ref: RefPair::from_pair(-1),
+                reference: RefPair::from_pair(-1),
             };
             let write_temporal = recon.seq_hdr.ref_frame_mvs && !recon.cur_mvs.is_empty();
             if write_temporal {
@@ -1138,14 +1138,14 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                             &recon.rt.r
                                 [((by + y_off) & 63) as usize * 128 + ((bx + x_off) & 127) as usize]
                         };
-                        if r.r#ref.ref_at(0) == TIP_FRAME as i8 {
+                        if r.reference.ref_at(0) == TIP_FRAME as i8 {
                             x_off = 0;
                             y_off = 0;
                         }
                     }
                     let ref0 = refs[0];
                     let match_ref = |r: &crate::refmvs::Block| -> bool {
-                        r.r#ref.r0() == ref0 || r.r#ref.r1() == ref0
+                        r.reference.r0() == ref0 || r.reference.r1() == ref0
                     };
                     // left neighbour on the current row, lmt the top neighbour.
                     let tml_ok = have_left && {
@@ -1250,7 +1250,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                             },
                         },
                     ],
-                    r#ref: RefPair::from_refs(refs[0], -1),
+                    reference: RefPair::from_refs(refs[0], -1),
                     bs: bs as u8,
                     mf,
                     subpel_filter: b.inter_data().filter,
@@ -1266,7 +1266,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                 if write_temporal {
                     let q = refmvs::quantize_mv(blk_mv);
                     t_src.mv = refmvs::TemporalBlockMv::from_mvs(q, q);
-                    t_src.r#ref = if q.bits() == refmvs::INVALID_TRAJ {
+                    t_src.reference = if q.bits() == refmvs::INVALID_TRAJ {
                         RefPair::from_pair(-1)
                     } else {
                         RefPair::from_refs(refs[0], refs[0])
@@ -1283,7 +1283,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                         bh4,
                     );
                 } else {
-                    crate::refmvs::splat_mv(
+                    refmvs::splat_mv(
                         &mut recon.rt.r[s_off..],
                         &mut s_src,
                         None,
@@ -1301,7 +1301,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                 } else {
                     recon.frm_hdr.gmv.m[refs[0] as usize]
                 };
-                let mut s_src = crate::refmvs::Block {
+                let mut s_src = refmvs::Block {
                     mv: [
                         blk_mv,
                         Mv {
@@ -1311,7 +1311,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                             },
                         },
                     ],
-                    r#ref: RefPair::from_refs(refs[0], -1),
+                    reference: RefPair::from_refs(refs[0], -1),
                     bs: bs as u8,
                     subpel_filter: b.inter_data().filter,
                     ..Default::default()
@@ -1338,7 +1338,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                     + mat[1] as i64
                     + (mat[5] as i64 - 0x10000) * (by as i64 + 1) * 4;
                 let mut t_src = crate::refmvs::TemporalBlock::default();
-                t_src.r#ref = RefPair::from_refs(refs[0], refs[0]);
+                t_src.reference = RefPair::from_refs(refs[0], refs[0]);
                 let write_temporal = recon.seq_hdr.ref_frame_mvs
                     && refs[0] != TIP_FRAME as i8
                     && !recon.cur_mvs.is_empty();
@@ -2916,10 +2916,12 @@ where
                 && fi.motion_modes & (1 << MotionMode::WarpCausal as u8) != 0
             {
                 let is_sb_boundary = (by & (fi.sb_step - 1)) == 0;
-                let match_ref_l =
-                    |off: usize, r: i8| -> bool { l.r#ref[0][off] == r || l.r#ref[1][off] == r };
-                let match_ref_a =
-                    |off: usize, r: i8| -> bool { a.r#ref[0][off] == r || a.r#ref[1][off] == r };
+                let match_ref_l = |off: usize, r: i8| -> bool {
+                    l.reference[0][off] == r || l.reference[1][off] == r
+                };
+                let match_ref_a = |off: usize, r: i8| -> bool {
+                    a.reference[0][off] == r || a.reference[1][off] == r
+                };
                 let match_refs = |r: i8| -> bool {
                     let left = match_ref_l(by4, r)
                         || (by + bh4 <= fi.tile_row_end && match_ref_l(by4 + bh4 as usize - 1, r));
@@ -3452,10 +3454,12 @@ where
                 // is used directly here (exact for non-boundary; SB-boundary refmv
                 // edge handling is a follow-up).
                 let is_sb_boundary = (by & (fi.sb_step - 1)) == 0;
-                let match_ref_l =
-                    |off: usize| -> bool { l.r#ref[0][off] == ref0 || l.r#ref[1][off] == ref0 };
-                let match_ref_a =
-                    |off: usize| -> bool { a.r#ref[0][off] == ref0 || a.r#ref[1][off] == ref0 };
+                let match_ref_l = |off: usize| -> bool {
+                    l.reference[0][off] == ref0 || l.reference[1][off] == ref0
+                };
+                let match_ref_a = |off: usize| -> bool {
+                    a.reference[0][off] == ref0 || a.reference[1][off] == ref0
+                };
                 let has_cs_ext = if inter_mode == InterPredMode::WarpNewMv as u8 {
                     let left_match = have_left
                         && (match_ref_l(by4)

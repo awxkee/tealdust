@@ -284,8 +284,8 @@ pub(crate) fn reset_context(ctx: &mut BlockContext, keyframe: bool, is_tip_frame
     ctx.skip_txfm.fill(0);
     ctx.skip_mode.fill(0);
     if !keyframe {
-        ctx.r#ref[0].fill(-1);
-        ctx.r#ref[1].fill(-1);
+        ctx.reference[0].fill(-1);
+        ctx.reference[1].fill(-1);
         ctx.comp_type.fill(0);
         ctx.mode.fill(13); // NEARMV
     }
@@ -1158,7 +1158,7 @@ fn make_refmv_tile(ra_len: usize, bw: i32, bh: i32) -> refmvs::Tile {
         bank: refmvs::MvBank {
             mv: [[[Mv::default(); 2]; 4]; 9],
             cwp_idx: [[0; 4]; 3],
-            r#ref: [RefPair::default(); 4],
+            reference: [RefPair::default(); 4],
             size: [0; 9],
             idx: [0; 9],
             hits: [0; 2],
@@ -1729,8 +1729,8 @@ where
         // off by `have_top`).
         if fi.is_inter_or_switch {
             let a_src = &a_arr[a_idx];
-            recon.a_sb_cache.r#ref[0].copy_from_slice(&a_src.r#ref[0]);
-            recon.a_sb_cache.r#ref[1].copy_from_slice(&a_src.r#ref[1]);
+            recon.a_sb_cache.reference[0].copy_from_slice(&a_src.reference[0]);
+            recon.a_sb_cache.reference[1].copy_from_slice(&a_src.reference[1]);
             if by > row_start {
                 recon
                     .a_sb_cache
@@ -2233,7 +2233,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     // few scalar `rf` fields needed before the loop so `rf` can be re-borrowed
     // mutably (for the per-sbrow load_tmvs) inside it.
     let ffr_idx = *furthest_future_refidx;
-    let tip_ref = rf.tip.r#ref;
+    let tip_ref = rf.tip.reference;
     let rf_rp_stride = rf.rp_stride;
 
     // Precompute the per-frame filter parameters once (deblock thresholds, CDEF
@@ -4052,10 +4052,10 @@ fn get_snglref_ctx(
 
     macro_rules! add_matching {
         ($ctx:expr, $cnt:ident, $idx:expr) => {
-            if $ctx.r#ref[0][$idx] as i8 == ref_idx {
+            if $ctx.reference[0][$idx] as i8 == ref_idx {
                 $cnt += 1;
                 newmv += (((1u32 << $ctx.mode[$idx]) & NEWMV0_MASK) != 0) as i32;
-            } else if $ctx.r#ref[1][$idx] as i8 == ref_idx {
+            } else if $ctx.reference[1][$idx] as i8 == ref_idx {
                 $cnt += 1;
                 newmv += (((1u32 << $ctx.mode[$idx]) & NEWMV1_MASK) != 0) as i32;
             }

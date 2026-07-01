@@ -2268,7 +2268,7 @@ where
                     if r2.ox4 != 0 || r2.oy4 != 0 {
                         continue;
                     }
-                    let s_ref0 = r2.r#ref.ref_at(0);
+                    let s_ref0 = r2.reference.ref_at(0);
                     if s_ref0 < 0 || s_ref0 as usize >= 7 {
                         continue;
                     }

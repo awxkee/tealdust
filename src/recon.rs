@@ -1061,7 +1061,7 @@ pub(crate) fn update_temporal(
 
     let t_src = TemporalBlock {
         mv: refmvs::TemporalBlockMv::from_mvs(mv0, mv1),
-        r#ref: ref_pair,
+        reference: ref_pair,
     };
     for y in 0..h8 {
         let row = &mut t_dst[y * t_stride..y * t_stride + w8];

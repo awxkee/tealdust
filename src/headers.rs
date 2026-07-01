@@ -630,7 +630,7 @@ pub struct FhTip {
     pub gmv_y: i8,
     pub gmv_x: i8,
     pub subpel_filter: u8,
-    pub r#ref: [i8; 2],
+    pub reference: [i8; 2],
 }
 
 #[derive(Debug, Clone, Default)]
@@ -774,7 +774,7 @@ pub struct FhCcso {
 
 #[derive(Debug, Clone, Default)]
 pub struct FhGmv {
-    pub r#ref: u8,
+    pub reference: u8,
     pub refref: u8,
     pub m: [WarpedMotionParams; REFS_PER_FRAME],
 }

@@ -48,7 +48,7 @@ pub(crate) struct BlockContext {
     pub(crate) intrabc: [u8; 64],
     pub(crate) morph_pred: [u8; 64],
     pub(crate) comp_type: [u8; 64],
-    pub(crate) r#ref: [[i8; 64]; 2],
+    pub(crate) reference: [[i8; 64]; 2],
     pub(crate) motion_mode: [u8; 64],
     pub(crate) amvd: [u8; 64],
     pub(crate) mvprec: [u8; 64],
@@ -78,7 +78,7 @@ impl Default for BlockContext {
             intrabc: [0; 64],
             morph_pred: [0; 64],
             comp_type: [0; 64],
-            r#ref: [[0; 64]; 2],
+            reference: [[0; 64]; 2],
             motion_mode: [0; 64],
             amvd: [0; 64],
             mvprec: [0; 64],
@@ -94,14 +94,14 @@ impl Default for BlockContext {
 
 #[derive(Clone)]
 pub(crate) struct SBEdgeCtx {
-    pub(crate) r#ref: [[i8; 64]; 2],
+    pub(crate) reference: [[i8; 64]; 2],
     pub(crate) motion_mode: [u8; 64],
 }
 
 impl Default for SBEdgeCtx {
     fn default() -> Self {
         Self {
-            r#ref: [[0; 64]; 2],
+            reference: [[0; 64]; 2],
             motion_mode: [0; 64],
         }
     }
@@ -281,19 +281,19 @@ pub(crate) fn get_warp_ctx(
     have_bottom_left: bool,
     top_is_at_tile_boundary: bool,
     b_dim: &[u8],
-    r#ref: i8,
+    reference: i8,
 ) -> i32 {
     let mut ctx = 0i32;
 
     macro_rules! add_bc {
         ($dir:expr, $idx:expr) => {
-            ctx += (($dir.r#ref[0][$idx] == r#ref || $dir.r#ref[1][$idx] == r#ref)
+            ctx += (($dir.reference[0][$idx] == reference || $dir.reference[1][$idx] == reference)
                 && $dir.motion_mode[$idx] >= 2) as i32;
         };
     }
     macro_rules! add_sb {
         ($dir:expr, $idx:expr) => {
-            ctx += (($dir.r#ref[0][$idx] == r#ref || $dir.r#ref[1][$idx] == r#ref)
+            ctx += (($dir.reference[0][$idx] == reference || $dir.reference[1][$idx] == reference)
                 && $dir.motion_mode[$idx] >= 2) as i32;
         };
     }
@@ -342,21 +342,21 @@ pub(crate) fn get_compref_ctx(
     have_top_right: bool,
     have_bottom_left: bool,
     b_dim: &[u8],
-    r#ref: RefPair,
+    reference: RefPair,
     tip: RefPair,
 ) -> i32 {
     let mut row = 0i32;
     let mut col = 0i32;
     let mut newmv = 0i32;
-    let (ref0, ref1) = (r#ref.r0(), r#ref.r1());
+    let (ref0, ref1) = (reference.r0(), reference.r1());
     let (tip0, tip1) = (tip.r0(), tip.r1());
 
     macro_rules! add_matching {
         ($dir:expr, $cnt:expr, $idx:expr) => {
-            if $dir.r#ref[0][$idx] == TIP_FRAME as i8 && tip0 == ref0 && tip1 == ref1 {
+            if $dir.reference[0][$idx] == TIP_FRAME as i8 && tip0 == ref0 && tip1 == ref1 {
                 $cnt += 1;
                 newmv += ($dir.mode[$idx] == 15) as i32; // NEWMV
-            } else if $dir.r#ref[0][$idx] == ref0 && $dir.r#ref[1][$idx] == ref1 {
+            } else if $dir.reference[0][$idx] == ref0 && $dir.reference[1][$idx] == ref1 {
                 $cnt += 1;
                 newmv += (((1u32 << $dir.mode[$idx]) & NEWMV_COMP_MODE_MASK) != 0) as i32;
             }

@@ -218,7 +218,7 @@ impl TrajMap {
 #[repr(C)]
 pub(crate) struct SnglMvBlock {
     pub(crate) mv: Mv,
-    pub(crate) r#ref: u8,
+    pub(crate) reference: u8,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -264,7 +264,7 @@ impl QMv {
 #[derive(Default)]
 pub(crate) struct TemporalBlock {
     pub(crate) mv: TemporalBlockMv,
-    pub(crate) r#ref: RefPair,
+    pub(crate) reference: RefPair,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -330,7 +330,7 @@ impl TemporalBlockMv {
 #[derive(Default)]
 pub(crate) struct Block {
     pub(crate) mv: [Mv; 2],
-    pub(crate) r#ref: RefPair,
+    pub(crate) reference: RefPair,
     pub(crate) bs: u8,
     pub(crate) mf: i8,
     pub(crate) ox4: u8,
@@ -343,7 +343,7 @@ pub(crate) struct Block {
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct MfmvRef {
-    pub(crate) r#ref: u8,
+    pub(crate) reference: u8,
     pub(crate) tgt: i8,
     pub(crate) dir: u8,
 }
@@ -386,7 +386,7 @@ pub(crate) struct Frame {
 #[derive(Default)]
 pub(crate) struct FrameTip {
     pub(crate) sf: [i32; 2],
-    pub(crate) r#ref: RefPair,
+    pub(crate) reference: RefPair,
     pub(crate) delta: i8,
 }
 
@@ -398,7 +398,7 @@ pub(crate) struct TileRange {
 pub(crate) struct MvBank {
     pub(crate) mv: [[[Mv; 2]; 4]; 9],
     pub(crate) cwp_idx: [[i8; 4]; 3],
-    pub(crate) r#ref: [RefPair; 4],
+    pub(crate) reference: [RefPair; 4],
     pub(crate) size: [u8; 9],
     pub(crate) idx: [u8; 9],
     pub(crate) hits: [u8; 2],
@@ -541,7 +541,7 @@ pub(crate) fn add_candidate_c2s(
     mvstack: &mut [SnglMvBlock],
     cnt: &mut i32,
     max_cnt: i32,
-    r#ref: u8,
+    reference: u8,
     cand_mv: Mv,
     iter_cntr: &mut i32,
     max_iter: i32,
@@ -549,7 +549,7 @@ pub(crate) fn add_candidate_c2s(
     let last = *cnt as usize;
     if *iter_cntr < max_iter {
         for m in 0..last {
-            if mvstack[m].mv.bits() == cand_mv.bits() && mvstack[m].r#ref == r#ref {
+            if mvstack[m].mv.bits() == cand_mv.bits() && mvstack[m].reference == reference {
                 *iter_cntr += m as i32 + 1;
                 return;
             }
@@ -562,7 +562,7 @@ pub(crate) fn add_candidate_c2s(
     }
 
     mvstack[last].mv = cand_mv;
-    mvstack[last].r#ref = r#ref;
+    mvstack[last].reference = reference;
     *cnt = last as i32 + 1;
 }
 
@@ -629,9 +629,9 @@ pub(crate) fn tip_projection(
                     continue;
                 }
                 let mv = rp_proj[pos].mv;
-                let r = rp_proj[pos].r#ref;
+                let r = rp_proj[pos].reference;
                 rp_proj[pos].mv = mv_projection(mv, tip_delta as i32, r as i32, -2047, 2047);
-                rp_proj[pos].r#ref = tip_delta as u8;
+                rp_proj[pos].reference = tip_delta as u8;
                 x += tmvp_sample_step;
             }
             y += tmvp_sample_step;
@@ -674,28 +674,28 @@ pub(crate) fn fill_holes(
                     let p = (pos as isize - step as isize) as usize;
                     if rp_proj[p].mv.y() == INVALID_MV {
                         rp_proj[p].mv = mv;
-                        rp_proj[p].r#ref = tip_delta as u8;
+                        rp_proj[p].reference = tip_delta as u8;
                     }
                 }
                 if x + step < xend {
                     let p = pos + step as usize;
                     if rp_proj[p].mv.y() == INVALID_MV {
                         rp_proj[p].mv = mv;
-                        rp_proj[p].r#ref = tip_delta as u8;
+                        rp_proj[p].reference = tip_delta as u8;
                     }
                 }
                 if y - step >= ystart {
                     let p = (pos as isize - step as isize * stride) as usize;
                     if rp_proj[p].mv.y() == INVALID_MV {
                         rp_proj[p].mv = mv;
-                        rp_proj[p].r#ref = tip_delta as u8;
+                        rp_proj[p].reference = tip_delta as u8;
                     }
                 }
                 if y + step < yend {
                     let p = (pos as isize + step as isize * stride) as usize;
                     if rp_proj[p].mv.y() == INVALID_MV {
                         rp_proj[p].mv = mv;
-                        rp_proj[p].r#ref = tip_delta as u8;
+                        rp_proj[p].reference = tip_delta as u8;
                     }
                 }
                 x += step;
@@ -706,17 +706,21 @@ pub(crate) fn fill_holes(
     }
 }
 
-pub(crate) fn warp_bank_add(warp: &mut WarpBank, mat: &WarpedMotionParams, r#ref: usize) -> i32 {
+pub(crate) fn warp_bank_add(
+    warp: &mut WarpBank,
+    mat: &WarpedMotionParams,
+    reference: usize,
+) -> i32 {
     if warp.hits >= 64 {
         return -1;
     }
     warp.hits += 1;
-    let sz = warp.size[r#ref] as usize;
-    let idx = warp.idx[r#ref] as usize;
+    let sz = warp.size[reference] as usize;
+    let idx = warp.idx[reference] as usize;
 
     let mut n = 0;
     while n < sz {
-        let m = &warp.mat[r#ref][(idx + n) & 3][2..6];
+        let m = &warp.mat[reference][(idx + n) & 3][2..6];
         if m == &mat.matrix[2..6] {
             break;
         }
@@ -731,40 +735,45 @@ pub(crate) fn warp_bank_add(warp: &mut WarpBank, mat: &WarpedMotionParams, r#ref
         };
         let from = (idx + n) & 3;
         if from != to {
-            let bak = warp.mat[r#ref][from];
-            let bak_type = warp.warp_type[r#ref][from];
+            let bak = warp.mat[reference][from];
+            let bak_type = warp.warp_type[reference][from];
             let mut n1 = from;
             let mut n2 = (n1 + 1) & 3;
             while n1 != to {
-                warp.mat[r#ref][n1] = warp.mat[r#ref][n2];
-                warp.warp_type[r#ref][n1] = warp.warp_type[r#ref][n2];
+                warp.mat[reference][n1] = warp.mat[reference][n2];
+                warp.warp_type[reference][n1] = warp.warp_type[reference][n2];
                 n1 = n2;
                 n2 = (n2 + 1) & 3;
             }
-            warp.mat[r#ref][to] = bak;
-            warp.warp_type[r#ref][to] = bak_type;
+            warp.mat[reference][to] = bak;
+            warp.warp_type[reference][to] = bak_type;
         }
         return 0;
     }
 
     let tgt = if sz == 4 {
-        let t = warp.idx[r#ref] as usize & 3;
-        warp.idx[r#ref] = warp.idx[r#ref].wrapping_add(1);
+        let t = warp.idx[reference] as usize & 3;
+        warp.idx[reference] = warp.idx[reference].wrapping_add(1);
         t
     } else {
-        let t = warp.size[r#ref] as usize;
-        warp.size[r#ref] += 1;
+        let t = warp.size[reference] as usize;
+        warp.size[reference] += 1;
         t
     };
-    warp.mat[r#ref][tgt] = mat.matrix;
-    warp.warp_type[r#ref][tgt] = mat.wm_type as i8;
+    warp.mat[reference][tgt] = mat.matrix;
+    warp.warp_type[reference][tgt] = mat.wm_type as i8;
     0
 }
 
-pub(crate) fn mv_bank_add_inner(bank: &mut MvBank, r#ref: RefPair, mv: &[Mv; 2], cwp_idx_val: i8) {
+pub(crate) fn mv_bank_add_inner(
+    bank: &mut MvBank,
+    reference: RefPair,
+    mv: &[Mv; 2],
+    cwp_idx_val: i8,
+) {
     bank.hits[0] += 1;
 
-    let (ref0, ref1) = (r#ref.r0(), r#ref.r1());
+    let (ref0, ref1) = (reference.r0(), reference.r1());
     let c = if ref1 == -1 {
         if (ref0 as u32) <= 5 { ref0 as usize } else { 8 }
     } else {
@@ -784,7 +793,7 @@ pub(crate) fn mv_bank_add_inner(bank: &mut MvBank, r#ref: RefPair, mv: &[Mv; 2],
         let i = (idx + n) & 3;
         let match0 = mv[0].bits() == bank.mv[c][i][0].bits();
         let match1 = mv[comp_idx].bits() == bank.mv[c][i][comp_idx].bits();
-        let ref_match = c < 8 || r#ref.pair() == bank.r#ref[i].pair();
+        let ref_match = c < 8 || reference.pair() == bank.reference[i].pair();
         if match0 && match1 && ref_match {
             break;
         }
@@ -800,7 +809,7 @@ pub(crate) fn mv_bank_add_inner(bank: &mut MvBank, r#ref: RefPair, mv: &[Mv; 2],
         let from = (idx + n) & 3;
         if from != to {
             let mv_bak = bank.mv[c][from];
-            let ref_bak = bank.r#ref[from];
+            let ref_bak = bank.reference[from];
             let cwp_bak = if c >= 6 {
                 bank.cwp_idx[c.saturating_sub(6)][from]
             } else {
@@ -811,7 +820,7 @@ pub(crate) fn mv_bank_add_inner(bank: &mut MvBank, r#ref: RefPair, mv: &[Mv; 2],
             while n1 != to {
                 bank.mv[c][n1] = bank.mv[c][n2];
                 if c == 8 {
-                    bank.r#ref[n1] = bank.r#ref[n2];
+                    bank.reference[n1] = bank.reference[n2];
                 }
                 if c >= 6 {
                     bank.cwp_idx[c - 6][n1] = bank.cwp_idx[c - 6][n2];
@@ -821,7 +830,7 @@ pub(crate) fn mv_bank_add_inner(bank: &mut MvBank, r#ref: RefPair, mv: &[Mv; 2],
             }
             bank.mv[c][to] = mv_bak;
             if c == 8 {
-                bank.r#ref[to] = ref_bak;
+                bank.reference[to] = ref_bak;
             }
             if c >= 6 {
                 bank.cwp_idx[c - 6][to] = cwp_bak;
@@ -841,7 +850,7 @@ pub(crate) fn mv_bank_add_inner(bank: &mut MvBank, r#ref: RefPair, mv: &[Mv; 2],
     };
     bank.mv[c][tgt] = *mv;
     if c == 8 {
-        bank.r#ref[tgt] = r#ref;
+        bank.reference[tgt] = reference;
     }
     if ref1 != -1 {
         bank.cwp_idx[c.saturating_sub(6)][tgt] = cwp_idx_val;
@@ -908,7 +917,7 @@ pub(crate) fn smoothen(
                 if !first_line {
                     let prev = (pos as isize - step as isize * stride) as usize;
                     rp_proj[prev].mv = mv_line[(x - sx) as usize];
-                    rp_proj[prev].r#ref = tip_delta as u8;
+                    rp_proj[prev].reference = tip_delta as u8;
                 }
 
                 if sum_n > 0 {
@@ -940,7 +949,7 @@ pub(crate) fn smoothen(
             while x < xend {
                 let pos = (pos_base + x as isize) as usize;
                 rp_proj[pos].mv = mv_line[(x - sx) as usize];
-                rp_proj[pos].r#ref = tip_delta as u8;
+                rp_proj[pos].reference = tip_delta as u8;
                 x += step;
             }
         }
@@ -975,11 +984,11 @@ pub(crate) fn fill_gap_proj(
                     continue;
                 }
                 let (mut sum_y, mut sum_x, mut sum_n) = (mvy, mvx, 1i32);
-                let ref_off = rp_proj[pos].r#ref;
+                let ref_off = rp_proj[pos].reference;
 
                 let have_right = x + 2 < xend;
                 if have_right && rp_proj[pos + 2].mv.y() != INVALID_MV {
-                    let right_ref = rp_proj[pos + 2].r#ref;
+                    let right_ref = rp_proj[pos + 2].reference;
                     let rmv = mv_projection(
                         rp_proj[pos + 2].mv,
                         ref_off as i32,
@@ -992,7 +1001,7 @@ pub(crate) fn fill_gap_proj(
                     sum_y += ry;
                     rp_proj[pos + 1].mv.c.y = (sum_y + (sum_y > 0) as i32) >> 1;
                     rp_proj[pos + 1].mv.c.x = (sum_x + (sum_x > 0) as i32) >> 1;
-                    rp_proj[pos + 1].r#ref = ref_off;
+                    rp_proj[pos + 1].reference = ref_off;
                     sum_n += 1;
                 } else {
                     rp_proj[pos + 1] = rp_proj[pos];
@@ -1002,7 +1011,7 @@ pub(crate) fn fill_gap_proj(
                 let bot = (pos as isize + 2 * stride) as usize;
                 let mid = (pos as isize + stride) as usize;
                 if have_bottom && rp_proj[bot].mv.y() != INVALID_MV {
-                    let bot_ref = rp_proj[bot].r#ref;
+                    let bot_ref = rp_proj[bot].reference;
                     let bmv =
                         mv_projection(rp_proj[bot].mv, ref_off as i32, bot_ref as i32, -2047, 2047);
                     let (by, bx) = (bmv.y(), bmv.x());
@@ -1011,7 +1020,7 @@ pub(crate) fn fill_gap_proj(
                     let (mx, my) = (mvx + bx, mvy + by);
                     rp_proj[mid].mv.c.y = (my + (my > 0) as i32) >> 1;
                     rp_proj[mid].mv.c.x = (mx + (mx > 0) as i32) >> 1;
-                    rp_proj[mid].r#ref = ref_off;
+                    rp_proj[mid].reference = ref_off;
                     sum_n += 1;
                 } else {
                     rp_proj[mid] = rp_proj[pos];
@@ -1020,7 +1029,7 @@ pub(crate) fn fill_gap_proj(
                 if have_right && have_bottom {
                     let br = (pos as isize + 2 * (1 + stride)) as usize;
                     if rp_proj[br].mv.y() != INVALID_MV {
-                        let br_ref = rp_proj[br].r#ref;
+                        let br_ref = rp_proj[br].reference;
                         let brmv = mv_projection(
                             rp_proj[br].mv,
                             ref_off as i32,
@@ -1050,7 +1059,7 @@ pub(crate) fn fill_gap_proj(
                     }
                     _ => unreachable!(),
                 }
-                rp_proj[diag].r#ref = ref_off;
+                rp_proj[diag].reference = ref_off;
                 x += 2;
             }
             y += 2;
@@ -1212,7 +1221,7 @@ impl Default for MvSearchState {
             dr: [Candidate::default(); 6],
             sngl: [SnglMvBlock {
                 mv: Mv::default(),
-                r#ref: 0,
+                reference: 0,
             }; 4],
             drvd_cnt: 0,
             sngl_cnt: 0,
@@ -1263,10 +1272,10 @@ pub(crate) fn add_temporal_candidate(
     mvstack: &mut [Candidate; 6],
     cnt: &mut i32,
     off_8x8: isize,
-    r#ref: RefPair,
+    reference: RefPair,
     seq_mv_traj: bool,
 ) -> bool {
-    let (ref0, ref1) = (r#ref.r0(), r#ref.r1());
+    let (ref0, ref1) = (reference.r0(), reference.r1());
     if ref0 as usize >= crate::levels::TIP_FRAME {
         return false;
     }
@@ -1285,7 +1294,7 @@ pub(crate) fn add_temporal_candidate(
         mv_projection(
             proj_mv,
             rf.pocdiff[ref0 as usize] as i32,
-            rp_proj[off].r#ref as i32,
+            rp_proj[off].reference as i32,
             -0xffff,
             0xffff,
         )
@@ -1306,7 +1315,7 @@ pub(crate) fn add_temporal_candidate(
         mv_projection(
             proj_mv,
             rf.pocdiff[ref1 as usize] as i32,
-            rp_proj[off].r#ref as i32,
+            rp_proj[off].reference as i32,
             -0xffff,
             0xffff,
         )
@@ -1331,7 +1340,7 @@ pub(crate) fn add_spatial_candidate(
     b: &Block,
     mut off_y_8x8: isize,
     mut off_x_8x8: isize,
-    r#ref: RefPair,
+    reference: RefPair,
     gmv: &[Mv; 2],
     seq_hdr: &crate::headers::SequenceHeader,
     frm_hdr: &crate::headers::FrameHeader,
@@ -1345,7 +1354,7 @@ pub(crate) fn add_spatial_candidate(
         return;
     }
 
-    if b.r#ref.ref_at(0) == TIP_FRAME as i8 {
+    if b.reference.ref_at(0) == TIP_FRAME as i8 {
         let b_dim = &crate::tables::BLOCK_DIMENSIONS[b.bs as usize];
         let tip16 = if frm_hdr.tip.frame_mode == 2 {
             !seq_hdr.tip_refine_mv || frm_hdr.tip.subpel_filter != 2
@@ -1359,12 +1368,12 @@ pub(crate) fn add_spatial_candidate(
     }
     // (top SB-boundary) projected-MV accesses land in valid buffer memory,
     let off_8x8 = (rp_base + rf.rp_stride * off_y_8x8 + off_x_8x8) as usize;
-    let (ref0, ref1) = (r#ref.r0(), r#ref.r1());
+    let (ref0, ref1) = (reference.r0(), reference.r1());
 
     if ref1 == -1 {
         let num = 1 + (ref0 >= 0) as usize;
         for n in 0..num {
-            let b_ref_n = b.r#ref.ref_at(n);
+            let b_ref_n = b.reference.ref_at(n);
             if b_ref_n == ref0 {
                 let cand_mv = if b.mf & 1 != 0 && gmv[0].y() != INVALID_MV {
                     gmv[0]
@@ -1382,7 +1391,8 @@ pub(crate) fn add_spatial_candidate(
                     &mut st.iter_cntr,
                     16,
                 );
-            } else if b.r#ref.ref_at(0) == TIP_FRAME as i8 && rf.tip.r#ref.ref_at(n) == ref0 {
+            } else if b.reference.ref_at(0) == TIP_FRAME as i8 && rf.tip.reference.ref_at(n) == ref0
+            {
                 let mut tmv = rp_proj[off_8x8].mv;
                 if tmv.y() == INVALID_MV {
                     tmv = Mv::default();
@@ -1405,7 +1415,7 @@ pub(crate) fn add_spatial_candidate(
                     &mut st.iter_cntr,
                     16,
                 );
-            } else if ref0 == TIP_FRAME as i8 && b.r#ref.pair() == rf.tip.r#ref.pair() {
+            } else if ref0 == TIP_FRAME as i8 && b.reference.pair() == rf.tip.reference.pair() {
                 let in_delta = Mv {
                     c: MvXY {
                         y: b.mv[0].y() - b.mv[1].y(),
@@ -1434,17 +1444,17 @@ pub(crate) fn add_spatial_candidate(
             } else if seq_hdr.mv_traj
                 && frm_hdr.use_ref_frame_mvs != 0
                 && (ref0 as usize) < TIP_FRAME
-                && (b.r#ref.ref_at(0) == TIP_FRAME as i8
-                    || (b.r#ref.ref_at(n) as usize) < TIP_FRAME)
+                && (b.reference.ref_at(0) == TIP_FRAME as i8
+                    || (b.reference.ref_at(n) as usize) < TIP_FRAME)
                 && rp_traj[ref0 as usize].len() > st.b8x8 as usize
                 && rp_traj[ref0 as usize][st.b8x8 as usize].y() != INVALID_MV
                 && {
                     // condition (refmvs.c:260-262); when it fails the whole
                     // mvtj arm is skipped so the lnr-spc arm below is reached.
-                    let src_ref = if b.r#ref.ref_at(0) == TIP_FRAME as i8 {
-                        (rf.tip.r#ref.ref_at(n)) as usize
+                    let src_ref = if b.reference.ref_at(0) == TIP_FRAME as i8 {
+                        (rf.tip.reference.ref_at(n)) as usize
                     } else {
-                        (b.r#ref.ref_at(n)) as usize
+                        (b.reference.ref_at(n)) as usize
                     };
                     src_ref < rp_traj.len()
                         && rp_traj[src_ref].len() > st.b8x8 as usize
@@ -1452,8 +1462,8 @@ pub(crate) fn add_spatial_candidate(
                 }
             {
                 let (a_mv, b_mv);
-                if b.r#ref.ref_at(0) == TIP_FRAME as i8 {
-                    a_mv = rp_traj[rf.tip.r#ref.ref_at(n) as usize][st.b8x8 as usize];
+                if b.reference.ref_at(0) == TIP_FRAME as i8 {
+                    a_mv = rp_traj[rf.tip.reference.ref_at(n) as usize][st.b8x8 as usize];
                     let mut tmv = rp_proj[off_8x8].mv;
                     if tmv.y() == INVALID_MV {
                         tmv = Mv::default();
@@ -1466,7 +1476,7 @@ pub(crate) fn add_spatial_candidate(
                         },
                     };
                 } else {
-                    a_mv = rp_traj[b.r#ref.ref_at(n) as usize][st.b8x8 as usize];
+                    a_mv = rp_traj[b.reference.ref_at(n) as usize][st.b8x8 as usize];
                     b_mv = b.mv[n];
                 }
                 let c_mv = rp_traj[ref0 as usize][st.b8x8 as usize];
@@ -1487,14 +1497,14 @@ pub(crate) fn add_spatial_candidate(
                     &mut st.drvd_iter_cntr,
                     2,
                 );
-            } else if (ref0 as usize) < TIP_FRAME && b.r#ref.ref_at(0) >= 0 {
-                let src_ref = if b.r#ref.ref_at(0) == TIP_FRAME as i8 {
-                    (rf.tip.r#ref.ref_at(n)) as usize
+            } else if (ref0 as usize) < TIP_FRAME && b.reference.ref_at(0) >= 0 {
+                let src_ref = if b.reference.ref_at(0) == TIP_FRAME as i8 {
+                    (rf.tip.reference.ref_at(n)) as usize
                 } else {
-                    (b.r#ref.ref_at(n)) as usize
+                    (b.reference.ref_at(n)) as usize
                 };
                 if rf.ref_sign[ref0 as usize] == rf.ref_sign[src_ref] {
-                    let (cand_mv_in, den) = if b.r#ref.ref_at(0) == TIP_FRAME as i8 {
+                    let (cand_mv_in, den) = if b.reference.ref_at(0) == TIP_FRAME as i8 {
                         let mut tmv = rp_proj[off_8x8].mv;
                         if tmv.y() == INVALID_MV {
                             tmv = Mv::default();
@@ -1507,10 +1517,10 @@ pub(crate) fn add_spatial_candidate(
                                     x: iclip(tipmv.x() + b.mv[0].x(), -0xffff, 0xffff),
                                 },
                             },
-                            rf.abspocdiff[rf.tip.r#ref.ref_at(n) as usize],
+                            rf.abspocdiff[rf.tip.reference.ref_at(n) as usize],
                         )
                     } else {
-                        (b.mv[n], rf.abspocdiff[b.r#ref.ref_at(n) as usize])
+                        (b.mv[n], rf.abspocdiff[b.reference.ref_at(n) as usize])
                     };
                     let cand_mv = mv_projection(
                         cand_mv_in,
@@ -1532,11 +1542,13 @@ pub(crate) fn add_spatial_candidate(
                     );
                 }
             }
-            if b.r#ref.ref_at(1) < 0 && b.r#ref.ref_at(0) != TIP_FRAME as i8 {
+            if b.reference.ref_at(1) < 0 && b.reference.ref_at(0) != TIP_FRAME as i8 {
                 break;
             }
         }
-    } else if b.r#ref.ref_at(0) == TIP_FRAME as i8 && r#ref.pair() == rf.tip.r#ref.pair() {
+    } else if b.reference.ref_at(0) == TIP_FRAME as i8
+        && reference.pair() == rf.tip.reference.pair()
+    {
         let mut tmv = rp_proj[off_8x8].mv;
         if tmv.y() == INVALID_MV {
             tmv = Mv::default();
@@ -1558,7 +1570,7 @@ pub(crate) fn add_spatial_candidate(
             },
         ];
         add_candidate_comp(mvstack, cnt, 6, weight, 8, &cand_mv, &mut st.iter_cntr, 16);
-    } else if b.r#ref.pair() == r#ref.pair() {
+    } else if b.reference.pair() == reference.pair() {
         let cand_mv = [
             if b.mf & 1 != 0 && gmv[0].y() != INVALID_MV {
                 gmv[0]
@@ -1584,7 +1596,7 @@ pub(crate) fn add_spatial_candidate(
     } else {
         if seq_hdr.mv_traj
             && frm_hdr.use_ref_frame_mvs != 0
-            && b.r#ref.ref_at(0) != TIP_FRAME as i8
+            && b.reference.ref_at(0) != TIP_FRAME as i8
             && ref0 != ref1
             && rp_traj[ref0 as usize].len() > st.b8x8 as usize
             && rp_traj[ref1 as usize].len() > st.b8x8 as usize
@@ -1594,10 +1606,10 @@ pub(crate) fn add_spatial_candidate(
             let b1_mv = rp_traj[ref0 as usize][st.b8x8 as usize];
             let b2_mv = rp_traj[ref1 as usize][st.b8x8 as usize];
             for n in 0..2 {
-                if b.r#ref.ref_at(n) < 0 {
+                if b.reference.ref_at(n) < 0 {
                     break;
                 }
-                let br = (b.r#ref.ref_at(n)) as usize;
+                let br = (b.reference.ref_at(n)) as usize;
                 if rp_traj[br].len() <= st.b8x8 as usize {
                     continue;
                 }
@@ -1633,15 +1645,15 @@ pub(crate) fn add_spatial_candidate(
         }
 
         let mut ns = 1i32;
-        if ref0 == b.r#ref.ref_at(0) || ref0 == b.r#ref.ref_at(1) {
+        if ref0 == b.reference.ref_at(0) || ref0 == b.reference.ref_at(1) {
             ns = 0;
-        } else if ref1 != b.r#ref.ref_at(0) && ref1 != b.r#ref.ref_at(1) {
+        } else if ref1 != b.reference.ref_at(0) && ref1 != b.reference.ref_at(1) {
             return;
         }
-        let nc = (r#ref.ref_at(ns as usize) != b.r#ref.ref_at(0)) as usize;
+        let nc = (reference.ref_at(ns as usize) != b.reference.ref_at(0)) as usize;
         let mut oidx = 0;
         while oidx < st.sngl_cnt as usize {
-            if r#ref.ref_at(1 - ns as usize) == st.sngl[oidx].r#ref as i8 {
+            if reference.ref_at(1 - ns as usize) == st.sngl[oidx].reference as i8 {
                 break;
             }
             oidx += 1;
@@ -1670,7 +1682,7 @@ pub(crate) fn add_spatial_candidate(
             &mut st.sngl,
             &mut st.sngl_cnt,
             4,
-            (b.r#ref.ref_at(nc)) as u8,
+            (b.reference.ref_at(nc)) as u8,
             cand_mv,
             &mut st.sngl_iter_cntr,
             2,
@@ -1689,7 +1701,7 @@ pub(crate) fn refmvs_find(
     mut warp: Option<&mut [[i32; 7]]>,
     cnt: &mut i32,
     warp_cnt: &mut i32,
-    r#ref: RefPair,
+    reference: RefPair,
     bs: u8,
     skip_mode: bool,
     by4: i32,
@@ -1706,7 +1718,7 @@ pub(crate) fn refmvs_find(
     let bh4 = b_dim[1] as i32;
     let w4 = imin(bw4, rt.tile_col.end - bx4);
     let h4 = imin(bh4, rt.tile_row.end - by4);
-    let (ref0, ref1) = (r#ref.r0(), r#ref.r1());
+    let (ref0, ref1) = (reference.r0(), reference.r1());
     let comp = ref1 >= 0;
 
     *cnt = 0;
@@ -1718,7 +1730,7 @@ pub(crate) fn refmvs_find(
         ($b:expr) => {
             if let Some(ref mut w) = warp {
                 if $b.mf & 2 != 0
-                    && $b.r#ref.ref_at(0) == ref0
+                    && $b.reference.ref_at(0) == ref0
                     && $b.warp_type != WarpedMotionType::Invalid as i8
                 {
                     let wc = *warp_cnt as usize;
@@ -1732,7 +1744,7 @@ pub(crate) fn refmvs_find(
             if let Some(ref mut w) = warp {
                 if *warp_cnt < 4
                     && $b.mf & 2 != 0
-                    && $b.r#ref.ref_at(0) == ref0
+                    && $b.reference.ref_at(0) == ref0
                     && $b.warp_type != WarpedMotionType::Invalid as i8
                 {
                     let wc = *warp_cnt as usize;
@@ -1744,7 +1756,7 @@ pub(crate) fn refmvs_find(
         };
         ($b:expr, limited_no_type) => {
             if let Some(ref mut w) = warp {
-                if *warp_cnt < 4 && $b.mf & 2 != 0 && $b.r#ref.ref_at(0) == ref0 {
+                if *warp_cnt < 4 && $b.mf & 2 != 0 && $b.reference.ref_at(0) == ref0 {
                     let wc = *warp_cnt as usize;
                     w[wc][..6].copy_from_slice(&$b.m);
                     w[wc][6] = $b.warp_type as i32;
@@ -1861,11 +1873,11 @@ pub(crate) fn refmvs_find(
     if warp.is_some() {
         if let Some(bml_b) = bml {
             let bl_ref_cond = {
-                let bl_ref_idx = (bml_b.r#ref.ref_at(0) != ref0) as usize;
-                bl_ref_idx == 0 || (bml_b.r#ref.ref_at(1) == ref0 && bml_b.mf & 2 == 0)
+                let bl_ref_idx = (bml_b.reference.ref_at(0) != ref0) as usize;
+                bl_ref_idx == 0 || (bml_b.reference.ref_at(1) == ref0 && bml_b.mf & 2 == 0)
             };
             if bl_ref_cond {
-                let bl_ref_idx = (bml_b.r#ref.ref_at(0) != ref0) as usize;
+                let bl_ref_idx = (bml_b.reference.ref_at(0) != ref0) as usize;
                 let bl_mv = if bml_b.mf & 2 == 0 {
                     bml_b.mv[bl_ref_idx]
                 } else {
@@ -1882,12 +1894,12 @@ pub(crate) fn refmvs_find(
                 };
                 if let Some(tl_b) = tl {
                     if let Some(rmt_b) = rmt {
-                        let tl_ref_idx = (tl_b.r#ref.ref_at(0) != ref0) as usize;
-                        let tr_ref_idx = (rmt_b.r#ref.ref_at(0) != ref0) as usize;
-                        let cond_tl =
-                            tl_ref_idx == 0 || (tl_b.r#ref.ref_at(1) == ref0 && tl_b.mf & 2 == 0);
-                        let cond_tr =
-                            tr_ref_idx == 0 || (rmt_b.r#ref.ref_at(1) == ref0 && rmt_b.mf & 2 == 0);
+                        let tl_ref_idx = (tl_b.reference.ref_at(0) != ref0) as usize;
+                        let tr_ref_idx = (rmt_b.reference.ref_at(0) != ref0) as usize;
+                        let cond_tl = tl_ref_idx == 0
+                            || (tl_b.reference.ref_at(1) == ref0 && tl_b.mf & 2 == 0);
+                        let cond_tr = tr_ref_idx == 0
+                            || (rmt_b.reference.ref_at(1) == ref0 && rmt_b.mf & 2 == 0);
                         if cond_tl && cond_tr {
                             let tl_mv = if tl_b.mf & 2 == 0 {
                                 tl_b.mv[tl_ref_idx]
@@ -1938,12 +1950,12 @@ pub(crate) fn refmvs_find(
                 if *warp_cnt == 0 {
                     if let Some(lmt_b) = lmt {
                         if let Some(tr_b) = tr {
-                            let tl_ref_idx = (lmt_b.r#ref.ref_at(0) != ref0) as usize;
-                            let tr_ref_idx = (tr_b.r#ref.ref_at(0) != ref0) as usize;
+                            let tl_ref_idx = (lmt_b.reference.ref_at(0) != ref0) as usize;
+                            let tr_ref_idx = (tr_b.reference.ref_at(0) != ref0) as usize;
                             let cond_tl = tl_ref_idx == 0
-                                || (lmt_b.r#ref.ref_at(1) == ref0 && lmt_b.mf & 2 == 0);
+                                || (lmt_b.reference.ref_at(1) == ref0 && lmt_b.mf & 2 == 0);
                             let cond_tr = tr_ref_idx == 0
-                                || (tr_b.r#ref.ref_at(1) == ref0 && tr_b.mf & 2 == 0);
+                                || (tr_b.reference.ref_at(1) == ref0 && tr_b.mf & 2 == 0);
                             if cond_tl && cond_tr {
                                 let tl_mv = if lmt_b.mf & 2 == 0 {
                                     lmt_b.mv[tl_ref_idx]
@@ -2024,7 +2036,7 @@ pub(crate) fn refmvs_find(
             bml_b,
             bms_8x8y,
             left_8x8x,
-            r#ref,
+            reference,
             &gmv,
             seq_hdr,
             frm_hdr,
@@ -2054,7 +2066,7 @@ pub(crate) fn refmvs_find(
             rmt_b,
             top_8x8y,
             ((bx4 + xpos) >> 1) as isize,
-            r#ref,
+            reference,
             &gmv,
             seq_hdr,
             frm_hdr,
@@ -2071,7 +2083,7 @@ pub(crate) fn refmvs_find(
         add_matrix!(tml_b);
         add_spatial_candidate(
             0, -1, rf, rp_proj, rp_base, rp_traj, &mut st, mvstack, cnt, 1, tml_b, tms_8x8y,
-            left_8x8x, r#ref, &gmv, seq_hdr, frm_hdr,
+            left_8x8x, reference, &gmv, seq_hdr, frm_hdr,
         );
     }
 
@@ -2093,7 +2105,7 @@ pub(crate) fn refmvs_find(
             lmt_b,
             top_8x8y,
             ((bx4 + xpos) >> 1) as isize,
-            r#ref,
+            reference,
             &gmv,
             seq_hdr,
             frm_hdr,
@@ -2118,7 +2130,7 @@ pub(crate) fn refmvs_find(
             bl,
             (((by4 + bh4) & (rf.sbsz - 1)) >> 1) as isize,
             left_8x8x,
-            r#ref,
+            reference,
             &gmv,
             seq_hdr,
             frm_hdr,
@@ -2143,7 +2155,7 @@ pub(crate) fn refmvs_find(
             tr_b,
             top_8x8y,
             ((bx4 + xpos) >> 1) as isize,
-            r#ref,
+            reference,
             &gmv,
             seq_hdr,
             frm_hdr,
@@ -2170,7 +2182,7 @@ pub(crate) fn refmvs_find(
                 cnt,
                 ((((by4 + ty_off) & (rf.sbsz - 1)) >> 1) as isize) * stride
                     + ((bx4 + tx_off) >> 1) as isize,
-                r#ref,
+                reference,
                 seq_hdr.mv_traj,
             );
         if !first && (bw4 > 4 || bh4 > 4) {
@@ -2184,7 +2196,7 @@ pub(crate) fn refmvs_find(
                 cnt,
                 ((((by4 + bh8) & (rf.sbsz - 1)) >> 1) as isize) * stride
                     + ((bx4 + bw8) >> 1) as isize,
-                r#ref,
+                reference,
                 seq_hdr.mv_traj,
             );
         }
@@ -2208,7 +2220,7 @@ pub(crate) fn refmvs_find(
             tl_b,
             top_8x8y,
             ((bx4 + xpos) >> 1) as isize,
-            r#ref,
+            reference,
             &gmv,
             seq_hdr,
             frm_hdr,
@@ -2243,7 +2255,7 @@ pub(crate) fn refmvs_find(
                             ext_bml,
                             bms_8x8y,
                             ((bx4 - adj) >> 1) as isize,
-                            r#ref,
+                            reference,
                             &gmv,
                             seq_hdr,
                             frm_hdr,
@@ -2273,7 +2285,7 @@ pub(crate) fn refmvs_find(
                             ext_tml,
                             tms_8x8y,
                             ((bx4 - adj) >> 1) as isize,
-                            r#ref,
+                            reference,
                             &gmv,
                             seq_hdr,
                             frm_hdr,
@@ -2332,7 +2344,7 @@ pub(crate) fn refmvs_find(
                 break;
             }
             let bank_idx = (start - n) & 3;
-            if c == 8 && rt.bank.r#ref[bank_idx].pair() != r#ref.pair() {
+            if c == 8 && rt.bank.reference[bank_idx].pair() != reference.pair() {
                 continue;
             }
             let mv = &rt.bank.mv[c][bank_idx];
@@ -2940,7 +2952,7 @@ pub(crate) fn load_tmvs(
             continue;
         }
 
-        let mfmv_ref = rf.mfmv[n].r#ref as usize;
+        let mfmv_ref = rf.mfmv[n].reference as usize;
         let tgt = rf.mfmv[n].tgt;
         let ref_sign = rf.mfmv[n].dir as usize;
 
@@ -2957,7 +2969,7 @@ pub(crate) fn load_tmvs(
             for x in (col_start8i..col_end8i).step_by(tmvp_sample_step as usize) {
                 let pos = (y as usize & (sbsz8 as usize - 1)) * stride as usize + x as usize;
                 let r_idx = row_start8 as usize * stride as usize + pos;
-                let b_ref = rf.rp_ref[mfmv_ref][r_idx].r#ref.ref_at(ref_sign);
+                let b_ref = rf.rp_ref[mfmv_ref][r_idx].reference.ref_at(ref_sign);
                 if b_ref == -1 {
                     continue;
                 }
@@ -3033,7 +3045,7 @@ pub(crate) fn load_tmvs(
                 if rf.rp_proj[pp + pos1].mv.y() != INVALID_MV
                     && (tgt == -1
                         || ref2idx != tgt
-                        || rf.rp_proj[pp + pos1].r#ref == ref2ref.unsigned_abs())
+                        || rf.rp_proj[pp + pos1].reference == ref2ref.unsigned_abs())
                 {
                     continue;
                 }
@@ -3087,7 +3099,7 @@ pub(crate) fn load_tmvs(
                     final_mv = Mv::from_xy(-final_mv.y(), -final_mv.x());
                 }
                 rf.rp_proj[pp + pos1].mv = final_mv;
-                rf.rp_proj[pp + pos1].r#ref = ref2ref.unsigned_abs();
+                rf.rp_proj[pp + pos1].reference = ref2ref.unsigned_abs();
             }
         }
     }
@@ -3283,9 +3295,9 @@ pub(crate) fn init_frame(
     rf.ref_flip = flipmask;
 
     // tip setup
-    rf.tip.r#ref = RefPair::from_refs(frm_hdr.tip.r#ref[0], frm_hdr.tip.r#ref[1]);
+    rf.tip.reference = RefPair::from_refs(frm_hdr.tip.reference[0], frm_hdr.tip.reference[1]);
     if frm_hdr.tip.frame_mode != 0 {
-        let tip_ref = rf.tip.r#ref.refs();
+        let tip_ref = rf.tip.reference.refs();
         let tip0poc = ref_poc[tip_ref[0] as usize] as i32;
         let tip1poc = ref_poc[tip_ref[1] as usize] as i32;
         let d2 = get_poc_diff(nbits, tip1poc, tip0poc);
@@ -3344,10 +3356,10 @@ pub(crate) fn init_frame(
             }
 
             if seq_hdr.tip
-                && (rf.ref_sign[rf.tip.r#ref.ref_at(0) as usize] != 0
-                    || rf.ref_sign[rf.tip.r#ref.ref_at(1) as usize] != 0)
+                && (rf.ref_sign[rf.tip.reference.ref_at(0) as usize] != 0
+                    || rf.ref_sign[rf.tip.reference.ref_at(1) as usize] != 0)
             {
-                let tip_ref = rf.tip.r#ref.refs();
+                let tip_ref = rf.tip.reference.refs();
                 let o = (rev_topo_order[tip_ref[0] as usize] > rev_topo_order[tip_ref[1] as usize])
                     as usize;
                 let dir = (get_poc_diff(
@@ -3357,7 +3369,7 @@ pub(crate) fn init_frame(
                 ) < 0) as u8;
                 let n_mfmvs = rf.n_mfmvs as usize;
                 rf.mfmv[n_mfmvs] = MfmvRef {
-                    r#ref: tip_ref[1 - o] as u8,
+                    reference: tip_ref[1 - o] as u8,
                     tgt: tip_ref[o],
                     dir,
                 };
@@ -3398,7 +3410,7 @@ pub(crate) fn init_frame(
                     debug_assert!(ref1 >= 0);
                     let nm = rf.n_mfmvs as usize;
                     rf.mfmv[nm] = MfmvRef {
-                        r#ref: ref1 as u8,
+                        reference: ref1 as u8,
                         tgt: -1,
                         dir: 1,
                     };
@@ -3411,7 +3423,7 @@ pub(crate) fn init_frame(
                 if ref2 >= 0 && ref_done[ref2 as usize][0] == 0 {
                     let nm = rf.n_mfmvs as usize;
                     rf.mfmv[nm] = MfmvRef {
-                        r#ref: ref2 as u8,
+                        reference: ref2 as u8,
                         tgt: -1,
                         dir: 0,
                     };
@@ -3424,7 +3436,7 @@ pub(crate) fn init_frame(
                 if ord == 0 && ref1 >= 0 && ref_done[ref1 as usize][1] == 0 {
                     let nm = rf.n_mfmvs as usize;
                     rf.mfmv[nm] = MfmvRef {
-                        r#ref: ref1 as u8,
+                        reference: ref1 as u8,
                         tgt: -1,
                         dir: 1,
                     };
@@ -3441,7 +3453,7 @@ pub(crate) fn init_frame(
                 if ref_done[r][0] == 0 {
                     let nm = rf.n_mfmvs as usize;
                     rf.mfmv[nm] = MfmvRef {
-                        r#ref: r as u8,
+                        reference: r as u8,
                         tgt: -1,
                         dir: 0,
                     };
@@ -3453,7 +3465,7 @@ pub(crate) fn init_frame(
                     if ref_done[r2][0] == 0 {
                         let nm = rf.n_mfmvs as usize;
                         rf.mfmv[nm] = MfmvRef {
-                            r#ref: r2 as u8,
+                            reference: r2 as u8,
                             tgt: -1,
                             dir: 0,
                         };
@@ -3471,7 +3483,7 @@ pub(crate) fn init_frame(
                 if ref_done[r][dir] == 0 {
                     let nm = rf.n_mfmvs as usize;
                     rf.mfmv[nm] = MfmvRef {
-                        r#ref: r as u8,
+                        reference: r as u8,
                         tgt: -1,
                         dir: dir as u8,
                     };
@@ -3484,7 +3496,7 @@ pub(crate) fn init_frame(
                 if ref_done[r][1 - dir] == 0 {
                     let nm = rf.n_mfmvs as usize;
                     rf.mfmv[nm] = MfmvRef {
-                        r#ref: r as u8,
+                        reference: r as u8,
                         tgt: -1,
                         dir: (1 - dir) as u8,
                     };
@@ -3503,14 +3515,14 @@ pub(crate) fn init_frame(
             }
 
             for n in 0..rf.n_mfmvs as usize {
-                let rpoc = ref_poc[rf.mfmv[n].r#ref as usize] as i32;
+                let rpoc = ref_poc[rf.mfmv[n].reference as usize] as i32;
                 let diff1 = get_poc_diff(nbits, rpoc, frm_hdr.frame_offset as i32);
                 if diff1.abs() > 31 {
                     rf.mfmv_ref2cur[n] = INVALID_REF2CUR;
                 } else {
                     rf.mfmv_ref2cur[n] = diff1 as i8;
                     for m in 0..7 {
-                        let rrpoc = ref_ref_poc[rf.mfmv[n].r#ref as usize][m] as i32;
+                        let rrpoc = ref_ref_poc[rf.mfmv[n].reference as usize][m] as i32;
                         let diff2 = get_poc_diff(nbits, rpoc, rrpoc);
                         rf.mfmv_ref2ref[n][m] = if ((diff2 + 31) as u32) < 63 {
                             diff2 as i8
@@ -3596,7 +3608,7 @@ pub(crate) fn reset_sb(
         for x in x_start..x_start + sbsz as usize {
             let idx = y * 128 + x;
             rt.r[idx].mv[0] = Mv::from_xy(INVALID_MV, 0);
-            rt.r[idx].r#ref = RefPair::from_pair(-1);
+            rt.r[idx].reference = RefPair::from_pair(-1);
         }
     }
 
@@ -3626,7 +3638,7 @@ pub(crate) fn reset_sb(
         let sz4 = crate::tables::BLOCK_DIMENSIONS[r.bs as usize][0] as i32;
         if r.mv[0].y() != INVALID_MV {
             if refmv_bank {
-                let rp = r.r#ref;
+                let rp = r.reference;
                 let mvs = if r.mf & 2 != 0 { &r.lmv } else { &r.mv };
                 mv_bank_add_inner(bank, rp, mvs, r.mf >> 2);
             }
@@ -3637,7 +3649,7 @@ pub(crate) fn reset_sb(
                     ..WarpedMotionParams::default()
                 };
                 if wmp.wm_type != WarpedMotionType::Invalid {
-                    warp_bank_add(warp, &wmp, r.r#ref.ref_at(0) as usize);
+                    warp_bank_add(warp, &wmp, r.reference.ref_at(0) as usize);
                 }
             }
             hits += 1;
@@ -3724,10 +3736,10 @@ pub(crate) fn splat_warpmv_scalar(
                 let ti = t_off + (x >> 1) as usize;
                 let n = t_src.mv.packed();
                 td[ti].mv = TemporalBlockMv::from_packed(n);
-                td[ti].r#ref = RefPair::from_pair(if n == INVALID_TRAJ as u32 * 0x10001 {
+                td[ti].reference = RefPair::from_pair(if n == INVALID_TRAJ as u32 * 0x10001 {
                     -1
                 } else {
-                    t_src.r#ref.pair()
+                    t_src.reference.pair()
                 });
             }
             mvxi += (mat.matrix[2] as i64 - 0x10000) * 8;
@@ -3833,14 +3845,16 @@ pub(crate) fn splat_comp_warpmv(
                 let mv1n = t_src.mv.mv_at(1).packed();
                 if mv0n == INVALID_TRAJ {
                     if mv1n == INVALID_TRAJ {
-                        td[ti].r#ref = RefPair::from_pair(-1);
+                        td[ti].reference = RefPair::from_pair(-1);
                     } else {
                         td[ti].mv = TemporalBlockMv::from_packed(mv1n as u32 * 0x10001);
-                        td[ti].r#ref = RefPair::from_pair((t_src.r#ref.r1() as u8 as i16) * 0x101);
+                        td[ti].reference =
+                            RefPair::from_pair((t_src.reference.r1() as u8 as i16) * 0x101);
                     }
                 } else if mv1n == INVALID_TRAJ {
                     td[ti].mv = TemporalBlockMv::from_packed(mv0n as u32 * 0x10001);
-                    td[ti].r#ref = RefPair::from_pair((t_src.r#ref.r0() as u8 as i16) * 0x101);
+                    td[ti].reference =
+                        RefPair::from_pair((t_src.reference.r0() as u8 as i16) * 0x101);
                 } else {
                     td[ti] = *t_src;
                 }

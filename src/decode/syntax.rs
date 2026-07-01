@@ -1175,7 +1175,7 @@ pub(crate) fn derive_warpmv(
             let bd = &BLOCK_DIMENSIONS[rp.bs as usize];
             let rmv = if rp.mf & 2 != 0 { &rp.lmv } else { &rp.mv };
             for n in 0..2usize {
-                if rp.r#ref.ref_at(n) != ref_idx {
+                if rp.reference.ref_at(n) != ref_idx {
                     continue;
                 }
                 pts[np][0][0] = 16 * (2 * ($dx as i32) + ($sx as i32) * bd[0] as i32) - 8;
@@ -1333,7 +1333,7 @@ pub(crate) fn extend_warpmv(
         m.copy_from_slice(gmv_matrix);
     } else {
         m[2..6].copy_from_slice(&DEFAULT_WM_PARAMS.matrix[2..6]);
-        let ref_n = (r.r#ref.ref_at(0) != ref0) as usize;
+        let ref_n = (r.reference.ref_at(0) != ref0) as usize;
         m[0] = r.mv[ref_n].x() * (1 << 13);
         m[1] = r.mv[ref_n].y() * (1 << 13);
     }

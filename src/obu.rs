@@ -1069,11 +1069,11 @@ pub fn parse_frame_hdr(
             } else {
                 let tip_ref0 = *hdr
                     .refidx
-                    .get(hdr.tip.r#ref[0] as usize)
+                    .get(hdr.tip.reference[0] as usize)
                     .ok_or(TealdustError::InvalidFrameHeader)?;
                 let tip_ref1 = *hdr
                     .refidx
-                    .get(hdr.tip.r#ref[1] as usize)
+                    .get(hdr.tip.reference[1] as usize)
                     .ok_or(TealdustError::InvalidFrameHeader)?;
                 let ref1hdr = ref_slot(refs, tip_ref0 as i32)?
                     .p
@@ -1442,15 +1442,15 @@ pub fn parse_frame_hdr(
                             pd.temporal = gb.get_bit() as u8;
                         }
                         if pd.temporal != 0 {
-                            let mut r#ref = 0u8;
+                            let mut reference = 0u8;
                             if n_bits_ref > 0 {
-                                r#ref = gb.get_bits(n_bits_ref) as u8;
-                                pd.refidx = r#ref;
-                                if r#ref >= hdr.n_ref_frames {
+                                reference = gb.get_bits(n_bits_ref) as u8;
+                                pd.refidx = reference;
+                                if reference >= hdr.n_ref_frames {
                                     return Err(TealdustError::InvalidFrameHeader);
                                 }
                             }
-                            let refhdr = ref_slot(refs, hdr.refidx[r#ref as usize] as i32)?
+                            let refhdr = ref_slot(refs, hdr.refidx[reference as usize] as i32)?
                                 .p
                                 .frame_hdr
                                 .as_ref()
@@ -1703,15 +1703,15 @@ pub fn parse_frame_hdr(
                         hdr.ccso.p[p].reuse = gb.get_bit() as u8;
                         hdr.ccso.p[p].sb_reuse = gb.get_bit() as u8;
                         if hdr.ccso.p[p].reuse != 0 || hdr.ccso.p[p].sb_reuse != 0 {
-                            let mut r#ref = 0u8;
+                            let mut reference = 0u8;
                             if n_bits_ref > 0 {
-                                r#ref = gb.get_bits(n_bits_ref) as u8;
-                                hdr.ccso.p[p].refidx = r#ref;
-                                if r#ref >= hdr.n_ref_frames {
+                                reference = gb.get_bits(n_bits_ref) as u8;
+                                hdr.ccso.p[p].refidx = reference;
+                                if reference >= hdr.n_ref_frames {
                                     return Err(TealdustError::InvalidFrameHeader);
                                 }
                             }
-                            let refhdr = ref_slot(refs, hdr.refidx[r#ref as usize] as i32)?
+                            let refhdr = ref_slot(refs, hdr.refidx[reference as usize] as i32)?
                                 .p
                                 .frame_hdr
                                 .as_ref()
@@ -1822,15 +1822,15 @@ pub fn parse_frame_hdr(
             if hdr.n_ref_frames == 0 {
                 return Err(TealdustError::InvalidFrameHeader);
             }
-            hdr.gmv.r#ref = gb.get_uniform(hdr.n_ref_frames as u32 + 1) as u8;
+            hdr.gmv.reference = gb.get_uniform(hdr.n_ref_frames as u32 + 1) as u8;
             let (ref_base_mat, in_dist);
-            if hdr.gmv.r#ref == hdr.n_ref_frames {
+            if hdr.gmv.reference == hdr.n_ref_frames {
                 ref_base_mat = DEFAULT_WM_PARAMS.matrix;
                 in_dist = 1;
             } else {
                 let refidx = *hdr
                     .refidx
-                    .get(hdr.gmv.r#ref as usize)
+                    .get(hdr.gmv.reference as usize)
                     .ok_or(TealdustError::InvalidFrameHeader)?;
                 let refhdr = ref_slot(refs, refidx as i32)?
                     .p
@@ -2491,8 +2491,8 @@ pub fn find_tip_ref_frames(
     // n_refs >= 2 is required to pick two TIP references; the index arithmetic
     // below underflows for 0 and is degenerate for 1.
     if n_refs < 2 {
-        hdr.tip.r#ref[0] = 0;
-        hdr.tip.r#ref[1] = 0;
+        hdr.tip.reference[0] = 0;
+        hdr.tip.reference[1] = 0;
         return Ok(());
     }
 
@@ -2523,14 +2523,14 @@ pub fn find_tip_ref_frames(
     }
 
     if n_past == n_refs {
-        hdr.tip.r#ref[0] = order[n_refs - 1] as i8;
-        hdr.tip.r#ref[1] = order[n_refs - 2] as i8;
+        hdr.tip.reference[0] = order[n_refs - 1] as i8;
+        hdr.tip.reference[1] = order[n_refs - 2] as i8;
     } else if n_past == 0 {
-        hdr.tip.r#ref[0] = order[0] as i8;
-        hdr.tip.r#ref[1] = order[1] as i8;
+        hdr.tip.reference[0] = order[0] as i8;
+        hdr.tip.reference[1] = order[1] as i8;
     } else {
-        hdr.tip.r#ref[0] = order[n_past - 1] as i8;
-        hdr.tip.r#ref[1] = order[n_past] as i8;
+        hdr.tip.reference[0] = order[n_past - 1] as i8;
+        hdr.tip.reference[1] = order[n_past] as i8;
     }
     Ok(())
 }

@@ -193,10 +193,10 @@ pub(crate) fn splat_warpmv_neon(
                 let ti = yp * t_stride + xp;
                 let n = t_src.mv.packed();
                 td[ti].mv = TemporalBlockMv::from_packed(n);
-                td[ti].r#ref = RefPair::from_pair(if n == INVALID_TRAJ as u32 * 0x10001 {
+                td[ti].reference = RefPair::from_pair(if n == INVALID_TRAJ as u32 * 0x10001 {
                     -1
                 } else {
-                    t_src.r#ref.pair()
+                    t_src.reference.pair()
                 });
             }
 
