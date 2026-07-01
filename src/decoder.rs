@@ -369,7 +369,6 @@ impl Decoder {
         Ok(pic)
     }
 
-    ///
     /// Frames coded with `show_implicit` are not displayed at decode time; they
     /// are held in the reference store and emitted in display order once the
     /// stream drains. This re-queues each such reference whose POC is later than

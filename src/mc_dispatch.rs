@@ -978,8 +978,6 @@ pub(crate) fn w_mask_8bpc(
     ss_hor: bool,
     ss_ver: bool,
 ) {
-    // 444 (no ss), 422 (h-only), 420 (h+v). (false, true) does not occur in
-    // AV2 chroma layouts; callers must not route that case here.
     crate::mc::w_mask_8bpc(
         dst,
         dst_stride,

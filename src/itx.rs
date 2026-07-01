@@ -28,7 +28,7 @@
  */
 
 use crate::intops::imin;
-use crate::itx_1d::{TX1D_FNS, TX1D_FNS_X8, inv_wht_wht_4x4, residual_add, residual_add_strided};
+use crate::itx_1d::{TX1D_FNS, TX1D_FNS_X8, residual_add, residual_add_strided};
 use crate::itx_2d::{ITX_TMP_PIXELS, ITX_TMP_STRIDE};
 
 // Test-only switch.
@@ -296,15 +296,10 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
 
     if tx_type_low8(txtp) == WHT_WHT {
         assert!(tx == 0);
-        let mut wht_coeff = [0i32; 16];
-        for (dst, &src) in wht_coeff.iter_mut().zip(&coeff[..16]) {
-            *dst = src.to_i32();
-        }
-        let mut tmp = [0i32; 16];
-        inv_wht_wht_4x4(&wht_coeff, &mut tmp);
-        coeff[..16].fill(C::ZERO);
         let dpcm_flag = (txtp >> TX_TYPE_EXT_SHIFT) as u8;
-        residual_add(bd, &mut dst[dst_off..], stride, &tmp, 4, 4, 0, 0, dpcm_flag);
+        crate::itx_wht_dispatch::inv_wht_wht_4x4_dispatch(
+            bd, dst, dst_off, stride, coeff, dpcm_flag,
+        );
         return;
     }
 
@@ -354,9 +349,6 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
     let shift0 = tx_sh[0] as i32;
     let shift1 = tx_sh[1] as i32;
 
-    // Hot square 8bpc DCT16/DCT32 fused paths.  Put the dedicated butterfly
-    // writers before the broad fused dispatchers so the hot DCT_DCT path is
-    // never swallowed by a generic dense route.
     #[cfg(target_arch = "aarch64")]
     if BD::BPC == 8
         && tx_type_low8(txtp) == txtp_kind::DCT_DCT as u32
@@ -436,11 +428,6 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
 
     #[cfg(target_arch = "aarch64")]
     {
-        // Try NEON first for every 8bpc no-extension transform.  The backend
-        // returns false for shapes/kinds that do not have a direct fused ITX
-        // body yet, and add_tmp_to_dst() has an AArch64 NEON writeback safety
-        // net for those fallbacks.  This keeps the fused path at the top of
-        // the 8-bit route instead of silently letting later tmp-based branches
         // win.
         let can_fuse_neon_8bpc = BD::BPC == 8
             && tx_type_has_no_extension(txtp)
@@ -591,10 +578,6 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
 
     #[cfg(all(target_arch = "x86_64", feature = "avx"))]
     {
-        // AVX2 8bpc path owns the complete ITX + final residual add/writeback.
-        // This mirrors the NEON fused route and avoids materializing the final
-        // i32 tmp tile for DCT, ADST, FLIPADST, square, rectangular and
-        // 64-expanded optimized i16 transforms.
         let can_fuse_avx2_8bpc = BD::BPC == 8
             && tx_type_has_no_extension(txtp)
             && tx_type_class(txtp) == 0

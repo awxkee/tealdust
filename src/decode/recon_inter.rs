@@ -410,7 +410,7 @@ where
 
 /// translational MC prediction is written to `dst`, BAWP rescales it by a
 /// per-block linear model `dst = clip((alpha*dst + beta) >> 8)`. The model
-/// `(alpha, beta)` is derived from the reconstructed neighbour template (rows
+/// `(alpha, beta)` is derived from the reconstructed neighbor template (rows
 /// above / columns left of the block) versus the corresponding reference-plane
 /// template. The luma plane derives `(alpha, beta)`; chroma reuses the luma
 /// `alpha`. `plane` is 0 for luma, 1 for U, 2 for V. `bawp_idx` is the parsed
@@ -619,7 +619,7 @@ pub(crate) fn bawp_plane<BD: BitDepth>(
 /// block MV (1/8-pel luma units). Uses the proper separable 8-tap / bilinear
 /// primitives from `mc.rs`. Scaled references (svc.scale != 0) are not handled.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn inter_mc_plane_8bpc<BD: crate::pixel::BitDepth>(
+pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -642,8 +642,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: crate::pixel::BitDepth>(
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
     let h_mul = 4 >> plss_hor;
     let v_mul = 4 >> plss_ver;
-    let ref_stride =
-        ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
+    let ref_stride = ref_pic.stride[(pl != 0) as usize].unsigned_abs() / size_of::<BD::Pixel>();
     let ref_data: (&[BD::Pixel], i32, i32) = match ref_pic.plane_slice::<BD::Pixel>(pl) {
         Some(s) => {
             let pw = if pl == 0 {
@@ -791,11 +790,8 @@ pub(crate) fn inter_mc_plane_8bpc<BD: crate::pixel::BitDepth>(
     }
 }
 
-/// with `dst == NULL`). Mirrors `inter_mc_plane_8bpc` but uses the `prep`
-/// kernels (no final shift to pixels) so the result can be blended by the
-/// compound `avg`/`w_avg`/`mask`/`w_mask` kernels. `tmp` is laid out at stride
 #[allow(clippy::too_many_arguments)]
-fn inter_mc_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
+fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
     bd: BD,
     tmp: &mut [i16],
     ref_pic: &crate::picture::Picture,
@@ -964,7 +960,7 @@ fn inter_mc_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
 /// >= 8px and `wmp.affine`); callers gate on those conditions, falling back to
 /// translational MC otherwise. 8bpc luma + chroma (with subsampling).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn warp_affine_plane_8bpc<BD: crate::pixel::BitDepth>(
+pub(crate) fn warp_affine_plane_8bpc<BD: BitDepth>(
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,

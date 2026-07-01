@@ -37,7 +37,165 @@ fn with_neon_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -> 
     f(&mut scratch[..len])
 }
 
-// Concrete 32x32 DCT kernels. These do not route through DctSimd4/DctWide.
+#[inline]
+#[target_feature(enable = "neon")]
+fn neon_wht4_i32x4(
+    in0: int32x4_t,
+    in1: int32x4_t,
+    in2: int32x4_t,
+    in3: int32x4_t,
+) -> (int32x4_t, int32x4_t, int32x4_t, int32x4_t) {
+    let t0 = vaddq_s32(in0, in1);
+    let t2 = vsubq_s32(in2, in3);
+    let t4 = vshrq_n_s32::<1>(vsubq_s32(t0, t2));
+    let t3 = vsubq_s32(t4, in3);
+    let t1 = vsubq_s32(t4, in1);
+
+    (vsubq_s32(t0, t3), t3, t1, vaddq_s32(t2, t1))
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn neon_transpose4x4_i32(
+    r0: int32x4_t,
+    r1: int32x4_t,
+    r2: int32x4_t,
+    r3: int32x4_t,
+) -> (int32x4_t, int32x4_t, int32x4_t, int32x4_t) {
+    let t01 = vtrnq_s32(r0, r1);
+    let t23 = vtrnq_s32(r2, r3);
+    (
+        vcombine_s32(vget_low_s32(t01.0), vget_low_s32(t23.0)),
+        vcombine_s32(vget_low_s32(t01.1), vget_low_s32(t23.1)),
+        vcombine_s32(vget_high_s32(t01.0), vget_high_s32(t23.0)),
+        vcombine_s32(vget_high_s32(t01.1), vget_high_s32(t23.1)),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn neon_load_u8x4_pair(dst: &[u8], off0: usize, off1: usize) -> uint8x8_t {
+    unsafe {
+        let lanes = vld1_lane_u32::<0>(dst.as_ptr().add(off0).cast::<u32>(), vdup_n_u32(0));
+        vreinterpret_u8_u32(vld1_lane_u32::<1>(
+            dst.as_ptr().add(off1).cast::<u32>(),
+            lanes,
+        ))
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn neon_store_u8x4_pair(dst: &mut [u8], off0: usize, off1: usize, v: uint8x8_t) {
+    let lanes = vreinterpret_u32_u8(v);
+    unsafe {
+        vst1_lane_u32::<0>(dst.as_mut_ptr().add(off0).cast::<u32>(), lanes);
+        vst1_lane_u32::<1>(dst.as_mut_ptr().add(off1).cast::<u32>(), lanes);
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn neon_store_wht_4x4_8bpc(
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+    r0: int32x4_t,
+    r1: int32x4_t,
+    r2: int32x4_t,
+    r3: int32x4_t,
+) {
+    let row0 = dst_off;
+    let row1 = dst_off + stride;
+    let row2 = row1 + stride;
+    let row3 = row2 + stride;
+
+    let d01 = neon_load_u8x4_pair(dst, row0, row1);
+    let d23 = neon_load_u8x4_pair(dst, row2, row3);
+
+    let r01 = vcombine_s16(vqmovn_s32(r0), vqmovn_s32(r1));
+    let r23 = vcombine_s16(vqmovn_s32(r2), vqmovn_s32(r3));
+    let d01 = vreinterpretq_s16_u16(vmovl_u8(d01));
+    let d23 = vreinterpretq_s16_u16(vmovl_u8(d23));
+
+    let out01 = vqmovun_s16(vqaddq_s16(d01, r01));
+    let out23 = vqmovun_s16(vqaddq_s16(d23, r23));
+
+    neon_store_u8x4_pair(dst, row0, row1, out01);
+    neon_store_u8x4_pair(dst, row2, row3, out23);
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn neon_store_wht_row_hbd(dst: &mut [u16], off: usize, residual: int32x4_t, bitdepth_max: i32) {
+    let d = unsafe { vreinterpretq_s32_u32(vmovl_u16(vld1_u16(dst.as_ptr().add(off)))) };
+    let p = vminq_s32(
+        vmaxq_s32(vaddq_s32(d, residual), vdupq_n_s32(0)),
+        vdupq_n_s32(bitdepth_max),
+    );
+    unsafe {
+        vst1_u16(dst.as_mut_ptr().add(off), vqmovun_s32(p));
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+pub(crate) fn inv_wht_wht_4x4_i16_neon_8bpc(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+) {
+    unsafe {
+        debug_assert!(coeff.len() >= 16);
+        let c0 = vshrq_n_s32::<3>(vmovl_s16(vld1_s16(coeff.as_ptr())));
+        let c1 = vshrq_n_s32::<3>(vmovl_s16(vld1_s16(coeff.as_ptr().add(4))));
+        let c2 = vshrq_n_s32::<3>(vmovl_s16(vld1_s16(coeff.as_ptr().add(8))));
+        let c3 = vshrq_n_s32::<3>(vmovl_s16(vld1_s16(coeff.as_ptr().add(12))));
+
+        let (c0, c1, c2, c3) = neon_wht4_i32x4(c0, c1, c2, c3);
+        let (r0, r1, r2, r3) = neon_transpose4x4_i32(c0, c1, c2, c3);
+        let (r0, r1, r2, r3) = neon_wht4_i32x4(r0, r1, r2, r3);
+
+        neon_store_wht_4x4_8bpc(dst, dst_off, stride, r0, r1, r2, r3);
+
+        let z = vdupq_n_s16(0);
+        vst1q_s16(coeff.as_mut_ptr(), z);
+        vst1q_s16(coeff.as_mut_ptr().add(8), z);
+    }
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+pub(crate) fn inv_wht_wht_4x4_i32_neon_hbd(
+    coeff: &mut [i32],
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    bitdepth_max: i32,
+) {
+    unsafe {
+        debug_assert!(coeff.len() >= 16);
+        let c0 = vshrq_n_s32::<3>(vld1q_s32(coeff.as_ptr()));
+        let c1 = vshrq_n_s32::<3>(vld1q_s32(coeff.as_ptr().add(4)));
+        let c2 = vshrq_n_s32::<3>(vld1q_s32(coeff.as_ptr().add(8)));
+        let c3 = vshrq_n_s32::<3>(vld1q_s32(coeff.as_ptr().add(12)));
+
+        let (c0, c1, c2, c3) = neon_wht4_i32x4(c0, c1, c2, c3);
+        let (r0, r1, r2, r3) = neon_transpose4x4_i32(c0, c1, c2, c3);
+        let (r0, r1, r2, r3) = neon_wht4_i32x4(r0, r1, r2, r3);
+        neon_store_wht_row_hbd(dst, dst_off, r0, bitdepth_max);
+        neon_store_wht_row_hbd(dst, dst_off + stride, r1, bitdepth_max);
+        neon_store_wht_row_hbd(dst, dst_off + stride * 2, r2, bitdepth_max);
+        neon_store_wht_row_hbd(dst, dst_off + stride * 3, r3, bitdepth_max);
+
+        let z = vdupq_n_s32(0);
+        vst1q_s32(coeff.as_mut_ptr(), z);
+        vst1q_s32(coeff.as_mut_ptr().add(4), z);
+        vst1q_s32(coeff.as_mut_ptr().add(8), z);
+        vst1q_s32(coeff.as_mut_ptr().add(12), z);
+    }
+}
 
 #[inline]
 #[target_feature(enable = "neon")]

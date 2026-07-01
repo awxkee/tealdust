@@ -42,6 +42,169 @@ fn with_sse41_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) ->
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
+fn sse41_wht4_i32x4(
+    in0: __m128i,
+    in1: __m128i,
+    in2: __m128i,
+    in3: __m128i,
+) -> (__m128i, __m128i, __m128i, __m128i) {
+    let t0 = _mm_add_epi32(in0, in1);
+    let t2 = _mm_sub_epi32(in2, in3);
+    let t4 = _mm_srai_epi32::<1>(_mm_sub_epi32(t0, t2));
+    let t3 = _mm_sub_epi32(t4, in3);
+    let t1 = _mm_sub_epi32(t4, in1);
+
+    (_mm_sub_epi32(t0, t3), t3, t1, _mm_add_epi32(t2, t1))
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn sse41_transpose4x4_i32(
+    r0: __m128i,
+    r1: __m128i,
+    r2: __m128i,
+    r3: __m128i,
+) -> (__m128i, __m128i, __m128i, __m128i) {
+    let t0 = _mm_unpacklo_epi32(r0, r1);
+    let t1 = _mm_unpackhi_epi32(r0, r1);
+    let t2 = _mm_unpacklo_epi32(r2, r3);
+    let t3 = _mm_unpackhi_epi32(r2, r3);
+    (
+        _mm_unpacklo_epi64(t0, t2),
+        _mm_unpackhi_epi64(t0, t2),
+        _mm_unpacklo_epi64(t1, t3),
+        _mm_unpackhi_epi64(t1, t3),
+    )
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn sse41_load_u8x4_row(dst: &[u8], off: usize) -> __m128i {
+    unsafe { _mm_castps_si128(_mm_load_ss(dst.as_ptr().add(off).cast())) }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn sse41_store_u8x4_row(dst: &mut [u8], off: usize, v: i32) {
+    unsafe { core::ptr::write_unaligned(dst.as_mut_ptr().add(off).cast::<i32>(), v) };
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn sse41_store_wht_4x4_8bpc(
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+    r0: __m128i,
+    r1: __m128i,
+    r2: __m128i,
+    r3: __m128i,
+) {
+    let d0 = sse41_load_u8x4_row(dst, dst_off);
+    let d1 = sse41_load_u8x4_row(dst, dst_off + stride);
+    let d2 = sse41_load_u8x4_row(dst, dst_off + stride * 2);
+    let d3 = sse41_load_u8x4_row(dst, dst_off + stride * 3);
+
+    let d01 = _mm_cvtepu8_epi16(_mm_unpacklo_epi32(d0, d1));
+    let d23 = _mm_cvtepu8_epi16(_mm_unpacklo_epi32(d2, d3));
+    let r01 = _mm_packs_epi32(r0, r1);
+    let r23 = _mm_packs_epi32(r2, r3);
+
+    let p01 = _mm_adds_epi16(d01, r01);
+    let p23 = _mm_adds_epi16(d23, r23);
+    let out = _mm_packus_epi16(p01, p23);
+
+    sse41_store_u8x4_row(dst, dst_off, _mm_cvtsi128_si32(out));
+    sse41_store_u8x4_row(dst, dst_off + stride, _mm_extract_epi32::<1>(out));
+    sse41_store_u8x4_row(dst, dst_off + stride * 2, _mm_extract_epi32::<2>(out));
+    sse41_store_u8x4_row(dst, dst_off + stride * 3, _mm_extract_epi32::<3>(out));
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn sse41_store_wht_row_hbd(dst: &mut [u16], off: usize, residual: __m128i, bitdepth_max: i32) {
+    let z = _mm_setzero_si128();
+    let maxv = _mm_set1_epi32(bitdepth_max);
+    let d = _mm_cvtepu16_epi32(unsafe { _mm_loadl_epi64(dst.as_ptr().add(off).cast::<__m128i>()) });
+    let p = _mm_min_epi32(_mm_max_epi32(_mm_add_epi32(d, residual), z), maxv);
+    unsafe {
+        _mm_storel_epi64(
+            dst.as_mut_ptr().add(off).cast::<__m128i>(),
+            _mm_packus_epi32(p, z),
+        );
+    }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn inv_wht_wht_4x4_i16_sse41_8bpc(
+    coeff: &mut [i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    stride: usize,
+) {
+    unsafe {
+        debug_assert!(coeff.len() >= 16);
+        let c0 = _mm_srai_epi32::<3>(_mm_cvtepi16_epi32(_mm_loadl_epi64(
+            coeff.as_ptr().cast::<__m128i>(),
+        )));
+        let c1 = _mm_srai_epi32::<3>(_mm_cvtepi16_epi32(_mm_loadl_epi64(
+            coeff.as_ptr().add(4).cast::<__m128i>(),
+        )));
+        let c2 = _mm_srai_epi32::<3>(_mm_cvtepi16_epi32(_mm_loadl_epi64(
+            coeff.as_ptr().add(8).cast::<__m128i>(),
+        )));
+        let c3 = _mm_srai_epi32::<3>(_mm_cvtepi16_epi32(_mm_loadl_epi64(
+            coeff.as_ptr().add(12).cast::<__m128i>(),
+        )));
+
+        let (c0, c1, c2, c3) = sse41_wht4_i32x4(c0, c1, c2, c3);
+        let (r0, r1, r2, r3) = sse41_transpose4x4_i32(c0, c1, c2, c3);
+        let (r0, r1, r2, r3) = sse41_wht4_i32x4(r0, r1, r2, r3);
+
+        sse41_store_wht_4x4_8bpc(dst, dst_off, stride, r0, r1, r2, r3);
+
+        let z = _mm_setzero_si128();
+        _mm_storeu_si128(coeff.as_mut_ptr().cast::<__m128i>(), z);
+        _mm_storeu_si128(coeff.as_mut_ptr().add(8).cast::<__m128i>(), z);
+    }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn inv_wht_wht_4x4_i32_sse41_hbd(
+    coeff: &mut [i32],
+    dst: &mut [u16],
+    dst_off: usize,
+    stride: usize,
+    bitdepth_max: i32,
+) {
+    unsafe {
+        debug_assert!(coeff.len() >= 16);
+        let c0 = _mm_srai_epi32::<3>(_mm_loadu_si128(coeff.as_ptr().cast::<__m128i>()));
+        let c1 = _mm_srai_epi32::<3>(_mm_loadu_si128(coeff.as_ptr().add(4).cast::<__m128i>()));
+        let c2 = _mm_srai_epi32::<3>(_mm_loadu_si128(coeff.as_ptr().add(8).cast::<__m128i>()));
+        let c3 = _mm_srai_epi32::<3>(_mm_loadu_si128(coeff.as_ptr().add(12).cast::<__m128i>()));
+
+        let (c0, c1, c2, c3) = sse41_wht4_i32x4(c0, c1, c2, c3);
+        let (r0, r1, r2, r3) = sse41_transpose4x4_i32(c0, c1, c2, c3);
+        let (r0, r1, r2, r3) = sse41_wht4_i32x4(r0, r1, r2, r3);
+
+        sse41_store_wht_row_hbd(dst, dst_off, r0, bitdepth_max);
+        sse41_store_wht_row_hbd(dst, dst_off + stride, r1, bitdepth_max);
+        sse41_store_wht_row_hbd(dst, dst_off + stride * 2, r2, bitdepth_max);
+        sse41_store_wht_row_hbd(dst, dst_off + stride * 3, r3, bitdepth_max);
+
+        let z = _mm_setzero_si128();
+        _mm_storeu_si128(coeff.as_mut_ptr().cast::<__m128i>(), z);
+        _mm_storeu_si128(coeff.as_mut_ptr().add(4).cast::<__m128i>(), z);
+        _mm_storeu_si128(coeff.as_mut_ptr().add(8).cast::<__m128i>(), z);
+        _mm_storeu_si128(coeff.as_mut_ptr().add(12).cast::<__m128i>(), z);
+    }
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
 fn sse41_dct16_i32x4_impl(s: &[__m128i; 16]) -> [__m128i; 16] {
     let z = _mm_setzero_si128();
     let mut out = [z; 16];

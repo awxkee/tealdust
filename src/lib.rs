@@ -81,6 +81,7 @@ pub(crate) mod ipred_prepare;
 pub(crate) mod itx;
 pub(crate) mod itx_1d;
 pub(crate) mod itx_2d;
+pub(crate) mod itx_wht_dispatch;
 pub(crate) mod lf_mask;
 pub(crate) mod looprestoration;
 pub(crate) mod mc;
