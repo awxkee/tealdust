@@ -931,12 +931,12 @@ pub struct ReconScratch {
     /// chroma-scaled MV) and read back by the chroma `rmv_uvpred`. Indexed
     /// `((by & 31) >> 1) * 16 + ((bx & 31) >> 1)`.
     pub rmv: [[[crate::levels::Mv; 2]; 2]; 256],
-    /// Above/left palette-colour cache (`t->al_pal`): `[a/l][bx4|by4][8 colours]`,
+    /// Above/left palette-color cache (`t->al_pal`): `[a/l][bx4|by4][8 colors]`,
     /// indexed by `bx & 63` (above) / `by & 63` (left). Written by the palette
     /// recon (`copy_pal_block_y`) and read by `read_pal_plane` to build the
-    /// per-block palette colour cache. Never explicitly reset — gating is via the
+    /// per-block palette color cache. Never explicitly reset — gating is via the
     pub al_pal: [[[u16; 8]; 64]; 2],
-    /// Current palette block's colour list (`t->scratch.pal`, 8 entries). Filled
+    /// Current palette block's color list (`t->scratch.pal`, 8 entries). Filled
     /// by `read_pal_plane` during parse and consumed by the palette recon fill.
     pub pal: [u16; 8],
     /// Current palette block's packed index map (`t->scratch.pal_idx_y`). `pack`
@@ -3812,7 +3812,7 @@ fn submit_frame_inner(
     Ok(())
 }
 
-/// One colour plane's copy descriptor. `src` is a shared read of the source
+/// One color plane's copy descriptor. `src` is a shared read of the source
 /// plane; `dst` launders the destination plane's `&mut` into a raw `(ptr, len)`
 /// so the disjoint row bands can be written from several threads at once.
 struct PlaneCopy<'a> {

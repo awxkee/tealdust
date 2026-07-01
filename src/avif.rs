@@ -559,7 +559,7 @@ pub struct AvifItem {
     pub iloc_extents: Vec<(u64, u64)>,
     /// Auxiliary image type from `auxC` (present on alpha / depth items).
     pub auxiliary_type: Option<AuxiliaryType>,
-    /// Whether the colour channels in the primary item are premultiplied by
+    /// Whether the color channels in the primary item are premultiplied by
     /// this alpha item's values.  Set when the `prem` item reference is
     /// present from the primary item to this alpha item.
     pub premultiplied_alpha: bool,
@@ -603,7 +603,7 @@ pub struct AvifImageInfo {
     pub pixel_layout: PixelLayout,
     /// Bits per component.
     pub bits_per_component: u8,
-    /// Colour information, if present.
+    /// color information, if present.
     pub color_info: Option<ColorInfo>,
     /// Content light level metadata from HDR CLL metadata OBUs, if present.
     pub content_light_level: Option<ContentLightLevel>,
@@ -614,7 +614,7 @@ pub struct AvifImageInfo {
     /// Whether the file contains a separate alpha (transparency) item linked
     /// to the primary item via an `auxl` `iref` reference.
     pub has_alpha: bool,
-    /// Whether the colour channels are premultiplied by alpha (`prem` iref).
+    /// Whether the color channels are premultiplied by alpha (`prem` iref).
     pub premultiplied_alpha: bool,
     /// Display orientation from `irot` / `imir` properties; `None` = identity.
     pub orientation: Option<Orientation>,
@@ -664,8 +664,6 @@ impl<'a> Reader<'a> {
 
     #[inline]
     fn remaining(&self) -> usize {
-        // FUZZ: saturating_sub prevents underflow if pos ever exceeds data.len()
-        // (which should be impossible with safe reads but provides a safe fallback).
         self.data.len().saturating_sub(self.pos)
     }
 
@@ -700,7 +698,6 @@ impl<'a> Reader<'a> {
     }
 
     fn read_bytes<const N: usize>(&mut self) -> Result<[u8; N]> {
-        // FUZZ: checked_add prevents pos+N from wrapping on pathological inputs.
         let end = self.pos.checked_add(N).ok_or(AvifError::TooShort)?;
         if end > self.data.len() {
             return Err(AvifError::TooShort);
@@ -712,7 +709,6 @@ impl<'a> Reader<'a> {
     }
 
     fn read_slice(&mut self, n: usize) -> Result<&'a [u8]> {
-        // FUZZ: checked_add prevents wrapping.
         let end = self.pos.checked_add(n).ok_or(AvifError::TooShort)?;
         if end > self.data.len() {
             return Err(AvifError::TooShort);
@@ -724,7 +720,6 @@ impl<'a> Reader<'a> {
 
     /// Create a sub-reader for exactly `len` bytes starting at the current position.
     fn sub_reader(&mut self, len: usize) -> Result<Reader<'a>> {
-        // FUZZ: checked_add prevents wrapping.
         let end = self.pos.checked_add(len).ok_or(AvifError::TooShort)?;
         if end > self.data.len() {
             return Err(AvifError::TooShort);
@@ -746,21 +741,7 @@ struct BoxHeader {
 
 /// Read the next ISOBMFF box header from `r`, returning header + a sub-reader
 /// strictly limited to the payload bytes.
-///
-/// # Fuzzer hardening
-///
-/// - Rejects size < 8 (invalid per spec) to prevent underflow in payload_size.
-/// - Rejects extended-size < 16 (would underflow after subtracting header).
-/// - `payload_size` is derived from the box's own declared size, so a sub-reader
-///   can never reach outside the bytes already consumed from the parent reader:
-///   the sub_reader call will return TooShort if the box claims more bytes than
-///   are available.
-/// - size=0 ("box extends to EOF") is rejected in nested contexts: we only accept
-///   it at the top level by treating the entire remaining parent slice as the box.
-///   Here we reject it unconditionally and let callers handle EOF by checking
-///   `is_empty()` before calling this function.
 fn read_box_header<'a>(r: &mut Reader<'a>) -> Result<(BoxHeader, Reader<'a>)> {
-    // FUZZ: require at least 8 bytes before attempting any reads.
     if r.remaining() < 8 {
         return Err(AvifError::TooShort);
     }
@@ -769,40 +750,26 @@ fn read_box_header<'a>(r: &mut Reader<'a>) -> Result<(BoxHeader, Reader<'a>)> {
     let fourcc = r.read_bytes::<4>()?;
 
     let (total_size, header_size): (u64, u64) = match size_field {
-        // FUZZ: size=0 ("extends to EOF") is rejected outright.  In the original
-        // code it used `r.data.len()` which is the *sub-reader* length, not the
-        // file length, giving a wrong total in nested contexts and allowing the
-        // payload_size calculation to produce an incorrect (potentially huge)
-        // value.  Real-world AVIF encoders never emit size=0 except as the
-        // outermost box; we just refuse it to keep the logic simple.
         0 => return Err(AvifError::InvalidBox),
 
         1 => {
             // Extended 64-bit size: next 8 bytes hold the *total* box size.
             let ext = r.read_u64_be()?;
-            // FUZZ: must be ≥ 16 (4+4+8 header bytes), otherwise payload_size
-            // would underflow.
             if ext < 16 {
                 return Err(AvifError::InvalidBox);
             }
             (ext, 16)
         }
 
-        // FUZZ: sizes 2–7 are reserved/invalid and would underflow when
-        // computing payload_size = total - 8.
         n if n < 8 => return Err(AvifError::InvalidBox),
 
         n => (n as u64, 8),
     };
 
-    // FUZZ: checked_sub prevents underflow if total_size < header_size (which
-    // the checks above make impossible, but we be defensive anyway).
     let payload_size = total_size
         .checked_sub(header_size)
         .ok_or(AvifError::InvalidBox)?;
 
-    // FUZZ: usize cast is required for sub_reader; reject sizes that would
-    // truncate on 32-bit platforms.
     let payload_size_usize = usize::try_from(payload_size).map_err(|_| AvifError::InvalidBox)?;
 
     // sub_reader will return TooShort if payload_size_usize > r.remaining(),
@@ -857,33 +824,23 @@ impl AvifParser {
         // iref raw bytes: deferred so item IDs are populated first.
         let mut iref_raw: Option<Vec<u8>> = None;
 
-        // FUZZ: only parse the first `meta` box encountered; duplicates are
-        // silently ignored to avoid re-entrant state corruption.
         let mut seen_meta = false;
 
         while !r.is_empty() {
             let (hdr, mut payload) = match read_box_header(&mut r) {
                 Ok(v) => v,
-                // FUZZ: a truncated trailing box is silently skipped; it
-                // cannot carry valid content so we just stop the outer loop.
                 Err(AvifError::TooShort) => break,
                 Err(e) => return Err(e),
             };
 
             match &hdr.fourcc {
                 b"ftyp" => {
-                    // FUZZ: only parse the first ftyp box (must be first in
-                    // spec, but we are tolerant of position; second occurrence
-                    // is ignored).
                     if !found_ftyp {
                         brand = payload.read_bytes::<4>()?;
                         let _minor_version = payload.read_u32_be()?;
 
                         let mut avif_brand = is_avif_brand(&brand);
 
-                        // FUZZ: cap the compatible-brand scan so a huge ftyp
-                        // box cannot cause O(n) scanning. A zero setting disables
-                        // this parser cap for trusted inputs.
                         let mut brand_count = 0usize;
                         while payload.remaining() >= 4
                             && (settings.max_compat_brands == 0
@@ -930,7 +887,6 @@ impl AvifParser {
 
         // Resolve iloc offsets into absolute file positions.
         if let Some(iloc_bytes) = iloc_raw {
-            // FUZZ: pass the real file length so extent validation is exact.
             Self::apply_iloc(&iloc_bytes, &mut items, data.len() as u64, settings)?;
         }
 
@@ -966,8 +922,6 @@ impl AvifParser {
         iref_raw: &mut Option<Vec<u8>>,
         settings: &AvifSettings,
     ) -> Result<()> {
-        // FUZZ: track which critical singleton boxes have been seen; a second
-        // occurrence is rejected to prevent state-confusion attacks.
         let mut seen_pitm = false;
         let mut seen_iinf = false;
         let mut seen_iloc = false;
@@ -1004,7 +958,6 @@ impl AvifParser {
                         payload.read_u32_be()?
                     };
 
-                    // FUZZ: cap item count before allocating or looping.
                     if settings.max_items != 0 && raw_count > settings.max_items {
                         return Err(AvifError::LimitExceeded);
                     }
@@ -1035,8 +988,6 @@ impl AvifParser {
                             *b"\0\0\0\0"
                         };
                         let item_type = ItemType::from_fourcc(item_type_bytes);
-                        // FUZZ: or_insert_with avoids clobbering an existing
-                        // entry if iinf contains duplicate item_ids.
                         items
                             .entry(item_id)
                             .or_insert_with(|| AvifItem::new(item_id, item_type));
@@ -1096,10 +1047,6 @@ impl AvifParser {
                             Err(e) => return Err(e),
                         };
 
-                        // FUZZ: cap the total number of ipco properties to
-                        // prevent unbounded Vec growth.  The Vec<u8> payloads
-                        // are already bounded by the sub-reader, so this is a
-                        // count-not-bytes limit.
                         if settings.max_ipco_props != 0
                             && ipco_props.len() >= settings.max_ipco_props
                         {
@@ -1140,10 +1087,6 @@ impl AvifParser {
         let base_offset_size = (byte2 >> 4) & 0x0F;
         let index_size = if ver >= 1 { byte2 & 0x0F } else { 0 };
 
-        // FUZZ: the spec only allows 0, 4, or 8 for these field sizes.
-        // Accept 1 and 2 as well (some encoders use them in practice), but
-        // reject anything else (3, 5, 6, 7, 9–15) to prevent the unusual
-        // byte-by-byte read path from being exercised on garbage inputs.
         for &sz in &[offset_size, length_size, base_offset_size, index_size] {
             if !matches!(sz, 0 | 1 | 2 | 4 | 8) {
                 return Err(AvifError::InvalidBox);
@@ -1156,7 +1099,6 @@ impl AvifParser {
             r.read_u32_be()?
         };
 
-        // FUZZ: cap item count before looping.
         if settings.max_iloc_items != 0 && raw_item_count > settings.max_iloc_items {
             return Err(AvifError::LimitExceeded);
         }
@@ -1179,9 +1121,6 @@ impl AvifParser {
                     let _ = r.read_u16_be()?; // data_reference_index
                     let _ = read_sized_int(&mut r, base_offset_size)?; // base_offset
                     let ec = r.read_u16_be()?;
-                    // FUZZ: reject over-large skipped entries too. Capping here
-                    // would leave unread extent records in this iloc entry and
-                    // desynchronize the parser for the next item.
                     if settings.max_extents_per_item != 0 && ec > settings.max_extents_per_item {
                         return Err(AvifError::LimitExceeded);
                     }
@@ -1200,8 +1139,6 @@ impl AvifParser {
             let base_offset = read_sized_int(&mut r, base_offset_size)?;
             let extent_count = r.read_u16_be()?;
 
-            // FUZZ: cap extents per item; prevents large allocations via
-            // Vec::with_capacity and limits the inner loop iterations.
             if settings.max_extents_per_item != 0 && extent_count > settings.max_extents_per_item {
                 return Err(AvifError::LimitExceeded);
             }
@@ -1218,8 +1155,6 @@ impl AvifParser {
                 let ext_offset = read_sized_int(&mut r, offset_size)?;
                 let ext_length = read_sized_int(&mut r, length_size)?;
 
-                // FUZZ: checked arithmetic prevents wrapping on 64-bit; on a
-                // 32-bit host the usize cast later in decode() is also guarded.
                 let abs_offset = base_offset
                     .checked_add(ext_offset)
                     .ok_or(AvifError::InvalidBox)?;
@@ -1228,9 +1163,6 @@ impl AvifParser {
                     .checked_add(ext_length)
                     .ok_or(AvifError::InvalidBox)?;
 
-                // FUZZ: validate against the real file length, not any
-                // sub-reader length, so crafted offsets cannot reach outside
-                // the file.
                 if end > file_len {
                     return Err(AvifError::ExtentOutOfBounds);
                 }
@@ -1256,7 +1188,6 @@ impl AvifParser {
 
         let entry_count = r.read_u32_be()?;
 
-        // FUZZ: cap entry count before looping.
         if settings.max_ipma_entries != 0 && entry_count > settings.max_ipma_entries {
             return Err(AvifError::LimitExceeded);
         }
@@ -1287,12 +1218,8 @@ impl AvifParser {
                     continue; // 0 = no property, per spec
                 }
 
-                // FUZZ: wrapping_sub is safe here because prop_idx ≥ 1.
                 let idx = (prop_idx as usize).wrapping_sub(1); // convert to 0-based
 
-                // FUZZ: bounds-check the property index against the actual
-                // ipco_props slice; out-of-range indices are silently skipped
-                // (the spec says this is a parse error, but skipping is safe).
                 if idx >= ipco_props.len() {
                     continue;
                 }
@@ -1323,8 +1250,6 @@ impl AvifParser {
                 let width = u32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]);
                 let height = u32::from_be_bytes([raw[8], raw[9], raw[10], raw[11]]);
 
-                // FUZZ: reject zero or absurdly large dimensions to prevent
-                // downstream overflow in plane-size arithmetic.
                 if width == 0 || height == 0 {
                     return Err(AvifError::InvalidBox);
                 }
@@ -1351,7 +1276,6 @@ impl AvifParser {
                     return Err(AvifError::InvalidCodecConfig);
                 }
 
-                // FUZZ: validate marker bit to catch garbage payloads early.
                 if raw[0] & 0x80 == 0 {
                     return Err(AvifError::InvalidCodecConfig);
                 }
@@ -1369,9 +1293,6 @@ impl AvifParser {
                 let ipd_present = (b3 >> 4) & 1 != 0;
                 let config_obu_start = if ipd_present { 5 } else { 4 };
 
-                // FUZZ: slice index is always ≤ raw.len() because raw.len() ≥ 4
-                // and config_obu_start is at most 5; the get() handles the
-                // config_obu_start=5, raw.len()=4 case safely.
                 let config_obus = raw.get(config_obu_start..).unwrap_or(&[]).to_vec();
 
                 item.codec_config = Some(CodecConfig {
@@ -1428,16 +1349,11 @@ impl AvifParser {
             b"pasp" => {
                 // pasp: hSpacing(4) + vSpacing(4) = 8 bytes.
                 if raw.len() < 8 {
-                    // FUZZ: changed from silent skip to explicit error so the
-                    // parser surfaces truncated pasp boxes rather than silently
-                    // leaving pixel_aspect_ratio unset.
                     return Err(AvifError::InvalidBox);
                 }
                 let h = u32::from_be_bytes([raw[0], raw[1], raw[2], raw[3]]);
                 let v = u32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]);
 
-                // FUZZ: zero spacing would cause division-by-zero in callers
-                // that compute display aspect ratio.
                 if h == 0 || v == 0 {
                     return Err(AvifError::InvalidBox);
                 }
@@ -1458,7 +1374,6 @@ impl AvifParser {
                 // raw[0..4] = version(1) + flags(3); rest is the URN.
                 let urn_bytes = &raw[4..];
 
-                // FUZZ: cap URN length before cloning into AuxiliaryType::Other.
                 if settings.max_auxc_urn_len != 0 && urn_bytes.len() > settings.max_auxc_urn_len {
                     return Err(AvifError::LimitExceeded);
                 }
@@ -1515,11 +1430,9 @@ impl AvifParser {
                 let voff_n = read_u32(24);
                 let voff_d = read_u32(28);
 
-                // FUZZ: zero denominators would cause divide-by-zero in callers.
                 if width_d == 0 || height_d == 0 || hoff_d == 0 || voff_d == 0 {
                     return Err(AvifError::InvalidBox);
                 }
-                // FUZZ: non-positive aperture size is nonsensical.
                 if width_n <= 0 || height_n <= 0 {
                     return Err(AvifError::InvalidBox);
                 }
@@ -1618,7 +1531,6 @@ impl AvifParser {
             // reference_count: number of target item IDs that follow.
             let ref_count = payload.read_u16_be()?;
 
-            // FUZZ: cap reference count per entry.
             if settings.max_iref_refs != 0 && ref_count > settings.max_iref_refs {
                 return Err(AvifError::LimitExceeded);
             }
@@ -1664,8 +1576,6 @@ impl AvifParser {
 /// (The caller in `apply_iloc` already validates the sizes from the bitstream,
 /// so this function is a second defensive layer.)
 fn read_sized_int(r: &mut Reader<'_>, size: u8) -> Result<u64> {
-    // FUZZ: explicit match on all allowed sizes; any other value returns an
-    // error rather than falling through to the unchecked byte-by-byte path.
     match size {
         0 => Ok(0),
         1 => Ok(r.read_u8()? as u64),
@@ -1708,7 +1618,7 @@ pub struct AvifImage {
     pub pixel_layout: PixelLayout,
     /// Bits per component (8, 10, or 12).
     pub bits_per_component: u8,
-    /// Colour information, if present in the container.
+    /// color information, if present in the container.
     pub color_info: Option<ColorInfo>,
     /// Content light level metadata from HDR CLL metadata OBUs, if present.
     pub content_light_level: Option<ContentLightLevel>,
@@ -1724,7 +1634,7 @@ pub struct AvifImage {
     /// sample layout matches the primary image's bit depth convention (8-bit →
     /// one byte per sample; 10/12-bit → two LE bytes per sample).
     pub alpha: Option<AlphaPlane>,
-    /// Whether the colour planes in `planes` are premultiplied by `alpha`.
+    /// Whether the color planes in `planes` are premultiplied by `alpha`.
     /// Consumers must un-premultiply before compositing if this is `true`.
     pub premultiplied_alpha: bool,
     /// Display orientation from `irot` / `imir`; [`Orientation::Normal`]
@@ -1872,8 +1782,6 @@ impl<'a> AvifDecoder<'a> {
             return Err(AvifError::InvalidCodecConfig);
         }
 
-        // FUZZ: i32 → usize casts are safe because picture dimensions come
-        // from the decoder which validates them against Settings::frame_size_limit.
         let pic_w = picture.p.w as usize;
         let pic_h = picture.p.h as usize;
 
@@ -1891,8 +1799,6 @@ impl<'a> AvifDecoder<'a> {
             _ => pic_w,
         };
 
-        // FUZZ: all multiplications in copy_plane are checked to prevent
-        // integer overflow when computing row pointers or allocation sizes.
         let plane_y = copy_plane(picture.plane_bytes(0), y_stride, pic_h, pic_w, bps)?;
         let plane_u = copy_plane(picture.plane_bytes(1), uv_stride, uv_h, uv_w, bps)?;
         let plane_v = copy_plane(picture.plane_bytes(2), uv_stride, uv_h, uv_w, bps)?;
@@ -2045,7 +1951,6 @@ impl<'a> AvifDecoder<'a> {
             .try_fold(0u64, |acc, &(_, len)| acc.checked_add(len))
             .ok_or(AvifError::InvalidBox)?;
 
-        // FUZZ: cap total OBU length before allocating.
         let total_obu_len: u64 = (config_len as u64)
             .checked_add(sample_len)
             .ok_or(AvifError::InvalidBox)?;
@@ -2062,7 +1967,6 @@ impl<'a> AvifDecoder<'a> {
             obu_data.extend_from_slice(&cfg.config_obus);
         }
         for &(abs_offset, ext_len) in &item.iloc_extents {
-            // FUZZ: checked arithmetic for start+len on usize.
             let start = usize::try_from(abs_offset).map_err(|_| AvifError::ExtentOutOfBounds)?;
             let len = usize::try_from(ext_len).map_err(|_| AvifError::ExtentOutOfBounds)?;
             let end = start.checked_add(len).ok_or(AvifError::ExtentOutOfBounds)?;
