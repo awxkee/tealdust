@@ -3749,6 +3749,245 @@ fn neon_col_generic_writeback_x4<const W: usize, const H: usize>(
     }
 }
 
+// First-stage (row pass) generic remainder: reads coeff, applies the width 1D
+// transform, clips, and stores to scratch. Extracted from the fused bodies so
+// the row remainder is emitted once per parameter set instead of inlined into
+// each. Four variants cover {plain vs rdm coeff loader} x {runtime vs const
+// kind}; the loader split is unavoidable because the rdm loader is a distinct
+// target_feature. `y` is threaded in/out so the DCT/identity fast paths still
+// run in the caller. Not #[inline]: heavy nested loop body.
+#[target_feature(enable = "neon")]
+fn neon_row_pass<const W: usize, const H: usize, const IS_RECT2: bool>(
+    coeff: &[i16],
+    scratch: &mut [i16],
+    nrows: usize,
+    first_kind: usize,
+    rnd: int32x4_t,
+    nsh: int32x4_t,
+    minv: int32x4_t,
+    maxv: int32x4_t,
+    mut y: usize,
+) -> usize {
+    let z = vdupq_n_s32(0);
+    while y + 4 <= nrows {
+        let mut m = 0usize;
+        while m < W {
+            let mut a0 = z;
+            let mut a1 = z;
+            let mut a2 = z;
+            let mut a3 = z;
+            let mut j = 0usize;
+            while j < W {
+                let x0 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
+                let x1 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                a0 = vmlal_n_s16(a0, x0, neon_tx_dense_coeff_i16(first_kind, W, m, j));
+                a0 = vmlal_n_s16(a0, x1, neon_tx_dense_coeff_i16(first_kind, W, m, j + 1));
+                a1 = vmlal_n_s16(a1, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 1, j));
+                a1 = vmlal_n_s16(a1, x1, neon_tx_dense_coeff_i16(first_kind, W, m + 1, j + 1));
+                a2 = vmlal_n_s16(a2, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 2, j));
+                a2 = vmlal_n_s16(a2, x1, neon_tx_dense_coeff_i16(first_kind, W, m + 2, j + 1));
+                a3 = vmlal_n_s16(a3, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 3, j));
+                a3 = vmlal_n_s16(a3, x1, neon_tx_dense_coeff_i16(first_kind, W, m + 3, j + 1));
+                j += 2;
+            }
+            neon_store4x4_i16_clip::<W>(scratch, y * W + m, a0, a1, a2, a3, rnd, nsh, minv, maxv);
+            m += 4;
+        }
+        y += 4;
+    }
+    y
+}
+
+#[target_feature(enable = "neon")]
+fn neon_row_pass_const<
+    const W: usize,
+    const H: usize,
+    const IS_RECT2: bool,
+    const FIRST_KIND: usize,
+>(
+    coeff: &[i16],
+    scratch: &mut [i16],
+    nrows: usize,
+    rnd: int32x4_t,
+    nsh: int32x4_t,
+    minv: int32x4_t,
+    maxv: int32x4_t,
+    mut y: usize,
+) -> usize {
+    let z = vdupq_n_s32(0);
+    while y + 4 <= nrows {
+        let mut m = 0usize;
+        while m < W {
+            let mut a0 = z;
+            let mut a1 = z;
+            let mut a2 = z;
+            let mut a3 = z;
+            let mut j = 0usize;
+            while j < W {
+                let x0 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
+                let x1 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                a0 = vmlal_n_s16(a0, x0, neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j));
+                a0 = vmlal_n_s16(
+                    a0,
+                    x1,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j + 1),
+                );
+                a1 = vmlal_n_s16(
+                    a1,
+                    x0,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j),
+                );
+                a1 = vmlal_n_s16(
+                    a1,
+                    x1,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j + 1),
+                );
+                a2 = vmlal_n_s16(
+                    a2,
+                    x0,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j),
+                );
+                a2 = vmlal_n_s16(
+                    a2,
+                    x1,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j + 1),
+                );
+                a3 = vmlal_n_s16(
+                    a3,
+                    x0,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j),
+                );
+                a3 = vmlal_n_s16(
+                    a3,
+                    x1,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j + 1),
+                );
+                j += 2;
+            }
+            neon_store4x4_i16_clip::<W>(scratch, y * W + m, a0, a1, a2, a3, rnd, nsh, minv, maxv);
+            m += 4;
+        }
+        y += 4;
+    }
+    y
+}
+
+#[target_feature(enable = "rdm")]
+fn neon_row_pass_rdm<const W: usize, const H: usize, const IS_RECT2: bool>(
+    coeff: &[i16],
+    scratch: &mut [i16],
+    nrows: usize,
+    first_kind: usize,
+    rnd: int32x4_t,
+    nsh: int32x4_t,
+    minv: int32x4_t,
+    maxv: int32x4_t,
+    mut y: usize,
+) -> usize {
+    let z = vdupq_n_s32(0);
+    while y + 4 <= nrows {
+        let mut m = 0usize;
+        while m < W {
+            let mut a0 = z;
+            let mut a1 = z;
+            let mut a2 = z;
+            let mut a3 = z;
+            let mut j = 0usize;
+            while j < W {
+                let x0 = neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(coeff, y + j * H);
+                let x1 = neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                a0 = vmlal_n_s16(a0, x0, neon_tx_dense_coeff_i16(first_kind, W, m, j));
+                a0 = vmlal_n_s16(a0, x1, neon_tx_dense_coeff_i16(first_kind, W, m, j + 1));
+                a1 = vmlal_n_s16(a1, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 1, j));
+                a1 = vmlal_n_s16(a1, x1, neon_tx_dense_coeff_i16(first_kind, W, m + 1, j + 1));
+                a2 = vmlal_n_s16(a2, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 2, j));
+                a2 = vmlal_n_s16(a2, x1, neon_tx_dense_coeff_i16(first_kind, W, m + 2, j + 1));
+                a3 = vmlal_n_s16(a3, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 3, j));
+                a3 = vmlal_n_s16(a3, x1, neon_tx_dense_coeff_i16(first_kind, W, m + 3, j + 1));
+                j += 2;
+            }
+            neon_store4x4_i16_clip::<W>(scratch, y * W + m, a0, a1, a2, a3, rnd, nsh, minv, maxv);
+            m += 4;
+        }
+        y += 4;
+    }
+    y
+}
+
+#[target_feature(enable = "rdm")]
+fn neon_row_pass_rdm_const<
+    const W: usize,
+    const H: usize,
+    const IS_RECT2: bool,
+    const FIRST_KIND: usize,
+>(
+    coeff: &[i16],
+    scratch: &mut [i16],
+    nrows: usize,
+    rnd: int32x4_t,
+    nsh: int32x4_t,
+    minv: int32x4_t,
+    maxv: int32x4_t,
+    mut y: usize,
+) -> usize {
+    let z = vdupq_n_s32(0);
+    while y + 4 <= nrows {
+        let mut m = 0usize;
+        while m < W {
+            let mut a0 = z;
+            let mut a1 = z;
+            let mut a2 = z;
+            let mut a3 = z;
+            let mut j = 0usize;
+            while j < W {
+                let x0 = neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(coeff, y + j * H);
+                let x1 = neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                a0 = vmlal_n_s16(a0, x0, neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j));
+                a0 = vmlal_n_s16(
+                    a0,
+                    x1,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j + 1),
+                );
+                a1 = vmlal_n_s16(
+                    a1,
+                    x0,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j),
+                );
+                a1 = vmlal_n_s16(
+                    a1,
+                    x1,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j + 1),
+                );
+                a2 = vmlal_n_s16(
+                    a2,
+                    x0,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j),
+                );
+                a2 = vmlal_n_s16(
+                    a2,
+                    x1,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j + 1),
+                );
+                a3 = vmlal_n_s16(
+                    a3,
+                    x0,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j),
+                );
+                a3 = vmlal_n_s16(
+                    a3,
+                    x1,
+                    neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j + 1),
+                );
+                j += 2;
+            }
+            neon_store4x4_i16_clip::<W>(scratch, y * W + m, a0, a1, a2, a3, rnd, nsh, minv, maxv);
+            m += 4;
+        }
+        y += 4;
+    }
+    y
+}
+
 #[inline(never)]
 #[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
@@ -3784,7 +4023,6 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
         }
     }
     let nrows = ngrp * 4;
-    let z = vdupq_n_s32(0);
     let rnd = vdupq_n_s32((1 << shift0) >> 1);
     let nsh = vdupq_n_s32(-shift0);
     let minv = vdupq_n_s32(row_clip_min);
@@ -3824,58 +4062,7 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
                 coeff, scratch, y, nrows, rnd, nsh, minv, maxv,
             );
         }
-        while y + 4 <= nrows {
-            {
-                let mut m = 0usize;
-                while m < W {
-                    let mut a0 = z;
-                    let mut a1 = z;
-                    let mut a2 = z;
-                    let mut a3 = z;
-                    let mut j = 0usize;
-                    while j < W {
-                        let x0 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
-                        let x1 =
-                            neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
-                        a0 = vmlal_n_s16(a0, x0, neon_tx_dense_coeff_i16(first_kind, W, m, j));
-                        a0 = vmlal_n_s16(a0, x1, neon_tx_dense_coeff_i16(first_kind, W, m, j + 1));
-                        a1 = vmlal_n_s16(a1, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 1, j));
-                        a1 = vmlal_n_s16(
-                            a1,
-                            x1,
-                            neon_tx_dense_coeff_i16(first_kind, W, m + 1, j + 1),
-                        );
-                        a2 = vmlal_n_s16(a2, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 2, j));
-                        a2 = vmlal_n_s16(
-                            a2,
-                            x1,
-                            neon_tx_dense_coeff_i16(first_kind, W, m + 2, j + 1),
-                        );
-                        a3 = vmlal_n_s16(a3, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 3, j));
-                        a3 = vmlal_n_s16(
-                            a3,
-                            x1,
-                            neon_tx_dense_coeff_i16(first_kind, W, m + 3, j + 1),
-                        );
-                        j += 2;
-                    }
-                    neon_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        a0,
-                        a1,
-                        a2,
-                        a3,
-                        rnd,
-                        nsh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-            }
-            y += 4;
-        }
+        neon_row_pass::<W, H, IS_RECT2>(coeff, scratch, nrows, first_kind, rnd, nsh, minv, maxv, y);
         let rnd1 = vdupq_n_s32((1 << shift1) >> 1);
         let nsh1 = vdupq_n_s32(-shift1);
 
@@ -3914,11 +4101,6 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_impl_const<
     });
 }
 
-// Const-kind variant of the generic column pass for the hot path: SECOND_KIND
-// is a const generic so the coefficient lookup constant-folds, matching the
-// inlined hot-path codegen. Independent of IS_RECT2 and FIRST_KIND, so it
-// collapses the second stage from one copy per (W, H, IS_RECT2, FIRST_KIND,
-// SECOND_KIND) to one per (W, H, SECOND_KIND). Not #[inline]: heavy loop body.
 #[target_feature(enable = "neon")]
 fn neon_col_generic_writeback_x4_const<const W: usize, const H: usize, const SECOND_KIND: usize>(
     scratch: &[i16],
@@ -4064,7 +4246,6 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_hot_impl_const<
         }
     }
     let nrows = ngrp * 4;
-    let z = vdupq_n_s32(0);
     let rnd = vdupq_n_s32((1 << shift0) >> 1);
     let nsh = vdupq_n_s32(-shift0);
     let minv = vdupq_n_s32(row_clip_min);
@@ -4086,78 +4267,9 @@ fn tx_dequant_dense_neon_i16_fused_8bpc_hot_impl_const<
                 coeff, scratch, y, nrows, rnd, nsh, minv, maxv,
             );
         }
-        while y + 4 <= nrows {
-            {
-                let mut m = 0usize;
-                while m < W {
-                    let mut a0 = z;
-                    let mut a1 = z;
-                    let mut a2 = z;
-                    let mut a3 = z;
-                    let mut j = 0usize;
-                    while j < W {
-                        let x0 = neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
-                        let x1 =
-                            neon_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
-                        a0 = vmlal_n_s16(
-                            a0,
-                            x0,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j),
-                        );
-                        a0 = vmlal_n_s16(
-                            a0,
-                            x1,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j + 1),
-                        );
-                        a1 = vmlal_n_s16(
-                            a1,
-                            x0,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j),
-                        );
-                        a1 = vmlal_n_s16(
-                            a1,
-                            x1,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j + 1),
-                        );
-                        a2 = vmlal_n_s16(
-                            a2,
-                            x0,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j),
-                        );
-                        a2 = vmlal_n_s16(
-                            a2,
-                            x1,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j + 1),
-                        );
-                        a3 = vmlal_n_s16(
-                            a3,
-                            x0,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j),
-                        );
-                        a3 = vmlal_n_s16(
-                            a3,
-                            x1,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j + 1),
-                        );
-                        j += 2;
-                    }
-                    neon_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        a0,
-                        a1,
-                        a2,
-                        a3,
-                        rnd,
-                        nsh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-            }
-            y += 4;
-        }
+        neon_row_pass_const::<W, H, IS_RECT2, FIRST_KIND>(
+            coeff, scratch, nrows, rnd, nsh, minv, maxv, y,
+        );
         let rnd1 = vdupq_n_s32((1 << shift1) >> 1);
         let nsh1 = vdupq_n_s32(-shift1);
 
@@ -4330,7 +4442,6 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
         }
     }
     let nrows = ngrp * 4;
-    let z = vdupq_n_s32(0);
     let rnd = vdupq_n_s32((1 << shift0) >> 1);
     let nsh = vdupq_n_s32(-shift0);
     let minv = vdupq_n_s32(row_clip_min);
@@ -4365,61 +4476,9 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
                 coeff, scratch, y, nrows, rnd, nsh, minv, maxv,
             );
         }
-        while y + 4 <= nrows {
-            {
-                let mut m = 0usize;
-                while m < W {
-                    let mut a0 = z;
-                    let mut a1 = z;
-                    let mut a2 = z;
-                    let mut a3 = z;
-                    let mut j = 0usize;
-                    while j < W {
-                        let x0 =
-                            neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(coeff, y + j * H);
-                        let x1 = neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(
-                            coeff,
-                            y + (j + 1) * H,
-                        );
-                        a0 = vmlal_n_s16(a0, x0, neon_tx_dense_coeff_i16(first_kind, W, m, j));
-                        a0 = vmlal_n_s16(a0, x1, neon_tx_dense_coeff_i16(first_kind, W, m, j + 1));
-                        a1 = vmlal_n_s16(a1, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 1, j));
-                        a1 = vmlal_n_s16(
-                            a1,
-                            x1,
-                            neon_tx_dense_coeff_i16(first_kind, W, m + 1, j + 1),
-                        );
-                        a2 = vmlal_n_s16(a2, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 2, j));
-                        a2 = vmlal_n_s16(
-                            a2,
-                            x1,
-                            neon_tx_dense_coeff_i16(first_kind, W, m + 2, j + 1),
-                        );
-                        a3 = vmlal_n_s16(a3, x0, neon_tx_dense_coeff_i16(first_kind, W, m + 3, j));
-                        a3 = vmlal_n_s16(
-                            a3,
-                            x1,
-                            neon_tx_dense_coeff_i16(first_kind, W, m + 3, j + 1),
-                        );
-                        j += 2;
-                    }
-                    neon_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        a0,
-                        a1,
-                        a2,
-                        a3,
-                        rnd,
-                        nsh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-            }
-            y += 4;
-        }
+        neon_row_pass_rdm::<W, H, IS_RECT2>(
+            coeff, scratch, nrows, first_kind, rnd, nsh, minv, maxv, y,
+        );
         let rnd1 = vdupq_n_s32((1 << shift1) >> 1);
         let nsh1 = vdupq_n_s32(-shift1);
 
@@ -4489,7 +4548,6 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_hot_impl_const<
         }
     }
     let nrows = ngrp * 4;
-    let z = vdupq_n_s32(0);
     let rnd = vdupq_n_s32((1 << shift0) >> 1);
     let nsh = vdupq_n_s32(-shift0);
     let minv = vdupq_n_s32(row_clip_min);
@@ -4506,81 +4564,9 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_hot_impl_const<
                 coeff, scratch, y, nrows, rnd, nsh, minv, maxv,
             );
         }
-        while y + 4 <= nrows {
-            {
-                let mut m = 0usize;
-                while m < W {
-                    let mut a0 = z;
-                    let mut a1 = z;
-                    let mut a2 = z;
-                    let mut a3 = z;
-                    let mut j = 0usize;
-                    while j < W {
-                        let x0 =
-                            neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(coeff, y + j * H);
-                        let x1 = neon_load4_i16_coeff_packed_rdm_const::<IS_RECT2>(
-                            coeff,
-                            y + (j + 1) * H,
-                        );
-                        a0 = vmlal_n_s16(
-                            a0,
-                            x0,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j),
-                        );
-                        a0 = vmlal_n_s16(
-                            a0,
-                            x1,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m, j + 1),
-                        );
-                        a1 = vmlal_n_s16(
-                            a1,
-                            x0,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j),
-                        );
-                        a1 = vmlal_n_s16(
-                            a1,
-                            x1,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 1, j + 1),
-                        );
-                        a2 = vmlal_n_s16(
-                            a2,
-                            x0,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j),
-                        );
-                        a2 = vmlal_n_s16(
-                            a2,
-                            x1,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 2, j + 1),
-                        );
-                        a3 = vmlal_n_s16(
-                            a3,
-                            x0,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j),
-                        );
-                        a3 = vmlal_n_s16(
-                            a3,
-                            x1,
-                            neon_tx_dense_coeff_i16_const::<FIRST_KIND, W>(m + 3, j + 1),
-                        );
-                        j += 2;
-                    }
-                    neon_store4x4_i16_clip::<W>(
-                        scratch,
-                        y * W + m,
-                        a0,
-                        a1,
-                        a2,
-                        a3,
-                        rnd,
-                        nsh,
-                        minv,
-                        maxv,
-                    );
-                    m += 4;
-                }
-            }
-            y += 4;
-        }
+        neon_row_pass_rdm_const::<W, H, IS_RECT2, FIRST_KIND>(
+            coeff, scratch, nrows, rnd, nsh, minv, maxv, y,
+        );
         let rnd1 = vdupq_n_s32((1 << shift1) >> 1);
         let nsh1 = vdupq_n_s32(-shift1);
 

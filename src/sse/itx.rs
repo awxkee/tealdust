@@ -2346,7 +2346,6 @@ fn tx_dequant_dense_sse41_i32_impl_const<const W: usize, const H: usize, const I
     }
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 fn tx_dequant_dense_sse41_i16_impl<const W: usize, const H: usize>(
     coeff: &mut [i16],
@@ -2387,7 +2386,6 @@ fn tx_dequant_dense_sse41_i16_impl<const W: usize, const H: usize>(
     }
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 fn tx_dequant_dense_sse41_i16_impl_const<const W: usize, const H: usize, const IS_RECT2: bool>(
     coeff: &mut [i16],

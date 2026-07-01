@@ -5616,6 +5616,159 @@ fn tx_dequant_dense_avx2_i16_impl<const W: usize, const H: usize>(
     }
 }
 
+#[target_feature(enable = "avx2")]
+fn avx2_row_pass<const W: usize, const H: usize, const IS_RECT2: bool>(
+    coeff: &[i16],
+    scratch: &mut [i16],
+    nrows: usize,
+    first_kind: usize,
+    rnd: __m128i,
+    sh: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+    mut y: usize,
+) -> usize {
+    let z = _mm_setzero_si128();
+    while y + 4 <= nrows {
+        let mut m = 0usize;
+        while m < W {
+            let mut a0 = z;
+            let mut a1 = z;
+            let mut a2 = z;
+            let mut a3 = z;
+            let mut j = 0usize;
+            while j < W {
+                let x0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
+                let x1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                let x01 = _mm_unpacklo_epi16(x0, x1);
+                a0 = _mm_add_epi32(
+                    a0,
+                    _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m, j)),
+                );
+                a1 = _mm_add_epi32(
+                    a1,
+                    _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 1, j)),
+                );
+                a2 = _mm_add_epi32(
+                    a2,
+                    _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 2, j)),
+                );
+                a3 = _mm_add_epi32(
+                    a3,
+                    _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 3, j)),
+                );
+                j += 2;
+            }
+            avx2_store4x4_i16_clip::<W>(scratch, y * W + m, a0, a1, a2, a3, rnd, sh, minv, maxv);
+            m += 4;
+        }
+        y += 4;
+    }
+    y
+}
+
+#[target_feature(enable = "avx2")]
+fn avx2_row_pass_const<
+    const W: usize,
+    const H: usize,
+    const IS_RECT2: bool,
+    const FIRST_KIND: usize,
+>(
+    coeff: &[i16],
+    scratch: &mut [i16],
+    nrows: usize,
+    rnd: __m128i,
+    sh: __m128i,
+    minv: __m128i,
+    maxv: __m128i,
+    mut y: usize,
+) -> usize {
+    let z = _mm_setzero_si128();
+    while y + 4 <= nrows {
+        let mut m = 0usize;
+        while m < W {
+            let mut a0 = z;
+            let mut a1 = z;
+            let mut a2 = z;
+            let mut a3 = z;
+            let mut j = 0usize;
+            while j < W {
+                let x0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
+                let x1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
+                let x01 = _mm_unpacklo_epi16(x0, x1);
+                a0 = _mm_add_epi32(
+                    a0,
+                    _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m, j)),
+                );
+                a1 = _mm_add_epi32(
+                    a1,
+                    _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 1, j)),
+                );
+                a2 = _mm_add_epi32(
+                    a2,
+                    _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 2, j)),
+                );
+                a3 = _mm_add_epi32(
+                    a3,
+                    _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 3, j)),
+                );
+                j += 2;
+            }
+            avx2_store4x4_i16_clip::<W>(scratch, y * W + m, a0, a1, a2, a3, rnd, sh, minv, maxv);
+            m += 4;
+        }
+        y += 4;
+    }
+    y
+}
+
+#[target_feature(enable = "avx2")]
+fn avx2_col_generic_store_x4<const W: usize, const H: usize>(
+    scratch: &[i16],
+    tmp: &mut [i32; ITX_TMP_PIXELS],
+    x: usize,
+    second_kind: usize,
+) {
+    let z = _mm_setzero_si128();
+    let mut m = 0usize;
+    while m < H {
+        let mut a0 = z;
+        let mut a1 = z;
+        let mut a2 = z;
+        let mut a3 = z;
+        let mut j = 0usize;
+        while j < H {
+            let x0 = avx2_load4_i16_scratch(scratch, x + j * W);
+            let x1 = avx2_load4_i16_scratch(scratch, x + (j + 1) * W);
+            let x01 = _mm_unpacklo_epi16(x0, x1);
+            a0 = _mm_add_epi32(
+                a0,
+                _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m, j)),
+            );
+            a1 = _mm_add_epi32(
+                a1,
+                _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 1, j)),
+            );
+            a2 = _mm_add_epi32(
+                a2,
+                _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 2, j)),
+            );
+            a3 = _mm_add_epi32(
+                a3,
+                _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 3, j)),
+            );
+            j += 2;
+        }
+        unsafe {
+            _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32).cast(), a0);
+            _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32).cast(), a1);
+            _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32).cast(), a2);
+            _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 3) * 32).cast(), a3);
+        }
+        m += 4;
+    }
+}
+
 #[inline(never)]
 #[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_impl_const<const W: usize, const H: usize, const IS_RECT2: bool>(
@@ -5642,13 +5795,12 @@ fn tx_dequant_dense_avx2_i16_impl_const<const W: usize, const H: usize, const IS
         }
     }
     let nrows = ngrp * 4;
-    let z = _mm_setzero_si128();
     let rnd = _mm_set1_epi32((1 << shift0) >> 1);
     let sh = _mm_cvtsi32_si128(shift0);
     let minv = _mm_set1_epi32(row_clip_min);
     let maxv = _mm_set1_epi32(row_clip_max);
 
-    with_avx2_itx_i16_scratch(W * H, |scratch| unsafe {
+    with_avx2_itx_i16_scratch(W * H, |scratch| {
         let mut y = 0usize;
         if first_kind == crate::itx_2d::TX_KIND_DCT && W == 16 {
             y = avx2_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, H>(
@@ -5671,52 +5823,7 @@ fn tx_dequant_dense_avx2_i16_impl_const<const W: usize, const H: usize, const IS
                 coeff, scratch, y, nrows, rnd, sh, minv, maxv,
             );
         }
-        while y + 4 <= nrows {
-            let mut m = 0usize;
-            while m < W {
-                let mut a0 = z;
-                let mut a1 = z;
-                let mut a2 = z;
-                let mut a3 = z;
-                let mut j = 0usize;
-                while j < W {
-                    let x0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
-                    let x1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
-                    let x01 = _mm_unpacklo_epi16(x0, x1);
-                    a0 = _mm_add_epi32(
-                        a0,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m, j)),
-                    );
-                    a1 = _mm_add_epi32(
-                        a1,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 1, j)),
-                    );
-                    a2 = _mm_add_epi32(
-                        a2,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 2, j)),
-                    );
-                    a3 = _mm_add_epi32(
-                        a3,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 3, j)),
-                    );
-                    j += 2;
-                }
-                avx2_store4x4_i16_clip::<W>(
-                    scratch,
-                    y * W + m,
-                    a0,
-                    a1,
-                    a2,
-                    a3,
-                    rnd,
-                    sh,
-                    minv,
-                    maxv,
-                );
-                m += 4;
-            }
-            y += 4;
-        }
+        avx2_row_pass::<W, H, IS_RECT2>(coeff, scratch, nrows, first_kind, rnd, sh, minv, maxv, y);
         coeff[..W * H].fill(0);
 
         let mut x = 0usize;
@@ -5766,41 +5873,7 @@ fn tx_dequant_dense_avx2_i16_impl_const<const W: usize, const H: usize, const IS
             } else if second_kind == crate::itx_2d::TX_KIND_DCT && H == 32 {
                 avx2_dct32_i16x4_scratch4_stride_eob_store::<W>(scratch, x, nrows, tmp);
             } else {
-                let mut m = 0usize;
-                while m < H {
-                    let mut a0 = z;
-                    let mut a1 = z;
-                    let mut a2 = z;
-                    let mut a3 = z;
-                    let mut j = 0usize;
-                    while j < H {
-                        let x0 = avx2_load4_i16_scratch(scratch, x + j * W);
-                        let x1 = avx2_load4_i16_scratch(scratch, x + (j + 1) * W);
-                        let x01 = _mm_unpacklo_epi16(x0, x1);
-                        a0 = _mm_add_epi32(
-                            a0,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m, j)),
-                        );
-                        a1 = _mm_add_epi32(
-                            a1,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 1, j)),
-                        );
-                        a2 = _mm_add_epi32(
-                            a2,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 2, j)),
-                        );
-                        a3 = _mm_add_epi32(
-                            a3,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 3, j)),
-                        );
-                        j += 2;
-                    }
-                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + m * 32).cast(), a0);
-                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 1) * 32).cast(), a1);
-                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 2) * 32).cast(), a2);
-                    _mm_storeu_si128(tmp.as_mut_ptr().add(x + (m + 3) * 32).cast(), a3);
-                    m += 4;
-                }
+                avx2_col_generic_store_x4::<W, H>(scratch, tmp, x, second_kind);
             }
             x += 4;
         }
@@ -5928,7 +6001,6 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
         }
     }
     let nrows = ngrp * 4;
-    let z = _mm_setzero_si128();
     let rnd = _mm_set1_epi32((1 << shift0) >> 1);
     let sh = _mm_cvtsi32_si128(shift0);
     let minv = _mm_set1_epi32(row_clip_min);
@@ -5964,52 +6036,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
                 coeff, scratch, y, nrows, rnd, sh, minv, maxv,
             );
         }
-        while y + 4 <= nrows {
-            let mut m = 0usize;
-            while m < W {
-                let mut a0 = z;
-                let mut a1 = z;
-                let mut a2 = z;
-                let mut a3 = z;
-                let mut j = 0usize;
-                while j < W {
-                    let x0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
-                    let x1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
-                    let x01 = _mm_unpacklo_epi16(x0, x1);
-                    a0 = _mm_add_epi32(
-                        a0,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m, j)),
-                    );
-                    a1 = _mm_add_epi32(
-                        a1,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 1, j)),
-                    );
-                    a2 = _mm_add_epi32(
-                        a2,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 2, j)),
-                    );
-                    a3 = _mm_add_epi32(
-                        a3,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(first_kind, W, m + 3, j)),
-                    );
-                    j += 2;
-                }
-                avx2_store4x4_i16_clip::<W>(
-                    scratch,
-                    y * W + m,
-                    a0,
-                    a1,
-                    a2,
-                    a3,
-                    rnd,
-                    sh,
-                    minv,
-                    maxv,
-                );
-                m += 4;
-            }
-            y += 4;
-        }
+        avx2_row_pass::<W, H, IS_RECT2>(coeff, scratch, nrows, first_kind, rnd, sh, minv, maxv, y);
         coeff[..W * H].fill(0);
 
         let rnd1_4 = _mm_set1_epi32((1 << shift1) >> 1);
@@ -6114,7 +6141,6 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_hot_impl_const<
         }
     }
     let nrows = ngrp * 4;
-    let z = _mm_setzero_si128();
     let rnd = _mm_set1_epi32((1 << shift0) >> 1);
     let sh = _mm_cvtsi32_si128(shift0);
     let minv = _mm_set1_epi32(row_clip_min);
@@ -6147,52 +6173,9 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_hot_impl_const<
                 coeff, scratch, y, nrows, rnd, sh, minv, maxv,
             );
         }
-        while y + 4 <= nrows {
-            let mut m = 0usize;
-            while m < W {
-                let mut a0 = z;
-                let mut a1 = z;
-                let mut a2 = z;
-                let mut a3 = z;
-                let mut j = 0usize;
-                while j < W {
-                    let x0 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + j * H);
-                    let x1 = avx2_load4_i16_coeff_packed_const::<IS_RECT2>(coeff, y + (j + 1) * H);
-                    let x01 = _mm_unpacklo_epi16(x0, x1);
-                    a0 = _mm_add_epi32(
-                        a0,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m, j)),
-                    );
-                    a1 = _mm_add_epi32(
-                        a1,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 1, j)),
-                    );
-                    a2 = _mm_add_epi32(
-                        a2,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 2, j)),
-                    );
-                    a3 = _mm_add_epi32(
-                        a3,
-                        _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(FIRST_KIND, W, m + 3, j)),
-                    );
-                    j += 2;
-                }
-                avx2_store4x4_i16_clip::<W>(
-                    scratch,
-                    y * W + m,
-                    a0,
-                    a1,
-                    a2,
-                    a3,
-                    rnd,
-                    sh,
-                    minv,
-                    maxv,
-                );
-                m += 4;
-            }
-            y += 4;
-        }
+        avx2_row_pass_const::<W, H, IS_RECT2, FIRST_KIND>(
+            coeff, scratch, nrows, rnd, sh, minv, maxv, y,
+        );
         coeff[..W * H].fill(0);
 
         let rnd1_4 = _mm_set1_epi32((1 << shift1) >> 1);
