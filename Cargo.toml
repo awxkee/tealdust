@@ -22,4 +22,5 @@ rust-version = "1.94.0"
 
 [features]
 default = ["avx"]
-avx = []
+sse = []
+avx = ["sse"]

@@ -242,7 +242,7 @@ fn resolve_ipred_v() -> IntraPred8Fn {
         {
             _f = crate::neon::ipred_v_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_v_8bpc_sse41;
@@ -267,7 +267,7 @@ fn resolve_ipred_h() -> IntraPred8Fn {
         {
             _f = crate::neon::ipred_h_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_h_8bpc_sse41;
@@ -292,7 +292,7 @@ fn resolve_ipred_smooth() -> SmoothPred8Fn {
         {
             _f = crate::neon::ipred_smooth_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_smooth_8bpc_sse41;
@@ -317,7 +317,7 @@ fn resolve_ipred_smooth_v() -> SmoothPred8Fn {
         {
             _f = crate::neon::ipred_smooth_v_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_smooth_v_8bpc_sse41;
@@ -342,7 +342,7 @@ fn resolve_ipred_smooth_h() -> SmoothPred8Fn {
         {
             _f = crate::neon::ipred_smooth_h_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_smooth_h_8bpc_sse41;
@@ -470,7 +470,7 @@ fn resolve_ipred_dc() -> IntraPred8Fn {
         {
             _f = crate::neon::ipred_dc_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_dc_8bpc_sse41;
@@ -495,7 +495,7 @@ fn resolve_ipred_dc_top() -> IntraPred8Fn {
         {
             _f = crate::neon::ipred_dc_top_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_dc_top_8bpc_sse41;
@@ -520,7 +520,7 @@ fn resolve_ipred_dc_left() -> IntraPred8Fn {
         {
             _f = crate::neon::ipred_dc_left_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_dc_left_8bpc_sse41;
@@ -545,7 +545,7 @@ fn resolve_ipred_dc_128() -> DcPred128Fn {
         {
             _f = crate::neon::ipred_dc_128_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_dc_128_8bpc_sse41;
@@ -645,7 +645,7 @@ fn resolve_ipred_paeth() -> SmoothPred8Fn {
         {
             _f = crate::neon::ipred_paeth_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_paeth_8bpc_sse41;
@@ -717,7 +717,7 @@ fn resolve_ipred_z1() -> Z1Pred8Fn {
         {
             _f = crate::neon::ipred_z1_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_z1_8bpc_sse41;
@@ -800,7 +800,7 @@ fn resolve_ipred_z3() -> Z1Pred8Fn {
         {
             _f = crate::neon::ipred_z3_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_z3_8bpc_sse41;
@@ -883,7 +883,7 @@ fn resolve_ipred_z2() -> Z2Pred8Fn {
         {
             _f = crate::neon::ipred_z2_8bpc_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ipred_z2_8bpc_sse41;
@@ -1493,7 +1493,7 @@ macro_rules! resolve_hbd_ipred {
             {
                 _f = $neon;
             }
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
             {
                 if std::is_x86_feature_detected!("sse4.1") {
                     _f = $sse;

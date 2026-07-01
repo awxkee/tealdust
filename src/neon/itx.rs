@@ -500,7 +500,6 @@ fn neon_writeback4_i32_u8<const W: usize, const H: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn add_tmp_to_dst_8bpc_neon(
     dst: &mut [u8],
@@ -4668,7 +4667,6 @@ fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_impl_const<
 
 // Hot fused path: only the curated square hot pairs use const kind
 // generics. The broad fallback below remains runtime-kind SIMD.
-#[inline]
 #[target_feature(enable = "rdm")]
 fn tx_dequant_dense_neon_i16_rdm_fused_8bpc_hot_impl_const<
     const N: usize,
@@ -5042,7 +5040,6 @@ fn tx_dequant_dense_neon_i16_fused_4x4_impl(
     }
 }
 
-#[inline]
 #[target_feature(enable = "neon")]
 fn tx_dequant_dense_neon_i16_fused_hot_square<const N: usize, const W: usize, const H: usize>(
     coeff: &mut [i16],
@@ -6000,7 +5997,6 @@ pub(crate) fn idct_dequant_32x32_i16_neon_fused_8bpc(
     )
 }
 
-#[inline]
 #[target_feature(enable = "rdm")]
 pub(crate) fn idct_dequant_16x16_i16_neon_rdm_fused_8bpc(
     coeff: &mut [i16],
@@ -6091,7 +6087,6 @@ pub(crate) fn idct_dequant_32x32_i16_neon_rdm_fused_8bpc(
     )
 }
 
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn itx_dequant_i16_neon_fused_8bpc(
     coeff: &mut [i16],
@@ -6199,7 +6194,6 @@ pub(crate) fn itx_dequant_i16_neon_fused_8bpc(
     )
 }
 
-#[inline]
 #[target_feature(enable = "rdm")]
 pub(crate) fn itx_dequant_i16_neon_rdm_fused_8bpc(
     coeff: &mut [i16],

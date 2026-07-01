@@ -120,7 +120,7 @@ mod levels;
 mod neon;
 mod picture;
 mod rowops_dispatch;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 pub(crate) mod sse;
 
 pub use avif::*;

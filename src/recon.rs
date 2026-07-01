@@ -1943,7 +1943,7 @@ pub(crate) fn decode_coefs_scalar<C: Coeff, const UPDATE_CDF: bool>(
     decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "sse"))]
 #[target_feature(enable = "sse2")]
 pub(crate) fn decode_coefs_sse2<C: Coeff, const UPDATE_CDF: bool>(
     msac: &mut crate::sse::MsacContextSse<'_, UPDATE_CDF>,

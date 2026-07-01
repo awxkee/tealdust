@@ -218,6 +218,7 @@ pub(crate) type CflMhccpPred8Fn = for<'a> unsafe fn(CflMhccpPred8<'a>);
 pub(crate) type CflMhccpPredHbdFn = for<'a> unsafe fn(CflMhccpPredHbd<'a>);
 
 #[inline(always)]
+#[allow(unused)]
 pub(crate) fn cfl_mhccp_coeffs_fit_fast_mul(alpha: &[i32; 3]) -> bool {
     // For AV2 MHCCP predictors v0/sqrnd(v1) are bounded by the pixel max
     // (255 for 8bpc, <=4095 for current HBD).  With |alpha| <= 65535 the
@@ -1585,7 +1586,7 @@ fn resolve_cfl_apply_420() -> CflApplyFn {
                 _f = crate::neon::cfl_apply_420_8bpc_neon_rdm;
             }
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cfl_apply_420_8bpc_sse41;
@@ -1637,7 +1638,7 @@ fn resolve_cfl_apply_422() -> CflApplyFn {
                 _f = crate::neon::cfl_apply_422_8bpc_neon_rdm;
             }
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cfl_apply_422_8bpc_sse41;
@@ -1665,7 +1666,7 @@ fn resolve_cfl_apply_444() -> CflApplyFn {
                 _f = crate::neon::cfl_apply_444_8bpc_neon_rdm;
             }
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cfl_apply_444_8bpc_sse41;
@@ -1719,7 +1720,7 @@ fn resolve_cfl_apply_420_hbd() -> CflApplyHbdFn {
         {
             _f = crate::neon::cfl_apply_420_hbd_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cfl_apply_420_hbd_sse41;
@@ -1763,7 +1764,7 @@ fn resolve_cfl_apply_422_hbd() -> CflApplyHbdFn {
         {
             _f = crate::neon::cfl_apply_422_hbd_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cfl_apply_422_hbd_sse41;
@@ -1787,7 +1788,7 @@ fn resolve_cfl_apply_444_hbd() -> CflApplyHbdFn {
         {
             _f = crate::neon::cfl_apply_444_hbd_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cfl_apply_444_hbd_sse41;

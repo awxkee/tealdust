@@ -219,7 +219,7 @@ pub(crate) type MsacContext<'a, const UPDATE_CDF: bool> = MsacContextScalar<'a, 
 
 pub(crate) struct ScalarMsacBackend;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "sse"))]
 pub(crate) struct SseMsacBackend;
 
 pub(crate) trait MsacBackend<const UPDATE_CDF: bool> {
@@ -246,7 +246,7 @@ impl<const UPDATE_CDF: bool> MsacBackend<UPDATE_CDF> for ScalarMsacBackend {
     }
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "sse"))]
 impl<const UPDATE_CDF: bool> MsacBackend<UPDATE_CDF> for SseMsacBackend {
     type Ctx<'a> = crate::sse::MsacContextSse<'a, UPDATE_CDF>;
 

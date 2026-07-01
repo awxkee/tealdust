@@ -29,7 +29,7 @@
 
 use crate::levels::{N_TX_1D_TYPES, N_TX_SIZES};
 use std::convert::TryInto;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 use std::sync::OnceLock;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1005,205 +1005,205 @@ pub(crate) static TX1D_FNS_X8_SCALAR_TBL: Itx1dFnX8Table = {
     t
 };
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_dct4_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_dct4_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_dct4_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_dct4_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_dct8_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_dct8_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_dct8_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_dct8_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_dct16_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_dct16_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_dct16_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_dct16_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_dct32_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_dct32_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_dct32_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_dct32_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_identity4_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_identity4_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_identity4_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_identity4_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_identity8_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_identity8_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_identity8_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_identity8_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_identity16_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_identity16_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_identity16_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_identity16_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_identity32_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_identity32_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_identity32_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_identity32_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_adst4_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_adst4_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_adst4_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_adst4_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_adst8_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_adst8_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_adst8_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_adst8_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_adst16_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_adst16_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_adst16_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_adst16_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_flipadst4_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_flipadst4_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_flipadst4_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_flipadst4_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_flipadst8_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_flipadst8_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_flipadst8_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_flipadst8_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_flipadst16_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_flipadst16_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_flipadst16_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_flipadst16_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_ddt8_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_ddt8_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_ddt8_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_ddt8_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_ddt16_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_ddt16_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_ddt16_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_ddt16_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_flipddt8_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_flipddt8_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_flipddt8_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_flipddt8_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[target_feature(enable = "avx2")]
 pub(crate) fn inv_flipddt16_1d_x8_avx2(c: &mut [i32], base: usize, stride: usize) {
     inv_flipddt16_1d_x8(c, base, stride)
 }
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_flipddt16_1d_x8_sse41(c: &mut [i32], base: usize, stride: usize) {
     inv_flipddt16_1d_x8(c, base, stride)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 pub(crate) static TX1D_FNS_X8_AVX2_TBL: Itx1dFnX8Table = {
     const DCT: usize = 0;
     const IDENTITY: usize = 1;
@@ -1235,7 +1235,7 @@ pub(crate) static TX1D_FNS_X8_AVX2_TBL: Itx1dFnX8Table = {
     t
 };
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 pub(crate) static TX1D_FNS_X8_SSE41_TBL: Itx1dFnX8Table = {
     const DCT: usize = 0;
     const IDENTITY: usize = 1;
@@ -1267,44 +1267,46 @@ pub(crate) static TX1D_FNS_X8_SSE41_TBL: Itx1dFnX8Table = {
     t
 };
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(unused)]
 pub(crate) enum X86ItxLevel {
     Scalar,
     Sse41,
     Avx2,
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 static X86_ITX_LEVEL: OnceLock<X86ItxLevel> = OnceLock::new();
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 static X86_TX1D_X8_TABLE: OnceLock<&'static Itx1dFnX8Table> = OnceLock::new();
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "sse"))]
 #[inline(always)]
 fn x86_tx1d_x8_table() -> &'static Itx1dFnX8Table {
     X86_TX1D_X8_TABLE.get_or_init(|| match x86_itx_level() {
+        #[cfg(feature = "avx")]
         X86ItxLevel::Avx2 => &TX1D_FNS_X8_AVX2_TBL,
         X86ItxLevel::Sse41 => &TX1D_FNS_X8_SSE41_TBL,
-        X86ItxLevel::Scalar => &TX1D_FNS_X8_SCALAR_TBL,
+        _ => &TX1D_FNS_X8_SCALAR_TBL,
     })
 }
 
-#[cfg(all(target_arch = "x86", not(target_arch = "x86_64")))]
+#[cfg(all(target_arch = "x86", feature = "sse", not(target_arch = "x86_64")))]
 #[inline(always)]
 fn x86_tx1d_x8_table() -> &'static Itx1dFnX8Table {
     X86_TX1D_X8_TABLE.get_or_init(|| match x86_itx_level() {
-        X86ItxLevel::Sse41 | X86ItxLevel::Avx2 => &TX1D_FNS_X8_SSE41_TBL,
-        X86ItxLevel::Scalar => &TX1D_FNS_X8_SCALAR_TBL,
+        X86ItxLevel::Sse41 => &TX1D_FNS_X8_SSE41_TBL,
+        _ => &TX1D_FNS_X8_SCALAR_TBL,
     })
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[inline(always)]
 pub(crate) fn x86_itx_level() -> X86ItxLevel {
     *X86_ITX_LEVEL.get_or_init(|| {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
                 return X86ItxLevel::Avx2;
@@ -1318,13 +1320,13 @@ pub(crate) fn x86_itx_level() -> X86ItxLevel {
     })
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 #[inline(always)]
 pub(crate) fn x86_itx_has_sse41() -> bool {
     matches!(x86_itx_level(), X86ItxLevel::Sse41 | X86ItxLevel::Avx2)
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
 #[inline(always)]
 pub(crate) fn x86_itx_has_avx2() -> bool {
     x86_itx_level() == X86ItxLevel::Avx2
@@ -1332,11 +1334,11 @@ pub(crate) fn x86_itx_has_avx2() -> bool {
 
 #[inline(always)]
 pub(crate) fn tx1d_x8_dispatch(tx_size: usize, kind: usize) -> Option<Itx1dFnX8U> {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
     {
         x86_tx1d_x8_table()[tx_size][kind]
     }
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    #[cfg(not(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse")))]
     {
         TX1D_FNS_X8_SCALAR_TBL[tx_size][kind]
     }

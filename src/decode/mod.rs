@@ -1999,7 +1999,7 @@ fn decode_frame_main_select<const UPDATE_CDF: bool>(
     pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
     if UPDATE_CDF {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", feature = "sse"))]
         {
             return decode_frame_main_inner::<UPDATE_CDF, crate::msac::SseMsacBackend>(
                 fc, n_passes, n_tc, pool,

@@ -292,7 +292,7 @@ fn resolve_ccso_prep_8bpc() -> CcsoPrep8bpcFn {
         {
             _f = crate::neon::ccso_prep_lut_8bpc_neon as CcsoPrep8bpcFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ccso_prep_lut_8bpc_sse41 as CcsoPrep8bpcFn;
@@ -316,7 +316,7 @@ fn resolve_ccso_prep_hbd() -> CcsoPrepHbdFn {
         {
             _f = crate::neon::ccso_prep_lut_hbd_neon as CcsoPrepHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ccso_prep_lut_hbd_sse41 as CcsoPrepHbdFn;
@@ -340,7 +340,7 @@ fn resolve_ccso_add_8bpc() -> CcsoAdd8bpcFn {
         {
             _f = crate::neon::ccso_add_8bpc_neon as CcsoAdd8bpcFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ccso_add_8bpc_sse41 as CcsoAdd8bpcFn;
@@ -364,7 +364,7 @@ fn resolve_ccso_add_hbd() -> CcsoAddHbdFn {
         {
             _f = crate::neon::ccso_add_hbd_neon as CcsoAddHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ccso_add_hbd_sse41 as CcsoAddHbdFn;

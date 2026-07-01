@@ -333,7 +333,7 @@ pub(crate) fn ns_wiener_fir_run() -> NsWienerFirFn {
         {
             _f = crate::neon::ns_wiener_fir_run_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ns_wiener_fir_run_sse41;
@@ -358,7 +358,7 @@ pub(crate) fn pc_wiener_fir_run() -> PcWienerFirFn {
         {
             _f = crate::neon::pc_wiener_fir_run_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::pc_wiener_fir_run_sse41;
@@ -425,7 +425,7 @@ pub(crate) fn ns_wiener_uv_fir_run() -> NsWienerUvFirFn {
         {
             _f = crate::neon::ns_wiener_uv_fir_run_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ns_wiener_uv_fir_run_sse41;
@@ -522,7 +522,7 @@ pub(crate) fn ns_wiener_fir_run_hbd() -> NsWienerFirHbdFn {
         {
             _f = crate::neon::ns_wiener_fir_run_hbd_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ns_wiener_fir_run_hbd_sse41;
@@ -546,7 +546,7 @@ pub(crate) fn pc_wiener_fir_run_hbd() -> PcWienerFirHbdFn {
         {
             _f = crate::neon::pc_wiener_fir_run_hbd_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::pc_wiener_fir_run_hbd_sse41;
@@ -634,7 +634,7 @@ pub(crate) fn ns_wiener_uv_fir_run_hbd() -> NsWienerUvFirHbdFn {
         {
             _f = crate::neon::ns_wiener_uv_fir_run_hbd_neon;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::ns_wiener_uv_fir_run_hbd_sse41;

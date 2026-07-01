@@ -873,7 +873,7 @@ fn deblock_hbd_edge(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, unused)]
 #[inline(always)]
 pub(crate) fn deblock_hbd_edge_with(
     dst: &mut [u16],
@@ -1337,7 +1337,7 @@ fn resolve_deblock_apply_8bpc() -> DeblockApply8bpcFn {
                 _f = crate::neon::deblock_apply_8bpc_neon as DeblockApply8bpcFn;
             }
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::deblock_apply_8bpc_sse41 as DeblockApply8bpcFn;
@@ -1364,7 +1364,7 @@ fn resolve_deblock_apply_hbd() -> DeblockApplyHbdFn {
                 _f = crate::neon::deblock_apply_hbd_neon as DeblockApplyHbdFn;
             }
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::deblock_apply_hbd_sse41 as DeblockApplyHbdFn;

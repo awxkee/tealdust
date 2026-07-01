@@ -97,7 +97,7 @@ fn resolve_residual_add() -> ResidualAddFn {
         {
             _f = crate::neon::residual_add_row_8bpc_neon as ResidualAddFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::residual_add_row_8bpc_sse41 as ResidualAddFn;
@@ -139,7 +139,7 @@ fn resolve_dc_add() -> DcAddFn {
         {
             _f = crate::neon::dc_add_row_8bpc_neon as DcAddFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::dc_add_row_8bpc_sse41 as DcAddFn;
@@ -180,7 +180,7 @@ fn resolve_row_clip() -> RowClipFn {
         {
             _f = crate::neon::row_clip_neon as RowClipFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::row_clip_sse41 as RowClipFn;
@@ -234,7 +234,7 @@ fn resolve_cctx() -> CctxFn {
         {
             _f = crate::neon::cctx_row_neon as CctxFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cctx_row_sse41 as CctxFn;
@@ -291,7 +291,7 @@ fn resolve_avg() -> AvgFn {
         {
             _f = crate::neon::avg_row_8bpc_neon as AvgFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::avg_row_8bpc_sse41 as AvgFn;
@@ -341,7 +341,7 @@ fn resolve_w_avg() -> WAvgFn {
         {
             _f = crate::neon::w_avg_row_8bpc_neon as WAvgFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::w_avg_row_8bpc_sse41 as WAvgFn;
@@ -406,7 +406,7 @@ fn resolve_mask() -> MaskFn {
         {
             _f = crate::neon::mask_row_8bpc_neon as MaskFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::mask_row_8bpc_sse41 as MaskFn;
@@ -459,7 +459,7 @@ fn resolve_blend() -> BlendFn {
         {
             _f = crate::neon::blend_row_8bpc_neon as BlendFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::blend_row_8bpc_sse41 as BlendFn;
@@ -500,7 +500,7 @@ fn resolve_morph() -> MorphFn {
         {
             _f = crate::neon::morph_row_8bpc_neon as MorphFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::morph_row_8bpc_sse41 as MorphFn;
@@ -555,7 +555,7 @@ fn resolve_residual_add_hbd() -> ResidualAddHbdFn {
         {
             _f = crate::neon::residual_add_row_hbd_neon as ResidualAddHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::residual_add_row_hbd_sse41 as ResidualAddHbdFn;
@@ -601,7 +601,7 @@ fn resolve_dc_add_hbd() -> DcAddHbdFn {
         {
             _f = crate::neon::dc_add_row_hbd_neon as DcAddHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::dc_add_row_hbd_sse41 as DcAddHbdFn;
@@ -648,7 +648,7 @@ fn resolve_avg_hbd() -> AvgHbdFn {
         {
             _f = crate::neon::avg_row_hbd_neon as AvgHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::avg_row_hbd_sse41 as AvgHbdFn;
@@ -706,7 +706,7 @@ fn resolve_w_avg_hbd() -> WAvgHbdFn {
         {
             _f = crate::neon::w_avg_row_hbd_neon as WAvgHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::w_avg_row_hbd_sse41 as WAvgHbdFn;
@@ -771,7 +771,7 @@ fn resolve_mask_hbd() -> MaskHbdFn {
         {
             _f = crate::neon::mask_row_hbd_neon as MaskHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::mask_row_hbd_sse41 as MaskHbdFn;
@@ -821,7 +821,7 @@ fn resolve_blend_hbd() -> BlendHbdFn {
         {
             _f = crate::neon::blend_row_hbd_neon as BlendHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::blend_row_hbd_sse41 as BlendHbdFn;
@@ -866,7 +866,7 @@ fn resolve_morph_hbd() -> MorphHbdFn {
         {
             _f = crate::neon::morph_row_hbd_neon as MorphHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::morph_row_hbd_sse41 as MorphHbdFn;
@@ -915,7 +915,7 @@ fn resolve_gdf_add() -> GdfAddFn {
         {
             _f = crate::neon::gdf_add_run_8bpc_neon as GdfAddFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::gdf_add_run_8bpc_sse41 as GdfAddFn;
@@ -1117,7 +1117,7 @@ fn resolve_gdf_grad() -> GdfGradFn {
         {
             _f = crate::neon::gdf_gradient_group_neon as GdfGradFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::gdf_gradient_group_sse41 as GdfGradFn;
@@ -1495,7 +1495,7 @@ fn resolve_cctx_i16() -> CctxI16Fn {
         {
             _f = crate::neon::cctx_row_i16_neon as CctxI16Fn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cctx_row_i16_sse41 as CctxI16Fn;

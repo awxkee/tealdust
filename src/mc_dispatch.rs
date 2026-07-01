@@ -126,7 +126,7 @@ fn resolve_prep_hbd() -> PrepHbdFn {
         {
             _f = crate::neon::prep_hbd_neon as PrepHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::prep_hbd_sse41 as PrepHbdFn;
@@ -195,7 +195,7 @@ fn resolve_put_bilin_hbd() -> PutBilinHbdFn {
         {
             _f = crate::neon::put_bilin_hbd_neon as PutBilinHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::put_bilin_hbd_sse41 as PutBilinHbdFn;
@@ -300,7 +300,7 @@ fn resolve_prep_bilin_hbd() -> PrepBilinHbdFn {
         {
             _f = crate::neon::prep_bilin_hbd_neon as PrepBilinHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::prep_bilin_hbd_sse41 as PrepBilinHbdFn;
@@ -409,7 +409,7 @@ fn resolve_put_8tap_hbd() -> Put8tapHbdFn {
         {
             _f = crate::neon::put_8tap_hbd_neon as Put8tapHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::put_8tap_hbd_sse41 as Put8tapHbdFn;
@@ -535,7 +535,7 @@ fn resolve_prep_8tap_hbd() -> Prep8tapHbdFn {
         {
             _f = crate::neon::prep_8tap_hbd_neon as Prep8tapHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::prep_8tap_hbd_sse41 as Prep8tapHbdFn;
@@ -664,7 +664,7 @@ fn resolve_put_bilin_8bpc() -> PutBilin8bpcFn {
         {
             _f = crate::neon::put_bilin_8bpc_neon as PutBilin8bpcFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = put_bilin_8bpc_scalar_dispatch as PutBilin8bpcFn;
@@ -688,7 +688,7 @@ fn resolve_prep_bilin_8bpc() -> PrepBilin8bpcFn {
         {
             _f = crate::neon::prep_bilin_8bpc_neon as PrepBilin8bpcFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = prep_bilin_8bpc_scalar_dispatch as PrepBilin8bpcFn;
@@ -776,7 +776,7 @@ fn resolve_put_8tap_8bpc() -> Put8tap8bpcFn {
         {
             _f = crate::neon::put_8tap_8bpc_neon as Put8tap8bpcFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = put_8tap_8bpc_scalar_dispatch as Put8tap8bpcFn;
@@ -800,7 +800,7 @@ fn resolve_prep_8tap_8bpc() -> Prep8tap8bpcFn {
         {
             _f = crate::neon::prep_8tap_8bpc_neon as Prep8tap8bpcFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = prep_8tap_8bpc_scalar_dispatch as Prep8tap8bpcFn;

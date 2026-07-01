@@ -534,7 +534,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     return;
                 }
             }
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
             {
                 if crate::itx_1d::x86_itx_has_sse41() {
                     if tx == txsz::TX_16X16 {

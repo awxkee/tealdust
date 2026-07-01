@@ -46,7 +46,7 @@ fn resolve_inv_wht_wht_4x4_8bpc() -> Option<InvWht4x4Fn8bpc> {
         {
             _f = Some(crate::neon::inv_wht_wht_4x4_i16_neon_8bpc as InvWht4x4Fn8bpc);
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if crate::itx_1d::x86_itx_has_sse41() {
                 _f = Some(crate::sse::inv_wht_wht_4x4_i16_sse41_8bpc as InvWht4x4Fn8bpc);
@@ -64,7 +64,7 @@ fn resolve_inv_wht_wht_4x4_hbd() -> Option<InvWht4x4FnHbd> {
         {
             _f = Some(crate::neon::inv_wht_wht_4x4_i32_neon_hbd as InvWht4x4FnHbd);
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if crate::itx_1d::x86_itx_has_sse41() {
                 _f = Some(crate::sse::inv_wht_wht_4x4_i32_sse41_hbd as InvWht4x4FnHbd);

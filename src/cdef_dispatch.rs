@@ -893,7 +893,7 @@ fn resolve_cdef_dir_8bpc() -> CdefDir8Fn {
         {
             _f = crate::neon::cdef_find_dir_8bpc_neon as CdefDir8Fn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cdef_find_dir_8bpc_sse41 as CdefDir8Fn;
@@ -919,7 +919,7 @@ fn resolve_cdef_dir_hbd() -> CdefDirHbdFn {
         {
             _f = crate::neon::cdef_find_dir_hbd_neon as CdefDirHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cdef_find_dir_hbd_sse41 as CdefDirHbdFn;
@@ -1080,7 +1080,7 @@ fn resolve_cdef_filter() -> CdefFilterFn {
         {
             _f = crate::neon::cdef_filter_block_8bpc_neon as CdefFilterFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cdef_filter_block_8bpc_sse41 as CdefFilterFn;
@@ -1107,7 +1107,7 @@ fn resolve_cdef_filter_hbd() -> CdefFilterHbdFn {
         {
             _f = crate::neon::cdef_filter_block_hbd_neon as CdefFilterHbdFn;
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = crate::sse::cdef_filter_block_hbd_sse41 as CdefFilterHbdFn;
@@ -1144,7 +1144,7 @@ fn resolve_cdef_filter_shapes() -> &'static [CdefFilterShapeFn; 4] {
                 crate::neon::cdef_filter_block_8x4_8bpc_neon as CdefFilterShapeFn,
             ];
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = [
@@ -1190,7 +1190,7 @@ fn resolve_cdef_filter_hbd_shapes() -> &'static [CdefFilterHbdShapeFn; 4] {
                 crate::neon::cdef_filter_block_8x4_hbd_neon as CdefFilterHbdShapeFn,
             ];
         }
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
             if std::is_x86_feature_detected!("sse4.1") {
                 _f = [

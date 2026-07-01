@@ -7145,7 +7145,6 @@ macro_rules! avx2_fused_match_body {
     }};
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn itx_dequant_i16_avx2_fused_8bpc(
     coeff: &mut [i16],
@@ -8502,7 +8501,6 @@ fn idct_dequant_32x32_i16_avx2_fixed_impl(
     )
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x16_i16_avx2_fused_8bpc(
     coeff: &mut [i16],

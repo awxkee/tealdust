@@ -3919,7 +3919,6 @@ fn idct_dequant_32x32_i16_sse41_fixed_impl(
     )
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_16x16_i16_sse41_fused_8bpc(
     coeff: &mut [i16],
