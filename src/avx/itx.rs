@@ -7581,8 +7581,6 @@ fn idct_dequant_32x32_avx2_i32_impl_const<const IS_RECT2: bool>(
         x += 8;
     }
 }
-
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_4x4_avx2(
     coeff: &mut [i32],
@@ -7607,7 +7605,7 @@ pub(crate) fn idct_dequant_4x4_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x8_avx2(
     coeff: &mut [i32],
@@ -7632,7 +7630,7 @@ pub(crate) fn idct_dequant_8x8_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x16_avx2(
     coeff: &mut [i32],
@@ -7655,6 +7653,7 @@ pub(crate) fn idct_dequant_16x16_avx2(
         row_clip_max,
     )
 }
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x32_avx2(
     coeff: &mut [i32],
@@ -7677,7 +7676,7 @@ pub(crate) fn idct_dequant_32x32_avx2(
         row_clip_max,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_64x64_avx2(
     coeff: &mut [i32],
@@ -7702,7 +7701,7 @@ pub(crate) fn idct_dequant_64x64_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_4x4_avx2(
     coeff: &mut [i32],
@@ -7729,7 +7728,7 @@ pub(crate) fn iadst_dequant_4x4_avx2(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_8x8_avx2(
     coeff: &mut [i32],
@@ -7756,7 +7755,7 @@ pub(crate) fn iadst_dequant_8x8_avx2(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_16x16_avx2(
     coeff: &mut [i32],
@@ -7783,7 +7782,7 @@ pub(crate) fn iadst_dequant_16x16_avx2(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_4x8_avx2(
     coeff: &mut [i32],
@@ -7808,7 +7807,7 @@ pub(crate) fn idct_dequant_4x8_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x4_avx2(
     coeff: &mut [i32],
@@ -7833,7 +7832,7 @@ pub(crate) fn idct_dequant_8x4_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x16_avx2(
     coeff: &mut [i32],
@@ -7858,7 +7857,7 @@ pub(crate) fn idct_dequant_8x16_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x8_avx2(
     coeff: &mut [i32],
@@ -7883,7 +7882,7 @@ pub(crate) fn idct_dequant_16x8_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x32_avx2(
     coeff: &mut [i32],
@@ -7908,7 +7907,7 @@ pub(crate) fn idct_dequant_16x32_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x16_avx2(
     coeff: &mut [i32],
@@ -7933,7 +7932,7 @@ pub(crate) fn idct_dequant_32x16_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_4x16_avx2(
     coeff: &mut [i32],
@@ -7958,7 +7957,7 @@ pub(crate) fn idct_dequant_4x16_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x4_avx2(
     coeff: &mut [i32],
@@ -7983,7 +7982,7 @@ pub(crate) fn idct_dequant_16x4_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x32_avx2(
     coeff: &mut [i32],
@@ -8008,7 +8007,7 @@ pub(crate) fn idct_dequant_8x32_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x8_avx2(
     coeff: &mut [i32],
@@ -8033,7 +8032,7 @@ pub(crate) fn idct_dequant_32x8_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_4x32_avx2(
     coeff: &mut [i32],
@@ -8058,7 +8057,7 @@ pub(crate) fn idct_dequant_4x32_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_32x4_avx2(
     coeff: &mut [i32],
@@ -8083,7 +8082,7 @@ pub(crate) fn idct_dequant_32x4_avx2(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_4x8_avx2(
     coeff: &mut [i32],
@@ -8110,7 +8109,7 @@ pub(crate) fn iadst_dequant_4x8_avx2(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_8x4_avx2(
     coeff: &mut [i32],
@@ -8137,7 +8136,7 @@ pub(crate) fn iadst_dequant_8x4_avx2(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_8x16_avx2(
     coeff: &mut [i32],
@@ -8164,7 +8163,7 @@ pub(crate) fn iadst_dequant_8x16_avx2(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_16x8_avx2(
     coeff: &mut [i32],
@@ -8191,7 +8190,7 @@ pub(crate) fn iadst_dequant_16x8_avx2(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_4x16_avx2(
     coeff: &mut [i32],
@@ -8218,7 +8217,7 @@ pub(crate) fn iadst_dequant_4x16_avx2(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_16x4_avx2(
     coeff: &mut [i32],
@@ -8249,10 +8248,10 @@ pub(crate) fn iadst_dequant_16x4_avx2(
 // Low-bit-depth i16 coefficient entry points.
 
 macro_rules! idct_i16_fn {
-    ($pub:ident, $imp:ident, $n:expr, $s:expr) => {
+    ($pub_fn:ident, $imp:ident, $n:expr, $s:expr) => {
         #[target_feature(enable = "avx2")]
-        #[inline]
-        pub(crate) fn $pub(
+
+        pub(crate) fn $pub_fn(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -8278,10 +8277,9 @@ macro_rules! idct_i16_fn {
     };
 }
 macro_rules! iadst_i16_fn {
-    ($pub:ident, $imp:ident, $n:expr, $s:expr) => {
+    ($pub_fn:ident, $imp:ident, $n:expr, $s:expr) => {
         #[target_feature(enable = "avx2")]
-        #[inline]
-        pub(crate) fn $pub(
+        pub(crate) fn $pub_fn(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -8309,10 +8307,9 @@ macro_rules! iadst_i16_fn {
     };
 }
 macro_rules! idct_rect_i16_fn {
-    ($pub:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+    ($pub_fn:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
         #[target_feature(enable = "avx2")]
-        #[inline]
-        pub(crate) fn $pub(
+        pub(crate) fn $pub_fn(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -8338,10 +8335,9 @@ macro_rules! idct_rect_i16_fn {
     };
 }
 macro_rules! iadst_rect_i16_fn {
-    ($pub:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+    ($pub_fn:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
         #[target_feature(enable = "avx2")]
-        #[inline]
-        pub(crate) fn $pub(
+        pub(crate) fn $pub_fn(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -8374,7 +8370,7 @@ idct_i16_fn!(
     16,
     4
 );
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x8_i16_avx2(
     coeff: &mut [i16],
@@ -8559,7 +8555,6 @@ pub(crate) fn idct_dequant_32x32_i16_avx2_fused_8bpc(
     )
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_16x16_i16_avx2(
     coeff: &mut [i16],
@@ -8618,7 +8613,7 @@ iadst_i16_fn!(
     16,
     4
 );
-#[inline]
+
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_8x8_i16_avx2(
     coeff: &mut [i16],
@@ -8646,7 +8641,6 @@ pub(crate) fn iadst_dequant_8x8_i16_avx2(
     )
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn iadst_dequant_16x16_i16_avx2(
     coeff: &mut [i16],

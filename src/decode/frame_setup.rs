@@ -215,7 +215,13 @@ pub(crate) fn setup_tile(
     ts.msac_buf.extend_from_slice(data);
     // Seed the resumable entropy state so every sbrow — including the first —
     // restores uniformly from `ts.msac_state` (sbrow-granularity scheduling).
-    ts.msac_state = MsacContextScalar::<true>::new(&ts.msac_buf).save();
+    // Without the `adaptive_cdf` feature, the UPDATE_CDF policy is carried in
+    // the saved MSAC state so the decode body can stay single-monomorphized.
+    ts.msac_state = MsacContextScalar::<true>::new_with_update_cdf(
+        &ts.msac_buf,
+        frame_hdr.disable_cdf_update == 0,
+    )
+    .save();
     ts.tile_start_off = tile_start_off;
 
     setup_tile_bounds(

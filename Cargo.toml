@@ -21,6 +21,7 @@ rust-version = "1.94.0"
 [dependencies]
 
 [features]
-default = ["avx"]
+default = ["avx", "adaptive_cdf"]
+adaptive_cdf = []
 sse = []
 avx = ["sse"]

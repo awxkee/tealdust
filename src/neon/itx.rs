@@ -138,7 +138,6 @@ fn neon_store_wht_row_hbd(dst: &mut [u16], off: usize, residual: int32x4_t, bitd
     }
 }
 
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn inv_wht_wht_4x4_i16_neon_8bpc(
     coeff: &mut [i16],
@@ -165,7 +164,6 @@ pub(crate) fn inv_wht_wht_4x4_i16_neon_8bpc(
     }
 }
 
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn inv_wht_wht_4x4_i32_neon_hbd(
     coeff: &mut [i32],
@@ -2992,9 +2990,8 @@ fn idct_dequant_32x32_neon_i32_impl_const<const IS_RECT2: bool>(
 }
 
 macro_rules! idct_neon_fn {
-    ($pub:ident, $n:expr, $s:expr) => {
-        #[inline]
-        pub(crate) fn $pub(
+    ($pub_fn:ident, $n:expr, $s:expr) => {
+        pub(crate) fn $pub_fn(
             coeff: &mut [i32],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -3024,7 +3021,6 @@ macro_rules! idct_neon_fn {
 
 macro_rules! idct_rect_neon_fn {
     ($pub:ident, $n:expr, $w:expr, $h:expr) => {
-        #[inline]
         pub(crate) fn $pub(
             coeff: &mut [i32],
             tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3054,9 +3050,8 @@ macro_rules! idct_rect_neon_fn {
 }
 
 macro_rules! iadst_rect_neon_fn {
-    ($pub:ident, $n:expr, $w:expr, $h:expr) => {
-        #[inline]
-        pub(crate) fn $pub(
+    ($pub_fn:ident, $n:expr, $w:expr, $h:expr) => {
+        pub(crate) fn $pub_fn(
             coeff: &mut [i32],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -3086,7 +3081,6 @@ macro_rules! iadst_rect_neon_fn {
     };
 }
 
-#[inline]
 pub(crate) fn idct_dequant_4x4_neon(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3112,7 +3106,6 @@ pub(crate) fn idct_dequant_4x4_neon(
         )
     }
 }
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_8x8_neon(
     coeff: &mut [i32],
@@ -3137,7 +3130,7 @@ pub(crate) fn idct_dequant_8x8_neon(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 pub(crate) fn idct_dequant_16x16_neon(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3185,7 +3178,7 @@ pub(crate) fn idct_dequant_32x32_neon(
     }
 }
 idct_neon_fn!(idct_dequant_64x64_neon, 1024, 32);
-#[inline]
+
 pub(crate) fn iadst_dequant_4x4_neon(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3213,7 +3206,6 @@ pub(crate) fn iadst_dequant_4x4_neon(
         )
     }
 }
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn iadst_dequant_8x8_neon(
     coeff: &mut [i32],
@@ -3240,7 +3232,6 @@ pub(crate) fn iadst_dequant_8x8_neon(
         second_kind,
     )
 }
-#[inline]
 pub(crate) fn iadst_dequant_16x16_neon(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3289,7 +3280,6 @@ iadst_rect_neon_fn!(iadst_dequant_16x4_neon, 64, 16, 4);
 
 macro_rules! idct_rect_rdm_fn {
     ($pub_name:ident, $impl_name:ident, $n:expr, $w:expr, $h:expr) => {
-        #[inline]
         pub(crate) fn $pub_name(
             coeff: &mut [i32],
             tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -3343,7 +3333,6 @@ macro_rules! idct_rect_rdm_fn {
 
 macro_rules! iadst_rect_rdm_fn {
     ($pub_name:ident, $impl_name:ident, $n:expr, $w:expr, $h:expr) => {
-        #[inline]
         pub(crate) fn $pub_name(
             coeff: &mut [i32],
             tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -5906,7 +5895,6 @@ fn idct_dequant_32x32_i16_neon_rdm_fixed_fused_8bpc_impl(
     }
 }
 
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_16x16_i16_neon_fused_8bpc(
     coeff: &mut [i16],
@@ -6305,7 +6293,6 @@ pub(crate) fn itx_dequant_i16_neon_rdm_fused_8bpc(
 
 macro_rules! idct_i16_neon_fn {
     ($pub:ident, $n:expr, $s:expr) => {
-        #[inline]
         pub(crate) fn $pub(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6336,7 +6323,6 @@ macro_rules! idct_i16_neon_fn {
 
 macro_rules! iadst_i16_neon_fn {
     ($pub:ident, $n:expr, $s:expr) => {
-        #[inline]
         pub(crate) fn $pub(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6369,7 +6355,6 @@ macro_rules! iadst_i16_neon_fn {
 
 macro_rules! idct_rect_i16_neon_fn {
     ($pub:ident, $n:expr, $w:expr, $h:expr) => {
-        #[inline]
         pub(crate) fn $pub(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6400,7 +6385,6 @@ macro_rules! idct_rect_i16_neon_fn {
 
 macro_rules! iadst_rect_i16_neon_fn {
     ($pub:ident, $n:expr, $w:expr, $h:expr) => {
-        #[inline]
         pub(crate) fn $pub(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6433,7 +6417,6 @@ macro_rules! iadst_rect_i16_neon_fn {
 
 macro_rules! idct_rect_i16_neon_rdm_fn {
     ($pub_name:ident, $impl_name:ident, $n:expr, $w:expr, $h:expr) => {
-        #[inline]
         pub(crate) fn $pub_name(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6487,7 +6470,6 @@ macro_rules! idct_rect_i16_neon_rdm_fn {
 
 macro_rules! iadst_rect_i16_neon_rdm_fn {
     ($pub_name:ident, $impl_name:ident, $n:expr, $w:expr, $h:expr) => {
-        #[inline]
         pub(crate) fn $pub_name(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
@@ -6546,7 +6528,7 @@ macro_rules! iadst_rect_i16_neon_rdm_fn {
 }
 
 idct_i16_neon_fn!(idct_dequant_4x4_i16_neon, 16, 4);
-#[inline]
+
 #[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_8x8_i16_neon(
     coeff: &mut [i16],
@@ -6572,7 +6554,6 @@ pub(crate) fn idct_dequant_8x8_i16_neon(
     )
 }
 
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_16x16_i16_neon(
     coeff: &mut [i16],
@@ -6642,7 +6623,6 @@ pub(crate) fn idct_dequant_32x32_i16_neon_rdm(
     )
 }
 
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn idct_dequant_64x64_i16_neon(
     coeff: &mut [i16],
@@ -6666,7 +6646,7 @@ pub(crate) fn idct_dequant_64x64_i16_neon(
     )
 }
 iadst_i16_neon_fn!(iadst_dequant_4x4_i16_neon, 16, 4);
-#[inline]
+
 #[target_feature(enable = "neon")]
 pub(crate) fn iadst_dequant_8x8_i16_neon(
     coeff: &mut [i16],
@@ -6694,7 +6674,6 @@ pub(crate) fn iadst_dequant_8x8_i16_neon(
     )
 }
 
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn iadst_dequant_16x16_i16_neon(
     coeff: &mut [i16],

@@ -42,17 +42,29 @@ pub(crate) struct MsacContextSse<'a, const UPDATE_CDF: bool> {
     pub(crate) dif: u64,
     pub(crate) rng: u32,
     pub(crate) cnt: i32,
+    #[cfg(not(feature = "adaptive_cdf"))]
+    pub(crate) update_cdf: bool,
 }
 
 impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
     #[inline(always)]
     pub(crate) fn new(data: &'a [u8]) -> Self {
+        Self::new_with_update_cdf(data, true)
+    }
+
+    #[inline(always)]
+    pub(crate) fn new_with_update_cdf(data: &'a [u8], update_cdf: bool) -> Self {
+        #[cfg(feature = "adaptive_cdf")]
+        let _ = update_cdf;
+
         let mut s = Self {
             buf_pos: 0,
             buf: data,
             dif: !0u64 >> 1,
             rng: 0x8000,
             cnt: -15,
+            #[cfg(not(feature = "adaptive_cdf"))]
+            update_cdf,
         };
         s.ctx_refill();
         s
@@ -65,6 +77,8 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
             dif: self.dif,
             rng: self.rng,
             cnt: self.cnt,
+            #[cfg(not(feature = "adaptive_cdf"))]
+            update_cdf: self.update_cdf,
         }
     }
 
@@ -76,6 +90,20 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
             dif: st.dif,
             rng: st.rng,
             cnt: st.cnt,
+            #[cfg(not(feature = "adaptive_cdf"))]
+            update_cdf: st.update_cdf,
+        }
+    }
+
+    #[inline(always)]
+    fn should_update_cdf(&self) -> bool {
+        #[cfg(feature = "adaptive_cdf")]
+        {
+            UPDATE_CDF
+        }
+        #[cfg(not(feature = "adaptive_cdf"))]
+        {
+            self.update_cdf
         }
     }
 
@@ -263,7 +291,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         debug_assert!(u >= v);
         self.ctx_norm(self.dif - ((v as u64) << 48), u - v);
 
-        if UPDATE_CDF {
+        if self.should_update_cdf() {
             let pc = cdf[N];
             let count = (pc & 0xFF) as u8;
             debug_assert!(count <= 32);
@@ -287,7 +315,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
     pub(crate) fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
         let bit = self.decode_bool_raw(cdf[0] as u32);
 
-        if UPDATE_CDF {
+        if self.should_update_cdf() {
             let pc = cdf[1];
             let count = (pc & 0xFF) as u8;
             let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize];
@@ -551,7 +579,7 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
         // cmp lane j = 0xFFFF iff c >= b_j   (subs_epu16(b,c)==0).
         let cmp = _mm_cmpeq_epi16(_mm_subs_epu16(bnd, c_bc), _mm_setzero_si128());
 
-        if UPDATE_CDF {
+        if s.should_update_cdf() {
             let pc = cdf[N];
             let count = (pc & 0xff) as u8;
             debug_assert!(count <= 32);

@@ -135,7 +135,6 @@ fn sse41_store_wht_row_hbd(dst: &mut [u16], off: usize, residual: __m128i, bitde
     }
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_wht_wht_4x4_i16_sse41_8bpc(
     coeff: &mut [i16],
@@ -170,7 +169,6 @@ pub(crate) fn inv_wht_wht_4x4_i16_sse41_8bpc(
     }
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn inv_wht_wht_4x4_i32_sse41_hbd(
     coeff: &mut [i32],
@@ -2999,7 +2997,6 @@ fn idct_dequant_32x32_sse41_i32_impl_const<const IS_RECT2: bool>(
     }
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_4x4_sse41(
     coeff: &mut [i32],
@@ -3024,7 +3021,7 @@ pub(crate) fn idct_dequant_4x4_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_8x8_sse41(
     coeff: &mut [i32],
@@ -3050,7 +3047,6 @@ pub(crate) fn idct_dequant_8x8_sse41(
     )
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_16x16_sse41(
     coeff: &mut [i32],
@@ -3095,7 +3091,6 @@ pub(crate) fn idct_dequant_32x32_sse41(
         row_clip_max,
     )
 }
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_64x64_sse41(
     coeff: &mut [i32],
@@ -3120,7 +3115,7 @@ pub(crate) fn idct_dequant_64x64_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_4x4_sse41(
     coeff: &mut [i32],
@@ -3147,7 +3142,7 @@ pub(crate) fn iadst_dequant_4x4_sse41(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_8x8_sse41(
     coeff: &mut [i32],
@@ -3174,7 +3169,7 @@ pub(crate) fn iadst_dequant_8x8_sse41(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_16x16_sse41(
     coeff: &mut [i32],
@@ -3201,7 +3196,7 @@ pub(crate) fn iadst_dequant_16x16_sse41(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_4x8_sse41(
     coeff: &mut [i32],
@@ -3226,7 +3221,7 @@ pub(crate) fn idct_dequant_4x8_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_8x4_sse41(
     coeff: &mut [i32],
@@ -3251,7 +3246,7 @@ pub(crate) fn idct_dequant_8x4_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_8x16_sse41(
     coeff: &mut [i32],
@@ -3276,7 +3271,7 @@ pub(crate) fn idct_dequant_8x16_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_16x8_sse41(
     coeff: &mut [i32],
@@ -3301,7 +3296,7 @@ pub(crate) fn idct_dequant_16x8_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_16x32_sse41(
     coeff: &mut [i32],
@@ -3326,7 +3321,7 @@ pub(crate) fn idct_dequant_16x32_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_32x16_sse41(
     coeff: &mut [i32],
@@ -3351,7 +3346,7 @@ pub(crate) fn idct_dequant_32x16_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_4x16_sse41(
     coeff: &mut [i32],
@@ -3376,7 +3371,7 @@ pub(crate) fn idct_dequant_4x16_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_16x4_sse41(
     coeff: &mut [i32],
@@ -3401,7 +3396,7 @@ pub(crate) fn idct_dequant_16x4_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_8x32_sse41(
     coeff: &mut [i32],
@@ -3426,7 +3421,7 @@ pub(crate) fn idct_dequant_8x32_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_32x8_sse41(
     coeff: &mut [i32],
@@ -3451,7 +3446,7 @@ pub(crate) fn idct_dequant_32x8_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_4x32_sse41(
     coeff: &mut [i32],
@@ -3476,7 +3471,7 @@ pub(crate) fn idct_dequant_4x32_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_32x4_sse41(
     coeff: &mut [i32],
@@ -3501,7 +3496,7 @@ pub(crate) fn idct_dequant_32x4_sse41(
         crate::itx_2d::TX_KIND_DCT,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_4x8_sse41(
     coeff: &mut [i32],
@@ -3528,7 +3523,7 @@ pub(crate) fn iadst_dequant_4x8_sse41(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_8x4_sse41(
     coeff: &mut [i32],
@@ -3555,7 +3550,7 @@ pub(crate) fn iadst_dequant_8x4_sse41(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_8x16_sse41(
     coeff: &mut [i32],
@@ -3582,7 +3577,7 @@ pub(crate) fn iadst_dequant_8x16_sse41(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_16x8_sse41(
     coeff: &mut [i32],
@@ -3609,7 +3604,7 @@ pub(crate) fn iadst_dequant_16x8_sse41(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_4x16_sse41(
     coeff: &mut [i32],
@@ -3636,7 +3631,7 @@ pub(crate) fn iadst_dequant_4x16_sse41(
         second_kind,
     )
 }
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_16x4_sse41(
     coeff: &mut [i32],
@@ -3667,10 +3662,9 @@ pub(crate) fn iadst_dequant_16x4_sse41(
 // Low-bit-depth i16 coefficient entry points.
 
 macro_rules! idct_i16_fn {
-    ($pub:ident, $imp:ident, $n:expr, $s:expr) => {
+    ($pub_fn:ident, $imp:ident, $n:expr, $s:expr) => {
         #[target_feature(enable = "sse4.1")]
-        #[inline]
-        pub(crate) fn $pub(
+        pub(crate) fn $pub_fn(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -3696,10 +3690,9 @@ macro_rules! idct_i16_fn {
     };
 }
 macro_rules! iadst_i16_fn {
-    ($pub:ident, $imp:ident, $n:expr, $s:expr) => {
+    ($pub_fn:ident, $imp:ident, $n:expr, $s:expr) => {
         #[target_feature(enable = "sse4.1")]
-        #[inline]
-        pub(crate) fn $pub(
+        pub(crate) fn $pub_fn(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -3727,10 +3720,9 @@ macro_rules! iadst_i16_fn {
     };
 }
 macro_rules! idct_rect_i16_fn {
-    ($pub:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+    ($pub_fn:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
         #[target_feature(enable = "sse4.1")]
-        #[inline]
-        pub(crate) fn $pub(
+        pub(crate) fn $pub_fn(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -3756,10 +3748,9 @@ macro_rules! idct_rect_i16_fn {
     };
 }
 macro_rules! iadst_rect_i16_fn {
-    ($pub:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+    ($pub_fn:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
         #[target_feature(enable = "sse4.1")]
-        #[inline]
-        pub(crate) fn $pub(
+        pub(crate) fn $pub_fn(
             coeff: &mut [i16],
             tmp: &mut [i32; ITX_TMP_PIXELS],
             eob: i32,
@@ -3792,7 +3783,7 @@ idct_i16_fn!(
     16,
     4
 );
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_8x8_i16_sse41(
     coeff: &mut [i16],
@@ -3977,7 +3968,6 @@ pub(crate) fn idct_dequant_32x32_i16_sse41_fused_8bpc(
     )
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn idct_dequant_16x16_i16_sse41(
     coeff: &mut [i16],
@@ -4036,7 +4026,7 @@ iadst_i16_fn!(
     16,
     4
 );
-#[inline]
+
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_8x8_i16_sse41(
     coeff: &mut [i16],
@@ -4064,7 +4054,6 @@ pub(crate) fn iadst_dequant_8x8_i16_sse41(
     )
 }
 
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn iadst_dequant_16x16_i16_sse41(
     coeff: &mut [i16],

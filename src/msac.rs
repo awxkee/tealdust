@@ -204,14 +204,31 @@ pub(crate) struct MsacContextScalar<'a, const UPDATE_CDF: bool> {
     pub(crate) dif: u64,
     pub(crate) rng: u32,
     pub(crate) cnt: i32,
+    #[cfg(not(feature = "adaptive_cdf"))]
+    pub(crate) update_cdf: bool,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub(crate) struct MsacState {
     pub(crate) buf_pos: usize,
     pub(crate) dif: u64,
     pub(crate) rng: u32,
     pub(crate) cnt: i32,
+    #[cfg(not(feature = "adaptive_cdf"))]
+    pub(crate) update_cdf: bool,
+}
+
+impl Default for MsacState {
+    fn default() -> Self {
+        Self {
+            buf_pos: 0,
+            dif: 0,
+            rng: 0,
+            cnt: 0,
+            #[cfg(not(feature = "adaptive_cdf"))]
+            update_cdf: true,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -296,12 +313,22 @@ pub(crate) trait MsacReader<const UPDATE_CDF: bool> {
 impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
     #[inline(always)]
     pub(crate) fn new(data: &'a [u8]) -> Self {
+        Self::new_with_update_cdf(data, true)
+    }
+
+    #[inline(always)]
+    pub(crate) fn new_with_update_cdf(data: &'a [u8], update_cdf: bool) -> Self {
+        #[cfg(feature = "adaptive_cdf")]
+        let _ = update_cdf;
+
         let mut s = Self {
             buf_pos: 0,
             buf: data,
             dif: !0u64 >> 1,
             rng: 0x8000,
             cnt: -15,
+            #[cfg(not(feature = "adaptive_cdf"))]
+            update_cdf,
         };
         s.ctx_refill();
         s
@@ -314,6 +341,8 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
             dif: self.dif,
             rng: self.rng,
             cnt: self.cnt,
+            #[cfg(not(feature = "adaptive_cdf"))]
+            update_cdf: self.update_cdf,
         }
     }
 
@@ -328,6 +357,20 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
             dif: st.dif,
             rng: st.rng,
             cnt: st.cnt,
+            #[cfg(not(feature = "adaptive_cdf"))]
+            update_cdf: st.update_cdf,
+        }
+    }
+
+    #[inline(always)]
+    fn should_update_cdf(&self) -> bool {
+        #[cfg(feature = "adaptive_cdf")]
+        {
+            UPDATE_CDF
+        }
+        #[cfg(not(feature = "adaptive_cdf"))]
+        {
+            self.update_cdf
         }
     }
 
@@ -471,7 +514,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
 
     #[inline(always)]
     pub(crate) fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
-        if !UPDATE_CDF && n_symbols == 3 {
+        if !self.should_update_cdf() && n_symbols == 3 {
             return self.decode_symbol_adapt3_no_update_scalar(cdf);
         }
         match n_symbols {
@@ -515,6 +558,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
     pub(crate) fn decode_symbol_adapt_n<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
         debug_assert!((1..=7).contains(&N));
 
+        #[cfg(feature = "adaptive_cdf")]
         if !UPDATE_CDF && N == 3 {
             return self.decode_symbol_adapt3_no_update_scalar(cdf);
         }
@@ -558,7 +602,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         debug_assert!(u >= v);
         self.ctx_norm(self.dif - ((v as u64) << 48), u - v);
 
-        if UPDATE_CDF {
+        if self.should_update_cdf() {
             let pc = cdf[N];
             let count = (pc & 0xFF) as u8;
 
@@ -586,6 +630,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
     ) -> u32 {
         debug_assert!((1..=7).contains(&N));
 
+        #[cfg(feature = "adaptive_cdf")]
         if !UPDATE_CDF && N == 3 {
             return self.decode_symbol_adapt3_no_update_scalar_l(cdf);
         }
@@ -624,7 +669,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         debug_assert!(u >= v);
         self.ctx_norm(self.dif - ((v as u64) << 48), u - v);
 
-        if UPDATE_CDF {
+        if self.should_update_cdf() {
             let pc = cdf[N];
             let count = (pc & 0xFF) as u8;
 
@@ -650,7 +695,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
     pub(crate) fn decode_bool_adapt(&mut self, cdf: &mut [u16]) -> u32 {
         let bit = self.decode_bool_raw(cdf[0] as u32);
 
-        if UPDATE_CDF {
+        if self.should_update_cdf() {
             let pc = cdf[1];
             let count = (pc & 0xFF) as u8;
             let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize];
@@ -665,12 +710,13 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         bit
     }
 
+    #[cfg(feature = "adaptive_cdf")]
     #[inline(always)]
     pub(crate) fn decode_symbol_adapt3_no_update_scalar_l<const LANES: usize>(
         &mut self,
         cdf: &[u16; LANES],
     ) -> u32 {
-        debug_assert!(!UPDATE_CDF);
+        debug_assert!(!self.should_update_cdf());
 
         let c = (self.dif >> 48) as u32;
         let r = self.rng >> 8;
@@ -703,7 +749,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
 
     #[inline(always)]
     pub(crate) fn decode_symbol_adapt3_no_update_scalar(&mut self, cdf: &[u16]) -> u32 {
-        debug_assert!(!UPDATE_CDF);
+        debug_assert!(!self.should_update_cdf());
 
         if cdf.len() <= 3 {
             return 0;

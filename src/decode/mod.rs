@@ -1984,9 +1984,17 @@ pub fn decode_frame_main(
     n_tc: i32,
     pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
-    if fc.frame_hdr.disable_cdf_update != 0 {
-        decode_frame_main_select::<false>(fc, n_passes, n_tc, pool)
-    } else {
+    #[cfg(feature = "adaptive_cdf")]
+    {
+        if fc.frame_hdr.disable_cdf_update != 0 {
+            decode_frame_main_select::<false>(fc, n_passes, n_tc, pool)
+        } else {
+            decode_frame_main_select::<true>(fc, n_passes, n_tc, pool)
+        }
+    }
+
+    #[cfg(not(feature = "adaptive_cdf"))]
+    {
         decode_frame_main_select::<true>(fc, n_passes, n_tc, pool)
     }
 }
