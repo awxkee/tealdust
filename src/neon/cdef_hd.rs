@@ -126,7 +126,7 @@ fn cdef_padding_hbd_neon_full<const W: usize, const H: usize>(
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn cdef_padding_hbd_neon(
+pub(crate) fn cdef_padding_hbd_neon(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u16],
@@ -643,7 +643,6 @@ fn cdef_filter_block_8w_hbd_neon_shape_dispatch<const H: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "neon")]
 fn cdef_filter_block_4w_hbd_neon_shape_dispatch<const H: usize>(
     dst: &mut [u16],
@@ -707,7 +706,6 @@ fn cdef_filter_block_4w_hbd_neon_shape_dispatch<const H: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn cdef_filter_block_8x8_hbd_neon(
     dst: &mut [u16],
@@ -740,7 +738,6 @@ pub(crate) fn cdef_filter_block_8x8_hbd_neon(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn cdef_filter_block_8x4_hbd_neon(
     dst: &mut [u16],
@@ -773,7 +770,6 @@ pub(crate) fn cdef_filter_block_8x4_hbd_neon(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn cdef_filter_block_4x8_hbd_neon(
     dst: &mut [u16],
@@ -806,7 +802,6 @@ pub(crate) fn cdef_filter_block_4x8_hbd_neon(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn cdef_filter_block_4x4_hbd_neon(
     dst: &mut [u16],
@@ -839,7 +834,6 @@ pub(crate) fn cdef_filter_block_4x4_hbd_neon(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "neon")]
 pub(crate) fn cdef_filter_block_hbd_neon(
     dst: &mut [u16],

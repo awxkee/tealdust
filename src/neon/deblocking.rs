@@ -3146,7 +3146,7 @@ pub(crate) fn setup_thr_rows_seg_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) unsafe fn setup_thr_cols_seg_8bpc_neon(
+pub(crate) fn setup_thr_cols_seg_8bpc_neon(
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     segmap: &[u8],

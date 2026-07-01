@@ -125,9 +125,8 @@ fn cdef_padding_8bpc_avx2_full<const W: usize, const H: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "avx2")]
-pub(crate) unsafe fn cdef_padding_8bpc_avx2(
+pub(crate) fn cdef_padding_8bpc_avx2(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -584,7 +583,6 @@ fn store_u8xw_2rows<const W: usize>(dst: &mut [u8], p0: usize, p1: usize, v: __m
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "avx2")]
 fn cdef_filter_block_8bpc_avx2_shape<
     const W: usize,
@@ -797,7 +795,6 @@ fn cdef_filter_block_8bpc_avx2_shape_dispatch<const W: usize, const H: usize>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn cdef_filter_block_8x8_8bpc_avx2(
     dst: &mut [u8],
@@ -830,7 +827,6 @@ pub(crate) fn cdef_filter_block_8x8_8bpc_avx2(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn cdef_filter_block_8x4_8bpc_avx2(
     dst: &mut [u8],
@@ -863,7 +859,6 @@ pub(crate) fn cdef_filter_block_8x4_8bpc_avx2(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn cdef_filter_block_4x8_8bpc_avx2(
     dst: &mut [u8],
@@ -896,7 +891,6 @@ pub(crate) fn cdef_filter_block_4x8_8bpc_avx2(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn cdef_filter_block_4x4_8bpc_avx2(
     dst: &mut [u8],
@@ -929,7 +923,6 @@ pub(crate) fn cdef_filter_block_4x4_8bpc_avx2(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn cdef_filter_block_8bpc_avx2(
     dst: &mut [u8],

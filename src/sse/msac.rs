@@ -579,9 +579,8 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
         let mask = raw | (1u32 << (2 * N));
         let i = (mask.trailing_zeros() >> 1) as usize;
 
-        let initialized = bounds.assume_init().0;
-        let u = initialized[7 + i] as u32;
-        let v = initialized[8 + i] as u32;
+        let u = bp.add(7 + i).read() as u32;
+        let v = bp.add(8 + i).read() as u32;
 
         debug_assert!(u <= s.rng);
         debug_assert!(u >= v);

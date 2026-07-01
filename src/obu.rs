@@ -411,7 +411,7 @@ pub fn parse_seq_hdr(gb: &mut GetBits, strict: bool) -> Result<SequenceHeader> {
     hdr.profile = gb.get_bits(5) as u8;
     // AV2 defines profiles 0–8; the original check (> 2) matches AV1 which only
     // has profiles 0-2. Relax to 8 so real AV2 encoders (e.g. profile 4) pass.
-    if hdr.profile > 8 {
+    if hdr.profile > 8 && hdr.profile != 31 {
         return Err(TealdustError::InvalidSequenceHeader);
     }
     hdr.reduced_still_picture_header = gb.get_bit() != 0;

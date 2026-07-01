@@ -507,7 +507,7 @@ impl CleanAperture {
     }
 }
 
-/// The four-character-code type of an `iinf` item.
+/// The four-character-code type of `iinf` item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ItemType {
     /// AV1 image item (AVIF using AV1 codec).
@@ -538,7 +538,7 @@ impl ItemType {
 
     /// Returns `true` if this item holds an AV1 or AV2 compressed image.
     pub fn is_image(&self) -> bool {
-        matches!(self, Self::Av01 | Self::Av02)
+        matches!(self, Self::Av02)
     }
 }
 

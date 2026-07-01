@@ -69,7 +69,6 @@ fn store_i16x4_u16(dst: &mut [u16], p: usize, v: __m128i) {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn cdef_filter_block_hbd_sse41(
     dst: &mut [u16],
@@ -216,7 +215,6 @@ pub(crate) fn cdef_filter_block_hbd_sse41(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn cdef_filter_block_8x8_hbd_sse41(
     dst: &mut [u16],
@@ -251,7 +249,6 @@ pub(crate) fn cdef_filter_block_8x8_hbd_sse41(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn cdef_filter_block_4x8_hbd_sse41(
     dst: &mut [u16],
@@ -286,7 +283,6 @@ pub(crate) fn cdef_filter_block_4x8_hbd_sse41(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn cdef_filter_block_4x4_hbd_sse41(
     dst: &mut [u16],

@@ -70,7 +70,6 @@ fn store_i16x4_u8(dst: &mut [u8], p: usize, v: __m128i) {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline]
 #[target_feature(enable = "sse4.1")]
 pub(crate) fn cdef_filter_block_8bpc_sse41(
     dst: &mut [u8],

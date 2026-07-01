@@ -316,7 +316,7 @@ pub(crate) fn stxfm4_8bpc_neon(cf: &mut [i16], kernel: &[i8], eob: usize, scan_o
 
 #[inline]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn stxfm8_8bpc_neon(
+pub(crate) fn stxfm8_8bpc_neon(
     cf: &mut [i16],
     kernel: &[i8],
     eob: usize,

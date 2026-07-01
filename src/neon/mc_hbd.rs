@@ -501,7 +501,7 @@ pub(crate) fn put_bilin_hbd_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn prep_bilin_hbd_neon(
+pub(crate) fn prep_bilin_hbd_neon(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u16],

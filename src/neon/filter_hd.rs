@@ -239,7 +239,7 @@ pub(crate) fn dc_add_row_hbd_neon(dst: &mut [u16], dc: i32, n: usize, bitdepth_m
 }
 
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn avg_row_hbd_neon(
+pub(crate) fn avg_row_hbd_neon(
     dst: &mut [u16],
     t1: &[i16],
     t2: &[i16],
@@ -320,7 +320,7 @@ pub(crate) fn w_avg_row_hbd_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn mask_row_hbd_neon(
+pub(crate) fn mask_row_hbd_neon(
     dst: &mut [u16],
     t1: &[i16],
     t2: &[i16],
@@ -373,7 +373,7 @@ pub(crate) unsafe fn mask_row_hbd_neon(
 }
 
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn blend_row_hbd_neon(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
+pub(crate) fn blend_row_hbd_neon(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
     let c64 = vdupq_n_u16(64);
     let f = |d: uint16x8_t, t: uint16x8_t, m: uint16x8_t| {
         let inv_m = vsubq_u16(c64, m);
@@ -423,7 +423,7 @@ pub(crate) unsafe fn blend_row_hbd_neon(dst: &mut [u16], tmp: &[u16], mask: &[u8
 }
 
 #[target_feature(enable = "neon")]
-pub(crate) unsafe fn morph_row_hbd_neon(
+pub(crate) fn morph_row_hbd_neon(
     dst: &mut [u16],
     alpha: i32,
     beta: i32,

@@ -133,7 +133,7 @@ fn copy_u16_to_i16_scalar(dst: &mut [i16], src: &[u16]) {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) unsafe fn cdef_padding_8bpc_scalar(
+pub(crate) fn cdef_padding_8bpc_scalar(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -213,7 +213,7 @@ pub(crate) unsafe fn cdef_padding_8bpc_scalar(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) unsafe fn cdef_padding_hbd_scalar(
+pub(crate) fn cdef_padding_hbd_scalar(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u16],
