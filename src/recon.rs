@@ -1749,83 +1749,63 @@ macro_rules! decode_coefs_impl {
                 // sign & dequant for AC
                 tcq_state = if tcq_en { -0x80000000i32 } else { 0 };
                 let ac_dq = p.dq_tbl[1];
-                macro_rules! decode_signed_ac {
-                    ($i:expr, $rc:expr, $sign:expr) => {{
-                        let i = $i;
-                        let rc = $rc;
-
-                        let tok_val = cf[rc].to_i32();
-                        if tok_val == 0 {
-                            tcq_state = tcq_next_state(tcq_state, 0);
-                            continue;
-                        }
-
-                        let sign: u32 = $sign;
-
-                        let tcq_bit = ((tcq_state & 2) >> 1) as i32;
-                        tcq_state = tcq_next_state(tcq_state, tok_val);
-
-                        let max_br = if i < hi_to_low_tx {
-                            if chroma { 5 } else { 8 }
+                // Exclusive `(1..eob+1).rev()` rather than `(1..=eob).rev()`:
+                // RangeInclusive carries an "exhausted" flag and its iterator
+                // doesn't lower to a clean counter, which showed up as a
+                // distinct `Rev<RangeInclusive>::next` frame in profiles.
+                for i in (1..eob + 1).rev() {
+                    if $tx_cl == 0 {
+                        rc = if is_stx {
+                            i as usize
                         } else {
-                            6
+                            scan[i as usize] as usize
                         };
-
-                        let mut tok = tok_val;
-                        let ac_val: i32;
-
-                        if tok >= max_br - tcq_en as i32 {
-                            let hr = decode_hr(msac, hr_avg);
-                            tok += hr << tcq_en as i32;
-                            hr_avg = (hr_avg + hr) >> 1;
-                            tok &= 0xfffff;
-
-                            let v = (tok << tcq_en as i32) - tcq_bit;
-                            ac_val = imin(
-                                ((((v as u32).wrapping_mul(ac_dq)) & 0xffffff).wrapping_add(4) >> dq_shift)
-                                    as i32,
-                                cf_max + sign as i32,
-                            );
-                        } else {
-                            let v = (tok << tcq_en as i32) - tcq_bit;
-                            ac_val = (((v as u32).wrapping_mul(ac_dq)).wrapping_add(4) >> dq_shift) as i32;
-                        }
-
-                        cul_level += tok as u32;
-                        cf[rc] = C::from_i32(if sign != 0 { -ac_val } else { ac_val });
-                    }};
-                }
-
-                if $tx_cl == 0 {
-                    let scan_prefix = &scan[..=eob as usize];
-
-                    for (i, &scan_rc) in scan_prefix.iter().enumerate().skip(1).rev() {
-                        let rc = if is_stx { i } else { scan_rc as usize };
-                        decode_signed_ac!(i as i32, rc, msac.decode_bool_bypass());
-                    }
-                } else if $tx_cl == 1 {
-                    for i in (1..eob + 1).rev() {
+                    } else if $tx_cl == 1 {
                         y = i as usize >> shift;
                         rc = i as usize;
-                        let sign = if y > 0 || chroma {
-                            msac.decode_bool_bypass()
-                        } else {
-                            msac.decode_bool_adapt(coef.dc_sign(chroma as usize, 0, 0))
-                        };
-                        decode_signed_ac!(i, rc, sign);
-                    }
-                } else {
-                    for i in (1..eob + 1).rev() {
+                    } else {
                         x = i as usize & mask;
                         y = i as usize >> shift;
                         rc = (x << shift2) | y;
-                        let sign = if y > 0 || chroma {
-                            msac.decode_bool_bypass()
-                        } else {
-                            msac.decode_bool_adapt(coef.dc_sign(chroma as usize, 0, 0))
-                        };
-                        decode_signed_ac!(i, rc, sign);
                     }
+                    let tok_val = cf[rc].to_i32();
+                    if tok_val == 0 {
+                        tcq_state = tcq_next_state(tcq_state, 0);
+                        continue;
+                    }
+                    let sign: u32;
+                    if $tx_cl == 0 || y > 0 || chroma {
+                        sign = msac.decode_bool_bypass();
+                    } else {
+                        sign = msac.decode_bool_adapt(coef.dc_sign(chroma as usize, 0, 0));
+                    }
+                    let tcq_bit = ((tcq_state & 2) >> 1) as i32;
+                    tcq_state = tcq_next_state(tcq_state, tok_val);
+                    let max_br = if i < hi_to_low_tx {
+                        if chroma { 5 } else { 8 }
+                    } else {
+                        6
+                    };
+                    let mut tok = tok_val;
+                    let ac_val: i32;
+                    if tok >= max_br - tcq_en as i32 {
+                        let hr = decode_hr(msac, hr_avg);
+                        tok += hr << tcq_en as i32;
+                        hr_avg = (hr_avg + hr) >> 1;
+                        tok &= 0xfffff;
+                        let v = (tok << tcq_en as i32) - tcq_bit;
+                        ac_val = imin(
+                            ((((v as u32).wrapping_mul(ac_dq)) & 0xffffff).wrapping_add(4)
+                                >> dq_shift) as i32,
+                            cf_max + sign as i32,
+                        );
+                    } else {
+                        let v = (tok << tcq_en as i32) - tcq_bit;
+                        ac_val =
+                            (((v as u32).wrapping_mul(ac_dq)).wrapping_add(4) >> dq_shift) as i32;
+                    }
+                    cul_level += tok as u32;
+                    cf[rc] = C::from_i32(if sign != 0 { -ac_val } else { ac_val });
                 }
             }};
         }
