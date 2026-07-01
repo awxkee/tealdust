@@ -44,6 +44,7 @@ pub(crate) fn get_random_number(bits: u32, state: &mut u32) -> u32 {
     (*state >> (16 - bits)) & ((1 << bits) - 1)
 }
 
+#[inline]
 pub(crate) fn round2(x: i32, shift: u32) -> i32 {
     (x + ((1 << shift) >> 1)) >> shift
 }
@@ -89,7 +90,7 @@ pub(crate) fn generate_scaling_8bpc(points: &[[u8; 2]], scaling: &mut [u8; 256])
     let first_x = points[0][0] as usize;
     scaling[..first_x].fill(points[0][1]);
 
-    for pair in points.windows(2) {
+    for pair in points.array_windows::<2>() {
         let bx = pair[0][0] as i32;
         let by = pair[0][1] as i32;
         let ex = pair[1][0] as i32;
@@ -126,7 +127,7 @@ pub(crate) fn generate_scaling_hbd(points: &[[u8; 2]], bitdepth: usize, scaling:
     let first_x = (points[0][0] as usize) << shift_x;
     scaling[..first_x].fill(points[0][1]);
 
-    for pair in points.windows(2) {
+    for pair in points.array_windows::<2>() {
         let bx = pair[0][0] as i32;
         let by = pair[0][1] as i32;
         let ex = pair[1][0] as i32;
@@ -148,7 +149,7 @@ pub(crate) fn generate_scaling_hbd(points: &[[u8; 2]], bitdepth: usize, scaling:
     scaling[n..].fill(points[num - 1][1]);
 
     let rnd = pad >> 1;
-    for pair in points.windows(2) {
+    for pair in points.array_windows::<2>() {
         let bx = (pair[0][0] as usize) << shift_x;
         let ex = (pair[1][0] as usize) << shift_x;
         let mut x = bx;
