@@ -2789,7 +2789,6 @@ fn avx2_dct32_i16x16_scratch16_stride_active_add_u8<const STRIDE: usize, const A
     write_group!(12usize);
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x8_scratch8_stride_active_store<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
@@ -2911,7 +2910,6 @@ fn avx2_dct16_i16x8_scratch8_stride_active_store<const STRIDE: usize, const ACTI
     }
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x8_scratch8_stride_active_add_u8<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
@@ -3204,7 +3202,6 @@ fn avx2_dct32_i16x8_scratch8_stride_active_store<const STRIDE: usize, const ACTI
     }
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x8_scratch8_stride_active_add_u8<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
@@ -3388,7 +3385,6 @@ fn avx2_dct32_i16x8_scratch8_stride_active_add_u8<const STRIDE: usize, const ACT
     write_row!(31, _mm256_sub_epi32(a0, b[0]));
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x16_scratch16_stride_eob_store<const STRIDE: usize>(
     scratch: &[i16],
@@ -3551,7 +3547,6 @@ fn avx2_dct16_i16x8_scratch8_stride_eob_add_u8<const STRIDE: usize>(
     }
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x8_scratch8_stride_eob_add_u8<const STRIDE: usize>(
     scratch: &[i16],
@@ -3719,7 +3714,6 @@ fn avx2_dct16_i16x4_scratch4_stride_active_store<const STRIDE: usize, const ACTI
     }
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x4_scratch4_stride_active_store<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
@@ -3900,7 +3894,6 @@ fn avx2_dct32_i16x4_scratch4_stride_eob_store<const STRIDE: usize>(
     }
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x4_scratch4_stride_active_add_u8<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
@@ -4046,7 +4039,6 @@ fn avx2_dct16_i16x4_scratch4_stride_active_add_u8<const STRIDE: usize, const ACT
     write_row!(15, _mm_sub_epi32(a0, b[0]));
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x4_scratch4_stride_active_add_u8<const STRIDE: usize, const ACTIVE: usize>(
     scratch: &[i16],
@@ -4286,7 +4278,6 @@ fn avx2_dct32_i16x4_scratch4_stride_eob_add_u8<const STRIDE: usize>(
     }
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
@@ -4301,7 +4292,6 @@ fn avx2_dct16_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STR
     avx2_dct16_i16x4_all_body!()
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
@@ -4316,7 +4306,6 @@ fn avx2_dct32_i16x4_all_from_coeff4_stride_const<const IS_RECT2: bool, const STR
     avx2_dct32_i16x4_all_body!()
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x8_store_quads_from_coeff8_stride_const<
     const IS_RECT2: bool,
@@ -4477,7 +4466,6 @@ fn avx2_dct32_i16x8_store_quads_from_coeff8_stride_const<
     store_group!(12usize);
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct32_i16x16_store_quads_from_coeff16_stride_const<
     const IS_RECT2: bool,
@@ -4636,7 +4624,6 @@ fn avx2_dct32_i16x16_store_quads_from_coeff16_stride_const<
     store_group!(12usize);
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x8_store_quads_from_coeff8_stride_const<
     const IS_RECT2: bool,
@@ -4772,7 +4759,6 @@ fn avx2_dct16_i16x8_store_quads_from_coeff8_stride_const<
     store_group!(4usize);
 }
 
-#[inline]
 #[target_feature(enable = "avx2")]
 fn avx2_dct16_i16x16_store_quads_from_coeff16_stride_const<
     const IS_RECT2: bool,
@@ -5091,7 +5077,7 @@ fn idct_dequant_dct_i16_avx2_impl_const<const N: usize, const IS_RECT2: bool>(
             );
         }
         debug_assert_eq!(y, ncols);
-        crate::itx_2d::clear_i16_coeff_active_rows::<N>(coeff, ncols);
+        crate::itx_2d::clear_i16_coeff_active_rows(coeff, N, ncols);
 
         let mut x = 0usize;
         while x + 16 <= N {
@@ -5164,7 +5150,7 @@ fn idct_dequant_dct_i16_avx2_fused_8bpc_impl_const<const N: usize, const IS_RECT
             );
         }
         debug_assert_eq!(y, ncols);
-        crate::itx_2d::clear_i16_coeff_active_rows::<N>(coeff, ncols);
+        crate::itx_2d::clear_i16_coeff_active_rows(coeff, N, ncols);
 
         let rnd1 = _mm256_set1_epi32((1 << shift1) >> 1);
         let sh1 = _mm_cvtsi32_si128(shift1);
@@ -5199,7 +5185,7 @@ fn idct_dequant_dct_i16_avx2_fused_8bpc_impl_const<const N: usize, const IS_RECT
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn tx_dequant_dense_avx2_i32_impl<const N: usize, const W: usize, const H: usize>(
+fn tx_dequant_dense_avx2_i32_impl<const W: usize, const H: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -5212,7 +5198,7 @@ fn tx_dequant_dense_avx2_i32_impl<const N: usize, const W: usize, const H: usize
     second_kind: usize,
 ) {
     if is_rect2 {
-        tx_dequant_dense_avx2_i32_impl_const::<N, W, H, true>(
+        tx_dequant_dense_avx2_i32_impl_const::<W, H, true>(
             coeff,
             tmp,
             eob,
@@ -5224,7 +5210,7 @@ fn tx_dequant_dense_avx2_i32_impl<const N: usize, const W: usize, const H: usize
             second_kind,
         )
     } else {
-        tx_dequant_dense_avx2_i32_impl_const::<N, W, H, false>(
+        tx_dequant_dense_avx2_i32_impl_const::<W, H, false>(
             coeff,
             tmp,
             eob,
@@ -5400,12 +5386,7 @@ fn tx_dequant_4x4_avx2_i32_impl_const<const IS_RECT2: bool>(
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn tx_dequant_dense_avx2_i32_impl_const<
-    const N: usize,
-    const W: usize,
-    const H: usize,
-    const IS_RECT2: bool,
->(
+fn tx_dequant_dense_avx2_i32_impl_const<const W: usize, const H: usize, const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -5419,7 +5400,7 @@ fn tx_dequant_dense_avx2_i32_impl_const<
     unsafe {
         debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
         debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-        debug_assert!(W * H <= N && N <= coeff.len());
+        debug_assert!(W * H <= coeff.len());
         let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
         let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
         let mut ngrp = 0usize;
@@ -5596,7 +5577,7 @@ fn tx_dequant_dense_avx2_i32_impl_const<
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn tx_dequant_dense_avx2_i16_impl<const N: usize, const W: usize, const H: usize>(
+fn tx_dequant_dense_avx2_i16_impl<const W: usize, const H: usize>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -5609,7 +5590,7 @@ fn tx_dequant_dense_avx2_i16_impl<const N: usize, const W: usize, const H: usize
     second_kind: usize,
 ) {
     if is_rect2 {
-        tx_dequant_dense_avx2_i16_impl_const::<N, W, H, true>(
+        tx_dequant_dense_avx2_i16_impl_const::<W, H, true>(
             coeff,
             tmp,
             eob,
@@ -5621,7 +5602,7 @@ fn tx_dequant_dense_avx2_i16_impl<const N: usize, const W: usize, const H: usize
             second_kind,
         )
     } else {
-        tx_dequant_dense_avx2_i16_impl_const::<N, W, H, false>(
+        tx_dequant_dense_avx2_i16_impl_const::<W, H, false>(
             coeff,
             tmp,
             eob,
@@ -5637,12 +5618,7 @@ fn tx_dequant_dense_avx2_i16_impl<const N: usize, const W: usize, const H: usize
 
 #[inline(never)]
 #[target_feature(enable = "avx2")]
-fn tx_dequant_dense_avx2_i16_impl_const<
-    const N: usize,
-    const W: usize,
-    const H: usize,
-    const IS_RECT2: bool,
->(
+fn tx_dequant_dense_avx2_i16_impl_const<const W: usize, const H: usize, const IS_RECT2: bool>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -5655,7 +5631,7 @@ fn tx_dequant_dense_avx2_i16_impl_const<
 ) {
     debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
     debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-    debug_assert!(W * H <= N && N <= coeff.len());
+    debug_assert!(W * H <= coeff.len());
     let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
     let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
     let mut ngrp = 0usize;
@@ -5672,7 +5648,7 @@ fn tx_dequant_dense_avx2_i16_impl_const<
     let minv = _mm_set1_epi32(row_clip_min);
     let maxv = _mm_set1_epi32(row_clip_max);
 
-    with_avx2_itx_i16_scratch(N, |scratch| unsafe {
+    with_avx2_itx_i16_scratch(W * H, |scratch| unsafe {
         let mut y = 0usize;
         if first_kind == crate::itx_2d::TX_KIND_DCT && W == 16 {
             y = avx2_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, H>(
@@ -5831,10 +5807,95 @@ fn tx_dequant_dense_avx2_i16_impl_const<
     });
 }
 
+#[target_feature(enable = "avx2")]
+fn avx2_col_generic_writeback_x4<const W: usize, const H: usize>(
+    scratch: &[i16],
+    dst: &mut [u8],
+    dst_off: usize,
+    dst_stride: usize,
+    out_w: usize,
+    out_h: usize,
+    x: usize,
+    second_kind: usize,
+    rnd1_4: __m128i,
+    sh1: __m128i,
+) {
+    let z = _mm_setzero_si128();
+    let mut m = 0usize;
+    while m < H {
+        let mut a0 = z;
+        let mut a1 = z;
+        let mut a2 = z;
+        let mut a3 = z;
+        let mut j = 0usize;
+        while j < H {
+            let x0 = avx2_load4_i16_scratch(scratch, x + j * W);
+            let x1 = avx2_load4_i16_scratch(scratch, x + (j + 1) * W);
+            let x01 = _mm_unpacklo_epi16(x0, x1);
+            a0 = _mm_add_epi32(
+                a0,
+                _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m, j)),
+            );
+            a1 = _mm_add_epi32(
+                a1,
+                _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 1, j)),
+            );
+            a2 = _mm_add_epi32(
+                a2,
+                _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 2, j)),
+            );
+            a3 = _mm_add_epi32(
+                a3,
+                _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 3, j)),
+            );
+            j += 2;
+        }
+        avx2_writeback4_i32_u8::<W, H>(
+            dst, dst_off, dst_stride, out_w, out_h, x, m, a0, rnd1_4, sh1,
+        );
+        avx2_writeback4_i32_u8::<W, H>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            x,
+            m + 1,
+            a1,
+            rnd1_4,
+            sh1,
+        );
+        avx2_writeback4_i32_u8::<W, H>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            x,
+            m + 2,
+            a2,
+            rnd1_4,
+            sh1,
+        );
+        avx2_writeback4_i32_u8::<W, H>(
+            dst,
+            dst_off,
+            dst_stride,
+            out_w,
+            out_h,
+            x,
+            m + 3,
+            a3,
+            rnd1_4,
+            sh1,
+        );
+        m += 4;
+    }
+}
+
 #[inline(never)]
 #[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
-    const N: usize,
     const W: usize,
     const H: usize,
     const IS_RECT2: bool,
@@ -5856,7 +5917,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
 ) {
     debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
     debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-    debug_assert!(W * H <= N && N <= coeff.len());
+    debug_assert!(W * H <= coeff.len());
     let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
     let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
     let mut ngrp = 0usize;
@@ -5873,7 +5934,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
     let minv = _mm_set1_epi32(row_clip_min);
     let maxv = _mm_set1_epi32(row_clip_max);
 
-    with_avx2_itx_i16_scratch(N, |scratch| {
+    with_avx2_itx_i16_scratch(W * H, |scratch| {
         let mut y = 0usize;
 
         if first_kind == crate::itx_2d::TX_KIND_IDENTITY {
@@ -6000,89 +6061,27 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl_const<
                     scratch, x, nrows, dst, dst_off, dst_stride, out_w, out_h, rnd1_4, sh1,
                 );
             } else {
-                let mut m = 0usize;
-                while m < H {
-                    let mut a0 = z;
-                    let mut a1 = z;
-                    let mut a2 = z;
-                    let mut a3 = z;
-                    let mut j = 0usize;
-                    while j < H {
-                        let x0 = avx2_load4_i16_scratch(scratch, x + j * W);
-                        let x1 = avx2_load4_i16_scratch(scratch, x + (j + 1) * W);
-                        let x01 = _mm_unpacklo_epi16(x0, x1);
-                        a0 = _mm_add_epi32(
-                            a0,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m, j)),
-                        );
-                        a1 = _mm_add_epi32(
-                            a1,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 1, j)),
-                        );
-                        a2 = _mm_add_epi32(
-                            a2,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 2, j)),
-                        );
-                        a3 = _mm_add_epi32(
-                            a3,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(second_kind, H, m + 3, j)),
-                        );
-                        j += 2;
-                    }
-                    avx2_writeback4_i32_u8::<W, H>(
-                        dst, dst_off, dst_stride, out_w, out_h, x, m, a0, rnd1_4, sh1,
-                    );
-                    avx2_writeback4_i32_u8::<W, H>(
-                        dst,
-                        dst_off,
-                        dst_stride,
-                        out_w,
-                        out_h,
-                        x,
-                        m + 1,
-                        a1,
-                        rnd1_4,
-                        sh1,
-                    );
-                    avx2_writeback4_i32_u8::<W, H>(
-                        dst,
-                        dst_off,
-                        dst_stride,
-                        out_w,
-                        out_h,
-                        x,
-                        m + 2,
-                        a2,
-                        rnd1_4,
-                        sh1,
-                    );
-                    avx2_writeback4_i32_u8::<W, H>(
-                        dst,
-                        dst_off,
-                        dst_stride,
-                        out_w,
-                        out_h,
-                        x,
-                        m + 3,
-                        a3,
-                        rnd1_4,
-                        sh1,
-                    );
-                    m += 4;
-                }
+                avx2_col_generic_writeback_x4::<W, H>(
+                    scratch,
+                    dst,
+                    dst_off,
+                    dst_stride,
+                    out_w,
+                    out_h,
+                    x,
+                    second_kind,
+                    rnd1_4,
+                    sh1,
+                );
             }
             x += 4;
         }
     });
 }
 
-// Hot fused path: keep kind pairs as const generics only for the small
-// curated set used by the dispatcher below. The broad fallback remains
-// runtime-kind SIMD to avoid rebuilding the full shape × kind-pair grid.
 #[inline]
 #[target_feature(enable = "avx2")]
 fn tx_dequant_dense_avx2_i16_fused_8bpc_hot_impl_const<
-    const N: usize,
     const W: usize,
     const H: usize,
     const IS_RECT2: bool,
@@ -6104,7 +6103,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_hot_impl_const<
 ) {
     debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
     debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-    debug_assert!(W * H <= N && N <= coeff.len());
+    debug_assert!(W * H <= coeff.len());
     let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
     let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
     let mut ngrp = 0usize;
@@ -6121,7 +6120,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_hot_impl_const<
     let minv = _mm_set1_epi32(row_clip_min);
     let maxv = _mm_set1_epi32(row_clip_max);
 
-    with_avx2_itx_i16_scratch(N, |scratch| {
+    with_avx2_itx_i16_scratch(W * H, |scratch| {
         let mut y = 0usize;
 
         if FIRST_KIND == crate::itx_2d::TX_KIND_IDENTITY {
@@ -6269,76 +6268,18 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_hot_impl_const<
                     scratch, x, nrows, dst, dst_off, dst_stride, out_w, out_h, rnd1_4, sh1,
                 );
             } else {
-                let mut m = 0usize;
-                while m < H {
-                    let mut a0 = z;
-                    let mut a1 = z;
-                    let mut a2 = z;
-                    let mut a3 = z;
-                    let mut j = 0usize;
-                    while j < H {
-                        let x0 = avx2_load4_i16_scratch(scratch, x + j * W);
-                        let x1 = avx2_load4_i16_scratch(scratch, x + (j + 1) * W);
-                        let x01 = _mm_unpacklo_epi16(x0, x1);
-                        a0 = _mm_add_epi32(
-                            a0,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(SECOND_KIND, H, m, j)),
-                        );
-                        a1 = _mm_add_epi32(
-                            a1,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(SECOND_KIND, H, m + 1, j)),
-                        );
-                        a2 = _mm_add_epi32(
-                            a2,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(SECOND_KIND, H, m + 2, j)),
-                        );
-                        a3 = _mm_add_epi32(
-                            a3,
-                            _mm_madd_epi16(x01, avx2_tx_dense_coeff_pair(SECOND_KIND, H, m + 3, j)),
-                        );
-                        j += 2;
-                    }
-                    avx2_writeback4_i32_u8::<W, H>(
-                        dst, dst_off, dst_stride, out_w, out_h, x, m, a0, rnd1_4, sh1,
-                    );
-                    avx2_writeback4_i32_u8::<W, H>(
-                        dst,
-                        dst_off,
-                        dst_stride,
-                        out_w,
-                        out_h,
-                        x,
-                        m + 1,
-                        a1,
-                        rnd1_4,
-                        sh1,
-                    );
-                    avx2_writeback4_i32_u8::<W, H>(
-                        dst,
-                        dst_off,
-                        dst_stride,
-                        out_w,
-                        out_h,
-                        x,
-                        m + 2,
-                        a2,
-                        rnd1_4,
-                        sh1,
-                    );
-                    avx2_writeback4_i32_u8::<W, H>(
-                        dst,
-                        dst_off,
-                        dst_stride,
-                        out_w,
-                        out_h,
-                        x,
-                        m + 3,
-                        a3,
-                        rnd1_4,
-                        sh1,
-                    );
-                    m += 4;
-                }
+                avx2_col_generic_writeback_x4::<W, H>(
+                    scratch,
+                    dst,
+                    dst_off,
+                    dst_stride,
+                    out_w,
+                    out_h,
+                    x,
+                    SECOND_KIND,
+                    rnd1_4,
+                    sh1,
+                );
             }
             x += 4;
         }
@@ -6594,7 +6535,7 @@ fn tx_dequant_dense_avx2_i16_fused_4x4_const<const IS_RECT2: bool>(
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn tx_dequant_dense_avx2_i16_fused_hot_square<const N: usize, const W: usize, const H: usize>(
+fn tx_dequant_dense_avx2_i16_fused_hot_square<const W: usize, const H: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
     dst_off: usize,
@@ -6614,7 +6555,6 @@ fn tx_dequant_dense_avx2_i16_fused_hot_square<const N: usize, const W: usize, co
     macro_rules! call_pair {
         ($first:expr, $second:expr) => {{
             tx_dequant_dense_avx2_i16_fused_8bpc_hot_impl_const::<
-                N,
                 W,
                 H,
                 false,
@@ -6674,7 +6614,7 @@ fn tx_dequant_dense_avx2_i16_fused_hot_square<const N: usize, const W: usize, co
 }
 
 #[target_feature(enable = "avx2")]
-fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const N: usize, const W: usize, const H: usize>(
+fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const W: usize, const H: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
     dst_off: usize,
@@ -6692,7 +6632,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const N: usize, const W: usize, con
     second_kind: usize,
 ) {
     if is_rect2 {
-        tx_dequant_dense_avx2_i16_fused_8bpc_impl_const::<N, W, H, true>(
+        tx_dequant_dense_avx2_i16_fused_8bpc_impl_const::<W, H, true>(
             coeff,
             dst,
             dst_off,
@@ -6709,7 +6649,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const N: usize, const W: usize, con
             second_kind,
         )
     } else {
-        tx_dequant_dense_avx2_i16_fused_8bpc_impl_const::<N, W, H, false>(
+        tx_dequant_dense_avx2_i16_fused_8bpc_impl_const::<W, H, false>(
             coeff,
             dst,
             dst_off,
@@ -6731,7 +6671,7 @@ fn tx_dequant_dense_avx2_i16_fused_8bpc_impl<const N: usize, const W: usize, con
 macro_rules! avx2_fused_match_body {
     ($call:ident, $coeff:ident, $dst:ident, $dst_off:ident, $dst_stride:ident, $out_w:ident, $out_h:ident, $eob:ident, $tx:ident, $is_rect2:ident, $shift0:ident, $row_clip_min:ident, $row_clip_max:ident, $shift1:ident, $first_kind:ident, $second_kind:ident) => {{
         match $tx {
-            crate::levels::txsz::TX_8X8 => $call::<64, 8, 8>(
+            crate::levels::txsz::TX_8X8 => $call::<8, 8>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6748,7 +6688,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::TX_16X16 => $call::<256, 16, 16>(
+            crate::levels::txsz::TX_16X16 => $call::<16, 16>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6765,7 +6705,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::TX_32X32 => $call::<1024, 32, 32>(
+            crate::levels::txsz::TX_32X32 => $call::<32, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6782,7 +6722,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::TX_64X64 => $call::<1024, 32, 32>(
+            crate::levels::txsz::TX_64X64 => $call::<32, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6799,7 +6739,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_4X8 => $call::<32, 4, 8>(
+            crate::levels::txsz::RTX_4X8 => $call::<4, 8>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6816,7 +6756,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_8X4 => $call::<32, 8, 4>(
+            crate::levels::txsz::RTX_8X4 => $call::<8, 4>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6833,7 +6773,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_8X16 => $call::<128, 8, 16>(
+            crate::levels::txsz::RTX_8X16 => $call::<8, 16>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6850,7 +6790,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_16X8 => $call::<128, 16, 8>(
+            crate::levels::txsz::RTX_16X8 => $call::<16, 8>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6867,7 +6807,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_16X32 => $call::<512, 16, 32>(
+            crate::levels::txsz::RTX_16X32 => $call::<16, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6884,7 +6824,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_32X16 => $call::<512, 32, 16>(
+            crate::levels::txsz::RTX_32X16 => $call::<32, 16>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6901,7 +6841,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_32X64 => $call::<1024, 32, 32>(
+            crate::levels::txsz::RTX_32X64 => $call::<32, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6918,7 +6858,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_64X32 => $call::<1024, 32, 32>(
+            crate::levels::txsz::RTX_64X32 => $call::<32, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6935,7 +6875,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_4X16 => $call::<64, 4, 16>(
+            crate::levels::txsz::RTX_4X16 => $call::<4, 16>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6952,7 +6892,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_16X4 => $call::<64, 16, 4>(
+            crate::levels::txsz::RTX_16X4 => $call::<16, 4>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6969,7 +6909,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_8X32 => $call::<256, 8, 32>(
+            crate::levels::txsz::RTX_8X32 => $call::<8, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -6986,7 +6926,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_32X8 => $call::<256, 32, 8>(
+            crate::levels::txsz::RTX_32X8 => $call::<32, 8>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -7003,7 +6943,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_16X64 => $call::<512, 16, 32>(
+            crate::levels::txsz::RTX_16X64 => $call::<16, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -7020,7 +6960,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_64X16 => $call::<512, 32, 16>(
+            crate::levels::txsz::RTX_64X16 => $call::<32, 16>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -7037,7 +6977,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_4X32 => $call::<128, 4, 32>(
+            crate::levels::txsz::RTX_4X32 => $call::<4, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -7054,7 +6994,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_32X4 => $call::<128, 32, 4>(
+            crate::levels::txsz::RTX_32X4 => $call::<32, 4>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -7071,7 +7011,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_8X64 => $call::<256, 8, 32>(
+            crate::levels::txsz::RTX_8X64 => $call::<8, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -7088,7 +7028,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_64X8 => $call::<256, 32, 8>(
+            crate::levels::txsz::RTX_64X8 => $call::<32, 8>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -7105,7 +7045,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_4X64 => $call::<128, 4, 32>(
+            crate::levels::txsz::RTX_4X64 => $call::<4, 32>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -7122,7 +7062,7 @@ macro_rules! avx2_fused_match_body {
                 $first_kind,
                 $second_kind,
             ),
-            crate::levels::txsz::RTX_64X4 => $call::<128, 32, 4>(
+            crate::levels::txsz::RTX_64X4 => $call::<32, 4>(
                 $coeff,
                 $dst,
                 $dst_off,
@@ -7187,7 +7127,7 @@ pub(crate) fn itx_dequant_i16_avx2_fused_8bpc(
     // runtime-kind SIMD body below, so we do not resurrect the full kind grid.
     if !is_rect2 {
         let handled_hot = match tx {
-            crate::levels::txsz::TX_8X8 => tx_dequant_dense_avx2_i16_fused_hot_square::<64, 8, 8>(
+            crate::levels::txsz::TX_8X8 => tx_dequant_dense_avx2_i16_fused_hot_square::<8, 8>(
                 coeff,
                 dst,
                 dst_off,
@@ -7203,24 +7143,22 @@ pub(crate) fn itx_dequant_i16_avx2_fused_8bpc(
                 first_kind,
                 second_kind,
             ),
-            crate::levels::txsz::TX_16X16 => {
-                tx_dequant_dense_avx2_i16_fused_hot_square::<256, 16, 16>(
-                    coeff,
-                    dst,
-                    dst_off,
-                    dst_stride,
-                    out_w,
-                    out_h,
-                    eob,
-                    tx,
-                    shift0,
-                    row_clip_min,
-                    row_clip_max,
-                    shift1,
-                    first_kind,
-                    second_kind,
-                )
-            }
+            crate::levels::txsz::TX_16X16 => tx_dequant_dense_avx2_i16_fused_hot_square::<16, 16>(
+                coeff,
+                dst,
+                dst_off,
+                dst_stride,
+                out_w,
+                out_h,
+                eob,
+                tx,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+                shift1,
+                first_kind,
+                second_kind,
+            ),
             _ => false,
         };
         if handled_hot {
@@ -7688,7 +7626,7 @@ pub(crate) fn idct_dequant_64x64_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<1024, 32, 32>(
+    tx_dequant_dense_avx2_i32_impl::<32, 32>(
         coeff,
         tmp,
         eob,
@@ -7794,7 +7732,7 @@ pub(crate) fn idct_dequant_4x8_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<32, 4, 8>(
+    tx_dequant_dense_avx2_i32_impl::<4, 8>(
         coeff,
         tmp,
         eob,
@@ -7819,7 +7757,7 @@ pub(crate) fn idct_dequant_8x4_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<32, 8, 4>(
+    tx_dequant_dense_avx2_i32_impl::<8, 4>(
         coeff,
         tmp,
         eob,
@@ -7844,7 +7782,7 @@ pub(crate) fn idct_dequant_8x16_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<128, 8, 16>(
+    tx_dequant_dense_avx2_i32_impl::<8, 16>(
         coeff,
         tmp,
         eob,
@@ -7869,7 +7807,7 @@ pub(crate) fn idct_dequant_16x8_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<128, 16, 8>(
+    tx_dequant_dense_avx2_i32_impl::<16, 8>(
         coeff,
         tmp,
         eob,
@@ -7894,7 +7832,7 @@ pub(crate) fn idct_dequant_16x32_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<512, 16, 32>(
+    tx_dequant_dense_avx2_i32_impl::<16, 32>(
         coeff,
         tmp,
         eob,
@@ -7919,7 +7857,7 @@ pub(crate) fn idct_dequant_32x16_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<512, 32, 16>(
+    tx_dequant_dense_avx2_i32_impl::<32, 16>(
         coeff,
         tmp,
         eob,
@@ -7944,7 +7882,7 @@ pub(crate) fn idct_dequant_4x16_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<64, 4, 16>(
+    tx_dequant_dense_avx2_i32_impl::<4, 16>(
         coeff,
         tmp,
         eob,
@@ -7969,7 +7907,7 @@ pub(crate) fn idct_dequant_16x4_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<64, 16, 4>(
+    tx_dequant_dense_avx2_i32_impl::<16, 4>(
         coeff,
         tmp,
         eob,
@@ -7994,7 +7932,7 @@ pub(crate) fn idct_dequant_8x32_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<256, 8, 32>(
+    tx_dequant_dense_avx2_i32_impl::<8, 32>(
         coeff,
         tmp,
         eob,
@@ -8019,7 +7957,7 @@ pub(crate) fn idct_dequant_32x8_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<256, 32, 8>(
+    tx_dequant_dense_avx2_i32_impl::<32, 8>(
         coeff,
         tmp,
         eob,
@@ -8044,7 +7982,7 @@ pub(crate) fn idct_dequant_4x32_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<128, 4, 32>(
+    tx_dequant_dense_avx2_i32_impl::<4, 32>(
         coeff,
         tmp,
         eob,
@@ -8069,7 +8007,7 @@ pub(crate) fn idct_dequant_32x4_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<128, 32, 4>(
+    tx_dequant_dense_avx2_i32_impl::<32, 4>(
         coeff,
         tmp,
         eob,
@@ -8096,7 +8034,7 @@ pub(crate) fn iadst_dequant_4x8_avx2(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<32, 4, 8>(
+    tx_dequant_dense_avx2_i32_impl::<4, 8>(
         coeff,
         tmp,
         eob,
@@ -8123,7 +8061,7 @@ pub(crate) fn iadst_dequant_8x4_avx2(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<32, 8, 4>(
+    tx_dequant_dense_avx2_i32_impl::<8, 4>(
         coeff,
         tmp,
         eob,
@@ -8150,7 +8088,7 @@ pub(crate) fn iadst_dequant_8x16_avx2(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<128, 8, 16>(
+    tx_dequant_dense_avx2_i32_impl::<8, 16>(
         coeff,
         tmp,
         eob,
@@ -8177,7 +8115,7 @@ pub(crate) fn iadst_dequant_16x8_avx2(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<128, 16, 8>(
+    tx_dequant_dense_avx2_i32_impl::<16, 8>(
         coeff,
         tmp,
         eob,
@@ -8204,7 +8142,7 @@ pub(crate) fn iadst_dequant_4x16_avx2(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<64, 4, 16>(
+    tx_dequant_dense_avx2_i32_impl::<4, 16>(
         coeff,
         tmp,
         eob,
@@ -8231,7 +8169,7 @@ pub(crate) fn iadst_dequant_16x4_avx2(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_avx2_i32_impl::<64, 16, 4>(
+    tx_dequant_dense_avx2_i32_impl::<16, 4>(
         coeff,
         tmp,
         eob,
@@ -8248,7 +8186,7 @@ pub(crate) fn iadst_dequant_16x4_avx2(
 // Low-bit-depth i16 coefficient entry points.
 
 macro_rules! idct_i16_fn {
-    ($pub_fn:ident, $imp:ident, $n:expr, $s:expr) => {
+    ($pub_fn:ident, $imp:ident, $s:expr) => {
         #[target_feature(enable = "avx2")]
 
         pub(crate) fn $pub_fn(
@@ -8261,7 +8199,7 @@ macro_rules! idct_i16_fn {
             row_clip_min: i32,
             row_clip_max: i32,
         ) {
-            tx_dequant_dense_avx2_i16_impl::<{ $n }, { $s }, { $s }>(
+            tx_dequant_dense_avx2_i16_impl::<{ $s }, { $s }>(
                 coeff,
                 tmp,
                 eob,
@@ -8277,7 +8215,7 @@ macro_rules! idct_i16_fn {
     };
 }
 macro_rules! iadst_i16_fn {
-    ($pub_fn:ident, $imp:ident, $n:expr, $s:expr) => {
+    ($pub_fn:ident, $imp:ident, $s:expr) => {
         #[target_feature(enable = "avx2")]
         pub(crate) fn $pub_fn(
             coeff: &mut [i16],
@@ -8291,7 +8229,7 @@ macro_rules! iadst_i16_fn {
             first_kind: usize,
             second_kind: usize,
         ) {
-            tx_dequant_dense_avx2_i16_impl::<{ $n }, { $s }, { $s }>(
+            tx_dequant_dense_avx2_i16_impl::<{ $s }, { $s }>(
                 coeff,
                 tmp,
                 eob,
@@ -8307,7 +8245,7 @@ macro_rules! iadst_i16_fn {
     };
 }
 macro_rules! idct_rect_i16_fn {
-    ($pub_fn:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+    ($pub_fn:ident, $imp:ident, $w:expr, $h:expr) => {
         #[target_feature(enable = "avx2")]
         pub(crate) fn $pub_fn(
             coeff: &mut [i16],
@@ -8319,7 +8257,7 @@ macro_rules! idct_rect_i16_fn {
             row_clip_min: i32,
             row_clip_max: i32,
         ) {
-            tx_dequant_dense_avx2_i16_impl::<{ $n }, { $w }, { $h }>(
+            tx_dequant_dense_avx2_i16_impl::<{ $w }, { $h }>(
                 coeff,
                 tmp,
                 eob,
@@ -8335,7 +8273,7 @@ macro_rules! idct_rect_i16_fn {
     };
 }
 macro_rules! iadst_rect_i16_fn {
-    ($pub_fn:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+    ($pub_fn:ident, $imp:ident, $w:expr, $h:expr) => {
         #[target_feature(enable = "avx2")]
         pub(crate) fn $pub_fn(
             coeff: &mut [i16],
@@ -8349,7 +8287,7 @@ macro_rules! iadst_rect_i16_fn {
             first_kind: usize,
             second_kind: usize,
         ) {
-            tx_dequant_dense_avx2_i16_impl::<{ $n }, { $w }, { $h }>(
+            tx_dequant_dense_avx2_i16_impl::<{ $w }, { $h }>(
                 coeff,
                 tmp,
                 eob,
@@ -8364,12 +8302,7 @@ macro_rules! iadst_rect_i16_fn {
         }
     };
 }
-idct_i16_fn!(
-    idct_dequant_4x4_i16_avx2,
-    idct_dequant_4x4_i16_avx2_impl,
-    16,
-    4
-);
+idct_i16_fn!(idct_dequant_4x4_i16_avx2, idct_dequant_4x4_i16_avx2_impl, 4);
 
 #[target_feature(enable = "avx2")]
 pub(crate) fn idct_dequant_8x8_i16_avx2(
@@ -8382,7 +8315,7 @@ pub(crate) fn idct_dequant_8x8_i16_avx2(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_avx2_i16_impl::<64, 8, 8>(
+    tx_dequant_dense_avx2_i16_impl::<8, 8>(
         coeff,
         tmp,
         eob,
@@ -8604,13 +8537,11 @@ pub(crate) fn idct_dequant_32x32_i16_avx2(
 idct_i16_fn!(
     idct_dequant_64x64_i16_avx2,
     idct_dequant_64x64_i16_avx2_impl,
-    1024,
     32
 );
 iadst_i16_fn!(
     iadst_dequant_4x4_i16_avx2,
     iadst_dequant_4x4_i16_avx2_impl,
-    16,
     4
 );
 
@@ -8627,7 +8558,7 @@ pub(crate) fn iadst_dequant_8x8_i16_avx2(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_avx2_i16_impl::<64, 8, 8>(
+    tx_dequant_dense_avx2_i16_impl::<8, 8>(
         coeff,
         tmp,
         eob,
@@ -8654,7 +8585,7 @@ pub(crate) fn iadst_dequant_16x16_i16_avx2(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_avx2_i16_impl::<256, 16, 16>(
+    tx_dequant_dense_avx2_i16_impl::<16, 16>(
         coeff,
         tmp,
         eob,
@@ -8671,126 +8602,108 @@ pub(crate) fn iadst_dequant_16x16_i16_avx2(
 idct_rect_i16_fn!(
     idct_dequant_4x8_i16_avx2,
     idct_dequant_4x8_i16_avx2_impl,
-    32,
     4,
     8
 );
 idct_rect_i16_fn!(
     idct_dequant_8x4_i16_avx2,
     idct_dequant_8x4_i16_avx2_impl,
-    32,
     8,
     4
 );
 idct_rect_i16_fn!(
     idct_dequant_8x16_i16_avx2,
     idct_dequant_8x16_i16_avx2_impl,
-    128,
     8,
     16
 );
 idct_rect_i16_fn!(
     idct_dequant_16x8_i16_avx2,
     idct_dequant_16x8_i16_avx2_impl,
-    128,
     16,
     8
 );
 idct_rect_i16_fn!(
     idct_dequant_16x32_i16_avx2,
     idct_dequant_16x32_i16_avx2_impl,
-    512,
     16,
     32
 );
 idct_rect_i16_fn!(
     idct_dequant_32x16_i16_avx2,
     idct_dequant_32x16_i16_avx2_impl,
-    512,
     32,
     16
 );
 idct_rect_i16_fn!(
     idct_dequant_4x16_i16_avx2,
     idct_dequant_4x16_i16_avx2_impl,
-    64,
     4,
     16
 );
 idct_rect_i16_fn!(
     idct_dequant_16x4_i16_avx2,
     idct_dequant_16x4_i16_avx2_impl,
-    64,
     16,
     4
 );
 idct_rect_i16_fn!(
     idct_dequant_8x32_i16_avx2,
     idct_dequant_8x32_i16_avx2_impl,
-    256,
     8,
     32
 );
 idct_rect_i16_fn!(
     idct_dequant_32x8_i16_avx2,
     idct_dequant_32x8_i16_avx2_impl,
-    256,
     32,
     8
 );
 idct_rect_i16_fn!(
     idct_dequant_4x32_i16_avx2,
     idct_dequant_4x32_i16_avx2_impl,
-    128,
     4,
     32
 );
 idct_rect_i16_fn!(
     idct_dequant_32x4_i16_avx2,
     idct_dequant_32x4_i16_avx2_impl,
-    128,
     32,
     4
 );
 iadst_rect_i16_fn!(
     iadst_dequant_4x8_i16_avx2,
     iadst_dequant_4x8_i16_avx2_impl,
-    32,
     4,
     8
 );
 iadst_rect_i16_fn!(
     iadst_dequant_8x4_i16_avx2,
     iadst_dequant_8x4_i16_avx2_impl,
-    32,
     8,
     4
 );
 iadst_rect_i16_fn!(
     iadst_dequant_8x16_i16_avx2,
     iadst_dequant_8x16_i16_avx2_impl,
-    128,
     8,
     16
 );
 iadst_rect_i16_fn!(
     iadst_dequant_16x8_i16_avx2,
     iadst_dequant_16x8_i16_avx2_impl,
-    128,
     16,
     8
 );
 iadst_rect_i16_fn!(
     iadst_dequant_4x16_i16_avx2,
     iadst_dequant_4x16_i16_avx2_impl,
-    64,
     4,
     16
 );
 iadst_rect_i16_fn!(
     iadst_dequant_16x4_i16_avx2,
     iadst_dequant_16x4_i16_avx2_impl,
-    64,
     16,
     4
 );

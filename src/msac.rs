@@ -218,6 +218,7 @@ pub(crate) struct MsacState {
     pub(crate) update_cdf: bool,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for MsacState {
     fn default() -> Self {
         Self {

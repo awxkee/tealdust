@@ -38,17 +38,17 @@ pub(crate) const ITX_TMP_PIXELS: usize = ITX_TMP_STRIDE * ITX_TMP_STRIDE;
 
 #[inline]
 #[allow(unused)]
-pub(crate) fn clear_i16_coeff_active_rows<const N: usize>(coeff: &mut [i16], nrows: usize) {
-    debug_assert!(N == 16 || N == 32);
-    debug_assert!(nrows <= N);
+pub(crate) fn clear_i16_coeff_active_rows(coeff: &mut [i16], n: usize, nrows: usize) {
+    debug_assert!(n == 16 || n == 32);
+    debug_assert!(nrows <= n);
     debug_assert_eq!(nrows & 3, 0);
-    debug_assert!(coeff.len() >= N * N);
-    if nrows >= N {
-        coeff[..N * N].fill(0);
+    debug_assert!(coeff.len() >= n * n);
+    if nrows >= n {
+        coeff[..n * n].fill(0);
     } else {
         let mut x = 0usize;
-        while x < N {
-            let off = x * N;
+        while x < n {
+            let off = x * n;
             coeff[off..off + nrows].fill(0);
             x += 1;
         }

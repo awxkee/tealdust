@@ -1915,7 +1915,7 @@ fn idct_dequant_dct_i16_sse41_impl_const<const N: usize, const IS_RECT2: bool>(
         };
         debug_assert_eq!(y, ncols);
 
-        crate::itx_2d::clear_i16_coeff_active_rows::<N>(coeff, ncols);
+        crate::itx_2d::clear_i16_coeff_active_rows(coeff, N, ncols);
 
         let mut x = 0usize;
         while x < N {
@@ -1972,7 +1972,7 @@ fn idct_dequant_dct_i16_sse41_fused_8bpc_impl_const<const N: usize, const IS_REC
         };
         debug_assert_eq!(y, ncols);
 
-        crate::itx_2d::clear_i16_coeff_active_rows::<N>(coeff, ncols);
+        crate::itx_2d::clear_i16_coeff_active_rows(coeff, N, ncols);
 
         let rnd1 = _mm_set1_epi32((1 << shift1) >> 1);
         let sh1 = _mm_cvtsi32_si128(shift1);
@@ -1994,7 +1994,7 @@ fn idct_dequant_dct_i16_sse41_fused_8bpc_impl_const<const N: usize, const IS_REC
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn tx_dequant_dense_sse41_i32_impl<const N: usize, const W: usize, const H: usize>(
+fn tx_dequant_dense_sse41_i32_impl<const W: usize, const H: usize>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -2007,7 +2007,7 @@ fn tx_dequant_dense_sse41_i32_impl<const N: usize, const W: usize, const H: usiz
     second_kind: usize,
 ) {
     if is_rect2 {
-        tx_dequant_dense_sse41_i32_impl_const::<N, W, H, true>(
+        tx_dequant_dense_sse41_i32_impl_const::<W, H, true>(
             coeff,
             tmp,
             eob,
@@ -2019,7 +2019,7 @@ fn tx_dequant_dense_sse41_i32_impl<const N: usize, const W: usize, const H: usiz
             second_kind,
         )
     } else {
-        tx_dequant_dense_sse41_i32_impl_const::<N, W, H, false>(
+        tx_dequant_dense_sse41_i32_impl_const::<W, H, false>(
             coeff,
             tmp,
             eob,
@@ -2194,12 +2194,7 @@ fn tx_dequant_4x4_sse41_i32_impl_const<const IS_RECT2: bool>(
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn tx_dequant_dense_sse41_i32_impl_const<
-    const N: usize,
-    const W: usize,
-    const H: usize,
-    const IS_RECT2: bool,
->(
+fn tx_dequant_dense_sse41_i32_impl_const<const W: usize, const H: usize, const IS_RECT2: bool>(
     coeff: &mut [i32],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -2213,7 +2208,7 @@ fn tx_dequant_dense_sse41_i32_impl_const<
     unsafe {
         debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
         debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-        debug_assert!(W * H <= N && N <= coeff.len());
+        debug_assert!(W * H <= coeff.len());
         let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
         let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
         let mut ngrp = 0usize;
@@ -2353,7 +2348,7 @@ fn tx_dequant_dense_sse41_i32_impl_const<
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn tx_dequant_dense_sse41_i16_impl<const N: usize, const W: usize, const H: usize>(
+fn tx_dequant_dense_sse41_i16_impl<const W: usize, const H: usize>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -2366,7 +2361,7 @@ fn tx_dequant_dense_sse41_i16_impl<const N: usize, const W: usize, const H: usiz
     second_kind: usize,
 ) {
     if is_rect2 {
-        tx_dequant_dense_sse41_i16_impl_const::<N, W, H, true>(
+        tx_dequant_dense_sse41_i16_impl_const::<W, H, true>(
             coeff,
             tmp,
             eob,
@@ -2378,7 +2373,7 @@ fn tx_dequant_dense_sse41_i16_impl<const N: usize, const W: usize, const H: usiz
             second_kind,
         )
     } else {
-        tx_dequant_dense_sse41_i16_impl_const::<N, W, H, false>(
+        tx_dequant_dense_sse41_i16_impl_const::<W, H, false>(
             coeff,
             tmp,
             eob,
@@ -2394,12 +2389,7 @@ fn tx_dequant_dense_sse41_i16_impl<const N: usize, const W: usize, const H: usiz
 
 #[inline]
 #[target_feature(enable = "sse4.1")]
-fn tx_dequant_dense_sse41_i16_impl_const<
-    const N: usize,
-    const W: usize,
-    const H: usize,
-    const IS_RECT2: bool,
->(
+fn tx_dequant_dense_sse41_i16_impl_const<const W: usize, const H: usize, const IS_RECT2: bool>(
     coeff: &mut [i16],
     tmp: &mut [i32; ITX_TMP_PIXELS],
     eob: i32,
@@ -2412,7 +2402,7 @@ fn tx_dequant_dense_sse41_i16_impl_const<
 ) {
     debug_assert!(W == 4 || W == 8 || W == 16 || W == 32);
     debug_assert!(H == 4 || H == 8 || H == 16 || H == 32);
-    debug_assert!(W * H <= N && N <= coeff.len());
+    debug_assert!(W * H <= coeff.len());
     let off = usize::from(crate::scan::LAST_EOB_PER_COL.offset[tx]);
     let last_eob = &crate::scan::LAST_EOB_PER_COL.table[off..];
     let mut ngrp = 0usize;
@@ -2429,7 +2419,7 @@ fn tx_dequant_dense_sse41_i16_impl_const<
     let minv = _mm_set1_epi32(row_clip_min);
     let maxv = _mm_set1_epi32(row_clip_max);
 
-    with_sse41_itx_i16_scratch(N, |scratch| unsafe {
+    with_sse41_itx_i16_scratch(W * H, |scratch| unsafe {
         let mut y = 0usize;
 
         if first_kind == crate::itx_2d::TX_KIND_IDENTITY {
@@ -3102,7 +3092,7 @@ pub(crate) fn idct_dequant_64x64_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<1024, 32, 32>(
+    tx_dequant_dense_sse41_i32_impl::<32, 32>(
         coeff,
         tmp,
         eob,
@@ -3208,7 +3198,7 @@ pub(crate) fn idct_dequant_4x8_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<32, 4, 8>(
+    tx_dequant_dense_sse41_i32_impl::<4, 8>(
         coeff,
         tmp,
         eob,
@@ -3233,7 +3223,7 @@ pub(crate) fn idct_dequant_8x4_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<32, 8, 4>(
+    tx_dequant_dense_sse41_i32_impl::<8, 4>(
         coeff,
         tmp,
         eob,
@@ -3258,7 +3248,7 @@ pub(crate) fn idct_dequant_8x16_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<128, 8, 16>(
+    tx_dequant_dense_sse41_i32_impl::<8, 16>(
         coeff,
         tmp,
         eob,
@@ -3283,7 +3273,7 @@ pub(crate) fn idct_dequant_16x8_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<128, 16, 8>(
+    tx_dequant_dense_sse41_i32_impl::<16, 8>(
         coeff,
         tmp,
         eob,
@@ -3308,7 +3298,7 @@ pub(crate) fn idct_dequant_16x32_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<512, 16, 32>(
+    tx_dequant_dense_sse41_i32_impl::<16, 32>(
         coeff,
         tmp,
         eob,
@@ -3333,7 +3323,7 @@ pub(crate) fn idct_dequant_32x16_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<512, 32, 16>(
+    tx_dequant_dense_sse41_i32_impl::<32, 16>(
         coeff,
         tmp,
         eob,
@@ -3358,7 +3348,7 @@ pub(crate) fn idct_dequant_4x16_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<64, 4, 16>(
+    tx_dequant_dense_sse41_i32_impl::<4, 16>(
         coeff,
         tmp,
         eob,
@@ -3383,7 +3373,7 @@ pub(crate) fn idct_dequant_16x4_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<64, 16, 4>(
+    tx_dequant_dense_sse41_i32_impl::<16, 4>(
         coeff,
         tmp,
         eob,
@@ -3408,7 +3398,7 @@ pub(crate) fn idct_dequant_8x32_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<256, 8, 32>(
+    tx_dequant_dense_sse41_i32_impl::<8, 32>(
         coeff,
         tmp,
         eob,
@@ -3433,7 +3423,7 @@ pub(crate) fn idct_dequant_32x8_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<256, 32, 8>(
+    tx_dequant_dense_sse41_i32_impl::<32, 8>(
         coeff,
         tmp,
         eob,
@@ -3458,7 +3448,7 @@ pub(crate) fn idct_dequant_4x32_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<128, 4, 32>(
+    tx_dequant_dense_sse41_i32_impl::<4, 32>(
         coeff,
         tmp,
         eob,
@@ -3483,7 +3473,7 @@ pub(crate) fn idct_dequant_32x4_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<128, 32, 4>(
+    tx_dequant_dense_sse41_i32_impl::<32, 4>(
         coeff,
         tmp,
         eob,
@@ -3510,7 +3500,7 @@ pub(crate) fn iadst_dequant_4x8_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<32, 4, 8>(
+    tx_dequant_dense_sse41_i32_impl::<4, 8>(
         coeff,
         tmp,
         eob,
@@ -3537,7 +3527,7 @@ pub(crate) fn iadst_dequant_8x4_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<32, 8, 4>(
+    tx_dequant_dense_sse41_i32_impl::<8, 4>(
         coeff,
         tmp,
         eob,
@@ -3564,7 +3554,7 @@ pub(crate) fn iadst_dequant_8x16_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<128, 8, 16>(
+    tx_dequant_dense_sse41_i32_impl::<8, 16>(
         coeff,
         tmp,
         eob,
@@ -3591,7 +3581,7 @@ pub(crate) fn iadst_dequant_16x8_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<128, 16, 8>(
+    tx_dequant_dense_sse41_i32_impl::<16, 8>(
         coeff,
         tmp,
         eob,
@@ -3618,7 +3608,7 @@ pub(crate) fn iadst_dequant_4x16_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<64, 4, 16>(
+    tx_dequant_dense_sse41_i32_impl::<4, 16>(
         coeff,
         tmp,
         eob,
@@ -3645,7 +3635,7 @@ pub(crate) fn iadst_dequant_16x4_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_sse41_i32_impl::<64, 16, 4>(
+    tx_dequant_dense_sse41_i32_impl::<16, 4>(
         coeff,
         tmp,
         eob,
@@ -3662,7 +3652,7 @@ pub(crate) fn iadst_dequant_16x4_sse41(
 // Low-bit-depth i16 coefficient entry points.
 
 macro_rules! idct_i16_fn {
-    ($pub_fn:ident, $imp:ident, $n:expr, $s:expr) => {
+    ($pub_fn:ident, $imp:ident, $s:expr) => {
         #[target_feature(enable = "sse4.1")]
         pub(crate) fn $pub_fn(
             coeff: &mut [i16],
@@ -3674,7 +3664,7 @@ macro_rules! idct_i16_fn {
             row_clip_min: i32,
             row_clip_max: i32,
         ) {
-            tx_dequant_dense_sse41_i16_impl::<{ $n }, { $s }, { $s }>(
+            tx_dequant_dense_sse41_i16_impl::<{ $s }, { $s }>(
                 coeff,
                 tmp,
                 eob,
@@ -3690,7 +3680,7 @@ macro_rules! idct_i16_fn {
     };
 }
 macro_rules! iadst_i16_fn {
-    ($pub_fn:ident, $imp:ident, $n:expr, $s:expr) => {
+    ($pub_fn:ident, $imp:ident, $s:expr) => {
         #[target_feature(enable = "sse4.1")]
         pub(crate) fn $pub_fn(
             coeff: &mut [i16],
@@ -3704,7 +3694,7 @@ macro_rules! iadst_i16_fn {
             first_kind: usize,
             second_kind: usize,
         ) {
-            tx_dequant_dense_sse41_i16_impl::<{ $n }, { $s }, { $s }>(
+            tx_dequant_dense_sse41_i16_impl::<{ $s }, { $s }>(
                 coeff,
                 tmp,
                 eob,
@@ -3720,7 +3710,7 @@ macro_rules! iadst_i16_fn {
     };
 }
 macro_rules! idct_rect_i16_fn {
-    ($pub_fn:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+    ($pub_fn:ident, $imp:ident, $w:expr, $h:expr) => {
         #[target_feature(enable = "sse4.1")]
         pub(crate) fn $pub_fn(
             coeff: &mut [i16],
@@ -3732,7 +3722,7 @@ macro_rules! idct_rect_i16_fn {
             row_clip_min: i32,
             row_clip_max: i32,
         ) {
-            tx_dequant_dense_sse41_i16_impl::<{ $n }, { $w }, { $h }>(
+            tx_dequant_dense_sse41_i16_impl::<{ $w }, { $h }>(
                 coeff,
                 tmp,
                 eob,
@@ -3748,7 +3738,7 @@ macro_rules! idct_rect_i16_fn {
     };
 }
 macro_rules! iadst_rect_i16_fn {
-    ($pub_fn:ident, $imp:ident, $n:expr, $w:expr, $h:expr) => {
+    ($pub_fn:ident, $imp:ident, $w:expr, $h:expr) => {
         #[target_feature(enable = "sse4.1")]
         pub(crate) fn $pub_fn(
             coeff: &mut [i16],
@@ -3762,7 +3752,7 @@ macro_rules! iadst_rect_i16_fn {
             first_kind: usize,
             second_kind: usize,
         ) {
-            tx_dequant_dense_sse41_i16_impl::<{ $n }, { $w }, { $h }>(
+            tx_dequant_dense_sse41_i16_impl::<{ $w }, { $h }>(
                 coeff,
                 tmp,
                 eob,
@@ -3780,7 +3770,6 @@ macro_rules! iadst_rect_i16_fn {
 idct_i16_fn!(
     idct_dequant_4x4_i16_sse41,
     idct_dequant_4x4_i16_sse41_impl,
-    16,
     4
 );
 
@@ -3795,7 +3784,7 @@ pub(crate) fn idct_dequant_8x8_i16_sse41(
     row_clip_min: i32,
     row_clip_max: i32,
 ) {
-    tx_dequant_dense_sse41_i16_impl::<64, 8, 8>(
+    tx_dequant_dense_sse41_i16_impl::<8, 8>(
         coeff,
         tmp,
         eob,
@@ -4017,13 +4006,11 @@ pub(crate) fn idct_dequant_32x32_i16_sse41(
 idct_i16_fn!(
     idct_dequant_64x64_i16_sse41,
     idct_dequant_64x64_i16_sse41_impl,
-    1024,
     32
 );
 iadst_i16_fn!(
     iadst_dequant_4x4_i16_sse41,
     iadst_dequant_4x4_i16_sse41_impl,
-    16,
     4
 );
 
@@ -4040,7 +4027,7 @@ pub(crate) fn iadst_dequant_8x8_i16_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_sse41_i16_impl::<64, 8, 8>(
+    tx_dequant_dense_sse41_i16_impl::<8, 8>(
         coeff,
         tmp,
         eob,
@@ -4067,7 +4054,7 @@ pub(crate) fn iadst_dequant_16x16_i16_sse41(
     first_kind: usize,
     second_kind: usize,
 ) {
-    tx_dequant_dense_sse41_i16_impl::<256, 16, 16>(
+    tx_dequant_dense_sse41_i16_impl::<16, 16>(
         coeff,
         tmp,
         eob,
@@ -4084,126 +4071,108 @@ pub(crate) fn iadst_dequant_16x16_i16_sse41(
 idct_rect_i16_fn!(
     idct_dequant_4x8_i16_sse41,
     idct_dequant_4x8_i16_sse41_impl,
-    32,
     4,
     8
 );
 idct_rect_i16_fn!(
     idct_dequant_8x4_i16_sse41,
     idct_dequant_8x4_i16_sse41_impl,
-    32,
     8,
     4
 );
 idct_rect_i16_fn!(
     idct_dequant_8x16_i16_sse41,
     idct_dequant_8x16_i16_sse41_impl,
-    128,
     8,
     16
 );
 idct_rect_i16_fn!(
     idct_dequant_16x8_i16_sse41,
     idct_dequant_16x8_i16_sse41_impl,
-    128,
     16,
     8
 );
 idct_rect_i16_fn!(
     idct_dequant_16x32_i16_sse41,
     idct_dequant_16x32_i16_sse41_impl,
-    512,
     16,
     32
 );
 idct_rect_i16_fn!(
     idct_dequant_32x16_i16_sse41,
     idct_dequant_32x16_i16_sse41_impl,
-    512,
     32,
     16
 );
 idct_rect_i16_fn!(
     idct_dequant_4x16_i16_sse41,
     idct_dequant_4x16_i16_sse41_impl,
-    64,
     4,
     16
 );
 idct_rect_i16_fn!(
     idct_dequant_16x4_i16_sse41,
     idct_dequant_16x4_i16_sse41_impl,
-    64,
     16,
     4
 );
 idct_rect_i16_fn!(
     idct_dequant_8x32_i16_sse41,
     idct_dequant_8x32_i16_sse41_impl,
-    256,
     8,
     32
 );
 idct_rect_i16_fn!(
     idct_dequant_32x8_i16_sse41,
     idct_dequant_32x8_i16_sse41_impl,
-    256,
     32,
     8
 );
 idct_rect_i16_fn!(
     idct_dequant_4x32_i16_sse41,
     idct_dequant_4x32_i16_sse41_impl,
-    128,
     4,
     32
 );
 idct_rect_i16_fn!(
     idct_dequant_32x4_i16_sse41,
     idct_dequant_32x4_i16_sse41_impl,
-    128,
     32,
     4
 );
 iadst_rect_i16_fn!(
     iadst_dequant_4x8_i16_sse41,
     iadst_dequant_4x8_i16_sse41_impl,
-    32,
     4,
     8
 );
 iadst_rect_i16_fn!(
     iadst_dequant_8x4_i16_sse41,
     iadst_dequant_8x4_i16_sse41_impl,
-    32,
     8,
     4
 );
 iadst_rect_i16_fn!(
     iadst_dequant_8x16_i16_sse41,
     iadst_dequant_8x16_i16_sse41_impl,
-    128,
     8,
     16
 );
 iadst_rect_i16_fn!(
     iadst_dequant_16x8_i16_sse41,
     iadst_dequant_16x8_i16_sse41_impl,
-    128,
     16,
     8
 );
 iadst_rect_i16_fn!(
     iadst_dequant_4x16_i16_sse41,
     iadst_dequant_4x16_i16_sse41_impl,
-    64,
     4,
     16
 );
 iadst_rect_i16_fn!(
     iadst_dequant_16x4_i16_sse41,
     iadst_dequant_16x4_i16_sse41_impl,
-    64,
     16,
     4
 );
