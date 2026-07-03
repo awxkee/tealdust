@@ -1749,11 +1749,8 @@ macro_rules! decode_coefs_impl {
                 // sign & dequant for AC
                 tcq_state = if tcq_en { -0x80000000i32 } else { 0 };
                 let ac_dq = p.dq_tbl[1];
-                // Exclusive `(1..eob+1).rev()` rather than `(1..=eob).rev()`:
-                // RangeInclusive carries an "exhausted" flag and its iterator
-                // doesn't lower to a clean counter, which showed up as a
-                // distinct `Rev<RangeInclusive>::next` frame in profiles.
-                for i in (1..eob + 1).rev() {
+                let mut i = eob;
+                while i >= 1 {
                     if $tx_cl == 0 {
                         rc = if is_stx {
                             i as usize
@@ -1771,6 +1768,7 @@ macro_rules! decode_coefs_impl {
                     let tok_val = cf[rc].to_i32();
                     if tok_val == 0 {
                         tcq_state = tcq_next_state(tcq_state, 0);
+                        i -= 1;
                         continue;
                     }
                     let sign: u32;
@@ -1806,6 +1804,7 @@ macro_rules! decode_coefs_impl {
                     }
                     cul_level += tok as u32;
                     cf[rc] = C::from_i32(if sign != 0 { -ac_val } else { ac_val });
+                    i -= 1;
                 }
             }};
         }
