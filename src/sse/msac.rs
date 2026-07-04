@@ -136,14 +136,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
     pub(crate) fn ctx_norm(&mut self, dif: u64, rng: u32) {
         debug_assert!(rng <= 65535 && rng > 0);
 
-        // Skewed symbols keep the range normalized (d == 0) most of the time;
-        // a predicted branch is cheaper on the dif/rng chain than the
-        // unconditional lzcnt + shifts.
-        if rng >= 0x8000 {
-            self.dif = dif;
-            self.rng = rng;
-            return;
-        }
         let d = rng.leading_zeros() ^ 16;
         let cnt = self.cnt;
 
@@ -156,7 +148,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         }
     }
 
-    #[inline(always)]
     #[inline(always)]
     pub(crate) fn decode_hr_bypass(&mut self, cmax: u32, m: u32) -> i32 {
         // One conservative refill covers every fused path (bits <= 40; refill
@@ -180,7 +171,6 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         }
     }
 
-    #[inline(always)]
     pub(crate) fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
         debug_assert!(n_bits > 0 && n_bits <= 32);
         if (self.cnt as u32) < n_bits {
