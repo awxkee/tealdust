@@ -528,6 +528,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
     }
 
+    #[inline(always)]
     pub(crate) fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
         debug_assert!(n_bits > 0 && n_bits <= 32);
         if (self.cnt as u32) < n_bits {
