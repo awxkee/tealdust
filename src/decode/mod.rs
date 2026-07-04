@@ -630,14 +630,6 @@ pub struct ReconFrameCtx<'a> {
 
 std::thread_local! {
     /// Per-thread reusable coefficient scratch (one max 64x64 transform block).
-    ///
-    /// The inverse transform zeroes each block's coefficient region after
-    /// consuming it (see `itx`), so this buffer is left entirely zero between
-    /// blocks and between frames. Reusing it therefore needs no
-    /// re-initialization — which removes the per-frame zeroed heap allocation
-    /// (`vec![0i32; 64*64]`) that each decode worker used to make. It lives in
-    /// TLS as a plain array, so there is no heap allocation at all and no
-    /// `MaybeUninit`: it is value-initialized to zero once per thread.
     static CF_SCRATCH_8: core::cell::RefCell<[i16; 64 * 64]> =
         const { core::cell::RefCell::new([0; 64 * 64]) };
 
