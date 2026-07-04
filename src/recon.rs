@@ -279,27 +279,32 @@ pub(crate) fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
     (s != 0) as u32 + (s > 0) as u32
 }
 
+/// Levels store min(tok,5) in bits 0..5 and min(tok,3) in bits 5..8, so the
+/// context sums are raw byte adds split once by mask/shift, with no
+/// per-neighbor min (a 5-way sum of the low field stays below 32).
 #[inline(always)]
-fn lvl5(x: i8) -> u32 {
-    debug_assert!((0..=5).contains(&x));
+fn pack_level(tok: i32) -> i8 {
+    let t5 = tok.min(5);
+    (t5 | (t5.min(3) << 5)) as i8
+}
+
+#[inline(always)]
+fn packed(x: i8) -> u32 {
     x as u8 as u32
 }
 
-#[inline(always)]
-fn lvl3(x: i8) -> u32 {
-    (x as u8 as u32).min(3)
-}
-
 /// Parity-hiding DC context (dav2d `get_ph_ctx`): magnitude of the
-/// neighbouring levels around the DC position, capped to 3 per neighbour.
+/// neighboring levels around the DC position, capped to 3 per neighbou .
 #[inline(always)]
 fn get_ph_ctx(levels: &[i8], is_2d: bool, stride: usize) -> usize {
-    let mut mag = lvl3(levels[1]) + lvl3(levels[2]) + lvl3(levels[stride]);
+    assert!(stride >= 4 && levels.len() > 2 * stride);
+    let mut s = packed(levels[1]) + packed(levels[2]) + packed(levels[stride]);
     if is_2d {
-        mag += lvl3(levels[stride + 1]) + lvl3(levels[2 * stride]);
+        s += packed(levels[stride + 1]) + packed(levels[2 * stride]);
     } else {
-        mag += lvl3(levels[3]) + lvl3(levels[4]);
+        s += packed(levels[3]) + packed(levels[4]);
     }
+    let mag = s >> 5;
     if mag < 7 {
         ((mag + 1) >> 1) as usize
     } else {
@@ -309,16 +314,12 @@ fn get_ph_ctx(levels: &[i8], is_2d: bool, stride: usize) -> usize {
 
 #[inline(always)]
 fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
-    let a = base[1];
-    let b = base[stride];
-    let c = base[stride + 1];
-    let d = base[2];
-    let e = base[2 * stride];
+    // One check instead of five: lets the per-read bounds tests fold away.
+    assert!(stride >= 4 && base.len() > 2 * stride);
+    let s3 = packed(base[1]) + packed(base[stride]) + packed(base[stride + 1]);
+    let s5 = s3 + packed(base[2]) + packed(base[2 * stride]);
 
-    // Regular coefficient context stores levels capped to 5. That makes the
-    // common cap::<5>() path free; only the cap-to-3 low-frequency path still
-    // needs min(3).
-    let hi = lvl5(a) + lvl5(b) + lvl5(c);
+    let hi = s3 & 31;
 
     let lo_freq = xy < 4;
 
@@ -327,7 +328,7 @@ fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
     let lim;
 
     if lo_freq {
-        lo = lvl5(a) + lvl5(b) + lvl5(c) + lvl5(d) + lvl5(e);
+        lo = s5 & 31;
 
         if xy == 0 {
             offset = 0;
@@ -342,7 +343,7 @@ fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
 
         *hi_mag = if xy > 0 { 7 } else { 0 } + ((hi + 1) >> 1).min(6);
     } else {
-        lo = lvl3(a) + lvl3(b) + lvl3(c) + lvl3(d) + lvl3(e);
+        lo = s5 >> 5;
 
         offset = if xy < 6 {
             0
@@ -361,20 +362,19 @@ fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
 
 #[inline(always)]
 fn get_lo_ctx_luma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
-    let e = base[4];
-    let a = base[1];
-    let b = base[stride];
-    let c = base[2];
-    let d = base[3];
+    assert!(stride >= 4 && base.len() > stride);
+    let sab = packed(base[1]) + packed(base[stride]);
+    let scde = packed(base[2]) + packed(base[3]) + packed(base[4]);
+    let sabc = sab + packed(base[2]);
 
-    let hi = lvl5(a) + lvl5(b) + lvl5(c);
+    let hi = sabc & 31;
 
     let lo;
     let offset;
     let lim;
 
     if xy < 2 {
-        lo = lvl5(a) + lvl5(b) + lvl3(c) + lvl3(d) + lvl3(e);
+        lo = (sab & 31) + (scde >> 5);
 
         if xy == 0 {
             offset = 21;
@@ -386,7 +386,7 @@ fn get_lo_ctx_luma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
 
         *hi_mag = 7 + ((hi + 1) >> 1).min(6);
     } else {
-        lo = lvl3(a) + lvl3(b) + lvl3(c) + lvl3(d) + lvl3(e);
+        lo = (sab + scde) >> 5;
 
         offset = 15;
         lim = 4;
@@ -399,17 +399,12 @@ fn get_lo_ctx_luma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
 
 #[inline(always)]
 fn get_lo_ctx_chroma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, plane: i32, stride: usize) -> u32 {
-    let a = base[1];
-    let b = base[stride];
-    let c = base[stride + 1];
+    assert!(stride >= 2 && base.len() > stride + 1);
+    let s = packed(base[1]) + packed(base[stride]) + packed(base[stride + 1]);
 
-    let hi = lvl5(a) + lvl5(b) + lvl5(c);
+    let hi = s & 31;
 
-    let lo = if xy == 0 {
-        hi
-    } else {
-        lvl3(a) + lvl3(b) + lvl3(c)
-    };
+    let lo = if xy == 0 { hi } else { s >> 5 };
 
     *hi_mag = ((hi + 1) >> 1).min(3);
 
@@ -420,12 +415,12 @@ fn get_lo_ctx_chroma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, plane: i32, stri
 
 #[inline(always)]
 fn get_lo_ctx_chroma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
-    let a = base[1];
-    let b = base[stride];
+    assert!(stride >= 2 && base.len() > stride);
+    let s = packed(base[1]) + packed(base[stride]);
 
-    let hi = lvl5(a) + lvl5(b);
+    let hi = s & 31;
 
-    let lo = if xy == 0 { hi } else { lvl3(a) + lvl3(b) };
+    let lo = if xy == 0 { hi } else { s >> 5 };
 
     *hi_mag = ((hi + 1) >> 1).min(3);
 
@@ -1842,9 +1837,11 @@ macro_rules! decode_coefs_impl {
                 } else if ph_state != 0 {
                     ph_state += 0x10000 + tok as u32;
                 }
-                tcq_state = tcq_next_state(tcq_state, tok);
+                if tcq_state != 0 {
+                    tcq_state = tcq_next_state(tcq_state, tok);
+                }
                 cf[if is_stx { eob as usize } else { rc }] = C::from_i32(tok);
-                let level_tok = tok.min(5) as i8;
+                let level_tok = pack_level(tok);
                 if $tx_cl == 0 {
                     levels[rc] = level_tok;
                 } else {
@@ -1936,8 +1933,10 @@ macro_rules! decode_coefs_impl {
                         // Adds the non-zero count bit plus the token parity.
                         ph_state = ph_state.wrapping_add((tok as u32).wrapping_neg() & 0x10001);
                     }
-                    tcq_state = tcq_next_state(tcq_state, tok);
-                    levels[off] = tok.min(5) as i8;
+                    if tcq_state != 0 {
+                        tcq_state = tcq_next_state(tcq_state, tok);
+                    }
+                    levels[off] = pack_level(tok);
                     cf[if is_stx { i as usize } else { rc }] = C::from_i32(tok);
                     i -= 1;
                 }
@@ -2009,7 +2008,9 @@ macro_rules! decode_coefs_impl {
                     }
                     let tok_val = cf[rc].to_i32();
                     if tok_val == 0 {
-                        tcq_state = tcq_next_state(tcq_state, 0);
+                        if tcq_state != 0 {
+                            tcq_state = tcq_next_state(tcq_state, 0);
+                        }
                         i -= 1;
                         continue;
                     }
@@ -2024,7 +2025,9 @@ macro_rules! decode_coefs_impl {
                         ));
                     }
                     let tcq_bit = ((tcq_state & 2) >> 1) as i32;
-                    tcq_state = tcq_next_state(tcq_state, tok_val);
+                    if tcq_state != 0 {
+                        tcq_state = tcq_next_state(tcq_state, tok_val);
+                    }
                     let max_br = if i < hi_to_low_tx {
                         if chroma { 5 } else { 8 }
                     } else {
@@ -2346,4 +2349,142 @@ pub(crate) fn intrabc_pred<BD: crate::pixel::BitDepth>(
         mx,
         my,
     );
+}
+
+#[cfg(test)]
+mod packed_level_ctx_tests {
+    use super::*;
+
+    fn l5(x: u32) -> u32 {
+        x.min(5)
+    }
+    fn l3(x: u32) -> u32 {
+        x.min(3)
+    }
+
+    // Reference: original formulas over uncapped token values.
+    fn ref_luma_2d(t: &dyn Fn(usize) -> u32, hm: &mut u32, xy: u32, st: usize) -> u32 {
+        let (a, b, c, d, e) = (t(1), t(st), t(st + 1), t(2), t(2 * st));
+        let hi = l5(a) + l5(b) + l5(c);
+        let (lo, offset, lim);
+        if xy < 4 {
+            lo = l5(a) + l5(b) + l5(c) + l5(d) + l5(e);
+            (offset, lim) = if xy == 0 {
+                (0, 8)
+            } else if xy < 2 {
+                (9, 6)
+            } else {
+                (16, 4)
+            };
+            *hm = if xy > 0 { 7 } else { 0 } + ((hi + 1) >> 1).min(6);
+        } else {
+            lo = l3(a) + l3(b) + l3(c) + l3(d) + l3(e);
+            offset = if xy < 6 {
+                0
+            } else if xy < 8 {
+                5
+            } else {
+                10
+            };
+            lim = 4;
+            *hm = ((hi + 1) >> 1).min(6);
+        }
+        offset + ((lo + 1) >> 1).min(lim)
+    }
+
+    fn ref_luma_1d(t: &dyn Fn(usize) -> u32, hm: &mut u32, xy: u32, st: usize) -> u32 {
+        let (a, b, c, d, e) = (t(1), t(st), t(2), t(3), t(4));
+        let hi = l5(a) + l5(b) + l5(c);
+        let (lo, offset, lim);
+        if xy < 2 {
+            lo = l5(a) + l5(b) + l3(c) + l3(d) + l3(e);
+            (offset, lim) = if xy == 0 { (21, 6) } else { (28, 4) };
+            *hm = 7 + ((hi + 1) >> 1).min(6);
+        } else {
+            lo = l3(a) + l3(b) + l3(c) + l3(d) + l3(e);
+            (offset, lim) = (15, 4);
+            *hm = ((hi + 1) >> 1).min(6);
+        }
+        offset + ((lo + 1) >> 1).min(lim)
+    }
+
+    fn ref_chroma_2d(
+        t: &dyn Fn(usize) -> u32,
+        hm: &mut u32,
+        xy: u32,
+        plane: i32,
+        st: usize,
+    ) -> u32 {
+        let (a, b, c) = (t(1), t(st), t(st + 1));
+        let hi = l5(a) + l5(b) + l5(c);
+        let lo = if xy == 0 { hi } else { l3(a) + l3(b) + l3(c) };
+        *hm = ((hi + 1) >> 1).min(3);
+        (if plane == 1 { 0 } else { 4 }) + ((lo + 1) >> 1).min(3)
+    }
+
+    fn ref_chroma_1d(t: &dyn Fn(usize) -> u32, hm: &mut u32, xy: u32, st: usize) -> u32 {
+        let (a, b) = (t(1), t(st));
+        let hi = l5(a) + l5(b);
+        let lo = if xy == 0 { hi } else { l3(a) + l3(b) };
+        *hm = ((hi + 1) >> 1).min(3);
+        8 + ((lo + 1) >> 1).min(3)
+    }
+
+    fn ref_ph(t: &dyn Fn(usize) -> u32, is_2d: bool, st: usize) -> usize {
+        let mut m = l3(t(1)) + l3(t(2)) + l3(t(st));
+        if is_2d {
+            m += l3(t(st + 1)) + l3(t(2 * st));
+        } else {
+            m += l3(t(3)) + l3(t(4));
+        }
+        if m < 7 { ((m + 1) >> 1) as usize } else { 4 }
+    }
+
+    #[test]
+    fn packed_ctx_matches_reference() {
+        let mut s: u64 = 0xc0ffee_15_600d;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        for _ in 0..50_000 {
+            let st = [4usize, 8, 16, 32][(next() % 4) as usize];
+            let mut toks = [0u32; 128];
+            let mut lv = [0i8; 128];
+            for i in 0..(2 * st + 2).min(128) {
+                toks[i] = (next() % 9) as u32;
+                lv[i] = pack_level(toks[i] as i32);
+            }
+            let t = |i: usize| toks[i];
+            for xy in 0..13u32 {
+                let (mut hm_r, mut hm_n) = (0u32, 0u32);
+                assert_eq!(
+                    ref_luma_2d(&t, &mut hm_r, xy, st),
+                    get_lo_ctx_luma_2d(&lv, &mut hm_n, xy, st)
+                );
+                assert_eq!(hm_r, hm_n);
+                assert_eq!(
+                    ref_luma_1d(&t, &mut hm_r, xy, st.max(32)),
+                    get_lo_ctx_luma_1d(&lv[..64], &mut hm_n, xy, st.max(32))
+                );
+                assert_eq!(hm_r, hm_n);
+                for plane in 1..=2 {
+                    assert_eq!(
+                        ref_chroma_2d(&t, &mut hm_r, xy, plane, st),
+                        get_lo_ctx_chroma_2d(&lv, &mut hm_n, xy, plane, st)
+                    );
+                    assert_eq!(hm_r, hm_n);
+                }
+                assert_eq!(
+                    ref_chroma_1d(&t, &mut hm_r, xy, st),
+                    get_lo_ctx_chroma_1d(&lv, &mut hm_n, xy, st)
+                );
+                assert_eq!(hm_r, hm_n);
+            }
+            assert_eq!(ref_ph(&t, true, st), get_ph_ctx(&lv, true, st));
+            assert_eq!(ref_ph(&t, false, st), get_ph_ctx(&lv, false, st));
+        }
+    }
 }

@@ -357,9 +357,44 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         }
     }
 
+    #[cfg(feature = "adaptive_cdf")]
+    #[inline(always)]
+    fn decode_symbol_adapt3_no_update_scalar(&mut self, cdf: &[u16]) -> u32 {
+        debug_assert!(!self.should_update_cdf());
+        let c = (self.dif >> 48) as u32;
+        let r = self.rng >> 8;
+
+        let p0 = ((cdf[0] | 127) as u32) - 31;
+        let b0 = ((r * p0) >> 10) << 3;
+        if c >= b0 {
+            self.ctx_norm(self.dif - ((b0 as u64) << 48), self.rng - b0);
+            return 0;
+        }
+        let p1 = ((cdf[1] | 127) as u32) - 63;
+        let b1 = ((r * p1) >> 10) << 3;
+        if c >= b1 {
+            self.ctx_norm(self.dif - ((b1 as u64) << 48), b0 - b1);
+            return 1;
+        }
+        let p2 = ((cdf[2] | 127) as u32) - 95;
+        let b2 = ((r * p2) >> 10) << 3;
+        if c >= b2 {
+            self.ctx_norm(self.dif - ((b2 as u64) << 48), b1 - b2);
+            return 2;
+        }
+        self.ctx_norm(self.dif, b2);
+        3
+    }
+
     #[inline(always)]
     pub(crate) fn decode_symbol_adapt_n_sse2<const N: usize>(&mut self, cdf: &mut [u16]) -> u32 {
         debug_assert!((1..=7).contains(&N));
+        #[cfg(feature = "adaptive_cdf")]
+        if !UPDATE_CDF && N == 3 {
+            // Static CDFs (disable_cdf_update): a skewed branchy search beats
+            // the fixed-cost SIMD boundary evaluation.
+            return self.decode_symbol_adapt3_no_update_scalar(cdf);
+        }
 
         if cdf.len() <= N {
             return 0;
@@ -388,6 +423,11 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         cdf: &mut [u16; LANES],
     ) -> u32 {
         debug_assert!((1..=7).contains(&N));
+        #[cfg(feature = "adaptive_cdf")]
+        if !UPDATE_CDF && N == 3 {
+            return self.decode_symbol_adapt3_no_update_scalar(&cdf[..]);
+        }
+
         debug_assert!(LANES == 2 || LANES == 4 || LANES == 8);
         debug_assert!(N < LANES);
 
@@ -591,5 +631,55 @@ fn msac_decode_symbol_adapt_sse2<const UPDATE_CDF: bool, const N: usize, const L
         s.ctx_norm(s.dif - ((v as u64) << 48), u - v);
 
         i as u32
+    }
+}
+
+#[cfg(all(test, feature = "adaptive_cdf"))]
+mod no_update_fastpath_tests {
+    use super::MsacContextSse;
+
+    #[test]
+    fn adapt3_no_update_scalar_matches_simd() {
+        let mut s: u64 = 0x0dd0_5e1e_c7ed_b055;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let mut buf = [0u8; 4096];
+        for b in buf.iter_mut() {
+            *b = next() as u8;
+        }
+        for _ in 0..20_000 {
+            // Random monotone 3-symbol CDF (values in (0, 32768), descending).
+            let mut v = [0u16; 3];
+            v[0] = 1 + (next() % 32700) as u16;
+            v[1] = (v[0] as u64 * (next() % 1000) / 1000) as u16;
+            v[2] = (v[1] as u64 * (next() % 1000) / 1000) as u16;
+            let cdf = [v[0], v[1], v[2], 0u16];
+            let skip = (next() % 64) as u32;
+
+            let mut a: MsacContextSse<false> = MsacContextSse::new(&buf);
+            let mut b: MsacContextSse<false> = MsacContextSse::new(&buf);
+            for _ in 0..skip {
+                a.decode_bool_bypass();
+                b.decode_bool_bypass();
+            }
+            let mut ca = cdf;
+            let mut cb = cdf;
+            let ra = a.decode_symbol_adapt3_no_update_scalar(&ca[..]);
+            let rb = msac_simd_ref(&mut b, &mut cb);
+            assert_eq!(ra, rb);
+            assert_eq!(
+                (a.dif, a.rng, a.cnt, a.buf_pos),
+                (b.dif, b.rng, b.cnt, b.buf_pos)
+            );
+            assert_eq!(ca, cb);
+        }
+    }
+
+    fn msac_simd_ref(s: &mut MsacContextSse<false>, cdf: &mut [u16; 4]) -> u32 {
+        super::msac_decode_symbol_adapt_sse2::<false, 3, 4>(s, cdf)
     }
 }

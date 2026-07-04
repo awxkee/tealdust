@@ -53,6 +53,9 @@ struct DecodeEdgeCtx {
     comp_type: [u8; 2],
 }
 
+/// dav1d-style `case_set`: the neighbour context runs are tiny powers of two,
+/// where a libc `memset` call costs more than the stores themselves. The
+/// match predicts perfectly (the width is constant within a block).
 #[inline(always)]
 fn set_n<T: Copy, const N: usize>(dst: &mut [T], off: usize, v: T) {
     let d: &mut [T; N] = (&mut dst[off..off + N]).try_into().expect("ctx run");
