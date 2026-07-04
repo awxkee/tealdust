@@ -41,16 +41,6 @@ use crate::tables::{
 };
 use crate::warpmv::resolve_divisor_32;
 
-#[inline(always)]
-pub(crate) fn decode_exp_golomb<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
-    msac: &mut M,
-    k: u32,
-) -> u32 {
-    let length = msac.decode_unary_bypass(21) + k;
-    let x = (1u32 << length) + msac.decode_bools_bypass(length);
-    x - (1 << k)
-}
-
 /// Out of line on purpose: `decode_hr` runs only for high-magnitude
 /// coefficients (not per symbol), and a single shared copy both shrinks the
 /// inlined token loops and lets its data-dependent unary/exp-Golomb branches
@@ -62,13 +52,7 @@ pub(crate) fn decode_hr<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
 ) -> i32 {
     let m = ulog2(iclip(hr_avg, 2, 64) as u32) as u32;
     let cmax = imin(m as i32 + 4, 6) as u32;
-    let q = msac.decode_unary_bypass(cmax);
-    let rem = if q == cmax {
-        decode_exp_golomb(msac, m + 1)
-    } else {
-        msac.decode_bools_bypass(m)
-    };
-    (rem + (q << m)) as i32
+    msac.decode_hr_bypass(cmax, m)
 }
 
 #[inline]

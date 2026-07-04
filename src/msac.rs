@@ -170,6 +170,74 @@ static MSAC_MIN_PROB_INNER: Aligned<[[u16; 8]; 7]> = Aligned([
 
 pub(crate) static MSAC_MIN_PROB: &[[u16; 8]; 7] = &MSAC_MIN_PROB_INNER.0;
 
+/// Result of the fused high-range bypass decode.
+pub(crate) enum HrDecode {
+    Commit {
+        val: i32,
+        bits: u32,
+        dif: u64,
+    },
+    /// Code too long for the available bit window; decode sequentially.
+    Fallback,
+}
+
+/// Fused `decode_hr`: truncated unary + suffix (or exp-Golomb when
+/// saturated) computed from `dif` in one pass with a single divide and a
+/// single renormalization, instead of chained per-op renorms.
+/// Pure: commits nothing. Caller must guarantee `cnt` covers `bits`.
+#[inline(always)]
+pub(crate) fn hr_bypass_kernel(dif: u64, rng: u32, cnt: u32, cmax: u32, m: u32) -> HrDecode {
+    debug_assert!(rng & 1 == 0 && (dif >> 48) < rng as u64);
+    debug_assert!((1..=6).contains(&cmax) && (1..=6).contains(&m));
+    let r = rng as u64;
+    let msb_r = (31 - rng.leading_zeros()) as i32;
+    let d_rem = (r << 48) - dif;
+    let k = (48 + msb_r - (63 - d_rem.leading_zeros()) as i32).clamp(0, cmax as i32) as u32;
+    let over = (d_rem > (r << (48 - k))) as u32;
+    let q = k - over;
+    if q < cmax {
+        let c = q + 1;
+        let x = (r << (48 - q)) - d_rem;
+        let s = 48 - c - m;
+        let q2 = ((x >> s) as u32) / rng;
+        let rem = x - (((q2 as u64) * r) << s);
+        let total = c + m;
+        let suffix = !q2 & ((1u32 << m) - 1);
+        return HrDecode::Commit {
+            val: (suffix + (q << m)) as i32,
+            bits: total,
+            dif: ((rem + 1) << total) - 1,
+        };
+    }
+    // Saturated: cmax ones with no stop bit, then exp-Golomb with k = m + 1.
+    let x1 = (r << (48 - cmax)) - d_rem;
+    let dif2 = ((x1 + 1) << cmax) - 1; // logical renorm, in-register only
+    let d_rem2 = (r << 48) - dif2;
+    let k2 = (48 + msb_r - (63 - d_rem2.leading_zeros()) as i32).clamp(0, 21) as u32;
+    let over2 = (d_rem2 > (r << (48 - k2))) as u32;
+    let q21 = k2 - over2;
+    let c2 = q21 + (q21 < 21) as u32;
+    let len = q21 + m + 1;
+    let total = cmax + c2 + len;
+    if total > cnt {
+        return HrDecode::Fallback;
+    }
+    let x2 = (r << (48 - q21)) - d_rem2;
+    let s2 = 48 - c2 - len;
+    let q2 = if len <= 16 {
+        (((x2 >> s2) as u32) / rng) as u64
+    } else {
+        x2 / (r << s2)
+    };
+    let rem = x2 - ((q2 * r) << s2);
+    let golomb = (1u32 << len) + (!(q2 as u32) & (u32::MAX >> (32 - len))) - (1u32 << (m + 1));
+    HrDecode::Commit {
+        val: (golomb + (cmax << m)) as i32,
+        bits: total,
+        dif: ((rem + 1) << (c2 + len)) - 1,
+    }
+}
+
 /// Branch-free truncated-unary bypass in closed form.
 ///
 /// The unary value is `q` = #{k >= 1 : dif >= rng * (2^48 - 2^(48-k))}, which
@@ -303,6 +371,7 @@ impl<const UPDATE_CDF: bool> MsacBackend<UPDATE_CDF> for SseMsacBackend {
 pub(crate) trait MsacReader<const UPDATE_CDF: bool> {
     fn save(&self) -> MsacState;
     fn decode_bools_bypass(&mut self, n_bits: u32) -> u32;
+    fn decode_hr_bypass(&mut self, cmax: u32, m: u32) -> i32;
     fn decode_bool_bypass(&mut self) -> u32;
     fn decode_unary_bypass(&mut self, max_bits: u32) -> u32;
     fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32;
@@ -436,6 +505,28 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         }
     }
 
+    pub(crate) fn decode_hr_bypass(&mut self, cmax: u32, m: u32) -> i32 {
+        // One conservative refill covers every fused path (bits <= 40; refill
+        // tops cnt above 40). Early refills are order-transparent.
+        if (self.cnt as u32) < 40 {
+            self.ctx_refill();
+        }
+        match hr_bypass_kernel(self.dif, self.rng, self.cnt as u32, cmax, m) {
+            HrDecode::Commit { val, bits, dif } => {
+                self.dif = dif;
+                self.cnt -= bits as i32;
+                val
+            }
+            HrDecode::Fallback => {
+                let q = self.decode_unary_bypass(cmax);
+                debug_assert_eq!(q, cmax);
+                let length = self.decode_unary_bypass(21) + m + 1;
+                let golomb = (1u32 << length) + self.decode_bools_bypass(length) - (1 << (m + 1));
+                (golomb + (cmax << m)) as i32
+            }
+        }
+    }
+
     pub(crate) fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
         debug_assert!(n_bits > 0 && n_bits <= 32);
         if (self.cnt as u32) < n_bits {
@@ -462,10 +553,16 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
             return ret;
         }
         // The per-bit loop is restoring division; one divide replaces the
-        // n-step serial chain and its n renormalizations.
-        let d = r << (48 - n_bits);
-        let q = dif / d;
-        self.dif = ((dif - q * d + 1) << n_bits) - 1;
+        // n-step serial chain and its n renormalizations. For n <= 16 the
+        // nested-floor identity reduces it to a 32-bit divide:
+        // dif / (rng << (48-n)) == (dif >> (48-n)) / rng, numerator < 2^32.
+        let s = 48 - n_bits;
+        let q = if n_bits <= 16 {
+            (((dif >> s) as u32) / self.rng) as u64
+        } else {
+            dif / (r << s)
+        };
+        self.dif = ((dif - ((q * r) << s) + 1) << n_bits) - 1;
         self.cnt -= n_bits as i32;
         !(q as u32) & (u32::MAX >> (32 - n_bits))
     }
@@ -828,6 +925,11 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextScalar<'a
     }
 
     #[inline(always)]
+    fn decode_hr_bypass(&mut self, cmax: u32, m: u32) -> i32 {
+        MsacContextScalar::decode_hr_bypass(self, cmax, m)
+    }
+
+    #[inline(always)]
     fn decode_bool_bypass(&mut self) -> u32 {
         MsacContextScalar::decode_bool_bypass(self)
     }
@@ -992,8 +1094,88 @@ mod bools_bypass_div_tests {
             let q = dif / d;
             let cf_dif = ((dif - q * d + 1) << n) - 1;
             let cf_ret = !(q as u32) & (u32::MAX >> (32 - n));
-            assert_eq!((r2, ref_dif), (cf_ret, cf_dif), "dif={dif:#x} rng={rng:#x} n={n}");
+            assert_eq!(
+                (r2, ref_dif),
+                (cf_ret, cf_dif),
+                "dif={dif:#x} rng={rng:#x} n={n}"
+            );
         }
     }
 }
 
+#[cfg(test)]
+mod hr_kernel_tests {
+    use super::{HrDecode, hr_bypass_kernel};
+
+    // Sequential reference: unary loop, renorm, then suffix loop or golomb.
+    fn unary_ref(dif: &mut u64, rng: u64, max: u32) -> u32 {
+        let mut vw = rng << 47;
+        let (mut ret, mut bit) = (0u32, 0u32);
+        while bit < max {
+            if *dif >= vw {
+                *dif -= vw;
+                vw >>= 1;
+                ret += 1;
+                bit += 1;
+            } else {
+                bit += 1;
+                break;
+            }
+        }
+        *dif = ((*dif + 1) << bit) - 1;
+        ret
+    }
+    fn bools_ref(dif: &mut u64, rng: u64, n: u32) -> u32 {
+        let mut vw = rng << 47;
+        let mut ret = 0u32;
+        for _ in 0..n {
+            let ge = u32::from(*dif >= vw);
+            *dif -= vw & 0u64.wrapping_sub(ge as u64);
+            ret = (ret << 1) | (ge ^ 1);
+            vw >>= 1;
+        }
+        *dif = ((*dif + 1) << n) - 1;
+        ret
+    }
+    fn hr_ref(mut dif: u64, rng: u64, cmax: u32, m: u32) -> (i32, u64) {
+        let q = unary_ref(&mut dif, rng, cmax);
+        let rem = if q == cmax {
+            let len = unary_ref(&mut dif, rng, 21) + m + 1;
+            (1u32 << len) + bools_ref(&mut dif, rng, len) - (1 << (m + 1))
+        } else {
+            bools_ref(&mut dif, rng, m)
+        };
+        ((rem + (q << m)) as i32, dif)
+    }
+
+    #[test]
+    fn fused_hr_matches_sequential() {
+        let mut s: u64 = 0xb0a7_10ad_5eed_c0de;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        let mut fallbacks = 0u32;
+        for _ in 0..400_000 {
+            let rng = ((0x8000 | (next() & 0x7FFF)) & !1) as u32;
+            let dif = next() % ((rng as u64) << 48);
+            let m = 1 + (next() % 6) as u32;
+            let cmax = (m + 4).min(6);
+            match hr_bypass_kernel(dif, rng, 48, cmax, m) {
+                HrDecode::Commit { val, bits, dif: nd } => {
+                    let (rv, rd) = hr_ref(dif, rng as u64, cmax, m);
+                    assert_eq!((val, nd), (rv, rd), "dif={dif:#x} rng={rng:#x} m={m}");
+                    assert!(bits <= 48);
+                }
+                HrDecode::Fallback => fallbacks += 1,
+            }
+            // a low bit budget must never commit more bits than available
+            if let HrDecode::Commit { bits, .. } = hr_bypass_kernel(dif, rng, 20, cmax, m) {
+                assert!(bits <= 20);
+            }
+        }
+        assert!(fallbacks < 4_000, "fallback should be rare: {fallbacks}");
+    }
+}

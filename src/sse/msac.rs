@@ -149,6 +149,28 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
     }
 
     #[inline(always)]
+    pub(crate) fn decode_hr_bypass(&mut self, cmax: u32, m: u32) -> i32 {
+        // One conservative refill covers every fused path (bits <= 40; refill
+        // tops cnt above 40). Early refills are order-transparent.
+        if (self.cnt as u32) < 40 {
+            self.ctx_refill();
+        }
+        match crate::msac::hr_bypass_kernel(self.dif, self.rng, self.cnt as u32, cmax, m) {
+            crate::msac::HrDecode::Commit { val, bits, dif } => {
+                self.dif = dif;
+                self.cnt -= bits as i32;
+                val
+            }
+            crate::msac::HrDecode::Fallback => {
+                let q = self.decode_unary_bypass(cmax);
+                debug_assert_eq!(q, cmax);
+                let length = self.decode_unary_bypass(21) + m + 1;
+                let golomb = (1u32 << length) + self.decode_bools_bypass(length) - (1 << (m + 1));
+                (golomb + (cmax << m)) as i32
+            }
+        }
+    }
+
     pub(crate) fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
         debug_assert!(n_bits > 0 && n_bits <= 32);
         if (self.cnt as u32) < n_bits {
@@ -175,10 +197,16 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
             return ret;
         }
         // The per-bit loop is restoring division; one divide replaces the
-        // n-step serial chain and its n renormalizations.
-        let d = r << (48 - n_bits);
-        let q = dif / d;
-        self.dif = ((dif - q * d + 1) << n_bits) - 1;
+        // n-step serial chain and its n renormalizations. For n <= 16 the
+        // nested-floor identity reduces it to a 32-bit divide:
+        // dif / (rng << (48-n)) == (dif >> (48-n)) / rng, numerator < 2^32.
+        let s = 48 - n_bits;
+        let q = if n_bits <= 16 {
+            (((dif >> s) as u32) / self.rng) as u64
+        } else {
+            dif / (r << s)
+        };
+        self.dif = ((dif - ((q * r) << s) + 1) << n_bits) - 1;
         self.cnt -= n_bits as i32;
         !(q as u32) & (u32::MAX >> (32 - n_bits))
     }
@@ -468,6 +496,11 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
     #[inline(always)]
     fn decode_bools_bypass(&mut self, n_bits: u32) -> u32 {
         MsacContextSse::decode_bools_bypass(self, n_bits)
+    }
+
+    #[inline(always)]
+    fn decode_hr_bypass(&mut self, cmax: u32, m: u32) -> i32 {
+        MsacContextSse::decode_hr_bypass(self, cmax, m)
     }
 
     #[inline(always)]
