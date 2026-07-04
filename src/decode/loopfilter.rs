@@ -124,11 +124,11 @@ pub(crate) fn ensure_filter_lines(
     let n_units = (bh as usize / 2) + 2;
 
     fn slot_has(slot: &[Vec<u8>; 3], y_len: usize, uv_len: usize, mono: bool) -> bool {
-        slot[0].len() == y_len
+        slot[0].len() >= y_len
             && if mono {
                 slot[1].is_empty() && slot[2].is_empty()
             } else {
-                slot[1].len() == uv_len && slot[2].len() == uv_len
+                slot[1].len() >= uv_len && slot[2].len() >= uv_len
             }
     }
 
@@ -160,10 +160,10 @@ pub(crate) fn ensure_filter_lines(
     }
 
     fn ensure_plane(v: &mut Vec<u8>, len: usize) -> Result<(), ()> {
-        if v.len() != len {
-            if len > v.len() {
-                v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
-            }
+        // Grow-only: shrinking then regrowing re-zeroes the whole line each
+        // time the requested height alternates; a longer buffer is harmless.
+        if len > v.len() {
+            v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
             v.resize(len, 0);
         }
         Ok(())
@@ -249,11 +249,11 @@ pub(crate) fn ensure_filter_lines_hbd(
     let n_units = (bh as usize / 2) + 2;
 
     fn slot_has(slot: &[Vec<u16>; 3], y_len: usize, uv_len: usize, mono: bool) -> bool {
-        slot[0].len() == y_len
+        slot[0].len() >= y_len
             && if mono {
                 slot[1].is_empty() && slot[2].is_empty()
             } else {
-                slot[1].len() == uv_len && slot[2].len() == uv_len
+                slot[1].len() >= uv_len && slot[2].len() >= uv_len
             }
     }
 
@@ -285,10 +285,10 @@ pub(crate) fn ensure_filter_lines_hbd(
     }
 
     fn ensure_plane(v: &mut Vec<u16>, len: usize) -> Result<(), ()> {
-        if v.len() != len {
-            if len > v.len() {
-                v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
-            }
+        // Grow-only: shrinking then regrowing re-zeroes the whole line each
+        // time the requested height alternates; a longer buffer is harmless.
+        if len > v.len() {
+            v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
             v.resize(len, 0);
         }
         Ok(())

@@ -1535,10 +1535,9 @@ where
         let a_idx = (tile_row * sb256w + (bx >> 6)) as usize;
         let lf_idx = ((bx >> 6) + sb256y * sb256w) as usize;
 
-        // Reset is_coded for this superblock (luma + chroma rows).
-        for row in recon_scratch.is_coded.iter_mut() {
-            row.fill(0);
-        }
+        // Reset is_coded for this superblock: whole-array store compiles to
+        // inline vector stores instead of per-row memset calls.
+        recon_scratch.is_coded = [[0u64; 64]; 2];
 
         // reset_context path); marks all 4x4 units intra (invalid mv) so that
         // not-yet-decoded neighbours are skipped by refmvs_find.

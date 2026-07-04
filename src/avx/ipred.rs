@@ -204,7 +204,14 @@ fn splat_row_u8_avx2(row: &mut [u8], v: u8) {
     for c in c8.iter_mut() {
         store_u8x8_fixed(c, vv16);
     }
-    rem.fill(v);
+    // Widths of 4 land entirely here; direct stores avoid a memset call.
+    let (c4, rem4) = rem.as_chunks_mut::<4>();
+    for c in c4.iter_mut() {
+        *c = [v; 4];
+    }
+    for b in rem4.iter_mut() {
+        *b = v;
+    }
 }
 
 #[inline]
