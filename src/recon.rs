@@ -1991,7 +1991,84 @@ macro_rules! decode_coefs_impl {
                 tcq_state = if tcq_en { -0x80000000i32 } else { 0 };
                 let ac_dq = p.dq_tbl[1];
                 let mut i = eob;
-                while i >= 1 {
+                if $tx_cl == 0 {
+                    // 2D: every sign is a bypass bit, so signs of consecutive
+                    // non-zero coefficients batch into one bools_bypass call
+                    // (one renormalization instead of one per sign). A
+                    // high-range coefficient ends the run: its extension bits
+                    // follow its own sign in the stream.
+                    const SIGN_RUN_CAP: usize = 16;
+                    let mut run_rc = [0u16; SIGN_RUN_CAP];
+                    let mut run_tok = [0i32; SIGN_RUN_CAP];
+                    let mut run_tcq = [0u8; SIGN_RUN_CAP];
+                    while i >= 1 {
+                        let mut k = 0usize;
+                        let mut hr_term = false;
+                        while i >= 1 && k < SIGN_RUN_CAP {
+                            let rc = if is_stx {
+                                i as usize
+                            } else {
+                                scan[i as usize] as usize
+                            };
+                            let tok_val = cf[rc].to_i32();
+                            if tok_val == 0 {
+                                if tcq_state != 0 {
+                                    tcq_state = tcq_next_state(tcq_state, 0);
+                                }
+                                i -= 1;
+                                continue;
+                            }
+                            run_rc[k] = rc as u16;
+                            run_tok[k] = tok_val;
+                            run_tcq[k] = ((tcq_state & 2) >> 1) as u8;
+                            if tcq_state != 0 {
+                                tcq_state = tcq_next_state(tcq_state, tok_val);
+                            }
+                            let max_br = if i < hi_to_low_tx {
+                                if chroma { 5 } else { 8 }
+                            } else {
+                                6
+                            };
+                            k += 1;
+                            i -= 1;
+                            if tok_val >= max_br - tcq_en as i32 {
+                                hr_term = true;
+                                break;
+                            }
+                        }
+                        if k == 0 {
+                            continue;
+                        }
+                        let sign_bits = msac.decode_bools_bypass(k as u32);
+                        for j in 0..k {
+                            let sign = (sign_bits >> (k - 1 - j)) & 1;
+                            let rc = run_rc[j] as usize;
+                            let mut tok = run_tok[j];
+                            let tcq_bit = run_tcq[j] as i32;
+                            let ac_val: i32;
+                            if hr_term && j == k - 1 {
+                                let hr = decode_hr(msac, hr_avg);
+                                tok += hr << tcq_en as i32;
+                                hr_avg = (hr_avg + hr) >> 1;
+                                tok &= 0xfffff;
+                                let v = (tok << tcq_en as i32) - tcq_bit;
+                                ac_val = imin(
+                                    ((((v as u32).wrapping_mul(ac_dq)) & 0xffffff)
+                                        .wrapping_add(4)
+                                        >> dq_shift) as i32,
+                                    cf_max + sign as i32,
+                                );
+                            } else {
+                                let v = (tok << tcq_en as i32) - tcq_bit;
+                                ac_val = (((v as u32).wrapping_mul(ac_dq)).wrapping_add(4)
+                                    >> dq_shift) as i32;
+                            }
+                            cul_level += tok as u32;
+                            cf[rc] = C::from_i32(if sign != 0 { -ac_val } else { ac_val });
+                        }
+                    }
+                }
+                while $tx_cl != 0 && i >= 1 {
                     if $tx_cl == 0 {
                         rc = if is_stx {
                             i as usize

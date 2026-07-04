@@ -156,21 +156,31 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         }
 
         let r = self.rng as u64;
-        let mut dif = self.dif;
+        let dif = self.dif;
         debug_assert!(r & 1 == 0);
         debug_assert!((dif >> 48) < r);
-        let mut vw = r << 47;
-        let mut ret: u32 = 0;
-        for _ in 0..n_bits {
-            let ge = u32::from(dif >= vw);
-            let mask = 0u64.wrapping_sub(ge as u64);
-            dif = dif.wrapping_sub(vw & mask);
-            ret = (ret << 1) | (ge ^ 1);
-            vw >>= 1;
+        if n_bits < 4 {
+            let mut dif = dif;
+            let mut vw = r << 47;
+            let mut ret: u32 = 0;
+            for _ in 0..n_bits {
+                let ge = u32::from(dif >= vw);
+                let mask = 0u64.wrapping_sub(ge as u64);
+                dif = dif.wrapping_sub(vw & mask);
+                ret = (ret << 1) | (ge ^ 1);
+                vw >>= 1;
+            }
+            self.dif = ((dif + 1) << n_bits) - 1;
+            self.cnt -= n_bits as i32;
+            return ret;
         }
-        self.dif = ((dif + 1) << n_bits) - 1;
+        // The per-bit loop is restoring division; one divide replaces the
+        // n-step serial chain and its n renormalizations.
+        let d = r << (48 - n_bits);
+        let q = dif / d;
+        self.dif = ((dif - q * d + 1) << n_bits) - 1;
         self.cnt -= n_bits as i32;
-        ret
+        !(q as u32) & (u32::MAX >> (32 - n_bits))
     }
 
     #[inline(always)]
