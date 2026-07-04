@@ -294,16 +294,12 @@ fn get_ph_ctx(levels: &[i8], is_2d: bool, stride: usize) -> usize {
 }
 
 #[inline(always)]
-fn sums_lo_ctx_luma_2d(base: &[i8], stride: usize) -> (u32, u32) {
+fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
     // One check instead of five: lets the per-read bounds tests fold away.
     assert!(stride >= 4 && base.len() > 2 * stride);
     let s3 = packed(base[1]) + packed(base[stride]) + packed(base[stride + 1]);
     let s5 = s3 + packed(base[2]) + packed(base[2 * stride]);
-    (s3, s5)
-}
 
-#[inline(always)]
-fn fold_lo_ctx_luma_2d(s3: u32, s5: u32, hi_mag: &mut u32, xy: u32) -> u32 {
     let hi = s3 & 31;
 
     let lo_freq = xy < 4;
@@ -346,18 +342,6 @@ fn fold_lo_ctx_luma_2d(s3: u32, s5: u32, hi_mag: &mut u32, xy: u32) -> u32 {
 }
 
 #[inline(always)]
-fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
-    let (s3, s5) = sums_lo_ctx_luma_2d(base, stride);
-    fold_lo_ctx_luma_2d(s3, s5, hi_mag, xy)
-}
-
-#[inline(always)]
-fn get_lo_ctx_chroma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, plane: i32, stride: usize) -> u32 {
-    let s = sum_lo_ctx_chroma_2d(base, stride);
-    fold_lo_ctx_chroma_2d(s, hi_mag, xy, plane)
-}
-
-#[inline(always)]
 fn get_lo_ctx_luma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
     assert!(stride >= 4 && base.len() > stride);
     let sab = packed(base[1]) + packed(base[stride]);
@@ -395,13 +379,10 @@ fn get_lo_ctx_luma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
 }
 
 #[inline(always)]
-fn sum_lo_ctx_chroma_2d(base: &[i8], stride: usize) -> u32 {
+fn get_lo_ctx_chroma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, plane: i32, stride: usize) -> u32 {
     assert!(stride >= 2 && base.len() > stride + 1);
-    packed(base[1]) + packed(base[stride]) + packed(base[stride + 1])
-}
+    let s = packed(base[1]) + packed(base[stride]) + packed(base[stride + 1]);
 
-#[inline(always)]
-fn fold_lo_ctx_chroma_2d(s: u32, hi_mag: &mut u32, xy: u32, plane: i32) -> u32 {
     let hi = s & 31;
 
     let lo = if xy == 0 { hi } else { s >> 5 };
@@ -1864,219 +1845,104 @@ macro_rules! decode_coefs_impl {
                 }
 
                 // ac tokens (eob-1 down to 1)
-                if $tx_cl == 0 {
-                    // Software-pipelined: the next position's neighbour sums
-                    // load before the current level store (each cell is
-                    // written exactly once, so at most the cell being stored
-                    // is stale, and it is patched in-register). This lets the
-                    // next CDF address resolve under the current symbol's
-                    // renormalization chain.
-                    let mut i = eob - 1;
-                    let mut cur_rc = 0usize;
-                    let mut cur_s3 = 0u32;
-                    let mut cur_s5 = 0u32;
-                    if i >= 1 {
-                        cur_rc = scan[i as usize] as usize;
+                let mut i = eob - 1;
+                loop {
+                    if i == hi_to_low_tx - 1 {
+                        lim = 5;
                         if !chroma {
-                            (cur_s3, cur_s5) = sums_lo_ctx_luma_2d(&levels[cur_rc..], stride);
+                            hi_base = 4080;
+                            hi_stride = 4;
+                            lo_base = 1440 + (t_dim.ctx as usize) * 528;
+                            lo_stride = 8;
+                            lo_nsym = 5;
+                            hi_cdf_valid = true;
                         } else {
-                            cur_s3 = sum_lo_ctx_chroma_2d(&levels[cur_rc..], stride);
+                            hi_base = 0;
+                            hi_stride = 0;
+                            lo_base = 4560;
+                            lo_stride = 8;
+                            lo_nsym = 5;
+                            hi_cdf_valid = false;
                         }
                     }
-                    loop {
-                        if i == hi_to_low_tx - 1 {
-                            lim = 5;
-                            if !chroma {
-                                hi_base = 4080;
-                                hi_stride = 4;
-                                lo_base = 1440 + (t_dim.ctx as usize) * 528;
-                                lo_stride = 8;
-                                lo_nsym = 5;
-                                hi_cdf_valid = true;
-                            } else {
-                                hi_base = 0;
-                                hi_stride = 0;
-                                lo_base = 4560;
-                                lo_stride = 8;
-                                lo_nsym = 5;
-                                hi_cdf_valid = false;
-                            }
-                        }
-                        if i == 0 {
-                            break;
-                        }
-                        rc = cur_rc;
+                    if i == 0 {
+                        break;
+                    }
+                    if $tx_cl == 0 {
+                        rc = scan[i as usize] as usize;
                         x = rc >> shift;
                         y = rc & mask;
-                        let xy_val = (x + y) as u32;
-                        let mut hr_ctx = 0u32;
-                        let ctx = if !chroma {
-                            fold_lo_ctx_luma_2d(cur_s3, cur_s5, &mut hr_ctx, xy_val)
-                        } else {
-                            fold_lo_ctx_chroma_2d(cur_s3, &mut hr_ctx, xy_val, p.plane)
-                        };
-                        let tcq_bit = ((tcq_state & 2) >> 1) as u32;
-                        let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
-                        let o = lo_base + lo_cdf_idx * lo_stride;
-                        let mut tok = if lo_nsym == 3 {
-                            msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
-                                &mut coef.data,
-                                o,
-                            )) as i32
-                        } else {
-                            debug_assert_eq!(lo_nsym, 5);
-                            msac.decode_symbol_adapt_n_padded::<5, 8>(cdf_array_mut::<8>(
-                                &mut coef.data,
-                                o,
-                            )) as i32
-                        };
-                        if tok == lim && hi_cdf_valid {
-                            let o2 = hi_base + hr_ctx as usize * hi_stride;
-                            tok += msac
-                                .decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
-                                    &mut coef.data,
-                                    o2,
-                                )) as i32;
-                            if ph_state != 0 {
-                                ph_state += 0x10000 + tok as u32 + (tok == 7) as u32;
-                            }
-                        } else if ph_state != 0 {
-                            // Adds the non-zero count bit plus the token parity.
-                            ph_state =
-                                ph_state.wrapping_add((tok as u32).wrapping_neg() & 0x10001);
-                        }
-                        if tcq_state != 0 {
-                            tcq_state = tcq_next_state(tcq_state, tok);
-                        }
-                        let lt = pack_level(tok);
-                        if i > 1 {
-                            let nrc = scan[(i - 1) as usize] as usize;
-                            let d = rc.wrapping_sub(nrc);
-                            let plt = packed(lt);
-                            if !chroma {
-                                let (ns3, ns5) = sums_lo_ctx_luma_2d(&levels[nrc..], stride);
-                                let in3 = (d == 1) | (d == stride) | (d == stride + 1);
-                                let in5 = in3 | (d == 2) | (d == 2 * stride);
-                                cur_s3 = ns3 + plt * in3 as u32;
-                                cur_s5 = ns5 + plt * in5 as u32;
-                            } else {
-                                let ns = sum_lo_ctx_chroma_2d(&levels[nrc..], stride);
-                                let in3 = (d == 1) | (d == stride) | (d == stride + 1);
-                                cur_s3 = ns + plt * in3 as u32;
-                            }
-                            cur_rc = nrc;
-                        }
-                        levels[rc] = lt;
-                        cf[if is_stx { i as usize } else { rc }] = C::from_i32(tok);
-                        if tok != 0 {
-                            nz_scratch[nz_n] = (if is_stx { i as usize } else { rc }) as u32
-                                | (tcq_bit << 13)
-                                | (((i < hi_to_low_tx) as u32) << 14)
-                                | ((tok as u32) << 16);
-                            nz_n += 1;
-                        }
-                        i -= 1;
+                    } else if $tx_cl == 1 {
+                        x = i as usize & mask;
+                        y = i as usize >> shift;
+                        rc = i as usize;
+                    } else {
+                        x = i as usize & mask;
+                        y = i as usize >> shift;
+                        rc = (x << shift2) | y;
                     }
-                } else {
-                    let mut i = eob - 1;
-                    loop {
-                        if i == hi_to_low_tx - 1 {
-                            lim = 5;
-                            if !chroma {
-                                hi_base = 4080;
-                                hi_stride = 4;
-                                lo_base = 1440 + (t_dim.ctx as usize) * 528;
-                                lo_stride = 8;
-                                lo_nsym = 5;
-                                hi_cdf_valid = true;
-                            } else {
-                                hi_base = 0;
-                                hi_stride = 0;
-                                lo_base = 4560;
-                                lo_stride = 8;
-                                lo_nsym = 5;
-                                hi_cdf_valid = false;
-                            }
-                        }
-                        if i == 0 {
-                            break;
-                        }
+                    let off = if $tx_cl == 0 { rc } else { x * stride + y };
+                    let mut hr_ctx = 0u32;
+                    let xy_val: u32 = if $tx_cl == 0 {
+                        (x + y) as u32
+                    } else {
+                        y as u32
+                    };
+                    let base = &levels[off..];
+                    let ctx = if !chroma {
                         if $tx_cl == 0 {
-                            rc = scan[i as usize] as usize;
-                            x = rc >> shift;
-                            y = rc & mask;
-                        } else if $tx_cl == 1 {
-                            x = i as usize & mask;
-                            y = i as usize >> shift;
-                            rc = i as usize;
+                            get_lo_ctx_luma_2d(base, &mut hr_ctx, xy_val, stride)
                         } else {
-                            x = i as usize & mask;
-                            y = i as usize >> shift;
-                            rc = (x << shift2) | y;
+                            get_lo_ctx_luma_1d(base, &mut hr_ctx, xy_val, stride)
                         }
-                        let off = if $tx_cl == 0 { rc } else { x * stride + y };
-                        let mut hr_ctx = 0u32;
-                        let xy_val: u32 = if $tx_cl == 0 {
-                            (x + y) as u32
-                        } else {
-                            y as u32
-                        };
-                        let base = &levels[off..];
-                        let ctx = if !chroma {
-                            if $tx_cl == 0 {
-                                get_lo_ctx_luma_2d(base, &mut hr_ctx, xy_val, stride)
-                            } else {
-                                get_lo_ctx_luma_1d(base, &mut hr_ctx, xy_val, stride)
-                            }
-                        } else if $tx_cl == 0 {
-                            get_lo_ctx_chroma_2d(base, &mut hr_ctx, xy_val, p.plane, stride)
-                        } else {
-                            get_lo_ctx_chroma_1d(base, &mut hr_ctx, xy_val, stride)
-                        };
-                        let tcq_bit = ((tcq_state & 2) >> 1) as u32;
-                        let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
-                        let o = lo_base + lo_cdf_idx * lo_stride;
-                        let mut tok = if lo_nsym == 3 {
-                            msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
+                    } else if $tx_cl == 0 {
+                        get_lo_ctx_chroma_2d(base, &mut hr_ctx, xy_val, p.plane, stride)
+                    } else {
+                        get_lo_ctx_chroma_1d(base, &mut hr_ctx, xy_val, stride)
+                    };
+                    let tcq_bit = ((tcq_state & 2) >> 1) as u32;
+                    let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
+                    let o = lo_base + lo_cdf_idx * lo_stride;
+                    let mut tok = if lo_nsym == 3 {
+                        msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
+                            &mut coef.data,
+                            o,
+                        )) as i32
+                    } else {
+                        debug_assert_eq!(lo_nsym, 5);
+                        msac.decode_symbol_adapt_n_padded::<5, 8>(cdf_array_mut::<8>(
+                            &mut coef.data,
+                            o,
+                        )) as i32
+                    };
+                    if tok == lim && hi_cdf_valid {
+                        let o2 = hi_base + hr_ctx as usize * hi_stride;
+                        tok += msac
+                            .decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
                                 &mut coef.data,
-                                o,
-                            )) as i32
-                        } else {
-                            debug_assert_eq!(lo_nsym, 5);
-                            msac.decode_symbol_adapt_n_padded::<5, 8>(cdf_array_mut::<8>(
-                                &mut coef.data,
-                                o,
-                            )) as i32
-                        };
-                        if tok == lim && hi_cdf_valid {
-                            let o2 = hi_base + hr_ctx as usize * hi_stride;
-                            tok += msac
-                                .decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
-                                    &mut coef.data,
-                                    o2,
-                                )) as i32;
-                            if ph_state != 0 {
-                                ph_state += 0x10000 + tok as u32 + (tok == 7) as u32;
-                            }
-                        } else if ph_state != 0 {
-                            // Adds the non-zero count bit plus the token parity.
-                            ph_state = ph_state.wrapping_add((tok as u32).wrapping_neg() & 0x10001);
+                                o2,
+                            )) as i32;
+                        if ph_state != 0 {
+                            ph_state += 0x10000 + tok as u32 + (tok == 7) as u32;
                         }
-                        if tcq_state != 0 {
-                            tcq_state = tcq_next_state(tcq_state, tok);
-                        }
-                        levels[off] = pack_level(tok);
-                        cf[if is_stx { i as usize } else { rc }] = C::from_i32(tok);
-                        if tok != 0 {
-                            nz_scratch[nz_n] = (if is_stx { i as usize } else { rc }) as u32
-                                | (tcq_bit << 13)
-                                | (((i < hi_to_low_tx) as u32) << 14)
-                                | ((($tx_cl != 0 && y == 0 && !chroma) as u32) << 15)
-                                | ((tok as u32) << 16);
-                            nz_n += 1;
-                        }
-                        i -= 1;
+                    } else if ph_state != 0 {
+                        // Adds the non-zero count bit plus the token parity.
+                        ph_state = ph_state.wrapping_add((tok as u32).wrapping_neg() & 0x10001);
                     }
+                    if tcq_state != 0 {
+                        tcq_state = tcq_next_state(tcq_state, tok);
+                    }
+                    levels[off] = pack_level(tok);
+                    cf[if is_stx { i as usize } else { rc }] = C::from_i32(tok);
+                    if tok != 0 {
+                        nz_scratch[nz_n] = (if is_stx { i as usize } else { rc }) as u32
+                            | (tcq_bit << 13)
+                            | (((i < hi_to_low_tx) as u32) << 14)
+                            | ((($tx_cl != 0 && y == 0 && !chroma) as u32) << 15)
+                            | ((tok as u32) << 16);
+                        nz_n += 1;
+                    }
+                    i -= 1;
                 }
 
                 // dc token
