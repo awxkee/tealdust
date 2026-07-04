@@ -263,10 +263,22 @@ pub(crate) fn get_dc_sign_ctx(t_dim: &TxfmInfo, a: &[u8], l: &[u8]) -> u32 {
 /// Levels store min(tok,5) in bits 0..5 and min(tok,3) in bits 5..8, so the
 /// context sums are raw byte adds split once by mask/shift, with no
 /// per-neighbor min (a 5-way sum of the low field stays below 32).
+static PACK_LEVEL: [i8; 16] = {
+    let mut t = [0i8; 16];
+    let mut i = 0;
+    while i < 16 {
+        let t5 = if i < 5 { i as i8 } else { 5 };
+        let t3 = if t5 < 3 { t5 } else { 3 };
+        t[i] = t5 | (t3 << 5);
+        i += 1;
+    }
+    t
+};
+
 #[inline(always)]
 fn pack_level(tok: i32) -> i8 {
-    let t5 = tok.min(5);
-    (t5 | (t5.min(3) << 5)) as i8
+    debug_assert!((0..=8).contains(&tok));
+    PACK_LEVEL[(tok & 15) as usize]
 }
 
 #[inline(always)]
@@ -2000,8 +2012,7 @@ macro_rules! decode_coefs_impl {
                 while j < nz_n {
                     let mut k = 0usize;
                     let mut hr_term = false;
-                    while j + k < nz_n && k < 16 {
-                        let rec = nz_scratch[j + k];
+                    for &rec in nz_scratch[j..nz_n].iter().take(16) {
                         if rec & (1 << 15) != 0 {
                             break;
                         }
