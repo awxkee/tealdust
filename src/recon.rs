@@ -1637,6 +1637,34 @@ fn decode_coefs_dc_tail<C: Coeff, const UPDATE_CDF: bool, M: MsacReader<UPDATE_C
     eob
 }
 
+
+/// Carves the base-token and high-range CDF regions for one scan segment into
+/// typed chunk slices, replacing per-token offset arithmetic + range checks.
+#[inline(always)]
+fn carve_cdf_pair<const L: usize>(
+    data: &mut [u16],
+    lo_base: usize,
+    lo_chunks: usize,
+    hi_base: usize,
+    hi_chunks: usize,
+) -> (&mut [[u16; L]], &mut [[u16; 4]]) {
+    let lo_end = lo_base + lo_chunks * L;
+    if lo_end <= hi_base {
+        let (a, b) = data.split_at_mut(hi_base);
+        (
+            a[lo_base..lo_end].as_chunks_mut().0,
+            b[..hi_chunks * 4].as_chunks_mut().0,
+        )
+    } else {
+        debug_assert!(hi_base + hi_chunks * 4 <= lo_base);
+        let (a, b) = data.split_at_mut(lo_base);
+        (
+            b[..lo_chunks * L].as_chunks_mut().0,
+            a[hi_base..hi_base + hi_chunks * 4].as_chunks_mut().0,
+        )
+    }
+}
+
 macro_rules! decode_coefs_impl {
     (
         $msac:expr,
@@ -1848,10 +1876,19 @@ macro_rules! decode_coefs_impl {
                 // the region check leaves the loop and lim/nsym const-fold.
                 macro_rules! ac_tokens {
                     ($first:expr, $last:expr, $seg_lim:literal, $seg_nsym:literal,
-                     $seg_lo_base:expr, $seg_lo_stride:literal, $seg_hi_base:expr,
-                     $seg_hi_valid:expr) => {
+                     $seg_lanes:literal, $seg_lo_base:expr, $seg_lo_chunks:literal,
+                     $seg_hi_base:expr, $seg_hi_chunks:literal, $seg_hi_valid:expr) => {
                         let mut i: i32 = $first;
                         let last: i32 = $last;
+                        // One carve per segment kills the per-token CDF offset
+                        // arithmetic, range checks and cold expect path.
+                        let (lo_cdf, hi_cdf) = carve_cdf_pair::<$seg_lanes>(
+                            &mut coef.data,
+                            $seg_lo_base,
+                            $seg_lo_chunks,
+                            $seg_hi_base,
+                            $seg_hi_chunks,
+                        );
                         while i >= last {
                             if $tx_cl == 0 {
                                 rc = scan[i as usize] as usize;
@@ -1887,25 +1924,15 @@ macro_rules! decode_coefs_impl {
                             };
                             let tcq_bit = ((tcq_state & 2) >> 1) as u32;
                             let lo_cdf_idx = (ctx * (2 - chroma as u32) + tcq_bit) as usize;
-                            let o = $seg_lo_base + lo_cdf_idx * $seg_lo_stride;
-                            let mut tok = if $seg_nsym == 3 {
-                                msac.decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
-                                    &mut coef.data,
-                                    o,
-                                )) as i32
-                            } else {
-                                msac.decode_symbol_adapt_n_padded::<5, 8>(cdf_array_mut::<8>(
-                                    &mut coef.data,
-                                    o,
-                                )) as i32
-                            };
+                            let mut tok = msac
+                                .decode_symbol_adapt_n_padded::<$seg_nsym, $seg_lanes>(
+                                    &mut lo_cdf[lo_cdf_idx],
+                                ) as i32;
                             if tok == $seg_lim && $seg_hi_valid {
-                                let o2 = $seg_hi_base + hr_ctx as usize * 4;
                                 tok += msac
-                                    .decode_symbol_adapt_n_padded::<3, 4>(cdf_array_mut::<4>(
-                                        &mut coef.data,
-                                        o2,
-                                    )) as i32;
+                                    .decode_symbol_adapt_n_padded::<3, 4>(
+                                        &mut hi_cdf[hr_ctx as usize],
+                                    ) as i32;
                                 if ph_state != 0 {
                                     ph_state += 0x10000 + tok as u32 + (tok == 7) as u32;
                                 }
@@ -1936,9 +1963,9 @@ macro_rules! decode_coefs_impl {
                 if eob >= hi_to_low_tx {
                     // HF segment: lim 3, 4-symbol base CDFs, hi CDFs valid.
                     if !chroma {
-                        ac_tokens!(eob - 1, hf_last, 3, 3, 452 + (t_dim.ctx as usize) * 160, 4, 1252, true);
+                        ac_tokens!(eob - 1, hf_last, 3, 3, 4, 452 + (t_dim.ctx as usize) * 160, 40, 1252, 7, true);
                     } else {
-                        ac_tokens!(eob - 1, hf_last, 3, 3, 4460, 4, 4508, true);
+                        ac_tokens!(eob - 1, hf_last, 3, 3, 4, 4460, 12, 4508, 4, true);
                     }
                 }
                 // LF params also feed the DC token below.
@@ -1962,9 +1989,9 @@ macro_rules! decode_coefs_impl {
                 {
                     let lf_first = (eob - 1).min(hi_to_low_tx - 1);
                     if !chroma {
-                        ac_tokens!(lf_first, 1, 5, 5, 1440 + (t_dim.ctx as usize) * 528, 8, 4080, true);
+                        ac_tokens!(lf_first, 1, 5, 5, 8, 1440 + (t_dim.ctx as usize) * 528, 66, 4080, 14, true);
                     } else {
-                        ac_tokens!(lf_first, 1, 5, 5, 4560, 8, 0, false);
+                        ac_tokens!(lf_first, 1, 5, 5, 8, 4560, 12, 4508, 4, false);
                     }
                 }
 
