@@ -931,7 +931,7 @@ pub struct ReconScratch {
     /// by the luma `tip_pred` (version 0 = luma MV post-refine, version 1 =
     /// chroma-scaled MV) and read back by the chroma `rmv_uvpred`. Indexed
     /// `((by & 31) >> 1) * 16 + ((bx & 31) >> 1)`.
-    pub rmv: [[[crate::levels::Mv; 2]; 2]; 256],
+    pub rmv: [[[Mv; 2]; 2]; 256],
     /// Above/left palette-color cache (`t->al_pal`): `[a/l][bx4|by4][8 colors]`,
     /// indexed by `bx & 63` (above) / `by & 63` (left). Written by the palette
     /// recon (`copy_pal_block_y`) and read by `read_pal_plane` to build the
@@ -943,6 +943,8 @@ pub struct ReconScratch {
     /// Current palette block's packed index map (`t->scratch.pal_idx_y`). `pack`
     /// stores two indices per byte; sized for the largest palette block (64x64).
     pub pal_idx_y: Box<[u8; 64 * 64]>,
+    /// Unpacked palette index scratch (avoids a per-block heap alloc).
+    pub pal_idx_unpack: Box<[u8; 64 * 64]>,
     /// Reusable coefficient-level neighbour map for `decode_coefs` (worst case
     /// 33*33 = 1089). Only the prefix actually used by the current transform is
     /// cleared per block, so small TUs avoid a full 1089-byte memset.
@@ -990,6 +992,7 @@ impl Default for ReconScratch {
             al_pal: [[[0u16; 8]; 64]; 2],
             pal: [0u16; 8],
             pal_idx_y: Box::new([0u8; 64 * 64]),
+            pal_idx_unpack: Box::new([0u8; 64 * 64]),
             coef_levels: [0i8; 1089],
             coef_nz: [0u32; 1024],
             itx_tmp: Box::new([0i32; crate::itx_2d::ITX_TMP_PIXELS]),
@@ -1069,7 +1072,7 @@ impl ReconScratch {
     }
 
     #[inline]
-    fn reset_for_sbrow(&mut self) {
+    fn reset_for_sbrow(&mut self, inter: bool) {
         self.is_coded = [[0u64; 64]; 2];
         self.luma_intra_dir_mode_map = [0u8; 256];
         self.luma_fsc_map = [0u8; 256];
@@ -1087,14 +1090,16 @@ impl ReconScratch {
         self.luma_tx_cf32.clear();
         self.luma_tx_rpos = 0;
         self.txtp_map = [0u16; 256];
-        self.rmv = [[[Mv::default(); 2]; 2]; 256];
+        if inter {
+            self.rmv = [[[Mv::default(); 2]; 2]; 256];
+        }
         self.al_pal = [[[0u16; 8]; 64]; 2];
         self.pal = [0u16; 8];
         // coef_levels: decode_coefs zero-fills its used prefix per TU.
         // coef_nz: records[..nz_n] are written before read by construction.
         self.chroma_cf8.clear();
         self.chroma_cf32.clear();
-        self.pal_idx_y.fill(0);
+        // pal_idx_y: read_pal_indices packs the full region pal_pred reads.
         // `itx_tmp` and the compound MC temporaries are fully overwritten on the
         // used prefix when taken. Keep their capacity across superblock rows.
     }
@@ -1508,14 +1513,16 @@ where
     let row_start = ts.tiling.row_start;
     let row_end = ts.tiling.row_end;
 
-    // Per-worker reusable reconstruction scratch.
-    recon_scratch.reset_for_sbrow();
+    let refmvs_active = fi.allow_intrabc || fi.is_inter_or_switch;
+
+    // Per-worker reusable reconstruction scratch. The MV scratch is only
+    // touched by inter refinement; intra frames skip its 4 KB re-clear.
+    recon_scratch.reset_for_sbrow(refmvs_active);
 
     let mut sb_last_qidx = ts.last_qidx;
     let mut sb_dqmem = ts.dqmem;
     let mut sb_seg_err = false;
 
-    let refmvs_active = fi.allow_intrabc || fi.is_inter_or_switch;
     if refmvs_active {
         crate::refmvs::tile_sbrow_init(
             rt,

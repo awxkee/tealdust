@@ -2531,12 +2531,13 @@ where
         if pal_sz != 0 {
             let sz = [w4 * 4, h4 * 4, bw4 * 4, bh4 * 4];
             // pal_idx_finish needs distinct dst (packed) / src (unpacked) buffers;
-            let mut idx_scratch = vec![0u8; (bw4 * 4 * bh4 * 4) as usize];
+            let unpack_len = (bw4 * 4 * bh4 * 4) as usize;
+            let s = &mut recon.scratch;
             if read_pal_indices(
                 msac,
                 cdf_m,
-                &mut recon.scratch.pal_idx_y[..],
-                &mut idx_scratch[..],
+                &mut s.pal_idx_y[..],
+                &mut s.pal_idx_unpack[..unpack_len],
                 pal_sz,
                 &sz,
             ) < 0
