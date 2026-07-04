@@ -170,6 +170,30 @@ static MSAC_MIN_PROB_INNER: Aligned<[[u16; 8]; 7]> = Aligned([
 
 pub(crate) static MSAC_MIN_PROB: &[[u16; 8]; 7] = &MSAC_MIN_PROB_INNER.0;
 
+/// (dif, rng, max_bits) -> (unary value, bits consumed, renormalized dif).
+pub(crate) type UnaryBypassKernelFn = unsafe fn(u64, u32, u32) -> (u32, u32, u64);
+
+pub(crate) fn unary_bypass_kernel_scalar(dif: u64, rng: u32, max_bits: u32) -> (u32, u32, u64) {
+    debug_assert!(rng & 1 == 0);
+    debug_assert!((dif >> 48) < rng as u64);
+    let mut dif = dif;
+    let mut vw = (rng as u64) << 47;
+    let mut ret: u32 = 0;
+    let mut bit: u32 = 0;
+    while bit < max_bits {
+        if dif >= vw {
+            dif -= vw;
+            vw >>= 1;
+            ret += 1;
+            bit += 1;
+        } else {
+            bit += 1;
+            break;
+        }
+    }
+    (ret, bit, ((dif + 1) << bit) - 1)
+}
+
 #[inline(always)]
 pub(crate) unsafe fn msac_load_be64_unchecked(buf: &[u8], start: usize) -> u64 {
     debug_assert!(start + 8 <= buf.len());

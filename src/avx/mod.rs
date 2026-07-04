@@ -43,6 +43,7 @@ mod looprestoration;
 mod looprestoration_hd;
 mod mc;
 mod mc_hbd;
+mod msac;
 mod pal;
 mod refmvs;
 mod stx;
@@ -102,6 +103,7 @@ pub(crate) use looprestoration_hd::{
 };
 pub(crate) use mc::*;
 pub(crate) use mc_hbd::*;
+pub(crate) use msac::unary_bypass_kernel_avx2;
 pub(crate) use pal::{pal_pred_8bpc_avx2, pal_pred_hbd_avx2};
 pub(crate) use refmvs::{splat_mv_avx2, splat_warpmv_avx2};
 pub(crate) use stx::{stxfm4_8bpc_avx2, stxfm4_hbd_avx2, stxfm8_8bpc_avx2, stxfm8_hbd_avx2};

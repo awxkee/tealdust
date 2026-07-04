@@ -32,9 +32,27 @@
 use core::convert::TryInto;
 
 use crate::msac::{
-    MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState, msac_load_be64_unchecked, msac_refill_eob,
+    MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState, UnaryBypassKernelFn, msac_load_be64_unchecked,
+    msac_refill_eob, unary_bypass_kernel_scalar,
 };
 use core::arch::x86_64::*;
+use std::sync::OnceLock;
+
+static UNARY_KERNEL: OnceLock<UnaryBypassKernelFn> = OnceLock::new();
+
+#[inline]
+fn resolve_unary_kernel() -> UnaryBypassKernelFn {
+    *UNARY_KERNEL.get_or_init(|| {
+        let mut _f = unary_bypass_kernel_scalar as UnaryBypassKernelFn;
+        #[cfg(feature = "avx")]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                _f = crate::avx::unary_bypass_kernel_avx2 as UnaryBypassKernelFn;
+            }
+        }
+        _f
+    })
+}
 
 pub(crate) struct MsacContextSse<'a, const UPDATE_CDF: bool> {
     pub(crate) buf_pos: usize,
@@ -195,38 +213,16 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
     }
 
     #[inline(always)]
-    pub(crate) fn decode_unary_bypass_scalar(&mut self, max_bits: u32) -> u32 {
+    pub(crate) fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
         debug_assert!(max_bits == 5 || max_bits == 6 || max_bits == 21);
         if (self.cnt as u32) < max_bits {
             self.ctx_refill();
         }
-
-        let r = self.rng as u64;
-        let mut dif = self.dif;
-        debug_assert!(r & 1 == 0);
-        debug_assert!((dif >> 48) < r);
-        let mut vw = r << 47;
-        let mut ret: u32 = 0;
-        let mut bit: u32 = 0;
-        while bit < max_bits {
-            if dif >= vw {
-                dif -= vw;
-                vw >>= 1;
-                ret += 1;
-                bit += 1;
-            } else {
-                bit += 1;
-                break;
-            }
-        }
-        self.dif = ((dif + 1) << bit) - 1;
-        self.cnt -= bit as i32;
+        // SAFETY: the kernel is resolved against detected CPU features.
+        let (ret, bits, dif) = unsafe { resolve_unary_kernel()(self.dif, self.rng, max_bits) };
+        self.dif = dif;
+        self.cnt -= bits as i32;
         ret
-    }
-
-    #[inline(always)]
-    pub(crate) fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
-        self.decode_unary_bypass_scalar(max_bits)
     }
 
     #[inline(always)]

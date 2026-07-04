@@ -1470,7 +1470,7 @@ fn decode_coefs_idtx<C: Coeff, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
     *txtp = txtp::IDTX_INV as u16;
     let stride = 1 + (4 << slh);
     // Reuse the per-thread scratch buffer and clear only the prefix this
-    // transform actually touches (worst case 33*33 = 1089). Neighbour reads
+    // transform actually touches (worst case 33*33 = 1089). Neighbor reads
     // by `get_*_ctx_idtx` stay within `stride*((4<<slw)+1)`.
     let level_len = stride * ((4usize << slw) + 1);
     let levels = &mut levels_scratch[..level_len];
