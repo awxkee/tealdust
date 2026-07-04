@@ -281,9 +281,10 @@ impl PoolPicAllocator {
                 .iter()
                 .position(|s| s.byte_capacity_matches(byte_len, hbd))
             {
-                let mut s = free.swap_remove(idx);
-                s.zero_fill();
-                return Some(s);
+                // Reconstruction fully writes every plane it exposes;
+                // re-zeroing recycled storage is a full-frame memset of
+                // dead work plus the cache traffic to match.
+                return Some(free.swap_remove(idx));
             }
         }
         PlaneStorage::with_len_for_bpc(byte_len, hbd)
@@ -750,12 +751,12 @@ mod pool_tests {
         let dirtied_ptr = a.data[0].bytes().as_ptr();
         pool.release_picture(a);
 
-        // Next allocation of identical geometry must reuse a freed buffer...
+        // Next allocation of identical geometry must reuse a freed buffer.
+        // Contents are intentionally NOT re-zeroed: the decoder overwrites
+        // every byte it exposes, and the re-zero was a full-frame memset.
         let b = pool.alloc_picture(&p).unwrap();
         let reused = b.data.iter().any(|s| s.bytes().as_ptr() == dirtied_ptr);
         assert!(reused, "expected a pooled buffer to be reused");
-        // ...and it must be zeroed, indistinguishable from a fresh allocation.
-        assert!(b.data[0].bytes().iter().all(|&x| x == 0));
         assert_eq!(b.data[0].len_bytes(), y_len);
     }
 }
