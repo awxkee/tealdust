@@ -32,27 +32,10 @@
 use core::convert::TryInto;
 
 use crate::msac::{
-    MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState, UnaryBypassKernelFn, msac_load_be64_unchecked,
-    msac_refill_eob, unary_bypass_kernel_scalar,
+    MSAC_MIN_PROB, MSAC_RATE, MsacReader, MsacState, msac_load_be64_unchecked, msac_refill_eob,
+    unary_bypass_kernel,
 };
 use core::arch::x86_64::*;
-use std::sync::OnceLock;
-
-static UNARY_KERNEL: OnceLock<UnaryBypassKernelFn> = OnceLock::new();
-
-#[inline]
-fn resolve_unary_kernel() -> UnaryBypassKernelFn {
-    *UNARY_KERNEL.get_or_init(|| {
-        let mut _f = unary_bypass_kernel_scalar as UnaryBypassKernelFn;
-        #[cfg(feature = "avx")]
-        {
-            if std::is_x86_feature_detected!("avx2") {
-                _f = crate::avx::unary_bypass_kernel_avx2 as UnaryBypassKernelFn;
-            }
-        }
-        _f
-    })
-}
 
 pub(crate) struct MsacContextSse<'a, const UPDATE_CDF: bool> {
     pub(crate) buf_pos: usize,
@@ -218,8 +201,7 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
         if (self.cnt as u32) < max_bits {
             self.ctx_refill();
         }
-        // SAFETY: the kernel is resolved against detected CPU features.
-        let (ret, bits, dif) = unsafe { resolve_unary_kernel()(self.dif, self.rng, max_bits) };
+        let (ret, bits, dif) = unary_bypass_kernel(self.dif, self.rng, max_bits);
         self.dif = dif;
         self.cnt -= bits as i32;
         ret

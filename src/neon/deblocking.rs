@@ -139,9 +139,9 @@ fn deblock_delta_i16(
 
 #[inline]
 #[target_feature(enable = "rdm")]
-fn deblock_mla_i16(acc: int16x8_t, delta: int16x8_t, width: i32, tap: i32, sign: i32) -> int16x8_t {
-    let coeff = (crate::deblock::W_MULT[(width - 1) as usize] as i32 * tap * 16 * sign) as i16;
-    vqrdmlahq_s16(acc, delta, vdupq_n_s16(coeff))
+fn deblock_diff_i16(delta: int16x8_t, width: i32, tap: i32) -> int16x8_t {
+    let coeff = (crate::deblock::W_MULT[(width - 1) as usize] as i32 * tap * 16) as i16;
+    vqrdmulhq_s16(delta, vdupq_n_s16(coeff))
 }
 
 #[inline]
@@ -172,18 +172,13 @@ fn deblock_apply_8bpc_neon_h_sym4_rows(
     apply_pos: bool,
 ) {
     let wm = (crate::deblock::W_MULT[3] as i16) * 16;
-    let neg = if apply_neg { wm } else { 0 };
-    let pos = if apply_pos { -wm } else { 0 };
-    let coeff = load_i16x8([
-        neg,
-        neg * 2,
-        neg * 3,
-        neg * 4,
-        pos * 4,
-        pos * 3,
-        pos * 2,
-        pos,
-    ]);
+    let neg = if apply_neg { 1 } else { 0 };
+    let pos = if apply_pos { -1 } else { 0 };
+    let coeff = load_i16x8([wm, wm * 2, wm * 3, wm * 4, wm * 4, wm * 3, wm * 2, wm]);
+    // Keep the tap coefficient positive and apply +/- after sqrdmulh.
+    // The rounded high multiply is not sign-symmetric, while scalar computes
+    // the positive rounded diff first and then adds/subtracts it.
+    let sign = load_i16x8([neg, neg, neg, neg, pos, pos, pos, pos]);
 
     unsafe {
         let p = dst.as_mut_ptr();
@@ -193,7 +188,8 @@ fn deblock_apply_8bpc_neon_h_sym4_rows(
             let bytes = vld1_u8(p.add(row as usize));
             let pix = vreinterpretq_s16_u16(vmovl_u8(bytes));
             let d = deblock_extract_i16(delta, r as i32);
-            let res = vqrdmlahq_s16(pix, vdupq_n_s16(d), coeff);
+            let diff = vmulq_s16(vqrdmulhq_s16(vdupq_n_s16(d), coeff), sign);
+            let res = vaddq_s16(pix, diff);
             vst1_u8(p.add(row as usize), vqmovun_s16(res));
             r += 1;
         }
@@ -211,28 +207,15 @@ fn deblock_apply_8bpc_neon_h_sym8_rows(
     apply_pos: bool,
 ) {
     let wm = (crate::deblock::W_MULT[7] as i16) * 16;
-    let neg = if apply_neg { wm } else { 0 };
-    let pos = if apply_pos { -wm } else { 0 };
-    let coeff_lo = load_i16x8([
-        neg,
-        neg * 2,
-        neg * 3,
-        neg * 4,
-        neg * 5,
-        neg * 6,
-        neg * 7,
-        neg * 8,
-    ]);
-    let coeff_hi = load_i16x8([
-        pos * 8,
-        pos * 7,
-        pos * 6,
-        pos * 5,
-        pos * 4,
-        pos * 3,
-        pos * 2,
-        pos,
-    ]);
+    let neg = if apply_neg { 1 } else { 0 };
+    let pos = if apply_pos { -1 } else { 0 };
+    let coeff_lo = load_i16x8([wm, wm * 2, wm * 3, wm * 4, wm * 5, wm * 6, wm * 7, wm * 8]);
+    let coeff_hi = load_i16x8([wm * 8, wm * 7, wm * 6, wm * 5, wm * 4, wm * 3, wm * 2, wm]);
+    // Keep the tap coefficient positive and apply +/- after sqrdmulh.
+    // The rounded high multiply is not sign-symmetric, while scalar computes
+    // the positive rounded diff first and then adds/subtracts it.
+    let sign_lo = vdupq_n_s16(neg);
+    let sign_hi = vdupq_n_s16(pos);
 
     unsafe {
         let p = dst.as_mut_ptr();
@@ -244,8 +227,10 @@ fn deblock_apply_8bpc_neon_h_sym8_rows(
             let pix_hi = vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(bytes)));
             let d = deblock_extract_i16(delta, r as i32);
             let d_v = vdupq_n_s16(d);
-            let res_lo = vqrdmlahq_s16(pix_lo, d_v, coeff_lo);
-            let res_hi = vqrdmlahq_s16(pix_hi, d_v, coeff_hi);
+            let diff_lo = vmulq_s16(vqrdmulhq_s16(d_v, coeff_lo), sign_lo);
+            let diff_hi = vmulq_s16(vqrdmulhq_s16(d_v, coeff_hi), sign_hi);
+            let res_lo = vaddq_s16(pix_lo, diff_lo);
+            let res_hi = vaddq_s16(pix_hi, diff_hi);
             vst1q_u8(
                 p.add(row as usize),
                 vcombine_u8(vqmovun_s16(res_lo), vqmovun_s16(res_hi)),
@@ -298,8 +283,8 @@ fn deblock_apply_8bpc_neon_const_oriented<const WN: i32, const WP: i32, const CO
         while j < WN {
             let base = off + (-(j as isize) - 1) * stride_tap;
             let cur = load4_u8_i16_oriented::<CONTIG>(dst, base, stride_line);
-            let res = deblock_mla_i16(cur, delta, WN, WN - j, 1);
-            store4_clip_u8_i16_oriented::<CONTIG>(dst, base, stride_line, res);
+            let diff = deblock_diff_i16(delta, WN, WN - j);
+            store4_clip_u8_i16_oriented::<CONTIG>(dst, base, stride_line, vaddq_s16(cur, diff));
             j += 1;
         }
     }
@@ -309,8 +294,8 @@ fn deblock_apply_8bpc_neon_const_oriented<const WN: i32, const WP: i32, const CO
         while j < WP {
             let base = off + (j as isize) * stride_tap;
             let cur = load4_u8_i16_oriented::<CONTIG>(dst, base, stride_line);
-            let res = deblock_mla_i16(cur, delta, WP, WP - j, -1);
-            store4_clip_u8_i16_oriented::<CONTIG>(dst, base, stride_line, res);
+            let diff = deblock_diff_i16(delta, WP, WP - j);
+            store4_clip_u8_i16_oriented::<CONTIG>(dst, base, stride_line, vsubq_s16(cur, diff));
             j += 1;
         }
     }
@@ -538,29 +523,23 @@ fn deblock_apply_8bpc_neon_h_w8x4_transpose(
         while c < 8 {
             let tap = (c + 1) as i16;
             let coeff = vdupq_n_s16(wm * tap);
-            let coeff_lo = and_s16(coeff, neg_mask_lo);
-            let coeff_hi = and_s16(coeff, neg_mask_hi);
+            let diff_lo = and_s16(vqrdmulhq_s16(delta_lo, coeff), neg_mask_lo);
+            let diff_hi = and_s16(vqrdmulhq_s16(delta_hi, coeff), neg_mask_hi);
             let pix_lo = cvtepu8_lo_i16(cols[c]);
             let pix_hi = cvtepu8_hi_i16(cols[c]);
-            cols[c] = pack_u8_from_i16x2(
-                vqrdmlahq_s16(pix_lo, delta_lo, coeff_lo),
-                vqrdmlahq_s16(pix_hi, delta_hi, coeff_hi),
-            );
+            cols[c] = pack_u8_from_i16x2(vaddq_s16(pix_lo, diff_lo), vaddq_s16(pix_hi, diff_hi));
             c += 1;
         }
 
         c = 8;
         while c < 16 {
             let tap = (16 - c) as i16;
-            let coeff = vdupq_n_s16(-(wm * tap));
-            let coeff_lo = and_s16(coeff, pos_mask_lo);
-            let coeff_hi = and_s16(coeff, pos_mask_hi);
+            let coeff = vdupq_n_s16(wm * tap);
+            let diff_lo = and_s16(vqrdmulhq_s16(delta_lo, coeff), pos_mask_lo);
+            let diff_hi = and_s16(vqrdmulhq_s16(delta_hi, coeff), pos_mask_hi);
             let pix_lo = cvtepu8_lo_i16(cols[c]);
             let pix_hi = cvtepu8_hi_i16(cols[c]);
-            cols[c] = pack_u8_from_i16x2(
-                vqrdmlahq_s16(pix_lo, delta_lo, coeff_lo),
-                vqrdmlahq_s16(pix_hi, delta_hi, coeff_hi),
-            );
+            cols[c] = pack_u8_from_i16x2(vsubq_s16(pix_lo, diff_lo), vsubq_s16(pix_hi, diff_hi));
             c += 1;
         }
 

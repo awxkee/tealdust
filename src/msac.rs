@@ -170,28 +170,25 @@ static MSAC_MIN_PROB_INNER: Aligned<[[u16; 8]; 7]> = Aligned([
 
 pub(crate) static MSAC_MIN_PROB: &[[u16; 8]; 7] = &MSAC_MIN_PROB_INNER.0;
 
-/// (dif, rng, max_bits) -> (unary value, bits consumed, renormalized dif).
-pub(crate) type UnaryBypassKernelFn = unsafe fn(u64, u32, u32) -> (u32, u32, u64);
-
-pub(crate) fn unary_bypass_kernel_scalar(dif: u64, rng: u32, max_bits: u32) -> (u32, u32, u64) {
+/// Branch-free truncated-unary bypass in closed form.
+///
+/// The unary value is `q` = #{k >= 1 : dif >= rng * (2^48 - 2^(48-k))}, which
+/// with `d_rem = (rng << 48) - dif` is the largest `k` with
+/// `d_rem <= rng << (48 - k)`; an MSB estimate corrected by one exact compare
+/// yields it without the serial data-dependent per-bit loop.
+#[inline(always)]
+pub(crate) fn unary_bypass_kernel(dif: u64, rng: u32, max_bits: u32) -> (u32, u32, u64) {
     debug_assert!(rng & 1 == 0);
     debug_assert!((dif >> 48) < rng as u64);
-    let mut dif = dif;
-    let mut vw = (rng as u64) << 47;
-    let mut ret: u32 = 0;
-    let mut bit: u32 = 0;
-    while bit < max_bits {
-        if dif >= vw {
-            dif -= vw;
-            vw >>= 1;
-            ret += 1;
-            bit += 1;
-        } else {
-            bit += 1;
-            break;
-        }
-    }
-    (ret, bit, ((dif + 1) << bit) - 1)
+    let d_rem = ((rng as u64) << 48) - dif; // >= 1 by the dif invariant
+    let k = (48 + (31 - rng.leading_zeros()) as i32 - (63 - d_rem.leading_zeros()) as i32)
+        .clamp(0, max_bits as i32) as u32;
+    // q is k or k - 1; when k == 0 the compare is always false.
+    let over = (d_rem > ((rng as u64) << (48 - k))) as u32;
+    let q = k - over;
+    let bits = q + (q < max_bits) as u32;
+    let dif = ((rng as u64) << (48 - q)) - d_rem; // == dif - sum of the q intervals
+    (q, bits, ((dif + 1) << bits) - 1)
 }
 
 #[inline(always)]
@@ -491,27 +488,9 @@ impl<'a, const UPDATE_CDF: bool> MsacContextScalar<'a, UPDATE_CDF> {
         if (self.cnt as u32) < max_bits {
             self.ctx_refill();
         }
-
-        let r = self.rng as u64;
-        let mut dif = self.dif;
-        debug_assert!(r & 1 == 0);
-        debug_assert!((dif >> 48) < r);
-        let mut vw = r << 47;
-        let mut ret: u32 = 0;
-        let mut bit: u32 = 0;
-        while bit < max_bits {
-            if dif >= vw {
-                dif -= vw;
-                vw >>= 1;
-                ret += 1;
-                bit += 1;
-            } else {
-                bit += 1;
-                break;
-            }
-        }
-        self.dif = ((dif + 1) << bit) - 1;
-        self.cnt -= bit as i32;
+        let (ret, bits, dif) = unary_bypass_kernel(self.dif, self.rng, max_bits);
+        self.dif = dif;
+        self.cnt -= bits as i32;
         ret
     }
 
@@ -910,5 +889,66 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextScalar<'a
     #[inline(always)]
     fn cnt(&self) -> i32 {
         MsacContextScalar::cnt(self)
+    }
+}
+
+#[cfg(test)]
+mod unary_kernel_tests {
+    use super::unary_bypass_kernel;
+
+    fn reference(mut dif: u64, rng: u32, max_bits: u32) -> (u32, u32, u64) {
+        let mut vw = (rng as u64) << 47;
+        let (mut ret, mut bit) = (0u32, 0u32);
+        while bit < max_bits {
+            if dif >= vw {
+                dif -= vw;
+                vw >>= 1;
+                ret += 1;
+                bit += 1;
+            } else {
+                bit += 1;
+                break;
+            }
+        }
+        (ret, bit, ((dif + 1) << bit) - 1)
+    }
+
+    #[test]
+    fn closed_form_matches_reference_loop() {
+        let mut s: u64 = 0x1234_5678_9abc_def0;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            s
+        };
+        for _ in 0..400_000 {
+            let rng = ((0x8000 | (next() & 0x7FFF)) & !1) as u32;
+            let dif = next() % ((rng as u64) << 48);
+            for &mb in &[5u32, 6, 21] {
+                assert_eq!(
+                    reference(dif, rng, mb),
+                    unary_bypass_kernel(dif, rng, mb),
+                    "dif={dif:#x} rng={rng:#x} max_bits={mb}"
+                );
+            }
+        }
+        for rng in [0x8000u32, 0x8002, 0x9246, 0xFFFE] {
+            for q in 1..=21u32 {
+                let s_q = (rng as u64) * ((1u64 << 48) - (1u64 << (48 - q)));
+                for dif in [s_q.wrapping_sub(1), s_q, s_q + 1] {
+                    if dif >> 48 >= rng as u64 {
+                        continue;
+                    }
+                    for &mb in &[5u32, 6, 21] {
+                        assert_eq!(
+                            reference(dif, rng, mb),
+                            unary_bypass_kernel(dif, rng, mb),
+                            "dif={dif:#x} rng={rng:#x} q={q} max_bits={mb}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

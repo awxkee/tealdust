@@ -197,18 +197,13 @@ fn deblock_apply_8bpc_avx2_h_sym4_rows(
     apply_pos: bool,
 ) {
     let wm = (crate::deblock::W_MULT[3] as i16) * 16;
-    let neg = if apply_neg { wm } else { 0 };
-    let pos = if apply_pos { -wm } else { 0 };
-    let coeff = _mm_setr_epi16(
-        neg,
-        neg * 2,
-        neg * 3,
-        neg * 4,
-        pos * 4,
-        pos * 3,
-        pos * 2,
-        pos,
-    );
+    let neg = if apply_neg { 1 } else { 0 };
+    let pos = if apply_pos { -1 } else { 0 };
+    let coeff = _mm_setr_epi16(wm, wm * 2, wm * 3, wm * 4, wm * 4, wm * 3, wm * 2, wm);
+    // Keep the tap coefficient positive and apply +/- after pmulhrsw.
+    // pmulhrsw's rounding is not sign-symmetric, while scalar computes
+    // the positive rounded diff first and then adds/subtracts it.
+    let sign = _mm_setr_epi16(neg, neg, neg, neg, pos, pos, pos, pos);
 
     let p = dst.as_mut_ptr();
     let mut r = 0;
@@ -223,7 +218,7 @@ fn deblock_apply_8bpc_avx2_h_sym4_rows(
                 2 => deblock_extract_i16::<2>(delta),
                 _ => deblock_extract_i16::<3>(delta),
             };
-            let diff = _mm_mulhrs_epi16(_mm_set1_epi16(d), coeff);
+            let diff = _mm_mullo_epi16(_mm_mulhrs_epi16(_mm_set1_epi16(d), coeff), sign);
             let res = _mm_add_epi16(pix, diff);
             let packed = _mm_packus_epi16(res, res);
             _mm_storel_epi64(p.add(row as usize).cast(), packed);
@@ -243,25 +238,31 @@ fn deblock_apply_8bpc_avx2_h_sym8_rows(
     apply_pos: bool,
 ) {
     let wm = (crate::deblock::W_MULT[7] as i16) * 16;
-    let neg = if apply_neg { wm } else { 0 };
-    let pos = if apply_pos { -wm } else { 0 };
+    let neg = if apply_neg { 1 } else { 0 };
+    let pos = if apply_pos { -1 } else { 0 };
     let coeff = _mm256_setr_epi16(
-        neg,
-        neg * 2,
-        neg * 3,
-        neg * 4,
-        neg * 5,
-        neg * 6,
-        neg * 7,
-        neg * 8,
-        pos * 8,
-        pos * 7,
-        pos * 6,
-        pos * 5,
-        pos * 4,
-        pos * 3,
-        pos * 2,
-        pos,
+        wm,
+        wm * 2,
+        wm * 3,
+        wm * 4,
+        wm * 5,
+        wm * 6,
+        wm * 7,
+        wm * 8,
+        wm * 8,
+        wm * 7,
+        wm * 6,
+        wm * 5,
+        wm * 4,
+        wm * 3,
+        wm * 2,
+        wm,
+    );
+    // Keep the tap coefficient positive and apply +/- after pmulhrsw.
+    // pmulhrsw's rounding is not sign-symmetric, while scalar computes
+    // the positive rounded diff first and then adds/subtracts it.
+    let sign = _mm256_setr_epi16(
+        neg, neg, neg, neg, neg, neg, neg, neg, pos, pos, pos, pos, pos, pos, pos, pos,
     );
 
     let p = dst.as_mut_ptr();
@@ -277,7 +278,7 @@ fn deblock_apply_8bpc_avx2_h_sym8_rows(
                 2 => deblock_extract_i16::<2>(delta),
                 _ => deblock_extract_i16::<3>(delta),
             };
-            let diff = _mm256_mulhrs_epi16(_mm256_set1_epi16(d), coeff);
+            let diff = _mm256_mullo_epi16(_mm256_mulhrs_epi16(_mm256_set1_epi16(d), coeff), sign);
             let res = _mm256_add_epi16(pix, diff);
             let lo = _mm256_castsi256_si128(res);
             let hi = _mm256_extracti128_si256::<1>(res);
