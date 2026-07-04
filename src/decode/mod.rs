@@ -1090,8 +1090,8 @@ impl ReconScratch {
         self.rmv = [[[Mv::default(); 2]; 2]; 256];
         self.al_pal = [[[0u16; 8]; 64]; 2];
         self.pal = [0u16; 8];
-        self.coef_levels = [0i8; 1089];
-        self.coef_nz = [0u32; 1024];
+        // coef_levels: decode_coefs zero-fills its used prefix per TU.
+        // coef_nz: records[..nz_n] are written before read by construction.
         self.chroma_cf8.clear();
         self.chroma_cf32.clear();
         self.pal_idx_y.fill(0);

@@ -90,16 +90,6 @@ impl PlaneStorage {
         }
     }
 
-    /// Zero every sample, so a recycled buffer matches a fresh `vec![0; n]`.
-    #[inline]
-    fn zero_fill(&mut self) {
-        match self {
-            PlaneStorage::Empty => {}
-            PlaneStorage::U8(v) => Arc::make_mut(v).fill(0),
-            PlaneStorage::U16(v) => Arc::make_mut(v).fill(0),
-        }
-    }
-
     /// True when this plane's buffer is uniquely owned (not shared with any
     /// other live picture). The pool only recycles uniquely-owned buffers — a
     /// plane still referenced by a ref slot or an emitted output picture must
