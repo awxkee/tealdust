@@ -951,8 +951,7 @@ pub struct ReconScratch {
     pub coef_levels: [i8; 1089],
     /// Non-zero coefficient records replayed by the sign pass.
     pub coef_nz: [u32; 1024],
-    /// Reusable inverse-transform scratch (`Txfm2d` buffer). Threaded into
-    /// `inv_txfm_add` so the transform path needs no thread-local / `RefCell`.
+    /// Reusable inverse-transform scratch (`Txfm2d` buffer)
     pub itx_tmp: Box<[i32; crate::itx_2d::ITX_TMP_PIXELS]>,
     /// Reusable compound-prediction temporary planes. Compound inter used to
     /// allocate two `Vec<i16>` buffers for every luma/chroma block; these buffers
