@@ -2007,10 +2007,6 @@ fn decode_frame_main_select<const UPDATE_CDF: bool>(
     n_tc: i32,
     pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
-    // Use the SSE msac backend for both CDF-update modes on x86_64: frames
-    // with `disable_cdf_update` decode with the same SIMD symbol path, and
-    // gating the scalar backend out entirely removes a whole extra
-    // monomorphised copy of the decode pipeline from the binary.
     #[cfg(all(target_arch = "x86_64", feature = "sse"))]
     {
         decode_frame_main_inner::<UPDATE_CDF, crate::msac::SseMsacBackend>(fc, n_passes, n_tc, pool)
