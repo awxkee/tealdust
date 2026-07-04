@@ -319,11 +319,9 @@ impl<'a, const UPDATE_CDF: bool> MsacContextSse<'a, UPDATE_CDF> {
             let pc = cdf[1];
             let count = (pc & 0xFF) as u8;
             let rate = MSAC_RATE[(pc >> 8) as usize][(count >> 4) as usize];
-            if bit != 0 {
-                cdf[0] += (32768 - cdf[0]) >> rate;
-            } else {
-                cdf[0] -= cdf[0] >> rate;
-            }
+            let b = bit as i32; // 0 or 1
+            let c = cdf[0] as i32;
+            cdf[0] = (c - b - ((c - 32769 * b) >> rate)) as u16;
             cdf[1] = pc + if count < 32 { 1 } else { 0 };
         }
 
