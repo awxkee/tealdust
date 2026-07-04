@@ -397,6 +397,7 @@ pub(crate) trait MsacReader<const UPDATE_CDF: bool> {
         txtp: &mut u16,
         res_ctx: &mut u8,
         levels_scratch: &mut [i8; 1089],
+        nz_scratch: &mut [u32; 1024],
     ) -> i32;
     fn cnt(&self) -> i32;
 }
@@ -983,6 +984,7 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextScalar<'a
         txtp: &mut u16,
         res_ctx: &mut u8,
         levels_scratch: &mut [i8; 1089],
+        nz_scratch: &mut [u32; 1024],
     ) -> i32 {
         crate::recon::decode_coefs_scalar(
             self,
@@ -995,6 +997,7 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextScalar<'a
             txtp,
             res_ctx,
             levels_scratch,
+            nz_scratch,
         )
     }
 

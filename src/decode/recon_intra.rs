@@ -873,6 +873,7 @@ where
                         &mut txtp,
                         &mut res_ctx,
                         &mut recon.scratch.coef_levels,
+                        &mut recon.scratch.coef_nz,
                     );
                     if eob == i32::MIN {
                         recon.scratch.put_chroma_cf::<BD::Coef>(cf_uv);
@@ -1589,6 +1590,7 @@ where
             &mut txtp,
             &mut res_ctx,
             &mut recon.scratch.coef_levels,
+            &mut recon.scratch.coef_nz,
         );
         if eob == i32::MIN {
             return Err(());

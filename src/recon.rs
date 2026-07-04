@@ -41,11 +41,8 @@ use crate::tables::{
 };
 use crate::warpmv::resolve_divisor_32;
 
-/// Out of line on purpose: `decode_hr` runs only for high-magnitude
-/// coefficients (not per symbol), and a single shared copy both shrinks the
-/// inlined token loops and lets its data-dependent unary/exp-Golomb branches
-/// train one branch-predictor entry instead of one per inlined copy.
-#[inline(never)]
+/// Thin wrapper: the fused bypass body lives on the msac contexts.
+#[inline(always)]
 pub(crate) fn decode_hr<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
     msac: &mut M,
     hr_avg: i32,
@@ -1424,6 +1421,7 @@ fn decode_coefs_header<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
 /// and only for FSC-style blocks, so it is kept out of the inlined hot body.
 #[allow(clippy::too_many_arguments)]
 #[inline(never)]
+#[allow(unused_variables)]
 fn decode_coefs_idtx<C: Coeff, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
     msac: &mut M,
     coef: &mut CdfCoefContext,
@@ -1432,6 +1430,7 @@ fn decode_coefs_idtx<C: Coeff, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
     txtp: &mut u16,
     res_ctx: &mut u8,
     levels_scratch: &mut [i8; 1089],
+    nz_scratch: &mut [u32; 1024],
     eob: i32,
     slw: usize,
     slh: usize,
@@ -1637,7 +1636,8 @@ macro_rules! decode_coefs_impl {
         $cf:expr,
         $txtp:expr,
         $res_ctx:expr,
-        $levels_scratch:expr
+        $levels_scratch:expr,
+        $nz_scratch:expr
     ) => {{
         let msac = $msac;
         let coef = $coef;
@@ -1649,6 +1649,7 @@ macro_rules! decode_coefs_impl {
         let txtp = $txtp;
         let res_ctx = $res_ctx;
         let levels_scratch = $levels_scratch;
+        let nz_scratch = $nz_scratch;
 
     let t_dim = &TXFM_DIMENSIONS[p.tx];
     let chroma = p.plane != 0;
@@ -1696,6 +1697,7 @@ macro_rules! decode_coefs_impl {
             txtp,
             res_ctx,
             levels_scratch,
+            nz_scratch,
             eob,
             slw,
             slh,
@@ -1736,6 +1738,11 @@ macro_rules! decode_coefs_impl {
                 let shift: usize = $shift;
                 let shift2: usize = $shift2;
                 let mask: usize = $mask;
+
+                // Non-zero record: bits 0..13 cf index, bit 13 tcq_bit,
+                // bit 14 low-frequency region, bit 15 adaptive dc-sign,
+                // bits 16.. base token. The sign pass replays this.
+                let mut nz_n = 0usize;
 
                 // eob token
                 let (mut lim, mut tok): (i32, i32);
@@ -1825,6 +1832,11 @@ macro_rules! decode_coefs_impl {
                     tcq_state = tcq_next_state(tcq_state, tok);
                 }
                 cf[if is_stx { eob as usize } else { rc }] = C::from_i32(tok);
+                nz_scratch[nz_n] = (if is_stx { eob as usize } else { rc }) as u32
+                    | (((eob < hi_to_low_tx) as u32) << 14)
+                    | ((($tx_cl != 0 && y == 0 && !chroma) as u32) << 15)
+                    | ((tok as u32) << 16);
+                nz_n += 1;
                 let level_tok = pack_level(tok);
                 if $tx_cl == 0 {
                     levels[rc] = level_tok;
@@ -1922,6 +1934,14 @@ macro_rules! decode_coefs_impl {
                     }
                     levels[off] = pack_level(tok);
                     cf[if is_stx { i as usize } else { rc }] = C::from_i32(tok);
+                    if tok != 0 {
+                        nz_scratch[nz_n] = (if is_stx { i as usize } else { rc }) as u32
+                            | (tcq_bit << 13)
+                            | (((i < hi_to_low_tx) as u32) << 14)
+                            | ((($tx_cl != 0 && y == 0 && !chroma) as u32) << 15)
+                            | ((tok as u32) << 16);
+                        nz_n += 1;
+                    }
                     i -= 1;
                 }
 
@@ -1971,150 +1991,75 @@ macro_rules! decode_coefs_impl {
                     }
                 }
 
-                // sign & dequant for AC
-                tcq_state = if tcq_en { -0x80000000i32 } else { 0 };
+                // sign & dequant for AC: replay the non-zero record. Signs of
+                // consecutive bypass entries batch into one bools_bypass call;
+                // a high-range entry terminates its run (its extension bits
+                // follow its own sign), adaptive dc-sign entries decode solo.
                 let ac_dq = p.dq_tbl[1];
-                let mut i = eob;
-                if $tx_cl == 0 {
-                    // 2D: every sign is a bypass bit, so signs of consecutive
-                    // non-zero coefficients batch into one bools_bypass call
-                    // (one renormalization instead of one per sign). A
-                    // high-range coefficient ends the run: its extension bits
-                    // follow its own sign in the stream.
-                    const SIGN_RUN_CAP: usize = 16;
-                    let mut run_rc = [0u16; SIGN_RUN_CAP];
-                    let mut run_tok = [0i32; SIGN_RUN_CAP];
-                    let mut run_tcq = [0u8; SIGN_RUN_CAP];
-                    while i >= 1 {
-                        let mut k = 0usize;
-                        let mut hr_term = false;
-                        while i >= 1 && k < SIGN_RUN_CAP {
-                            let rc = if is_stx {
-                                i as usize
-                            } else {
-                                scan[i as usize] as usize
-                            };
-                            let tok_val = cf[rc].to_i32();
-                            if tok_val == 0 {
-                                if tcq_state != 0 {
-                                    tcq_state = tcq_next_state(tcq_state, 0);
-                                }
-                                i -= 1;
-                                continue;
-                            }
-                            run_rc[k] = rc as u16;
-                            run_tok[k] = tok_val;
-                            run_tcq[k] = ((tcq_state & 2) >> 1) as u8;
-                            if tcq_state != 0 {
-                                tcq_state = tcq_next_state(tcq_state, tok_val);
-                            }
-                            let max_br = if i < hi_to_low_tx {
-                                if chroma { 5 } else { 8 }
-                            } else {
-                                6
-                            };
-                            k += 1;
-                            i -= 1;
-                            if tok_val >= max_br - tcq_en as i32 {
-                                hr_term = true;
-                                break;
-                            }
+                let mut j = 0usize;
+                while j < nz_n {
+                    let mut k = 0usize;
+                    let mut hr_term = false;
+                    while j + k < nz_n && k < 16 {
+                        let rec = nz_scratch[j + k];
+                        if rec & (1 << 15) != 0 {
+                            break;
                         }
-                        if k == 0 {
-                            continue;
-                        }
-                        let sign_bits = msac.decode_bools_bypass(k as u32);
-                        for j in 0..k {
-                            let sign = (sign_bits >> (k - 1 - j)) & 1;
-                            let rc = run_rc[j] as usize;
-                            let mut tok = run_tok[j];
-                            let tcq_bit = run_tcq[j] as i32;
-                            let ac_val: i32;
-                            if hr_term && j == k - 1 {
-                                let hr = decode_hr(msac, hr_avg);
-                                tok += hr << tcq_en as i32;
-                                hr_avg = (hr_avg + hr) >> 1;
-                                tok &= 0xfffff;
-                                let v = (tok << tcq_en as i32) - tcq_bit;
-                                ac_val = imin(
-                                    ((((v as u32).wrapping_mul(ac_dq)) & 0xffffff)
-                                        .wrapping_add(4)
-                                        >> dq_shift) as i32,
-                                    cf_max + sign as i32,
-                                );
-                            } else {
-                                let v = (tok << tcq_en as i32) - tcq_bit;
-                                ac_val = (((v as u32).wrapping_mul(ac_dq)).wrapping_add(4)
-                                    >> dq_shift) as i32;
-                            }
-                            cul_level += tok as u32;
-                            cf[rc] = C::from_i32(if sign != 0 { -ac_val } else { ac_val });
-                        }
-                    }
-                }
-                while $tx_cl != 0 && i >= 1 {
-                    if $tx_cl == 0 {
-                        rc = if is_stx {
-                            i as usize
+                        let tok = (rec >> 16) as i32;
+                        let max_br = if rec & (1 << 14) != 0 {
+                            if chroma { 5 } else { 8 }
                         } else {
-                            scan[i as usize] as usize
+                            6
                         };
-                    } else if $tx_cl == 1 {
-                        y = i as usize >> shift;
-                        rc = i as usize;
-                    } else {
-                        x = i as usize & mask;
-                        y = i as usize >> shift;
-                        rc = (x << shift2) | y;
-                    }
-                    let tok_val = cf[rc].to_i32();
-                    if tok_val == 0 {
-                        if tcq_state != 0 {
-                            tcq_state = tcq_next_state(tcq_state, 0);
+                        k += 1;
+                        if tok >= max_br - tcq_en as i32 {
+                            hr_term = true;
+                            break;
                         }
-                        i -= 1;
-                        continue;
                     }
-                    let sign: u32;
-                    if $tx_cl == 0 || y > 0 || chroma {
-                        sign = msac.decode_bool_bypass();
-                    } else {
-                        sign = msac.decode_bool_adapt(coef.dc_sign(
+                    let (n, sign_bits) = if k == 0 {
+                        // adaptive dc-sign entry (1D luma, first row)
+                        let rec = nz_scratch[j];
+                        let tok = (rec >> 16) as i32;
+                        let max_br = if rec & (1 << 14) != 0 { 8 } else { 6 };
+                        hr_term = tok >= max_br - tcq_en as i32;
+                        let s = msac.decode_bool_adapt(coef.dc_sign(
                             chroma as usize,
                             (ph_state >> 18 != 0) as usize,
                             0,
                         ));
-                    }
-                    let tcq_bit = ((tcq_state & 2) >> 1) as i32;
-                    if tcq_state != 0 {
-                        tcq_state = tcq_next_state(tcq_state, tok_val);
-                    }
-                    let max_br = if i < hi_to_low_tx {
-                        if chroma { 5 } else { 8 }
+                        (1usize, s)
                     } else {
-                        6
+                        (k, msac.decode_bools_bypass(k as u32))
                     };
-                    let mut tok = tok_val;
-                    let ac_val: i32;
-                    if tok >= max_br - tcq_en as i32 {
-                        let hr = decode_hr(msac, hr_avg);
-                        tok += hr << tcq_en as i32;
-                        hr_avg = (hr_avg + hr) >> 1;
-                        tok &= 0xfffff;
-                        let v = (tok << tcq_en as i32) - tcq_bit;
-                        ac_val = imin(
-                            ((((v as u32).wrapping_mul(ac_dq)) & 0xffffff).wrapping_add(4)
-                                >> dq_shift) as i32,
-                            cf_max + sign as i32,
-                        );
-                    } else {
-                        let v = (tok << tcq_en as i32) - tcq_bit;
-                        ac_val =
-                            (((v as u32).wrapping_mul(ac_dq)).wrapping_add(4) >> dq_shift) as i32;
+                    for t in 0..n {
+                        let rec = nz_scratch[j + t];
+                        let sign = (sign_bits >> (n - 1 - t)) & 1;
+                        let rc = (rec & 0x1fff) as usize;
+                        let mut tok = (rec >> 16) as i32;
+                        let tcq_bit = ((rec >> 13) & 1) as i32;
+                        let ac_val: i32;
+                        if hr_term && t == n - 1 {
+                            let hr = decode_hr(msac, hr_avg);
+                            tok += hr << tcq_en as i32;
+                            hr_avg = (hr_avg + hr) >> 1;
+                            tok &= 0xfffff;
+                            let v = (tok << tcq_en as i32) - tcq_bit;
+                            ac_val = imin(
+                                ((((v as u32).wrapping_mul(ac_dq)) & 0xffffff)
+                                    .wrapping_add(4)
+                                    >> dq_shift) as i32,
+                                cf_max + sign as i32,
+                            );
+                        } else {
+                            let v = (tok << tcq_en as i32) - tcq_bit;
+                            ac_val = (((v as u32).wrapping_mul(ac_dq)).wrapping_add(4)
+                                >> dq_shift) as i32;
+                        }
+                        cul_level += tok as u32;
+                        cf[rc] = C::from_i32(if sign != 0 { -ac_val } else { ac_val });
                     }
-                    cul_level += tok as u32;
-                    cf[rc] = C::from_i32(if sign != 0 { -ac_val } else { ac_val });
-                    i -= 1;
+                    j += n;
                 }
             }};
         }
@@ -2192,8 +2137,21 @@ pub(crate) fn decode_coefs<C: Coeff, const UPDATE_CDF: bool, M: MsacReader<UPDAT
     txtp: &mut u16,
     res_ctx: &mut u8,
     levels_scratch: &mut [i8; 1089],
+    nz_scratch: &mut [u32; 1024],
 ) -> i32 {
-    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+    decode_coefs_impl!(
+        msac,
+        coef,
+        mode,
+        a,
+        l,
+        p,
+        cf,
+        txtp,
+        res_ctx,
+        levels_scratch,
+        nz_scratch
+    )
 }
 
 #[inline(always)]
@@ -2208,8 +2166,21 @@ pub(crate) fn decode_coefs_scalar<C: Coeff, const UPDATE_CDF: bool>(
     txtp: &mut u16,
     res_ctx: &mut u8,
     levels_scratch: &mut [i8; 1089],
+    nz_scratch: &mut [u32; 1024],
 ) -> i32 {
-    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+    decode_coefs_impl!(
+        msac,
+        coef,
+        mode,
+        a,
+        l,
+        p,
+        cf,
+        txtp,
+        res_ctx,
+        levels_scratch,
+        nz_scratch
+    )
 }
 
 #[cfg(all(target_arch = "x86_64", feature = "sse"))]
@@ -2225,8 +2196,21 @@ pub(crate) fn decode_coefs_sse2<C: Coeff, const UPDATE_CDF: bool>(
     txtp: &mut u16,
     res_ctx: &mut u8,
     levels_scratch: &mut [i8; 1089],
+    nz_scratch: &mut [u32; 1024],
 ) -> i32 {
-    decode_coefs_impl!(msac, coef, mode, a, l, p, cf, txtp, res_ctx, levels_scratch)
+    decode_coefs_impl!(
+        msac,
+        coef,
+        mode,
+        a,
+        l,
+        p,
+        cf,
+        txtp,
+        res_ctx,
+        levels_scratch,
+        nz_scratch
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

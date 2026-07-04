@@ -947,6 +947,8 @@ pub struct ReconScratch {
     /// 33*33 = 1089). Only the prefix actually used by the current transform is
     /// cleared per block, so small TUs avoid a full 1089-byte memset.
     pub coef_levels: [i8; 1089],
+    /// Non-zero coefficient records replayed by the sign pass.
+    pub coef_nz: [u32; 1024],
     /// Reusable inverse-transform scratch (`Txfm2d` buffer). Threaded into
     /// `inv_txfm_add` so the transform path needs no thread-local / `RefCell`.
     pub itx_tmp: Box<[i32; crate::itx_2d::ITX_TMP_PIXELS]>,
@@ -989,6 +991,7 @@ impl Default for ReconScratch {
             pal: [0u16; 8],
             pal_idx_y: Box::new([0u8; 64 * 64]),
             coef_levels: [0i8; 1089],
+            coef_nz: [0u32; 1024],
             itx_tmp: Box::new([0i32; crate::itx_2d::ITX_TMP_PIXELS]),
             compound_tmp0: Vec::new(),
             compound_tmp1: Vec::new(),
@@ -1088,6 +1091,7 @@ impl ReconScratch {
         self.al_pal = [[[0u16; 8]; 64]; 2];
         self.pal = [0u16; 8];
         self.coef_levels = [0i8; 1089];
+        self.coef_nz = [0u32; 1024];
         self.chroma_cf8.clear();
         self.chroma_cf32.clear();
         self.pal_idx_y.fill(0);
