@@ -53,7 +53,25 @@ struct DecodeEdgeCtx {
     comp_type: [u8; 2],
 }
 
-#[inline(never)]
+#[inline(always)]
+fn set_n<T: Copy, const N: usize>(dst: &mut [T], off: usize, v: T) {
+    let d: &mut [T; N] = (&mut dst[off..off + N]).try_into().expect("ctx run");
+    *d = [v; N];
+}
+
+#[inline(always)]
+fn ctx_fill<T: Copy>(dst: &mut [T], off: usize, n: usize, v: T) {
+    match n {
+        1 => set_n::<T, 1>(dst, off, v),
+        2 => set_n::<T, 2>(dst, off, v),
+        4 => set_n::<T, 4>(dst, off, v),
+        8 => set_n::<T, 8>(dst, off, v),
+        16 => set_n::<T, 16>(dst, off, v),
+        32 => set_n::<T, 32>(dst, off, v),
+        _ => dst[off..off + n].fill(v),
+    }
+}
+
 fn gather_decode_edge_ctx(
     fi: &SbFrameInfo,
     a: &BlockContext,
@@ -357,47 +375,47 @@ fn write_inter_block_context(
         let refs = b.ref_pair.refs();
         let filter_val = b.inter_data().filter;
 
-        a.seg_pred[bx4..bx4 + aw].fill(0);
-        a.skip_mode[bx4..bx4 + aw].fill(b.skip_mode);
-        a.intra[bx4..bx4 + aw].fill(0);
-        a.intrabc[bx4..bx4 + aw].fill(0);
-        a.morph_pred[bx4..bx4 + aw].fill(0);
-        a.midx[bx4..bx4 + aw].fill(0xff);
-        a.fsc[bx4..bx4 + aw].fill(0);
-        a.skip_txfm[bx4..bx4 + aw].fill(b.skip_txfm);
-        a.pal_sz[bx4..bx4 + aw].fill(0);
-        a.comp_type[bx4..bx4 + aw].fill(comp_type);
-        a.filter[bx4..bx4 + aw].fill(filter_val);
-        a.mode[bx4..bx4 + aw].fill(inter_mode);
-        a.mrl[bx4..bx4 + aw].fill(0);
-        a.multi_mrl[bx4..bx4 + aw].fill(0);
-        a.dip[bx4..bx4 + aw].fill(0);
-        a.reference[0][bx4..bx4 + aw].fill(refs[0]);
-        a.reference[1][bx4..bx4 + aw].fill(refs[1]);
-        a.motion_mode[bx4..bx4 + aw].fill(motion_mode);
-        a.amvd[bx4..bx4 + aw].fill(amvd as u8);
-        a.mvprec[bx4..bx4 + aw].fill(mvprec_def);
+        ctx_fill(&mut a.seg_pred, bx4, aw, 0);
+        ctx_fill(&mut a.skip_mode, bx4, aw, b.skip_mode);
+        ctx_fill(&mut a.intra, bx4, aw, 0);
+        ctx_fill(&mut a.intrabc, bx4, aw, 0);
+        ctx_fill(&mut a.morph_pred, bx4, aw, 0);
+        ctx_fill(&mut a.midx, bx4, aw, 0xff);
+        ctx_fill(&mut a.fsc, bx4, aw, 0);
+        ctx_fill(&mut a.skip_txfm, bx4, aw, b.skip_txfm);
+        ctx_fill(&mut a.pal_sz, bx4, aw, 0);
+        ctx_fill(&mut a.comp_type, bx4, aw, comp_type);
+        ctx_fill(&mut a.filter, bx4, aw, filter_val);
+        ctx_fill(&mut a.mode, bx4, aw, inter_mode);
+        ctx_fill(&mut a.mrl, bx4, aw, 0);
+        ctx_fill(&mut a.multi_mrl, bx4, aw, 0);
+        ctx_fill(&mut a.dip, bx4, aw, 0);
+        ctx_fill(&mut a.reference[0], bx4, aw, refs[0]);
+        ctx_fill(&mut a.reference[1], bx4, aw, refs[1]);
+        ctx_fill(&mut a.motion_mode, bx4, aw, motion_mode);
+        ctx_fill(&mut a.amvd, bx4, aw, amvd as u8);
+        ctx_fill(&mut a.mvprec, bx4, aw, mvprec_def);
 
-        l.seg_pred[by4..by4 + lh].fill(0);
-        l.skip_mode[by4..by4 + lh].fill(b.skip_mode);
-        l.intra[by4..by4 + lh].fill(0);
-        l.intrabc[by4..by4 + lh].fill(0);
-        l.morph_pred[by4..by4 + lh].fill(0);
-        l.midx[by4..by4 + lh].fill(0xff);
-        l.fsc[by4..by4 + lh].fill(0);
-        l.skip_txfm[by4..by4 + lh].fill(b.skip_txfm);
-        l.pal_sz[by4..by4 + lh].fill(0);
-        l.comp_type[by4..by4 + lh].fill(comp_type);
-        l.filter[by4..by4 + lh].fill(filter_val);
-        l.mode[by4..by4 + lh].fill(inter_mode);
-        l.mrl[by4..by4 + lh].fill(0);
-        l.multi_mrl[by4..by4 + lh].fill(0);
-        l.dip[by4..by4 + lh].fill(0);
-        l.reference[0][by4..by4 + lh].fill(refs[0]);
-        l.reference[1][by4..by4 + lh].fill(refs[1]);
-        l.motion_mode[by4..by4 + lh].fill(motion_mode);
-        l.amvd[by4..by4 + lh].fill(amvd as u8);
-        l.mvprec[by4..by4 + lh].fill(mvprec_def);
+        ctx_fill(&mut l.seg_pred, by4, lh, 0);
+        ctx_fill(&mut l.skip_mode, by4, lh, b.skip_mode);
+        ctx_fill(&mut l.intra, by4, lh, 0);
+        ctx_fill(&mut l.intrabc, by4, lh, 0);
+        ctx_fill(&mut l.morph_pred, by4, lh, 0);
+        ctx_fill(&mut l.midx, by4, lh, 0xff);
+        ctx_fill(&mut l.fsc, by4, lh, 0);
+        ctx_fill(&mut l.skip_txfm, by4, lh, b.skip_txfm);
+        ctx_fill(&mut l.pal_sz, by4, lh, 0);
+        ctx_fill(&mut l.comp_type, by4, lh, comp_type);
+        ctx_fill(&mut l.filter, by4, lh, filter_val);
+        ctx_fill(&mut l.mode, by4, lh, inter_mode);
+        ctx_fill(&mut l.mrl, by4, lh, 0);
+        ctx_fill(&mut l.multi_mrl, by4, lh, 0);
+        ctx_fill(&mut l.dip, by4, lh, 0);
+        ctx_fill(&mut l.reference[0], by4, lh, refs[0]);
+        ctx_fill(&mut l.reference[1], by4, lh, refs[1]);
+        ctx_fill(&mut l.motion_mode, by4, lh, motion_mode);
+        ctx_fill(&mut l.amvd, by4, lh, amvd as u8);
+        ctx_fill(&mut l.mvprec, by4, lh, mvprec_def);
     }
     if has_chroma {
         let cb_dim = &BLOCK_DIMENSIONS[cbs as u8 as usize];
@@ -405,8 +423,8 @@ fn write_inter_block_context(
         let cby4 = (cby & 63) as usize;
         let cbw4 = 1usize << cb_dim[2];
         let cbh4 = 1usize << cb_dim[3];
-        a.uvmode[cbx4..cbx4 + cbw4].fill(0);
-        l.uvmode[cby4..cby4 + cbh4].fill(0);
+        ctx_fill(&mut a.uvmode, cbx4, cbw4, 0);
+        ctx_fill(&mut l.uvmode, cby4, cbh4, 0);
     }
 }
 
@@ -436,48 +454,48 @@ fn write_intra_block_context(
         let aw = 1usize << b_dim[2];
         let lh = 1usize << b_dim[3];
 
-        a.fsc[bx4..bx4 + aw].fill(b.fsc);
-        a.mode[bx4..bx4 + aw].fill(y_mode);
-        a.midx[bx4..bx4 + aw].fill(luma_midx);
-        a.mrl[bx4..bx4 + aw].fill((mrl_idx != 0) as u8);
-        a.multi_mrl[bx4..bx4 + aw].fill(multi_mrl);
-        a.dip[bx4..bx4 + aw].fill((dip_val != 0) as u8);
-        a.pal_sz[bx4..bx4 + aw].fill(pal_sz_val);
-        a.seg_pred[bx4..bx4 + aw].fill(seg_pred as u8);
-        a.skip_mode[bx4..bx4 + aw].fill(0);
-        a.intra[bx4..bx4 + aw].fill(1);
-        a.intrabc[bx4..bx4 + aw].fill(0);
-        a.morph_pred[bx4..bx4 + aw].fill(0);
-        a.skip_txfm[bx4..bx4 + aw].fill(b.skip_txfm);
+        ctx_fill(&mut a.fsc, bx4, aw, b.fsc);
+        ctx_fill(&mut a.mode, bx4, aw, y_mode);
+        ctx_fill(&mut a.midx, bx4, aw, luma_midx);
+        ctx_fill(&mut a.mrl, bx4, aw, (mrl_idx != 0) as u8);
+        ctx_fill(&mut a.multi_mrl, bx4, aw, multi_mrl);
+        ctx_fill(&mut a.dip, bx4, aw, (dip_val != 0) as u8);
+        ctx_fill(&mut a.pal_sz, bx4, aw, pal_sz_val);
+        ctx_fill(&mut a.seg_pred, bx4, aw, seg_pred as u8);
+        ctx_fill(&mut a.skip_mode, bx4, aw, 0);
+        ctx_fill(&mut a.intra, bx4, aw, 1);
+        ctx_fill(&mut a.intrabc, bx4, aw, 0);
+        ctx_fill(&mut a.morph_pred, bx4, aw, 0);
+        ctx_fill(&mut a.skip_txfm, bx4, aw, b.skip_txfm);
         if fi.is_inter_or_switch {
-            a.amvd[bx4..bx4 + aw].fill(0);
-            a.mvprec[bx4..bx4 + aw].fill(0);
-            a.motion_mode[bx4..bx4 + aw].fill(0);
-            a.comp_type[bx4..bx4 + aw].fill(0);
-            a.reference[0][bx4..bx4 + aw].fill(-1);
-            a.reference[1][bx4..bx4 + aw].fill(-1);
+            ctx_fill(&mut a.amvd, bx4, aw, 0);
+            ctx_fill(&mut a.mvprec, bx4, aw, 0);
+            ctx_fill(&mut a.motion_mode, bx4, aw, 0);
+            ctx_fill(&mut a.comp_type, bx4, aw, 0);
+            ctx_fill(&mut a.reference[0], bx4, aw, -1);
+            ctx_fill(&mut a.reference[1], bx4, aw, -1);
         }
 
-        l.fsc[by4..by4 + lh].fill(b.fsc);
-        l.mode[by4..by4 + lh].fill(y_mode);
-        l.midx[by4..by4 + lh].fill(luma_midx);
-        l.mrl[by4..by4 + lh].fill((mrl_idx != 0) as u8);
-        l.multi_mrl[by4..by4 + lh].fill(multi_mrl);
-        l.dip[by4..by4 + lh].fill((dip_val != 0) as u8);
-        l.pal_sz[by4..by4 + lh].fill(pal_sz_val);
-        l.seg_pred[by4..by4 + lh].fill(seg_pred as u8);
-        l.skip_mode[by4..by4 + lh].fill(0);
-        l.intra[by4..by4 + lh].fill(1);
-        l.intrabc[by4..by4 + lh].fill(0);
-        l.morph_pred[by4..by4 + lh].fill(0);
-        l.skip_txfm[by4..by4 + lh].fill(b.skip_txfm);
+        ctx_fill(&mut l.fsc, by4, lh, b.fsc);
+        ctx_fill(&mut l.mode, by4, lh, y_mode);
+        ctx_fill(&mut l.midx, by4, lh, luma_midx);
+        ctx_fill(&mut l.mrl, by4, lh, (mrl_idx != 0) as u8);
+        ctx_fill(&mut l.multi_mrl, by4, lh, multi_mrl);
+        ctx_fill(&mut l.dip, by4, lh, (dip_val != 0) as u8);
+        ctx_fill(&mut l.pal_sz, by4, lh, pal_sz_val);
+        ctx_fill(&mut l.seg_pred, by4, lh, seg_pred as u8);
+        ctx_fill(&mut l.skip_mode, by4, lh, 0);
+        ctx_fill(&mut l.intra, by4, lh, 1);
+        ctx_fill(&mut l.intrabc, by4, lh, 0);
+        ctx_fill(&mut l.morph_pred, by4, lh, 0);
+        ctx_fill(&mut l.skip_txfm, by4, lh, b.skip_txfm);
         if fi.is_inter_or_switch {
-            l.amvd[by4..by4 + lh].fill(0);
-            l.mvprec[by4..by4 + lh].fill(0);
-            l.motion_mode[by4..by4 + lh].fill(0);
-            l.comp_type[by4..by4 + lh].fill(0);
-            l.reference[0][by4..by4 + lh].fill(-1);
-            l.reference[1][by4..by4 + lh].fill(-1);
+            ctx_fill(&mut l.amvd, by4, lh, 0);
+            ctx_fill(&mut l.mvprec, by4, lh, 0);
+            ctx_fill(&mut l.motion_mode, by4, lh, 0);
+            ctx_fill(&mut l.comp_type, by4, lh, 0);
+            ctx_fill(&mut l.reference[0], by4, lh, -1);
+            ctx_fill(&mut l.reference[1], by4, lh, -1);
         }
     }
 
@@ -488,8 +506,8 @@ fn write_intra_block_context(
         let cby4 = (cby & 63) as usize;
         let cbw4 = 1usize << cb_dim[2];
         let cbh4 = 1usize << cb_dim[3];
-        a.uvmode[cbx4..cbx4 + cbw4].fill(uv_mode);
-        l.uvmode[cby4..cby4 + cbh4].fill(uv_mode);
+        ctx_fill(&mut a.uvmode, cbx4, cbw4, uv_mode);
+        ctx_fill(&mut l.uvmode, cby4, cbh4, uv_mode);
     }
 }
 
@@ -513,48 +531,48 @@ fn write_intrabc_block_context(
         let aw = 1usize << b_dim[2];
         let lh = 1usize << b_dim[3];
 
-        a.fsc[bx4..bx4 + aw].fill(0);
-        a.mode[bx4..bx4 + aw].fill(0); // DC_PRED
-        a.midx[bx4..bx4 + aw].fill(0xff);
-        a.mrl[bx4..bx4 + aw].fill(0);
-        a.multi_mrl[bx4..bx4 + aw].fill(0);
-        a.dip[bx4..bx4 + aw].fill(0);
-        a.pal_sz[bx4..bx4 + aw].fill(0);
-        a.seg_pred[bx4..bx4 + aw].fill(0);
-        a.skip_mode[bx4..bx4 + aw].fill(0);
-        a.intrabc[bx4..bx4 + aw].fill(1);
-        a.morph_pred[bx4..bx4 + aw].fill(morph_pred);
-        a.intra[bx4..bx4 + aw].fill(1);
-        a.skip_txfm[bx4..bx4 + aw].fill(b.skip_txfm);
+        ctx_fill(&mut a.fsc, bx4, aw, 0);
+        ctx_fill(&mut a.mode, bx4, aw, 0); // DC_PRED
+        ctx_fill(&mut a.midx, bx4, aw, 0xff);
+        ctx_fill(&mut a.mrl, bx4, aw, 0);
+        ctx_fill(&mut a.multi_mrl, bx4, aw, 0);
+        ctx_fill(&mut a.dip, bx4, aw, 0);
+        ctx_fill(&mut a.pal_sz, bx4, aw, 0);
+        ctx_fill(&mut a.seg_pred, bx4, aw, 0);
+        ctx_fill(&mut a.skip_mode, bx4, aw, 0);
+        ctx_fill(&mut a.intrabc, bx4, aw, 1);
+        ctx_fill(&mut a.morph_pred, bx4, aw, morph_pred);
+        ctx_fill(&mut a.intra, bx4, aw, 1);
+        ctx_fill(&mut a.skip_txfm, bx4, aw, b.skip_txfm);
         if fi.is_inter_or_switch {
-            a.amvd[bx4..bx4 + aw].fill(0);
-            a.mvprec[bx4..bx4 + aw].fill(0);
-            a.comp_type[bx4..bx4 + aw].fill(0);
-            a.motion_mode[bx4..bx4 + aw].fill(0);
-            a.reference[0][bx4..bx4 + aw].fill(-1);
-            a.reference[1][bx4..bx4 + aw].fill(-1);
+            ctx_fill(&mut a.amvd, bx4, aw, 0);
+            ctx_fill(&mut a.mvprec, bx4, aw, 0);
+            ctx_fill(&mut a.comp_type, bx4, aw, 0);
+            ctx_fill(&mut a.motion_mode, bx4, aw, 0);
+            ctx_fill(&mut a.reference[0], bx4, aw, -1);
+            ctx_fill(&mut a.reference[1], bx4, aw, -1);
         }
 
-        l.fsc[by4..by4 + lh].fill(0);
-        l.mode[by4..by4 + lh].fill(0);
-        l.midx[by4..by4 + lh].fill(0xff);
-        l.mrl[by4..by4 + lh].fill(0);
-        l.multi_mrl[by4..by4 + lh].fill(0);
-        l.dip[by4..by4 + lh].fill(0);
-        l.pal_sz[by4..by4 + lh].fill(0);
-        l.seg_pred[by4..by4 + lh].fill(0);
-        l.skip_mode[by4..by4 + lh].fill(0);
-        l.intrabc[by4..by4 + lh].fill(1);
-        l.morph_pred[by4..by4 + lh].fill(morph_pred);
-        l.intra[by4..by4 + lh].fill(1);
-        l.skip_txfm[by4..by4 + lh].fill(b.skip_txfm);
+        ctx_fill(&mut l.fsc, by4, lh, 0);
+        ctx_fill(&mut l.mode, by4, lh, 0);
+        ctx_fill(&mut l.midx, by4, lh, 0xff);
+        ctx_fill(&mut l.mrl, by4, lh, 0);
+        ctx_fill(&mut l.multi_mrl, by4, lh, 0);
+        ctx_fill(&mut l.dip, by4, lh, 0);
+        ctx_fill(&mut l.pal_sz, by4, lh, 0);
+        ctx_fill(&mut l.seg_pred, by4, lh, 0);
+        ctx_fill(&mut l.skip_mode, by4, lh, 0);
+        ctx_fill(&mut l.intrabc, by4, lh, 1);
+        ctx_fill(&mut l.morph_pred, by4, lh, morph_pred);
+        ctx_fill(&mut l.intra, by4, lh, 1);
+        ctx_fill(&mut l.skip_txfm, by4, lh, b.skip_txfm);
         if fi.is_inter_or_switch {
-            l.amvd[by4..by4 + lh].fill(0);
-            l.mvprec[by4..by4 + lh].fill(0);
-            l.comp_type[by4..by4 + lh].fill(0);
-            l.motion_mode[by4..by4 + lh].fill(0);
-            l.reference[0][by4..by4 + lh].fill(-1);
-            l.reference[1][by4..by4 + lh].fill(-1);
+            ctx_fill(&mut l.amvd, by4, lh, 0);
+            ctx_fill(&mut l.mvprec, by4, lh, 0);
+            ctx_fill(&mut l.comp_type, by4, lh, 0);
+            ctx_fill(&mut l.motion_mode, by4, lh, 0);
+            ctx_fill(&mut l.reference[0], by4, lh, -1);
+            ctx_fill(&mut l.reference[1], by4, lh, -1);
         }
     }
 
@@ -564,8 +582,8 @@ fn write_intrabc_block_context(
         let cby4 = (cby & 63) as usize;
         let cbw4 = 1usize << cb_dim[2];
         let cbh4 = 1usize << cb_dim[3];
-        a.uvmode[cbx4..cbx4 + cbw4].fill(0); // DC_PRED
-        l.uvmode[cby4..cby4 + cbh4].fill(0);
+        ctx_fill(&mut a.uvmode, cbx4, cbw4, 0); // DC_PRED
+        ctx_fill(&mut l.uvmode, cby4, cbh4, 0);
     }
 }
 
@@ -587,7 +605,7 @@ fn write_cur_segmap(
         let bh4u = bh4 as usize;
         let mut off = (by as isize * b4_stride + bx as isize) as usize;
         for _ in 0..bh4u {
-            cur_segmap[off..off + bw4u].fill(seg_id);
+            ctx_fill(cur_segmap, off, bw4u, seg_id);
             off = (off as isize + b4_stride) as usize;
         }
     }
@@ -655,7 +673,7 @@ fn update_block_filter_masks<BD: BitDepth>(
         let mut off =
             (((cby >> ss_ver) as isize) * seg_stride + ((cbx >> ss_hor) as isize)) as usize;
         for _ in 0..cbh4 {
-            recon.segmap_uv[off..off + cbw4].fill(seg_id);
+            ctx_fill(&mut recon.segmap_uv, off, cbw4, seg_id);
             off = (off as isize + seg_stride) as usize;
         }
     }
@@ -1935,7 +1953,7 @@ where
             };
             let n = 1usize << gdf_sz_log2;
             let m = &mut recon.lf_mask[recon.lf_idx];
-            m.gdf[idx..idx + n].fill(flag);
+            ctx_fill(&mut m.gdf, idx, n, flag);
             if gdf_bs >= 32 {
                 m.gdf[idx + 4..idx + 4 + n].fill(flag);
                 if gdf_bs == 64 {
@@ -1990,7 +2008,7 @@ where
             }
             let splat_n = 1usize << imax(0, b_dim[2] as i32 - 4);
             let m = &mut recon.lf_mask[recon.lf_idx];
-            m.cdef_idx[idx..idx + splat_n].fill(v);
+            ctx_fill(&mut m.cdef_idx, idx, splat_n, v);
             if bh4 >= 32 {
                 m.cdef_idx[idx + 4..idx + 4 + splat_n].fill(v);
                 if bh4 == 64 {
@@ -3861,8 +3879,13 @@ where
         let aw = (1usize << b_dim[2]).min(16);
         for y in 0..bh4_max16 {
             let row = off + y * 16;
-            recon.scratch.luma_intra_dir_mode_map[row..row + aw].fill(luma_midx);
-            recon.scratch.luma_fsc_map[row..row + aw].fill(b.fsc);
+            ctx_fill(
+                &mut recon.scratch.luma_intra_dir_mode_map,
+                row,
+                aw,
+                luma_midx,
+            );
+            ctx_fill(&mut recon.scratch.luma_fsc_map, row, aw, b.fsc);
         }
     }
 
