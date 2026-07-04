@@ -305,89 +305,6 @@ fn get_ph_ctx(levels: &[i8], is_2d: bool, stride: usize) -> usize {
     }
 }
 
-// Context folds flattened to LUTs: replaces the xy branch chains and the
-// (x+1)>>1 min/offset arithmetic with one L1-resident load per lookup.
-// Luma 2D: ctx by (xy, lo), hi_mag by (xy, hi). xy <= 62, lo <= 25, hi <= 15.
-static CTX_LUMA_2D: [u8; 64 * 32] = {
-    let mut t = [0u8; 64 * 32];
-    let mut xy = 0;
-    while xy < 64 {
-        let (offset, lim) = if xy == 0 {
-            (0, 8)
-        } else if xy < 2 {
-            (9, 6)
-        } else if xy < 4 {
-            (16, 4)
-        } else if xy < 6 {
-            (0, 4)
-        } else if xy < 8 {
-            (5, 4)
-        } else {
-            (10, 4)
-        };
-        let mut lo = 0;
-        while lo < 32 {
-            let f = (lo + 1) >> 1;
-            t[xy * 32 + lo] = (offset + if f < lim { f } else { lim }) as u8;
-            lo += 1;
-        }
-        xy += 1;
-    }
-    t
-};
-static HIM_LUMA_2D: [u8; 64 * 16] = {
-    let mut t = [0u8; 64 * 16];
-    let mut xy = 0;
-    while xy < 64 {
-        let add = if xy > 0 && xy < 4 { 7 } else { 0 };
-        let mut hi = 0;
-        while hi < 16 {
-            let f = (hi + 1) >> 1;
-            t[xy * 16 + hi] = (add + if f < 6 { f } else { 6 }) as u8;
-            hi += 1;
-        }
-        xy += 1;
-    }
-    t
-};
-// Luma 1D: xy is y <= 31.
-static CTX_LUMA_1D: [u8; 32 * 32] = {
-    let mut t = [0u8; 32 * 32];
-    let mut y = 0;
-    while y < 32 {
-        let (offset, lim) = if y == 0 {
-            (21, 6)
-        } else if y < 2 {
-            (28, 4)
-        } else {
-            (15, 4)
-        };
-        let mut lo = 0;
-        while lo < 32 {
-            let f = (lo + 1) >> 1;
-            t[y * 32 + lo] = (offset + if f < lim { f } else { lim }) as u8;
-            lo += 1;
-        }
-        y += 1;
-    }
-    t
-};
-static HIM_LUMA_1D: [u8; 32 * 16] = {
-    let mut t = [0u8; 32 * 16];
-    let mut y = 0;
-    while y < 32 {
-        let add = if y < 2 { 7 } else { 0 };
-        let mut hi = 0;
-        while hi < 16 {
-            let f = (hi + 1) >> 1;
-            t[y * 16 + hi] = (add + if f < 6 { f } else { 6 }) as u8;
-            hi += 1;
-        }
-        y += 1;
-    }
-    t
-};
-
 #[inline(always)]
 fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> u32 {
     // One check instead of five: lets the per-read bounds tests fold away.
@@ -396,10 +313,44 @@ fn get_lo_ctx_luma_2d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
     let s5 = s3 + packed(base[2]) + packed(base[2 * stride]);
 
     let hi = s3 & 31;
-    let lo = if xy < 4 { s5 & 31 } else { s5 >> 5 };
 
-    *hi_mag = HIM_LUMA_2D[(((xy << 4) | hi) & 0x3ff) as usize] as u32;
-    CTX_LUMA_2D[(((xy << 5) | lo) & 0x7ff) as usize] as u32
+    let lo_freq = xy < 4;
+
+    let lo;
+    let offset;
+    let lim;
+
+    if lo_freq {
+        lo = s5 & 31;
+
+        if xy == 0 {
+            offset = 0;
+            lim = 8;
+        } else if xy < 2 {
+            offset = 9;
+            lim = 6;
+        } else {
+            offset = 16;
+            lim = 4;
+        }
+
+        *hi_mag = if xy > 0 { 7 } else { 0 } + ((hi + 1) >> 1).min(6);
+    } else {
+        lo = s5 >> 5;
+
+        offset = if xy < 6 {
+            0
+        } else if xy < 8 {
+            5
+        } else {
+            10
+        };
+
+        lim = 4;
+        *hi_mag = ((hi + 1) >> 1).min(6);
+    }
+
+    offset + ((lo + 1) >> 1).min(lim)
 }
 
 #[inline(always)]
@@ -410,14 +361,33 @@ fn get_lo_ctx_luma_1d(base: &[i8], hi_mag: &mut u32, xy: u32, stride: usize) -> 
     let sabc = sab + packed(base[2]);
 
     let hi = sabc & 31;
-    let lo = if xy < 2 {
-        (sab & 31) + (scde >> 5)
-    } else {
-        (sab + scde) >> 5
-    };
 
-    *hi_mag = HIM_LUMA_1D[(((xy << 4) | hi) & 0x1ff) as usize] as u32;
-    CTX_LUMA_1D[(((xy << 5) | lo) & 0x3ff) as usize] as u32
+    let lo;
+    let offset;
+    let lim;
+
+    if xy < 2 {
+        lo = (sab & 31) + (scde >> 5);
+
+        if xy == 0 {
+            offset = 21;
+            lim = 6;
+        } else {
+            offset = 28;
+            lim = 4;
+        }
+
+        *hi_mag = 7 + ((hi + 1) >> 1).min(6);
+    } else {
+        lo = (sab + scde) >> 5;
+
+        offset = 15;
+        lim = 4;
+
+        *hi_mag = ((hi + 1) >> 1).min(6);
+    }
+
+    offset + ((lo + 1) >> 1).min(lim)
 }
 
 #[inline(always)]
