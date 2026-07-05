@@ -166,23 +166,6 @@ impl IntraPred8Backend for ScalarIntraPred8 {
     }
 }
 
-std::thread_local! {
-    static ZPRED_TMP: core::cell::RefCell<Vec<Box<[u8; 64 * 64]>>> =
-        const { core::cell::RefCell::new(Vec::new()) };
-}
-
-#[inline]
-pub(crate) fn zpred_tmp_take() -> Box<[u8; 64 * 64]> {
-    ZPRED_TMP
-        .with(|c| c.borrow_mut().pop())
-        .unwrap_or_else(|| Box::new([0u8; 64 * 64]))
-}
-
-#[inline]
-pub(crate) fn zpred_tmp_put(b: Box<[u8; 64 * 64]>) {
-    ZPRED_TMP.with(|c| c.borrow_mut().push(b));
-}
-
 #[inline]
 pub(crate) fn ipred_v_scalar(
     dst: &mut [u8],
@@ -1736,23 +1719,5 @@ pub(crate) fn dispatch_ipred_hbd(
         _ if m == Z3_PRED => call_ipred!(resolve_ipred_z3_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights, bitdepth_max),
         _ if m == DIP_PRED => call_ipred!(resolve_ipred_dip_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
         _ => call_ipred!(resolve_ipred_dc_128_hbd(), d, stride, w, h, bitdepth_max),
-    }
-}
-
-#[cfg(test)]
-mod zpred_scratch_tests {
-    use super::{ZPRED_TMP, zpred_tmp_put, zpred_tmp_take};
-    #[test]
-    fn zpred_nested_scratch_distinct() {
-        // Mirrors IBP->z3->MRL: two buffers live at once must not alias.
-        let mut a = zpred_tmp_take();
-        a.iter_mut().for_each(|x| *x = 0xAA);
-        let mut b = zpred_tmp_take();
-        b.iter_mut().for_each(|x| *x = 0xBB);
-        assert_ne!(a.as_ptr(), b.as_ptr());
-        assert!(a.iter().all(|&x| x == 0xAA) && b.iter().all(|&x| x == 0xBB));
-        zpred_tmp_put(b);
-        zpred_tmp_put(a);
-        assert_eq!(ZPRED_TMP.with(|c| c.borrow().len()), 2);
     }
 }
