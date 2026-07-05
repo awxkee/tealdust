@@ -510,11 +510,6 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextSse<'a, U
     }
 
     #[inline(always)]
-    fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
-        MsacContextSse::decode_unary_bypass(self, max_bits)
-    }
-
-    #[inline(always)]
     fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32 {
         MsacContextSse::decode_symbol_adapt_sse2(self, cdf, n_symbols)
     }

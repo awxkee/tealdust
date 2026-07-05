@@ -373,7 +373,6 @@ pub(crate) trait MsacReader<const UPDATE_CDF: bool> {
     fn decode_bools_bypass(&mut self, n_bits: u32) -> u32;
     fn decode_hr_bypass(&mut self, cmax: u32, m: u32) -> i32;
     fn decode_bool_bypass(&mut self) -> u32;
-    fn decode_unary_bypass(&mut self, max_bits: u32) -> u32;
     fn decode_symbol_adapt(&mut self, cdf: &mut [u16], n_symbols: usize) -> u32;
     fn decode_symbol_adapt_padded<const LANES: usize>(
         &mut self,
@@ -934,11 +933,6 @@ impl<'a, const UPDATE_CDF: bool> MsacReader<UPDATE_CDF> for MsacContextScalar<'a
     #[inline(always)]
     fn decode_bool_bypass(&mut self) -> u32 {
         MsacContextScalar::decode_bool_bypass(self)
-    }
-
-    #[inline(always)]
-    fn decode_unary_bypass(&mut self, max_bits: u32) -> u32 {
-        MsacContextScalar::decode_unary_bypass(self, max_bits)
     }
 
     #[inline(always)]
