@@ -2010,12 +2010,10 @@ fn decode_frame_main_select<const UPDATE_CDF: bool>(
 ) -> Result<(), ()> {
     #[cfg(all(target_arch = "x86_64", feature = "sse"))]
     {
-        if UPDATE_CDF {
-            return  decode_frame_main_inner::<UPDATE_CDF, crate::msac::SseMsacBackend>(fc, n_passes, n_tc, pool);
-        }
-    // }
-    // #[cfg(not(all(target_arch = "x86_64", feature = "sse")))]
-    // {
+        decode_frame_main_inner::<UPDATE_CDF, crate::msac::SseMsacBackend>(fc, n_passes, n_tc, pool)
+    }
+    #[cfg(not(all(target_arch = "x86_64", feature = "sse")))]
+    {
         decode_frame_main_inner::<UPDATE_CDF, crate::msac::ScalarMsacBackend>(
             fc, n_passes, n_tc, pool,
         )
