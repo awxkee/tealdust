@@ -1686,7 +1686,7 @@ pub(crate) fn ipred_z1_8bpc_avx2(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = [0u8; 64 * 64];
+        let mut tmp = crate::ipred_dispatch::zpred_tmp_take();
         let base_angle = a | ANGLE_IS_LUMA;
         let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
         ipred_z1_8bpc_avx2(
@@ -1714,12 +1714,13 @@ pub(crate) fn ipred_z1_8bpc_avx2(
             ibp_weights,
         );
         avg_pred_8bpc_avx2(dst, stride, tmp.as_slice(), w, h);
+        crate::ipred_dispatch::zpred_tmp_put(tmp);
         return;
     }
     if enable_ibp {
         let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
         let mode_idx = (10 - (a >> 3)).min(6) as usize;
-        let mut tmp = [0u8; 64 * 64];
+        let mut tmp = crate::ipred_dispatch::zpred_tmp_take();
         ipred_z1_8bpc_avx2(
             dst,
             stride,
@@ -1753,6 +1754,7 @@ pub(crate) fn ipred_z1_8bpc_avx2(
             false,
             &ibp_weights[mode_idx],
         );
+        crate::ipred_dispatch::zpred_tmp_put(tmp);
         return;
     }
     let is_sm_t = angle & ANGLE_SMOOTH_TOP_EDGE_FLAG != 0;
@@ -2029,7 +2031,7 @@ pub(crate) fn ipred_z3_8bpc_avx2(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = [0u8; 64 * 64];
+        let mut tmp = crate::ipred_dispatch::zpred_tmp_take();
         let base_angle = a | ANGLE_IS_LUMA;
         let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
         ipred_z3_8bpc_avx2(
@@ -2057,6 +2059,7 @@ pub(crate) fn ipred_z3_8bpc_avx2(
             ibp_weights,
         );
         avg_pred_8bpc_avx2(dst, stride, tmp.as_slice(), w, h);
+        crate::ipred_dispatch::zpred_tmp_put(tmp);
         return;
     }
     if enable_ibp {
@@ -2076,7 +2079,7 @@ pub(crate) fn ipred_z3_8bpc_avx2(
         }
         let angle_flags = angle & !(511 | ANGLE_IBP_FLAG);
         let mode_idx = ((a - 183) >> 3).min(6) as usize;
-        let mut tmp = [0u8; 64 * 64];
+        let mut tmp = crate::ipred_dispatch::zpred_tmp_take();
         ipred_z3_8bpc_avx2(
             dst,
             stride,
@@ -2110,6 +2113,7 @@ pub(crate) fn ipred_z3_8bpc_avx2(
             true,
             &ibp_weights[mode_idx],
         );
+        crate::ipred_dispatch::zpred_tmp_put(tmp);
         return;
     }
     if h > 64 {
@@ -2564,7 +2568,7 @@ pub(crate) fn ipred_z2_8bpc_avx2(
     let a = angle & 511;
     if mrl_mul {
         let e_stride = (w + h) * 2 + mrl_idx * 3 + 1;
-        let mut tmp = [0u8; 64 * 64];
+        let mut tmp = crate::ipred_dispatch::zpred_tmp_take();
         let base_angle = a | ANGLE_IS_LUMA;
         let first_angle = base_angle | ((mrl_idx as i32) << ANGLE_MRL_IDX_SHIFT);
         ipred_z2_8bpc_avx2(
@@ -2590,6 +2594,7 @@ pub(crate) fn ipred_z2_8bpc_avx2(
             max_height,
         );
         avg_pred_8bpc_avx2(dst, stride, tmp.as_slice(), w, h);
+        crate::ipred_dispatch::zpred_tmp_put(tmp);
         return;
     }
     let is_sm_l = angle & ANGLE_SMOOTH_LEFT_EDGE_FLAG != 0;
