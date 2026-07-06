@@ -39,107 +39,224 @@ fn with_avx512_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -
 }
 
 #[inline(always)]
-fn avx512_rect2_i16(v: i16) -> i16 {
-    (((v as i32 * 181) + 128) >> 8) as i16
+fn avx512_mask16(live: usize) -> __mmask16 {
+    debug_assert!(live <= 16);
+    if live == 16 {
+        u16::MAX
+    } else {
+        ((1u32 << live) - 1) as __mmask16
+    }
 }
 
 #[inline]
 #[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
-fn avx512_load_coeff_i16x16_i32<const IS_RECT2: bool, const STRIDE: usize>(
+fn avx512_load_coeff_i16x16<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
     base: usize,
     live: usize,
     row: usize,
-) -> __m512i {
+) -> __m256i {
     debug_assert!(live <= 16);
     debug_assert!(base + live <= STRIDE);
     debug_assert!(base + row * STRIDE + live <= coeff.len());
 
-    if live == 16 {
-        let mut v = unsafe { _mm256_loadu_si256(coeff.as_ptr().add(base + row * STRIDE).cast()) };
-        if IS_RECT2 {
-            v = _mm256_mulhrs_epi16(v, _mm256_set1_epi16(0x5a80));
-        }
-        return _mm512_cvtepi16_epi32(v);
-    }
-
-    let mut buf = [0i16; 16];
-    let src = &coeff[base + row * STRIDE..base + row * STRIDE + live];
+    let mask = avx512_mask16(live);
+    let ptr = unsafe { coeff.as_ptr().add(base + row * STRIDE) };
+    let mut v = unsafe { _mm256_maskz_loadu_epi16(mask, ptr.cast()) };
     if IS_RECT2 {
-        for (d, &s) in buf.iter_mut().zip(src.iter()) {
-            *d = avx512_rect2_i16(s);
-        }
-    } else {
-        buf[..live].copy_from_slice(src);
+        v = _mm256_mulhrs_epi16(v, _mm256_set1_epi16(0x5a80));
     }
-
-    unsafe { _mm512_cvtepi16_epi32(_mm256_loadu_si256(buf.as_ptr().cast())) }
+    v
 }
 
 #[inline]
 #[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
-fn avx512_load_scratch_i16x16_i32<const STRIDE: usize>(
+fn avx512_load_scratch_i16x16<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
     active: usize,
     row: usize,
-) -> __m512i {
+) -> __m256i {
     debug_assert!(base + 16 <= STRIDE);
     if row >= active {
-        return _mm512_setzero_si512();
+        return _mm256_setzero_si256();
     }
     debug_assert!(base + row * STRIDE + 16 <= scratch.len());
-    unsafe {
-        _mm512_cvtepi16_epi32(_mm256_loadu_si256(
-            scratch.as_ptr().add(base + row * STRIDE).cast(),
-        ))
-    }
+    unsafe { _mm256_loadu_si256(scratch.as_ptr().add(base + row * STRIDE).cast()) }
 }
 
 #[inline(always)]
-fn avx512_pair_coeff(table: &[i32], idx: usize) -> (i32, i32) {
+fn avx512_pair_coeff(table: &[i32], idx: usize) -> (i16, i16) {
     let p = table[idx * 4];
-    (p as i16 as i32, (p >> 16) as i16 as i32)
+    (p as i16, (p >> 16) as i16)
 }
 
 #[inline]
-#[target_feature(enable = "avx512f")]
-fn avx512_madd_pair_i16_i32(a: __m512i, b: __m512i, table: &[i32], idx: usize) -> __m512i {
+#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+fn avx512_i16_interleave_x16(a: __m256i, b: __m256i) -> __m512i {
+    let lo = _mm256_unpacklo_epi16(a, b);
+    let hi = _mm256_unpackhi_epi16(a, b);
+    let p0 = _mm256_inserti128_si256::<1>(
+        _mm256_castsi128_si256(_mm256_castsi256_si128(lo)),
+        _mm256_castsi256_si128(hi),
+    );
+    let p1 = _mm256_inserti128_si256::<1>(
+        _mm256_castsi128_si256(_mm256_extracti128_si256::<1>(lo)),
+        _mm256_extracti128_si256::<1>(hi),
+    );
+    _mm512_inserti64x4::<1>(_mm512_zextsi256_si512(p0), p1)
+}
+
+#[inline]
+#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+fn avx512_coeff_pair_512(k0: i16, k1: i16) -> __m512i {
+    let pair = (k0 as u16 as u32) | ((k1 as u16 as u32) << 16);
+    _mm512_set1_epi32(pair as i32)
+}
+
+#[inline]
+#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+fn avx512_madd_pair_i16_i32(a: __m256i, b: __m256i, table: &[i32], idx: usize) -> __m512i {
     let (k0, k1) = avx512_pair_coeff(table, idx);
-    _mm512_add_epi32(
-        _mm512_mullo_epi32(a, _mm512_set1_epi32(k0)),
-        _mm512_mullo_epi32(b, _mm512_set1_epi32(k1)),
-    )
+    let ab = avx512_i16_interleave_x16(a, b);
+    _mm512_dpwssds_epi32(_mm512_setzero_si512(), ab, avx512_coeff_pair_512(k0, k1))
 }
 
 #[inline]
-#[target_feature(enable = "avx512f")]
-fn avx512_store_rowpass_i16(
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
+fn avx512_round_clip_i32_to_i16(
+    v: __m512i,
+    rnd: __m512i,
+    sh: __m128i,
+    minv: __m512i,
+    maxv: __m512i,
+) -> __m256i {
+    let v = _mm512_sra_epi32(_mm512_add_epi32(v, rnd), sh);
+    let v = _mm512_min_epi32(_mm512_max_epi32(v, minv), maxv);
+    _mm512_cvtsepi32_epi16(v)
+}
+
+#[inline]
+#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl")]
+fn avx512_transpose16x16_i16_store<const STRIDE: usize>(
+    dst: &mut [i16],
+    off: usize,
+    r: &[__m256i; 16],
+) {
+    unsafe {
+        debug_assert!(off + 15 * STRIDE + 16 <= dst.len());
+        debug_assert!(matches!(STRIDE, 16 | 32));
+
+        let a0 = _mm256_unpacklo_epi16(r[0], r[1]);
+        let a1 = _mm256_unpackhi_epi16(r[0], r[1]);
+        let a2 = _mm256_unpacklo_epi16(r[2], r[3]);
+        let a3 = _mm256_unpackhi_epi16(r[2], r[3]);
+        let a4 = _mm256_unpacklo_epi16(r[4], r[5]);
+        let a5 = _mm256_unpackhi_epi16(r[4], r[5]);
+        let a6 = _mm256_unpacklo_epi16(r[6], r[7]);
+        let a7 = _mm256_unpackhi_epi16(r[6], r[7]);
+        let a8 = _mm256_unpacklo_epi16(r[8], r[9]);
+        let a9 = _mm256_unpackhi_epi16(r[8], r[9]);
+        let a10 = _mm256_unpacklo_epi16(r[10], r[11]);
+        let a11 = _mm256_unpackhi_epi16(r[10], r[11]);
+        let a12 = _mm256_unpacklo_epi16(r[12], r[13]);
+        let a13 = _mm256_unpackhi_epi16(r[12], r[13]);
+        let a14 = _mm256_unpacklo_epi16(r[14], r[15]);
+        let a15 = _mm256_unpackhi_epi16(r[14], r[15]);
+
+        let b0 = _mm256_unpacklo_epi32(a0, a2);
+        let b1 = _mm256_unpackhi_epi32(a0, a2);
+        let b2 = _mm256_unpacklo_epi32(a1, a3);
+        let b3 = _mm256_unpackhi_epi32(a1, a3);
+        let b4 = _mm256_unpacklo_epi32(a4, a6);
+        let b5 = _mm256_unpackhi_epi32(a4, a6);
+        let b6 = _mm256_unpacklo_epi32(a5, a7);
+        let b7 = _mm256_unpackhi_epi32(a5, a7);
+        let b8 = _mm256_unpacklo_epi32(a8, a10);
+        let b9 = _mm256_unpackhi_epi32(a8, a10);
+        let b10 = _mm256_unpacklo_epi32(a9, a11);
+        let b11 = _mm256_unpackhi_epi32(a9, a11);
+        let b12 = _mm256_unpacklo_epi32(a12, a14);
+        let b13 = _mm256_unpackhi_epi32(a12, a14);
+        let b14 = _mm256_unpacklo_epi32(a13, a15);
+        let b15 = _mm256_unpackhi_epi32(a13, a15);
+
+        let c0 = _mm256_unpacklo_epi64(b0, b4);
+        let c1 = _mm256_unpackhi_epi64(b0, b4);
+        let c2 = _mm256_unpacklo_epi64(b1, b5);
+        let c3 = _mm256_unpackhi_epi64(b1, b5);
+        let c4 = _mm256_unpacklo_epi64(b2, b6);
+        let c5 = _mm256_unpackhi_epi64(b2, b6);
+        let c6 = _mm256_unpacklo_epi64(b3, b7);
+        let c7 = _mm256_unpackhi_epi64(b3, b7);
+        let c8 = _mm256_unpacklo_epi64(b8, b12);
+        let c9 = _mm256_unpackhi_epi64(b8, b12);
+        let c10 = _mm256_unpacklo_epi64(b9, b13);
+        let c11 = _mm256_unpackhi_epi64(b9, b13);
+        let c12 = _mm256_unpacklo_epi64(b10, b14);
+        let c13 = _mm256_unpackhi_epi64(b10, b14);
+        let c14 = _mm256_unpacklo_epi64(b11, b15);
+        let c15 = _mm256_unpackhi_epi64(b11, b15);
+
+        macro_rules! store_pair {
+            ($base:expr, $lo:expr, $hi:expr) => {{
+                let r0 = _mm256_permute2x128_si256::<0x20>($lo, $hi);
+                let r1 = _mm256_permute2x128_si256::<0x31>($lo, $hi);
+                _mm256_storeu_si256(dst.as_mut_ptr().add(off + $base * STRIDE).cast(), r0);
+                _mm256_storeu_si256(dst.as_mut_ptr().add(off + ($base + 8) * STRIDE).cast(), r1);
+            }};
+        }
+
+        store_pair!(0, c0, c8);
+        store_pair!(1, c1, c9);
+        store_pair!(2, c2, c10);
+        store_pair!(3, c3, c11);
+        store_pair!(4, c4, c12);
+        store_pair!(5, c5, c13);
+        store_pair!(6, c6, c14);
+        store_pair!(7, c7, c15);
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl")]
+fn avx512_store_rowpass_i16x16<const STRIDE: usize>(
     scratch: &mut [i16],
     row_base: usize,
-    stride: usize,
-    out: usize,
-    live: usize,
-    v: __m512i,
+    out_base: usize,
+    rows: &[__m512i; 16],
     rnd: i32,
     shift: i32,
     minv: i32,
     maxv: i32,
 ) {
-    debug_assert!(live <= 16);
-    debug_assert!(row_base + (live.saturating_sub(1)) * stride + out < scratch.len());
-    let mut lanes = [0i32; 16];
-    unsafe { _mm512_storeu_si512(lanes.as_mut_ptr().cast(), v) };
-    let mut x = 0usize;
-    while x < live {
-        let r = ((lanes[x] + rnd) >> shift).clamp(minv, maxv) as i16;
-        scratch[row_base + x * stride + out] = r;
-        x += 1;
-    }
+    let rnd = _mm512_set1_epi32(rnd);
+    let sh = _mm_cvtsi32_si128(shift);
+    let minv = _mm512_set1_epi32(minv);
+    let maxv = _mm512_set1_epi32(maxv);
+    let packed = [
+        avx512_round_clip_i32_to_i16(rows[0], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[1], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[2], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[3], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[4], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[5], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[6], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[7], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[8], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[9], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[10], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[11], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[12], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[13], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[14], rnd, sh, minv, maxv),
+        avx512_round_clip_i32_to_i16(rows[15], rnd, sh, minv, maxv),
+    ];
+    avx512_transpose16x16_i16_store::<STRIDE>(scratch, row_base + out_base, &packed);
 }
 
 #[inline]
-#[target_feature(enable = "avx512f")]
+#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl")]
 fn avx512_writeback_i32x16_u8(
     dst: &mut [u8],
     dst_off: usize,
@@ -151,13 +268,21 @@ fn avx512_writeback_i32x16_u8(
     shift: i32,
 ) {
     debug_assert!(dst_off + y * dst_stride + x + 16 <= dst.len());
-    let mut lanes = [0i32; 16];
-    unsafe { _mm512_storeu_si512(lanes.as_mut_ptr().cast(), v) };
-    let off = dst_off + y * dst_stride + x;
-    let row = &mut dst[off..off + 16];
-    for (d, &r) in row.iter_mut().zip(lanes.iter()) {
-        let residual = (r + rnd) >> shift;
-        *d = ((*d as i32) + residual).clamp(0, 255) as u8;
+    let r = _mm512_sra_epi32(
+        _mm512_add_epi32(v, _mm512_set1_epi32(rnd)),
+        _mm_cvtsi32_si128(shift),
+    );
+    let residual = _mm512_cvtsepi32_epi16(r);
+    unsafe {
+        let ptr = dst.as_mut_ptr().add(dst_off + y * dst_stride + x);
+        let src = _mm_loadu_si128(ptr.cast());
+        let pix = _mm256_cvtepu8_epi16(src);
+        let sum = _mm256_adds_epi16(pix, residual);
+        let out = _mm_packus_epi16(
+            _mm256_castsi256_si128(sum),
+            _mm256_extracti128_si256::<1>(sum),
+        );
+        _mm_storeu_si128(ptr.cast(), out);
     }
 }
 
@@ -327,9 +452,10 @@ fn avx512_dct16_rows_to_scratch<const IS_RECT2: bool>(
     maxv: i32,
 ) {
     let z = _mm512_setzero_si512();
+    let mut out = [z; 16];
     macro_rules! load {
         ($row:expr) => {
-            avx512_load_coeff_i16x16_i32::<IS_RECT2, 16>(coeff, y, live, $row)
+            avx512_load_coeff_i16x16::<IS_RECT2, 16>(coeff, y, live, $row)
         };
     }
     macro_rules! madd_pair {
@@ -348,11 +474,12 @@ fn avx512_dct16_rows_to_scratch<const IS_RECT2: bool>(
         };
     }
     macro_rules! emit {
-        ($out:expr, $v:expr) => {
-            avx512_store_rowpass_i16(scratch, y * 16, 16, $out, live, $v, rnd, shift, minv, maxv)
+        ($idx:expr, $v:expr) => {
+            out[$idx] = $v
         };
     }
     avx512_dct16_body!(z, load, madd_pair, add, sub, emit);
+    avx512_store_rowpass_i16x16::<16>(scratch, y * 16, 0, &out, rnd, shift, minv, maxv);
 }
 
 #[inline]
@@ -368,9 +495,10 @@ fn avx512_dct32_rows_to_scratch<const IS_RECT2: bool>(
     maxv: i32,
 ) {
     let z = _mm512_setzero_si512();
+    let mut out = [z; 32];
     macro_rules! load {
         ($row:expr) => {
-            avx512_load_coeff_i16x16_i32::<IS_RECT2, 32>(coeff, y, live, $row)
+            avx512_load_coeff_i16x16::<IS_RECT2, 32>(coeff, y, live, $row)
         };
     }
     macro_rules! madd_pair {
@@ -389,11 +517,22 @@ fn avx512_dct32_rows_to_scratch<const IS_RECT2: bool>(
         };
     }
     macro_rules! emit {
-        ($out:expr, $v:expr) => {
-            avx512_store_rowpass_i16(scratch, y * 32, 32, $out, live, $v, rnd, shift, minv, maxv)
+        ($idx:expr, $v:expr) => {
+            out[$idx] = $v
         };
     }
     avx512_dct32_body!(z, load, madd_pair, add, sub, emit);
+
+    let lo = [
+        out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], out[8], out[9], out[10],
+        out[11], out[12], out[13], out[14], out[15],
+    ];
+    let hi = [
+        out[16], out[17], out[18], out[19], out[20], out[21], out[22], out[23], out[24], out[25],
+        out[26], out[27], out[28], out[29], out[30], out[31],
+    ];
+    avx512_store_rowpass_i16x16::<32>(scratch, y * 32, 0, &lo, rnd, shift, minv, maxv);
+    avx512_store_rowpass_i16x16::<32>(scratch, y * 32, 16, &hi, rnd, shift, minv, maxv);
 }
 
 #[inline]
@@ -411,7 +550,7 @@ fn avx512_dct16_scratch_to_dst(
     let z = _mm512_setzero_si512();
     macro_rules! load {
         ($row:expr) => {
-            avx512_load_scratch_i16x16_i32::<16>(scratch, base, active, $row)
+            avx512_load_scratch_i16x16::<16>(scratch, base, active, $row)
         };
     }
     macro_rules! madd_pair {
@@ -452,7 +591,7 @@ fn avx512_dct32_scratch_to_dst(
     let z = _mm512_setzero_si512();
     macro_rules! load {
         ($row:expr) => {
-            avx512_load_scratch_i16x16_i32::<32>(scratch, base, active, $row)
+            avx512_load_scratch_i16x16::<32>(scratch, base, active, $row)
         };
     }
     macro_rules! madd_pair {
@@ -636,19 +775,27 @@ fn avx512_tx16_dense_rows_to_scratch<const IS_RECT2: bool>(
     maxv: i32,
 ) {
     let z = _mm512_setzero_si512();
+    let mut rows = [z; 16];
     let mut out = 0usize;
     while out < 16 {
         let mut acc = z;
         let mut input = 0usize;
         while input < 16 {
-            let v = avx512_load_coeff_i16x16_i32::<IS_RECT2, 16>(coeff, y, live, input);
-            let k = _mm512_set1_epi32(avx512_tx16_coeff(kind, out, input));
-            acc = _mm512_add_epi32(acc, _mm512_mullo_epi32(v, k));
-            input += 1;
+            let a = avx512_load_coeff_i16x16::<IS_RECT2, 16>(coeff, y, live, input);
+            let b = avx512_load_coeff_i16x16::<IS_RECT2, 16>(coeff, y, live, input + 1);
+            let k0 = avx512_tx16_coeff(kind, out, input) as i16;
+            let k1 = avx512_tx16_coeff(kind, out, input + 1) as i16;
+            acc = _mm512_dpwssds_epi32(
+                acc,
+                avx512_i16_interleave_x16(a, b),
+                avx512_coeff_pair_512(k0, k1),
+            );
+            input += 2;
         }
-        avx512_store_rowpass_i16(scratch, y * 16, 16, out, live, acc, rnd, shift, minv, maxv);
+        rows[out] = acc;
         out += 1;
     }
+    avx512_store_rowpass_i16x16::<16>(scratch, y * 16, 0, &rows, rnd, shift, minv, maxv);
 }
 
 #[inline]
@@ -669,10 +816,16 @@ fn avx512_tx16_dense_scratch_to_dst(
         let mut acc = z;
         let mut input = 0usize;
         while input < 16 {
-            let v = avx512_load_scratch_i16x16_i32::<16>(scratch, 0, active, input);
-            let k = _mm512_set1_epi32(avx512_tx16_coeff(kind, out, input));
-            acc = _mm512_add_epi32(acc, _mm512_mullo_epi32(v, k));
-            input += 1;
+            let a = avx512_load_scratch_i16x16::<16>(scratch, 0, active, input);
+            let b = avx512_load_scratch_i16x16::<16>(scratch, 0, active, input + 1);
+            let k0 = avx512_tx16_coeff(kind, out, input) as i16;
+            let k1 = avx512_tx16_coeff(kind, out, input + 1) as i16;
+            acc = _mm512_dpwssds_epi32(
+                acc,
+                avx512_i16_interleave_x16(a, b),
+                avx512_coeff_pair_512(k0, k1),
+            );
+            input += 2;
         }
         avx512_writeback_i32x16_u8(dst, dst_off, dst_stride, 0, out, acc, rnd, shift);
         out += 1;
