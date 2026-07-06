@@ -134,17 +134,35 @@ impl PlaneStorage {
                 return None;
             }
             let len = byte_len / core::mem::size_of::<u16>();
-            let mut v = Vec::new();
-            v.try_reserve_exact(len).ok()?;
-            v.resize(len, 0u16);
+            let v = plane_vec_with_len::<u16>(len)?;
             Some(PlaneStorage::U16(Arc::new(v)))
         } else {
-            let mut v = Vec::new();
-            v.try_reserve_exact(byte_len).ok()?;
-            v.resize(byte_len, 0u8);
+            let v = plane_vec_with_len::<u8>(byte_len)?;
             Some(PlaneStorage::U8(Arc::new(v)))
         }
     }
+}
+
+#[inline]
+fn plane_vec_with_len<T: Copy + Default>(len: usize) -> Option<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).ok()?;
+
+    #[cfg(debug_assertions)]
+    {
+        v.resize_with(len, T::default);
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        // SAFETY: `T` is used here only as `u8`/`u16` plane storage. Both have no
+        // drop glue and every bit pattern is a valid value. The decoder already
+        // relies on exactly this no-clear contract for pooled/recycled planes:
+        // reconstruction must write samples before any read observes them.
+        unsafe { v.set_len(len) };
+    }
+
+    Some(v)
 }
 
 impl std::fmt::Debug for PlaneStorage {
