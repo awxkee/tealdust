@@ -29,7 +29,7 @@
 
 use crate::headers::FrameHeader;
 use crate::intops::{iclip, imin};
-use crate::lf_mask::{deblock_quant_thr, deblock_side_thr};
+use crate::lf_mask::{deblock_thr_cache, deblock_thr_from_cache};
 use crate::pixel::{BitDepth, Pixel};
 
 pub(crate) static MAX_WIDTH_Y: [i8; 4] = [1, 3, 6, 8];
@@ -49,6 +49,7 @@ pub(crate) fn init_deblock_thr_lut_y(
     let qmax = 255 + 48 * hbd;
     let seg = &frame_hdr.segmentation;
     let n = if seg.enabled != 0 { 8 } else { 1 };
+    let thr_cache = deblock_thr_cache();
     for i in 0..n {
         let yac = if seg.enabled != 0 {
             iclip(qidx + seg.d.delta_q[i] as i32, 0, qmax)
@@ -56,8 +57,9 @@ pub(crate) fn init_deblock_thr_lut_y(
             qidx
         };
         let dir_yac = yac + 8 * frame_hdr.deblock.delta_q_y[dir] as i32;
-        lut[0][i] = deblock_quant_thr(hbd, dir_yac);
-        lut[1][i] = deblock_side_thr(hbd, dir_yac);
+        let thr = deblock_thr_from_cache(thr_cache, hbd, dir_yac);
+        lut[0][i] = thr[0];
+        lut[1][i] = thr[1];
     }
 }
 
@@ -70,6 +72,7 @@ pub(crate) fn init_deblock_thr_lut_uv(
     let qmax = 255 + 48 * hbd;
     let seg = &frame_hdr.segmentation;
     let n = if seg.enabled != 0 { 8 } else { 1 };
+    let thr_cache = deblock_thr_cache();
     for i in 0..n {
         let yac = if seg.enabled != 0 {
             iclip(qidx + seg.d.delta_q[i] as i32, 0, qmax)
@@ -77,11 +80,13 @@ pub(crate) fn init_deblock_thr_lut_uv(
             qidx
         };
         let uac = yac + frame_hdr.quant.uac_delta as i32 + 8 * frame_hdr.deblock.delta_q_u as i32;
-        lut[0][0][i] = deblock_quant_thr(hbd, uac);
-        lut[0][1][i] = deblock_side_thr(hbd, uac);
+        let uthr = deblock_thr_from_cache(thr_cache, hbd, uac);
+        lut[0][0][i] = uthr[0];
+        lut[0][1][i] = uthr[1];
         let vac = yac + frame_hdr.quant.vac_delta as i32 + 8 * frame_hdr.deblock.delta_q_v as i32;
-        lut[1][0][i] = deblock_quant_thr(hbd, vac);
-        lut[1][1][i] = deblock_side_thr(hbd, vac);
+        let vthr = deblock_thr_from_cache(thr_cache, hbd, vac);
+        lut[1][0][i] = vthr[0];
+        lut[1][1][i] = vthr[1];
     }
 }
 

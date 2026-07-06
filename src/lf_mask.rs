@@ -79,6 +79,8 @@ impl Default for Av2Restoration {
     }
 }
 
+use std::sync::OnceLock;
+
 use crate::intops::{iclip, imax, imin};
 use crate::levels::TxPartition;
 use crate::quantizer::dq_lookup;
@@ -360,16 +362,50 @@ pub fn mask_subpu_edges(
     }
 }
 
-pub fn deblock_quant_thr(hbd: i32, qidx: i32) -> u32 {
+const DEBLOCK_THR_CACHE_QMAX: usize = 343;
+const DEBLOCK_THR_CACHE_LEN: usize = DEBLOCK_THR_CACHE_QMAX + 1;
+
+pub(crate) type DeblockThrCache = [[[u32; 2]; DEBLOCK_THR_CACHE_LEN]; 2];
+
+static DEBLOCK_THR_CACHE: OnceLock<DeblockThrCache> = OnceLock::new();
+
+#[inline(always)]
+fn deblock_quant_thr_uncached(hbd: i32, qidx: i32) -> u32 {
     let qmax = 255 + 48 * hbd;
     ((dq_lookup(iclip(qidx, 0, qmax)) + 4) >> (3 + 6)) as u32
 }
 
-pub fn deblock_side_thr(hbd: i32, qidx: i32) -> u32 {
+#[inline(always)]
+fn deblock_side_thr_uncached(hbd: i32, qidx: i32) -> u32 {
     let bitdepth_min_8 = 2 * hbd;
     let q_ind = iclip(qidx - 24 * bitdepth_min_8, 0, 296 - 1);
     let side_thr = DEBLOCK_SIDE_THRESHOLDS[q_ind as usize] as i32;
     imax(side_thr + (1 << 4 >> bitdepth_min_8), 0) as u32 >> (5 - bitdepth_min_8) as u32
+}
+
+fn init_deblock_thr_cache() -> DeblockThrCache {
+    let mut cache = [[[0u32; 2]; DEBLOCK_THR_CACHE_LEN]; 2];
+    for hbd in 0..2 {
+        for qidx in 0..DEBLOCK_THR_CACHE_LEN {
+            let hbd = hbd as i32;
+            let qidx = qidx as i32;
+            cache[hbd as usize][qidx as usize][0] = deblock_quant_thr_uncached(hbd, qidx);
+            cache[hbd as usize][qidx as usize][1] = deblock_side_thr_uncached(hbd, qidx);
+        }
+    }
+    cache
+}
+
+#[inline(always)]
+pub(crate) fn deblock_thr_cache() -> &'static DeblockThrCache {
+    DEBLOCK_THR_CACHE.get_or_init(init_deblock_thr_cache)
+}
+
+#[inline(always)]
+pub(crate) fn deblock_thr_from_cache(cache: &DeblockThrCache, hbd: i32, qidx: i32) -> [u32; 2] {
+    let hbd = (hbd != 0) as usize;
+    let qidx = iclip(qidx, 0, DEBLOCK_THR_CACHE_QMAX as i32) as usize;
+    cache[hbd][qidx]
 }
 
 pub fn transpose_lossless_mask(
