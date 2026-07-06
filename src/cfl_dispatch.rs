@@ -36,6 +36,16 @@ const CFL_FLT_TYPE_GAUSS: u32 = 2;
 #[cfg(target_arch = "aarch64")]
 const ENABLE_NEON_CFL_RDM_8BPC: bool = true;
 
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn x86_cfl_has_avx512() -> bool {
+    std::is_x86_feature_detected!("avx2")
+        && std::is_x86_feature_detected!("avx512f")
+        && std::is_x86_feature_detected!("avx512bw")
+        && std::is_x86_feature_detected!("avx512vl")
+        && std::is_x86_feature_detected!("avx512vnni")
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct CflLayout {
     pub(crate) yrow0: usize,
@@ -1386,6 +1396,9 @@ fn resolve_cfl_gen_mat_8bpc() -> CflGenMat8Fn {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::cfl_gen_mat_8bpc_avx2;
             }
+            if x86_cfl_has_avx512() {
+                _f = crate::avx::cfl_gen_mat_8bpc_avx512;
+            }
         }
         _f
     })
@@ -1434,6 +1447,9 @@ fn resolve_cfl_alpha_accum_8bpc() -> CflAlphaAccum8Fn {
         {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::cfl_alpha_accum_8bpc_avx2;
+            }
+            if x86_cfl_has_avx512() {
+                _f = crate::avx::cfl_alpha_accum_8bpc_avx512;
             }
         }
         _f
@@ -1484,6 +1500,9 @@ fn resolve_cfl_gen_y_row_8bpc() -> CflGenYRow8Fn {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::cfl_gen_y_row_8bpc_avx2;
             }
+            if x86_cfl_has_avx512() {
+                _f = crate::avx::cfl_gen_y_row_8bpc_avx512;
+            }
         }
         _f
     })
@@ -1532,6 +1551,9 @@ fn resolve_cfl_mhccp_pred_8bpc() -> CflMhccpPred8Fn {
         {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::cfl_mhccp_pred_8bpc_avx2;
+            }
+            if x86_cfl_has_avx512() {
+                _f = crate::avx::cfl_mhccp_pred_8bpc_avx512;
             }
         }
         _f
@@ -1598,6 +1620,9 @@ fn resolve_cfl_apply_420() -> CflApplyFn {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::cfl_apply_420_8bpc_avx2;
             }
+            if x86_cfl_has_avx512() {
+                _f = crate::avx::cfl_apply_420_8bpc_avx512;
+            }
         }
         _f
     })
@@ -1650,6 +1675,9 @@ fn resolve_cfl_apply_422() -> CflApplyFn {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::cfl_apply_422_8bpc_avx2;
             }
+            if x86_cfl_has_avx512() {
+                _f = crate::avx::cfl_apply_422_8bpc_avx512;
+            }
         }
         _f
     })
@@ -1677,6 +1705,9 @@ fn resolve_cfl_apply_444() -> CflApplyFn {
         {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::cfl_apply_444_8bpc_avx2;
+            }
+            if x86_cfl_has_avx512() {
+                _f = crate::avx::cfl_apply_444_8bpc_avx512;
             }
         }
         _f

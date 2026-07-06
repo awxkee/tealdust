@@ -1279,6 +1279,9 @@ pub(crate) enum X86ItxLevel {
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 static X86_ITX_LEVEL: OnceLock<X86ItxLevel> = OnceLock::new();
 
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
+static X86_ITX_AVX512: OnceLock<bool> = OnceLock::new();
+
 #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
 static X86_TX1D_X8_TABLE: OnceLock<&'static Itx1dFnX8Table> = OnceLock::new();
 
@@ -1330,6 +1333,17 @@ pub(crate) fn x86_itx_has_sse41() -> bool {
 #[inline(always)]
 pub(crate) fn x86_itx_has_avx2() -> bool {
     x86_itx_level() == X86ItxLevel::Avx2
+}
+
+#[cfg(all(target_arch = "x86_64", feature = "avx"))]
+#[inline(always)]
+pub(crate) fn x86_itx_has_avx512() -> bool {
+    *X86_ITX_AVX512.get_or_init(|| {
+        std::is_x86_feature_detected!("avx512f")
+            && std::is_x86_feature_detected!("avx512bw")
+            && std::is_x86_feature_detected!("avx512vl")
+            && std::is_x86_feature_detected!("avx512vnni")
+    })
 }
 
 #[inline(always)]

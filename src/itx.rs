@@ -497,6 +497,42 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
         ) {
             #[cfg(all(target_arch = "x86_64", feature = "avx"))]
             {
+                if crate::itx_1d::x86_itx_has_avx512() {
+                    if tx == txsz::TX_16X16 {
+                        unsafe {
+                            crate::avx::idct_dequant_16x16_i16_avx512_fused_8bpc(
+                                _coeff16,
+                                _dst8,
+                                dst_off,
+                                stride,
+                                eob,
+                                tx,
+                                is_rect2,
+                                shift0,
+                                row_clip_min,
+                                row_clip_max,
+                                shift1,
+                            )
+                        };
+                    } else {
+                        unsafe {
+                            crate::avx::idct_dequant_32x32_i16_avx512_fused_8bpc(
+                                _coeff16,
+                                _dst8,
+                                dst_off,
+                                stride,
+                                eob,
+                                tx,
+                                is_rect2,
+                                shift0,
+                                row_clip_min,
+                                row_clip_max,
+                                shift1,
+                            )
+                        };
+                    }
+                    return;
+                }
                 if crate::itx_1d::x86_itx_has_avx2() {
                     if tx == txsz::TX_16X16 {
                         unsafe {
@@ -589,6 +625,30 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 C::try_as_i16_slice_mut(coeff),
                 <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst),
             ) {
+                if crate::itx_1d::x86_itx_has_avx512() {
+                    let handled = unsafe {
+                        crate::avx::itx_dequant_i16_avx512_fused_8bpc(
+                            coeff16,
+                            dst8,
+                            dst_off,
+                            stride,
+                            w,
+                            h,
+                            eob,
+                            tx,
+                            is_rect2,
+                            shift0,
+                            row_clip_min,
+                            row_clip_max,
+                            shift1,
+                            first_kind,
+                            second_kind,
+                        )
+                    };
+                    if handled {
+                        return;
+                    }
+                }
                 if crate::itx_1d::x86_itx_has_avx2() {
                     let handled = unsafe {
                         crate::avx::itx_dequant_i16_avx2_fused_8bpc(

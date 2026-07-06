@@ -31,6 +31,7 @@ mod ccso_hd;
 mod cdef;
 mod cdef_hd;
 mod cfl;
+mod cfl512;
 mod cfl_hd;
 mod deblocking;
 mod filmgrain;
@@ -39,6 +40,7 @@ mod filter_hd;
 mod ipred;
 mod ipred_hd;
 mod itx;
+mod itx512;
 mod looprestoration;
 mod looprestoration_hd;
 mod mc;
@@ -46,8 +48,10 @@ mod mc_hbd;
 mod pal;
 mod refmvs;
 mod stx;
+mod stx512;
 
 pub(crate) use itx::*;
+pub(crate) use itx512::*;
 
 pub(crate) use ccso::{ccso_add_8bpc_avx2, ccso_prep_lut_8bpc_avx2};
 pub(crate) use ccso_hd::{ccso_add_hbd_avx2, ccso_prep_lut_hbd_avx2};
@@ -69,6 +73,11 @@ pub(crate) use cfl::{
 pub(crate) use cfl_hd::{
     cfl_alpha_accum_hbd_avx2, cfl_apply_420_hbd_avx2, cfl_apply_422_hbd_avx2,
     cfl_apply_444_hbd_avx2, cfl_gen_mat_hbd_avx2, cfl_gen_y_row_hbd_avx2, cfl_mhccp_pred_hbd_avx2,
+};
+pub(crate) use cfl512::{
+    cfl_alpha_accum_8bpc_avx512, cfl_apply_420_8bpc_avx512, cfl_apply_422_8bpc_avx512,
+    cfl_apply_444_8bpc_avx512, cfl_gen_mat_8bpc_avx512, cfl_gen_y_row_8bpc_avx512,
+    cfl_mhccp_pred_8bpc_avx512,
 };
 pub(crate) use deblocking::{
     deblock_apply_8bpc_avx2, deblock_apply_hbd_avx2, deblock_h_sb64uv_8bpc_avx2,
@@ -105,3 +114,6 @@ pub(crate) use mc_hbd::*;
 pub(crate) use pal::{pal_pred_8bpc_avx2, pal_pred_hbd_avx2};
 pub(crate) use refmvs::{splat_mv_avx2, splat_warpmv_avx2};
 pub(crate) use stx::{stxfm4_8bpc_avx2, stxfm4_hbd_avx2, stxfm8_8bpc_avx2, stxfm8_hbd_avx2};
+pub(crate) use stx512::{
+    stxfm4_8bpc_avx512, stxfm4_hbd_avx512, stxfm8_8bpc_avx512, stxfm8_hbd_avx512,
+};

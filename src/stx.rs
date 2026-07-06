@@ -136,6 +136,13 @@ fn resolve_stxfm4_8bpc() -> Stx4Fn8bpc {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::stxfm4_8bpc_avx2 as Stx4Fn8bpc;
             }
+            if std::is_x86_feature_detected!("avx512f")
+                && std::is_x86_feature_detected!("avx512bw")
+                && std::is_x86_feature_detected!("avx512vl")
+                && std::is_x86_feature_detected!("avx512vnni")
+            {
+                _f = crate::avx::stxfm4_8bpc_avx512 as Stx4Fn8bpc;
+            }
         }
         _f
     })
@@ -153,6 +160,13 @@ fn resolve_stxfm8_8bpc() -> Stx8Fn8bpc {
         {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::stxfm8_8bpc_avx2 as Stx8Fn8bpc;
+            }
+            if std::is_x86_feature_detected!("avx512f")
+                && std::is_x86_feature_detected!("avx512bw")
+                && std::is_x86_feature_detected!("avx512vl")
+                && std::is_x86_feature_detected!("avx512vnni")
+            {
+                _f = crate::avx::stxfm8_8bpc_avx512 as Stx8Fn8bpc;
             }
         }
         _f
@@ -172,6 +186,10 @@ fn resolve_stxfm4_hbd() -> Stx4FnHbd {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::stxfm4_hbd_avx2 as Stx4FnHbd;
             }
+            if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw")
+            {
+                _f = crate::avx::stxfm4_hbd_avx512 as Stx4FnHbd;
+            }
         }
         _f
     })
@@ -189,6 +207,10 @@ fn resolve_stxfm8_hbd() -> Stx8FnHbd {
         {
             if std::is_x86_feature_detected!("avx2") {
                 _f = crate::avx::stxfm8_hbd_avx2 as Stx8FnHbd;
+            }
+            if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw")
+            {
+                _f = crate::avx::stxfm8_hbd_avx512 as Stx8FnHbd;
             }
         }
         _f
