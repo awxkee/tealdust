@@ -159,9 +159,32 @@ pub(crate) fn ensure_filter_lines(
         return Ok(());
     }
 
-    fn ensure_plane(v: &mut Vec<u8>, len: usize) -> Result<(), ()> {
-        // Grow-only: shrinking then regrowing re-zeroes the whole line each
-        // time the requested height alternates; a longer buffer is harmless.
+    fn ensure_cdef_plane(v: &mut Vec<u8>, len: usize) -> Result<(), ()> {
+        // CDEF seam buffers are pure write-before-read scratch:
+        // - cdef_line[ru] is populated by the SAVE pass with unit ru's bottom seam;
+        // - cdef_top[ru + 1] is populated by the SAVE pass before FILTER may read it;
+        // - missing frame edges are guarded by the edge flags and cdef_padding() does
+        //   not inspect the corresponding slice.
+        //
+        // Therefore fresh growth does not need a frame-wide memset.
+        if len > v.len() {
+            v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+            #[cfg(debug_assertions)]
+            {
+                v.resize(len, 0);
+            }
+            #[cfg(not(debug_assertions))]
+            unsafe {
+                v.set_len(len);
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_lr_db_plane(v: &mut Vec<u8>, len: usize) -> Result<(), ()> {
+        // Do not make lr_db_line uninitialized here. backup_db() still has a
+        // top-carry copy_within() path before it writes the new stripe payload,
+        // and LR may consume partially-used backup rows at frame/root edges.
         if len > v.len() {
             v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
             v.resize(len, 0);
@@ -169,19 +192,36 @@ pub(crate) fn ensure_filter_lines(
         Ok(())
     }
 
-    fn ensure_slot(
+    fn ensure_cdef_slot(
         slot: &mut [Vec<u8>; 3],
         y_len: usize,
         uv_len: usize,
         mono: bool,
     ) -> Result<(), ()> {
-        ensure_plane(&mut slot[0], y_len)?;
+        ensure_cdef_plane(&mut slot[0], y_len)?;
         if mono {
             slot[1].clear();
             slot[2].clear();
         } else {
-            ensure_plane(&mut slot[1], uv_len)?;
-            ensure_plane(&mut slot[2], uv_len)?;
+            ensure_cdef_plane(&mut slot[1], uv_len)?;
+            ensure_cdef_plane(&mut slot[2], uv_len)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_lr_db_slot(
+        slot: &mut [Vec<u8>; 3],
+        y_len: usize,
+        uv_len: usize,
+        mono: bool,
+    ) -> Result<(), ()> {
+        ensure_lr_db_plane(&mut slot[0], y_len)?;
+        if mono {
+            slot[1].clear();
+            slot[2].clear();
+        } else {
+            ensure_lr_db_plane(&mut slot[1], uv_len)?;
+            ensure_lr_db_plane(&mut slot[2], uv_len)?;
         }
         Ok(())
     }
@@ -206,13 +246,13 @@ pub(crate) fn ensure_filter_lines(
     lr_db_line.resize_with(n_roots, || [Vec::new(), Vec::new(), Vec::new()]);
 
     for slot in cdef_line.iter_mut() {
-        ensure_slot(slot, need_y, need_uv, mono)?;
+        ensure_cdef_slot(slot, need_y, need_uv, mono)?;
     }
     for slot in cdef_top.iter_mut() {
-        ensure_slot(slot, need_y, need_uv, mono)?;
+        ensure_cdef_slot(slot, need_y, need_uv, mono)?;
     }
     for slot in lr_db_line.iter_mut() {
-        ensure_slot(slot, lr_y, lr_uv, mono)?;
+        ensure_lr_db_slot(slot, lr_y, lr_uv, mono)?;
     }
     Ok(())
 }
@@ -284,9 +324,33 @@ pub(crate) fn ensure_filter_lines_hbd(
         return Ok(());
     }
 
-    fn ensure_plane(v: &mut Vec<u16>, len: usize) -> Result<(), ()> {
-        // Grow-only: shrinking then regrowing re-zeroes the whole line each
-        // time the requested height alternates; a longer buffer is harmless.
+    fn ensure_cdef_plane(v: &mut Vec<u16>, len: usize) -> Result<(), ()> {
+        // CDEF seam buffers are pure write-before-read scratch:
+        // - cdef_line[ru] is populated by the SAVE pass with unit ru's bottom seam;
+        // - cdef_top[ru + 1] is populated by the SAVE pass before FILTER may read it;
+        // - missing frame edges are guarded by the edge flags and cdef_padding() does
+        //   not inspect the corresponding slice.
+        //
+        // Therefore fresh growth does not need a frame-wide memset. Keep debug builds
+        // deterministic; in release, only extend the logical length after reserving.
+        if len > v.len() {
+            v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+            #[cfg(debug_assertions)]
+            {
+                v.resize(len, 0);
+            }
+            #[cfg(not(debug_assertions))]
+            unsafe {
+                v.set_len(len);
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_lr_db_plane(v: &mut Vec<u16>, len: usize) -> Result<(), ()> {
+        // Do not make lr_db_line uninitialized here. backup_db_hbd() still has a
+        // top-carry copy_within() path before it writes the new stripe payload,
+        // and LR may consume partially-used backup rows at frame/root edges.
         if len > v.len() {
             v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
             v.resize(len, 0);
@@ -294,19 +358,36 @@ pub(crate) fn ensure_filter_lines_hbd(
         Ok(())
     }
 
-    fn ensure_slot(
+    fn ensure_cdef_slot(
         slot: &mut [Vec<u16>; 3],
         y_len: usize,
         uv_len: usize,
         mono: bool,
     ) -> Result<(), ()> {
-        ensure_plane(&mut slot[0], y_len)?;
+        ensure_cdef_plane(&mut slot[0], y_len)?;
         if mono {
             slot[1].clear();
             slot[2].clear();
         } else {
-            ensure_plane(&mut slot[1], uv_len)?;
-            ensure_plane(&mut slot[2], uv_len)?;
+            ensure_cdef_plane(&mut slot[1], uv_len)?;
+            ensure_cdef_plane(&mut slot[2], uv_len)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_lr_db_slot(
+        slot: &mut [Vec<u16>; 3],
+        y_len: usize,
+        uv_len: usize,
+        mono: bool,
+    ) -> Result<(), ()> {
+        ensure_lr_db_plane(&mut slot[0], y_len)?;
+        if mono {
+            slot[1].clear();
+            slot[2].clear();
+        } else {
+            ensure_lr_db_plane(&mut slot[1], uv_len)?;
+            ensure_lr_db_plane(&mut slot[2], uv_len)?;
         }
         Ok(())
     }
@@ -331,13 +412,13 @@ pub(crate) fn ensure_filter_lines_hbd(
     lr_db_line.resize_with(n_roots, || [Vec::new(), Vec::new(), Vec::new()]);
 
     for slot in cdef_line.iter_mut() {
-        ensure_slot(slot, need_y, need_uv, mono)?;
+        ensure_cdef_slot(slot, need_y, need_uv, mono)?;
     }
     for slot in cdef_top.iter_mut() {
-        ensure_slot(slot, need_y, need_uv, mono)?;
+        ensure_cdef_slot(slot, need_y, need_uv, mono)?;
     }
     for slot in lr_db_line.iter_mut() {
-        ensure_slot(slot, lr_y, lr_uv, mono)?;
+        ensure_lr_db_slot(slot, lr_y, lr_uv, mono)?;
     }
     Ok(())
 }
