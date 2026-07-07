@@ -148,17 +148,17 @@ fn sra_i16x16(v: __m256i, shift: i32) -> __m256i {
 
 #[inline(always)]
 fn load_u8x32_fixed(a: &[u8; 32]) -> __m256i {
-    unsafe { _mm256_loadu_si256(a.as_ptr() as *const __m256i) }
+    unsafe { _mm256_loadu_si256(a.as_ptr().cast()) }
 }
 
 #[inline(always)]
 fn store_u8x32_fixed(a: &mut [u8; 32], v: __m256i) {
-    unsafe { _mm256_storeu_si256(a.as_mut_ptr() as *mut __m256i, v) };
+    unsafe { _mm256_storeu_si256(a.as_mut_ptr().cast(), v) };
 }
 
 #[inline(always)]
 fn load_u8x16_i16_avx2(a: &[u8; 16]) -> __m256i {
-    unsafe { _mm256_cvtepu8_epi16(_mm_loadu_si128(a.as_ptr() as *const __m128i)) }
+    unsafe { _mm256_cvtepu8_epi16(_mm_loadu_si128(a.as_ptr().cast())) }
 }
 
 #[inline]
@@ -1115,7 +1115,7 @@ use crate::levels::ANGLE_IBP_FLAG;
 
 #[inline(always)]
 fn load_u8x16_fixed(a: &[u8; 16]) -> __m128i {
-    unsafe { _mm_loadu_si128(a.as_ptr() as *const __m128i) }
+    unsafe { _mm_loadu_si128(a.as_ptr().cast()) }
 }
 
 #[inline(always)]
@@ -1130,12 +1130,9 @@ fn store_u8x8_fixed(a: &mut [u8; 8], v: __m128i) {
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn reduce_i64x4(v: __m256i) -> i64 {
-    let lo = _mm256_castsi256_si128(v);
-    let hi = _mm256_extracti128_si256::<1>(v);
-    let sum2 = _mm_add_epi64(lo, hi);
-    let hi64 = _mm_unpackhi_epi64(sum2, sum2);
-    let sum1 = _mm_add_epi64(sum2, hi64);
+fn reduce_i64x2(v: __m128i) -> i64 {
+    let hi64 = _mm_unpackhi_epi64(v, v);
+    let sum1 = _mm_add_epi64(v, hi64);
     _mm_cvtsi128_si64(sum1)
 }
 
@@ -1143,14 +1140,41 @@ fn reduce_i64x4(v: __m256i) -> i64 {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn sum_u8_avx2(s: &[u8]) -> u32 {
-    let zero = _mm256_setzero_si256();
-    let mut acc = zero;
-    let (chunks, rem) = s.as_chunks::<32>();
-    for c in chunks.iter() {
-        // SAD against zero gives four u64 partial sums for 32 bytes.
-        acc = _mm256_add_epi64(acc, _mm256_sad_epu8(load_u8x32_fixed(c), zero));
+    let zero256 = _mm256_setzero_si256();
+    let mut acc0 = zero256;
+    let mut acc1 = zero256;
+
+    let (chunks64, rem) = s.as_chunks::<64>();
+    for c in chunks64.iter() {
+        // SAD against zero gives four u64 partial sums for each 32 bytes.
+        acc0 = _mm256_add_epi64(
+            acc0,
+            _mm256_sad_epu8(load_u8x32_fixed((&c[..16]).try_into().unwrap()), zero256),
+        );
+        acc1 = _mm256_add_epi64(
+            acc1,
+            _mm256_sad_epu8(load_u8x32_fixed((&c[16..32]).try_into().unwrap()), zero256),
+        );
     }
-    let mut total = reduce_i64x4(acc) as u32;
+
+    let (chunks32, rem) = rem.as_chunks::<32>();
+    for c in chunks32.iter() {
+        acc0 = _mm256_add_epi64(acc0, _mm256_sad_epu8(load_u8x32_fixed(c), zero256));
+    }
+
+    let sum256 = _mm256_add_epi64(acc0, acc1);
+    let mut total_128 = _mm_add_epi64(
+        _mm256_castsi256_si128(sum256),
+        _mm256_extracti128_si256::<1>(sum256),
+    );
+
+    let zero128 = _mm_setzero_si128();
+    let (chunks16, rem) = rem.as_chunks::<16>();
+    for c in chunks16.iter() {
+        let sad = _mm_sad_epu8(load_u8x16_fixed(c), zero128);
+        total_128 = _mm_add_epi64(total_128, sad);
+    }
+    let mut total = reduce_i64x2(total_128) as u32;
     for &b in rem {
         total += b as u32;
     }
@@ -1248,7 +1272,7 @@ pub(crate) fn ipred_dc_8bpc_avx2(
 
 #[inline(always)]
 fn load_u8x8_i16_fixed(a: &[u8; 8]) -> __m128i {
-    unsafe { _mm_cvtepu8_epi16(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
+    unsafe { _mm_cvtepu8_epi16(_mm_loadl_epi64(a.as_ptr().cast())) }
 }
 
 #[inline(always)]
@@ -1419,12 +1443,12 @@ pub(crate) fn ipred_paeth_8bpc_avx2(
 /// Load 8 bytes and zero-extend to one i32x8 AVX2 lane.
 #[inline(always)]
 fn load8_u8_i32_avx2(a: &[u8; 8]) -> __m256i {
-    unsafe { _mm256_cvtepu8_epi32(_mm_loadl_epi64(a.as_ptr() as *const __m128i)) }
+    unsafe { _mm256_cvtepu8_epi32(_mm_loadl_epi64(a.as_ptr().cast())) }
 }
 
 #[inline(always)]
 fn load8_u8_i32_rev_avx2(a: &[u8; 8]) -> __m256i {
-    let v = unsafe { _mm_loadl_epi64(a.as_ptr() as *const __m128i) };
+    let v = unsafe { _mm_loadl_epi64(a.as_ptr().cast()) };
     let mask = unsafe { _mm_setr_epi8(7, 6, 5, 4, 3, 2, 1, 0, -1, -1, -1, -1, -1, -1, -1, -1) };
     unsafe { _mm256_cvtepu8_epi32(_mm_shuffle_epi8(v, mask)) }
 }
@@ -1516,7 +1540,7 @@ fn z1_luma_row_avx2(
     let (c16, r16) = body.as_chunks_mut::<16>();
     for (ci, d) in c16.iter_mut().enumerate() {
         let bi = base_const + ci * 16;
-        let va = unsafe { _mm_loadu_si128(filt[bi - 1..].as_ptr() as *const __m128i) };
+        let va = unsafe { _mm_loadu_si128(filt[bi - 1..].as_ptr().cast()) };
         let lo8 = dr_filter8_avx2(
             av,
             bv,
@@ -1531,7 +1555,7 @@ fn z1_luma_row_avx2(
             widen8_at_avx2::<3>(va),
         );
         // group B taps bi+7..bi+10 → byte-offsets 5..8 of a load at bi+2.
-        let vb = unsafe { _mm_loadu_si128(filt[bi + 2..].as_ptr() as *const __m128i) };
+        let vb = unsafe { _mm_loadu_si128(filt[bi + 2..].as_ptr().cast()) };
         let hi8 = dr_filter8_avx2(
             av,
             bv,
@@ -1855,7 +1879,7 @@ fn z3_luma_col_avx2(
     for (ci, d) in c16.iter_mut().enumerate() {
         let bij = lob - (ci * 16) as i32;
         let ra = _mm_shuffle_epi8(
-            unsafe { _mm_loadu_si128(filt[(bij - 14) as usize..].as_ptr() as *const __m128i) },
+            unsafe { _mm_loadu_si128(filt[(bij - 14) as usize..].as_ptr().cast()) },
             rev16,
         );
         let lo8 = dr_filter8_avx2(
@@ -1872,7 +1896,7 @@ fn z3_luma_col_avx2(
             widen8_at_avx2::<3>(ra),
         );
         let rb = _mm_shuffle_epi8(
-            unsafe { _mm_loadu_si128(filt[(bij - 17) as usize..].as_ptr() as *const __m128i) },
+            unsafe { _mm_loadu_si128(filt[(bij - 17) as usize..].as_ptr().cast()) },
             rev16,
         );
         let hi8 = dr_filter8_avx2(
@@ -1950,11 +1974,11 @@ fn z3_chroma_col_avx2(
     for (ci, d) in c16.iter_mut().enumerate() {
         let bij = lob - (ci * 16) as i32;
         let a = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(
-            unsafe { _mm_loadu_si128(filt[(bij - 15) as usize..].as_ptr() as *const __m128i) },
+            unsafe { _mm_loadu_si128(filt[(bij - 15) as usize..].as_ptr().cast()) },
             rev16,
         ));
         let b = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(
-            unsafe { _mm_loadu_si128(filt[(bij - 16) as usize..].as_ptr() as *const __m128i) },
+            unsafe { _mm_loadu_si128(filt[(bij - 16) as usize..].as_ptr().cast()) },
             rev16,
         ));
         let v = _mm256_srli_epi16::<5>(_mm256_add_epi16(
@@ -2675,7 +2699,7 @@ pub(crate) fn ipred_z2_8bpc_avx2(
 #[inline]
 #[target_feature(enable = "avx2")]
 fn dip_dot_8bpc_avx2(inp8: __m256i, inp: &[i32; 11], weights: &[u16; 11]) -> i32 {
-    let w8 = _mm256_cvtepu16_epi32(unsafe { _mm_loadu_si128(weights.as_ptr() as *const __m128i) });
+    let w8 = _mm256_cvtepu16_epi32(unsafe { _mm_loadu_si128(weights.as_ptr().cast()) });
     let mut s = _mm256_hsum_epi32(_mm256_mullo_epi32(inp8, w8)) as i32;
     s += weights[8] as i32 * inp[8];
     s += weights[9] as i32 * inp[9];

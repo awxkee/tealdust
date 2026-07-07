@@ -209,10 +209,10 @@ const fn shuffle(z: u32, y: u32, x: u32, w: u32) -> i32 {
 #[inline]
 #[target_feature(enable = "avx2")]
 pub(crate) fn _mm_hsumv_epi32(v: __m128i) -> __m128i {
-    let mut hi = _mm_shuffle_epi32(v, shuffle(0, 0, 3, 2));
+    let mut hi = _mm_shuffle_epi32::<{ shuffle(0, 0, 3, 2) }>(v);
     let mut v = _mm_add_epi32(v, hi);
 
-    hi = _mm_shuffle_epi32(v, shuffle(0, 0, 0, 1));
+    hi = _mm_shuffle_epi32::<{ shuffle(0, 0, 0, 1) }>(v);
     v = _mm_add_epi32(v, hi);
     v
 }

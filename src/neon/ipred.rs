@@ -1079,10 +1079,32 @@ fn splat_h_rows4_u8_neon(dst: &mut [u8], stride: usize, off: usize, w: usize, v:
 #[target_feature(enable = "neon")]
 fn sum_u8_neon(s: &[u8]) -> u32 {
     let mut acc = vdupq_n_u32(0);
-    let (chunks, rem) = s.as_chunks::<16>();
-    for c in chunks.iter() {
+
+    let (chunks64, rem64) = s.as_chunks::<64>();
+    for c in chunks64.iter() {
+        acc = vpadalq_u16(
+            acc,
+            vpaddlq_u8(load_u8x16_fixed((&c[..16]).try_into().unwrap())),
+        );
+        acc = vpadalq_u16(
+            acc,
+            vpaddlq_u8(load_u8x16_fixed((&c[16..32]).try_into().unwrap())),
+        );
+        acc = vpadalq_u16(
+            acc,
+            vpaddlq_u8(load_u8x16_fixed((&c[32..48]).try_into().unwrap())),
+        );
+        acc = vpadalq_u16(
+            acc,
+            vpaddlq_u8(load_u8x16_fixed((&c[48..64]).try_into().unwrap())),
+        );
+    }
+
+    let (chunks16, rem) = rem64.as_chunks::<16>();
+    for c in chunks16.iter() {
         acc = vpadalq_u16(acc, vpaddlq_u8(load_u8x16_fixed(c)));
     }
+
     let mut total = vaddvq_u32(acc);
     for &b in rem {
         total += b as u32;
