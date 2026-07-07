@@ -66,7 +66,9 @@ fn splat_row_u16_avx2(row: &mut [u16], v: u16) {
     for c in chunks8.iter_mut() {
         store_u16x8(c, vv8);
     }
-    rem.fill(v);
+    for d in rem.iter_mut() {
+        *d = v;
+    }
 }
 
 #[inline]
@@ -122,10 +124,18 @@ fn splat_h_rows4_u16_avx2(dst: &mut [u16], stride: usize, off: usize, w: usize, 
         store_u16x8(r3, v3_8);
     }
 
-    r0_rem.fill(v[0]);
-    r1_rem.fill(v[1]);
-    r2_rem.fill(v[2]);
-    r3_rem.fill(v[3]);
+    for d in r0_rem.iter_mut() {
+        *d = v[0];
+    }
+    for d in r1_rem.iter_mut() {
+        *d = v[1];
+    }
+    for d in r2_rem.iter_mut() {
+        *d = v[2];
+    }
+    for d in r3_rem.iter_mut() {
+        *d = v[3];
+    }
 }
 
 #[inline]
@@ -252,7 +262,9 @@ fn splat_fill_avx2(dst: &mut [u16], stride: usize, off: usize, w: usize, h: usiz
             for c in chunks.iter_mut() {
                 store_u16x16(c, v);
             }
-            rem.fill(dc);
+            for d in rem.iter_mut() {
+                *d = dc;
+            }
             p += stride;
         }
         rows -= 4;
@@ -262,7 +274,9 @@ fn splat_fill_avx2(dst: &mut [u16], stride: usize, off: usize, w: usize, h: usiz
         for c in chunks.iter_mut() {
             store_u16x16(c, v);
         }
-        rem.fill(dc);
+        for d in rem.iter_mut() {
+            *d = dc;
+        }
         p += stride;
     }
 }

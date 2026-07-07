@@ -508,7 +508,9 @@ fn splat_fill_sse41(dst: &mut [u8], stride: usize, off: usize, w: usize, h: usiz
         for c in chunks.iter_mut() {
             store_u8x16_fixed(c, v);
         }
-        rem.fill(dc);
+        for d in rem.iter_mut() {
+            *d = dc;
+        }
         p += stride;
     }
 }

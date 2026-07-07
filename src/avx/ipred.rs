@@ -268,10 +268,18 @@ fn splat_h_rows4_u8_avx2(dst: &mut [u8], stride: usize, off: usize, w: usize, v:
         store_u8x8_fixed(r3, v3_16);
     }
 
-    r0_rem.fill(v[0]);
-    r1_rem.fill(v[1]);
-    r2_rem.fill(v[2]);
-    r3_rem.fill(v[3]);
+    for d in r0_rem.iter_mut() {
+        *d = v[0];
+    }
+    for d in r1_rem.iter_mut() {
+        *d = v[1];
+    }
+    for d in r2_rem.iter_mut() {
+        *d = v[2];
+    }
+    for d in r3_rem.iter_mut() {
+        *d = v[3];
+    }
 }
 
 #[target_feature(enable = "avx2")]
