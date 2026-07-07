@@ -31,6 +31,7 @@ use crate::env::BlockContext;
 use crate::headers::{AdaptiveBoolean, FrameHeader, MAX_SEGMENTS, RestorationType};
 use crate::internal::LoopFilterState;
 use crate::intops::imin;
+use crate::lf_mask::{Av2Filter, Av2Restoration};
 
 use crate::msac::MsacContextScalar;
 
@@ -40,6 +41,72 @@ fn try_resize_with_default<T: Default>(v: &mut Vec<T>, len: usize) -> Result<(),
         v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
     }
     v.resize_with(len, Default::default);
+    Ok(())
+}
+
+#[inline]
+fn resize_and_reset_filter_mask(v: &mut Vec<Av2Filter>, len: usize) -> Result<(), ()> {
+    if len < v.len() {
+        v.truncate(len);
+    }
+    if len > v.capacity() {
+        v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+    }
+
+    let old_len = v.len();
+    let ptr = v.as_mut_ptr();
+    unsafe {
+        for i in 0..old_len {
+            Av2Filter::write_reset(ptr.add(i));
+        }
+        for i in old_len..len {
+            Av2Filter::write_reset(ptr.add(i));
+        }
+        v.set_len(len);
+    }
+    Ok(())
+}
+
+#[inline]
+fn resize_and_reset_restoration_mask(v: &mut Vec<Av2Restoration>, len: usize) -> Result<(), ()> {
+    if len < v.len() {
+        v.truncate(len);
+    }
+    if len > v.capacity() {
+        v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+    }
+
+    let old_len = v.len();
+    let ptr = v.as_mut_ptr();
+    unsafe {
+        for i in 0..old_len {
+            Av2Restoration::write_reset(ptr.add(i));
+        }
+        for i in old_len..len {
+            Av2Restoration::write_reset(ptr.add(i));
+        }
+        v.set_len(len);
+    }
+    Ok(())
+}
+
+#[inline]
+fn resize_zero_new_restoration_mask(v: &mut Vec<Av2Restoration>, len: usize) -> Result<(), ()> {
+    if len < v.len() {
+        v.truncate(len);
+    }
+    if len > v.capacity() {
+        v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+    }
+
+    let old_len = v.len();
+    let ptr = v.as_mut_ptr();
+    unsafe {
+        for i in old_len..len {
+            Av2Restoration::write_reset(ptr.add(i));
+        }
+        v.set_len(len);
+    }
     Ok(())
 }
 
@@ -82,19 +149,21 @@ pub(crate) fn decode_frame_init(
 
     let num_sb256 = (sb256w * sb256h) as usize;
     lf.restore_planes = compute_restore_planes(frame_hdr);
-    try_resize_with_default(&mut lf.mask, num_sb256)?;
-    for m in lf.mask.iter_mut() {
-        *m = Default::default();
-    }
-    try_resize_with_default(&mut lf.lr_mask, num_sb256)?;
-    // The LR mask (~num_sb256 * 24 KB) is consumed only by loop restoration; when
-    // no plane is restored it is never read, so the per-frame re-zero is dead work
-    // and is skipped. `resize_with` already zero-fills any newly grown elements,
-    // and any later LR-enabled frame re-zeros the buffer itself before use.
+
+    // These masks are always reset before decode reads them.  Avoid
+    // `resize_with(Default::default)` here: on grow it first builds large default
+    // Av2Filter/Av2Restoration values and then the old code immediately wrote a
+    // second Default over every element.  The helpers write directly into spare
+    // capacity with the mask reset bit-pattern, then expose the length.
+    resize_and_reset_filter_mask(&mut lf.mask, num_sb256)?;
+    // The LR mask (~num_sb256 * 24 KiB) is consumed only by loop restoration.  If
+    // no plane is restored, existing elements may stay stale because no later
+    // code reads them, but newly exposed Vec slots must still be initialized
+    // before the Vec length is increased.  LR-enabled frames reset every slot.
     if lf.restore_planes != 0 {
-        for m in lf.lr_mask.iter_mut() {
-            *m = Default::default();
-        }
+        resize_and_reset_restoration_mask(&mut lf.lr_mask, num_sb256)?;
+    } else {
+        resize_zero_new_restoration_mask(&mut lf.lr_mask, num_sb256)?;
     }
 
     init_wiener(frame_hdr, lf);

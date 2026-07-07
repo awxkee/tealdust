@@ -27,6 +27,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use core::mem::MaybeUninit;
+
 #[derive(Clone, Default)]
 pub struct Av2RestorationUnit {
     pub restoration_type: u8,
@@ -48,20 +50,25 @@ pub struct Av2Filter {
     pub lossless_mask_uv: [[u16; 4]; 64],
 }
 
+impl Av2Filter {
+    #[inline(always)]
+    pub(crate) unsafe fn write_reset(dst: *mut Self) {
+        // SAFETY: every field of Av2Filter is an integer array, so all-zero is a
+        // valid bit pattern for the whole object.  After the zero fill the object
+        // is fully initialized; then patch the only non-zero default field.
+        unsafe {
+            core::ptr::write_bytes(dst, 0, 1);
+            core::ptr::addr_of_mut!((*dst).cdef_idx).write([-1; 16]);
+        }
+    }
+}
+
 impl Default for Av2Filter {
     fn default() -> Self {
-        Self {
-            filter_y: [[[[0; 4]; 5]; 64]; 2],
-            filter_uv: [[[[0; 4]; 5]; 64]; 2],
-            qidx: [0; 16],
-            gdf: [0; 16],
-            cdef_idx: [-1; 16],
-            ccso: [0; 3],
-            ccso_sb: [0; 48],
-            noskip_mask: [[0; 4]; 32],
-            lr_noskip_mask: [[0; 4]; 64],
-            lossless_mask_y: [[0; 4]; 64],
-            lossless_mask_uv: [[0; 4]; 64],
+        let mut out = MaybeUninit::<Self>::uninit();
+        unsafe {
+            Self::write_reset(out.as_mut_ptr());
+            out.assume_init()
         }
     }
 }
@@ -71,10 +78,21 @@ pub struct Av2Restoration {
     pub lr: [[Av2RestorationUnit; 16]; 3],
 }
 
+impl Av2Restoration {
+    #[inline(always)]
+    pub(crate) unsafe fn write_reset(dst: *mut Self) {
+        // SAFETY: Av2Restoration is integer-only storage and its default state is
+        // all-zero, so a byte zero-fill creates a valid initialized value.
+        unsafe { core::ptr::write_bytes(dst, 0, 1) };
+    }
+}
+
 impl Default for Av2Restoration {
     fn default() -> Self {
-        Self {
-            lr: std::array::from_fn(|_| std::array::from_fn(|_| Av2RestorationUnit::default())),
+        let mut out = MaybeUninit::<Self>::uninit();
+        unsafe {
+            Self::write_reset(out.as_mut_ptr());
+            out.assume_init()
         }
     }
 }
