@@ -32,6 +32,16 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
+#[inline(always)]
+unsafe fn load_deblock_unchecked<T: Copy>(buf: &[T], idx: isize) -> T {
+    unsafe { *buf.get_unchecked(idx as usize) }
+}
+
+#[inline(always)]
+unsafe fn store_deblock_unchecked<T>(buf: &mut [T], idx: isize, value: T) {
+    unsafe { *buf.get_unchecked_mut(idx as usize) = value };
+}
+
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
@@ -44,12 +54,14 @@ fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
     } else {
         // Four rows of the same horizontal edge.  This is still a gather, but it
         // stays register-only instead of using a temporary stack array.
-        _mm_setr_epi32(
-            dst[base as usize] as i32,
-            dst[(base + stride_line) as usize] as i32,
-            dst[(base + 2 * stride_line) as usize] as i32,
-            dst[(base + 3 * stride_line) as usize] as i32,
-        )
+        unsafe {
+            _mm_setr_epi32(
+                load_deblock_unchecked(dst, base) as i32,
+                load_deblock_unchecked(dst, base + stride_line) as i32,
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i32,
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i32,
+            )
+        }
     }
 }
 
@@ -65,10 +77,12 @@ fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: __m128i) {
             )
         }
     } else {
-        dst[base as usize] = _mm_cvtsi128_si32(v) as u8;
-        dst[(base + stride_line) as usize] = _mm_extract_epi32::<1>(v) as u8;
-        dst[(base + 2 * stride_line) as usize] = _mm_extract_epi32::<2>(v) as u8;
-        dst[(base + 3 * stride_line) as usize] = _mm_extract_epi32::<3>(v) as u8;
+        unsafe {
+            store_deblock_unchecked(dst, base, _mm_cvtsi128_si32(v) as u8);
+            store_deblock_unchecked(dst, base + stride_line, _mm_extract_epi32::<1>(v) as u8);
+            store_deblock_unchecked(dst, base + 2 * stride_line, _mm_extract_epi32::<2>(v) as u8);
+            store_deblock_unchecked(dst, base + 3 * stride_line, _mm_extract_epi32::<3>(v) as u8);
+        }
     }
 }
 
@@ -150,12 +164,14 @@ fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> __m128i {
             ))
         }
     } else {
-        _mm_setr_epi32(
-            dst[base as usize] as i32,
-            dst[(base + stride_line) as usize] as i32,
-            dst[(base + 2 * stride_line) as usize] as i32,
-            dst[(base + 3 * stride_line) as usize] as i32,
-        )
+        unsafe {
+            _mm_setr_epi32(
+                load_deblock_unchecked(dst, base) as i32,
+                load_deblock_unchecked(dst, base + stride_line) as i32,
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i32,
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i32,
+            )
+        }
     }
 }
 
@@ -169,10 +185,20 @@ fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: __m128i)
             _mm_storel_epi64(dst.as_mut_ptr().add(base as usize) as *mut __m128i, p16);
         }
     } else {
-        dst[base as usize] = _mm_cvtsi128_si32(v) as u16;
-        dst[(base + stride_line) as usize] = _mm_extract_epi32::<1>(v) as u16;
-        dst[(base + 2 * stride_line) as usize] = _mm_extract_epi32::<2>(v) as u16;
-        dst[(base + 3 * stride_line) as usize] = _mm_extract_epi32::<3>(v) as u16;
+        unsafe {
+            store_deblock_unchecked(dst, base, _mm_cvtsi128_si32(v) as u16);
+            store_deblock_unchecked(dst, base + stride_line, _mm_extract_epi32::<1>(v) as u16);
+            store_deblock_unchecked(
+                dst,
+                base + 2 * stride_line,
+                _mm_extract_epi32::<2>(v) as u16,
+            );
+            store_deblock_unchecked(
+                dst,
+                base + 3 * stride_line,
+                _mm_extract_epi32::<3>(v) as u16,
+            );
+        }
     }
 }
 

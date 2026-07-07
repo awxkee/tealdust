@@ -707,7 +707,7 @@ mod no_update_fastpath_tests {
                 a.decode_bool_bypass();
                 b.decode_bool_bypass();
             }
-            let mut ca = cdf;
+            let ca = cdf;
             let mut cb = cdf;
             let ra = a.decode_symbol_adapt3_no_update_scalar(&ca[..]);
             let rb = msac_simd_ref(&mut b, &mut cb);

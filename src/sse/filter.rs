@@ -791,10 +791,29 @@ pub(crate) fn gdf_gradient_group_sse41(
         acc_hi = _mm_add_epi32(acc_hi, _mm_abs_epi32(t_hi));
     }
     let pair = _mm_hadd_epi32(acc_lo, acc_hi);
-    let mut out = [0i32; 4];
-    store_i32x4(&mut out, pair);
-    for k in 0..ncells {
-        dst[base_cell + k][d] = out[k] as u16;
+    store_gdf_gradient_cells_i32x4(dst, d, base_cell, ncells, pair);
+}
+
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn store_gdf_gradient_cells_i32x4(
+    dst: &mut [[u16; 4]],
+    d: usize,
+    base_cell: usize,
+    ncells: usize,
+    v: __m128i,
+) {
+    if ncells > 0 {
+        dst[base_cell][d] = _mm_cvtsi128_si32(v) as u16;
+    }
+    if ncells > 1 {
+        dst[base_cell + 1][d] = _mm_extract_epi32::<1>(v) as u16;
+    }
+    if ncells > 2 {
+        dst[base_cell + 2][d] = _mm_extract_epi32::<2>(v) as u16;
+    }
+    if ncells > 3 {
+        dst[base_cell + 3][d] = _mm_extract_epi32::<3>(v) as u16;
     }
 }
 

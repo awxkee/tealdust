@@ -288,6 +288,16 @@ fn scatter_stx8_i16(cf: &mut [i16], sums: &[i16; 48], scan_out: &[u8; 64], mappi
 
 #[inline]
 #[target_feature(enable = "neon")]
+fn zero_stx4_scan_tail_i16_neon(sums: int16x8_t, scan_out: *const u8) -> int16x8_t {
+    let idx = unsafe { vmovl_u8(vld1_u8(scan_out)) };
+    let ge4 = vcgeq_u16(idx, vdupq_n_u16(4));
+    let lt8 = vcltq_u16(idx, vdupq_n_u16(8));
+    let mask = vandq_u16(ge4, lt8);
+    vbslq_s16(mask, vdupq_n_s16(0), sums)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
 fn zero_stx8_i16_neon(cf: &mut [i16]) {
     let zero = vdupq_n_s16(0);
     let dst = cf.as_mut_ptr();
@@ -306,11 +316,12 @@ pub(crate) fn stxfm4_8bpc_neon(cf: &mut [i16], kernel: &[i8], eob: usize, scan_o
     debug_assert!(kernel.len() >= 8 * 16);
 
     let (s0, s1) = stx4_sums(kernel, cf, eob);
+    let s0 = zero_stx4_scan_tail_i16_neon(s0, scan_out.as_ptr());
+    let s1 = zero_stx4_scan_tail_i16_neon(s1, unsafe { scan_out.as_ptr().add(8) });
     let mut sums = [0i16; 16];
     store_i16x8(&mut sums[..8], s0);
     store_i16x8(&mut sums[8..16], s1);
 
-    cf[4..8].fill(0);
     scatter_stx4_i16(cf, &sums, scan_out);
 }
 
@@ -523,6 +534,16 @@ fn scatter_stx8_i32(cf: &mut [i32], sums: &[i32; 48], scan_out: &[u8; 64], mappi
 
 #[inline]
 #[target_feature(enable = "neon")]
+fn zero_stx4_scan_tail_i32_neon(sums: int32x4_t, scan_out: *const u8) -> int32x4_t {
+    let idx = unsafe { vmovl_u16(vget_low_u16(vmovl_u8(vld1_u8(scan_out)))) };
+    let ge4 = vcgeq_u32(idx, vdupq_n_u32(4));
+    let lt8 = vcltq_u32(idx, vdupq_n_u32(8));
+    let mask = vandq_u32(ge4, lt8);
+    vbslq_s32(mask, vdupq_n_s32(0), sums)
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
 fn zero_stx8_i32_neon(cf: &mut [i32]) {
     let zero = vdupq_n_s32(0);
     let dst = cf.as_mut_ptr();
@@ -551,13 +572,16 @@ pub(crate) fn stxfm4_hbd_neon(
     debug_assert!(kernel.len() >= 8 * 16);
 
     let (s0, s1, s2, s3) = stx4_sums_hbd(kernel, cf, eob, bitdepth_max);
+    let s0 = zero_stx4_scan_tail_i32_neon(s0, scan_out.as_ptr());
+    let s1 = zero_stx4_scan_tail_i32_neon(s1, unsafe { scan_out.as_ptr().add(4) });
+    let s2 = zero_stx4_scan_tail_i32_neon(s2, unsafe { scan_out.as_ptr().add(8) });
+    let s3 = zero_stx4_scan_tail_i32_neon(s3, unsafe { scan_out.as_ptr().add(12) });
     let mut sums = [0i32; 16];
     store_i32x4(&mut sums[..4], s0);
     store_i32x4(&mut sums[4..8], s1);
     store_i32x4(&mut sums[8..12], s2);
     store_i32x4(&mut sums[12..16], s3);
 
-    cf[4..8].fill(0);
     scatter_stx4_i32(cf, &sums, scan_out);
 }
 

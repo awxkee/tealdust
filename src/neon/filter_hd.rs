@@ -224,7 +224,26 @@ pub(crate) fn dc_add_row_hbd_neon(dst: &mut [u16], dc: i32, n: usize, bitdepth_m
     }
     let dc_v = vdupq_n_s32(dc);
     let max_v = vdupq_n_s32(bitdepth_max);
-    let (d8, r8) = dst[..n].as_chunks_mut::<8>();
+    let (d32, r32) = dst[..n].as_chunks_mut::<32>();
+    for d in d32.iter_mut() {
+        let (d01, d23) = d.split_at_mut(16);
+        let (d0, d1) = d01.split_at_mut(8);
+        let (d2, d3) = d23.split_at_mut(8);
+        let d0: &mut [u16; 8] = d0.try_into().unwrap();
+        let d1: &mut [u16; 8] = d1.try_into().unwrap();
+        let d2: &mut [u16; 8] = d2.try_into().unwrap();
+        let d3: &mut [u16; 8] = d3.try_into().unwrap();
+
+        let (d00, d01) = load_u16x8_i32x2(&*d0);
+        let (d10, d11) = load_u16x8_i32x2(&*d1);
+        let (d20, d21) = load_u16x8_i32x2(&*d2);
+        let (d30, d31) = load_u16x8_i32x2(&*d3);
+        store_i32x8_u16_clip(d0, vaddq_s32(d00, dc_v), vaddq_s32(d01, dc_v), max_v);
+        store_i32x8_u16_clip(d1, vaddq_s32(d10, dc_v), vaddq_s32(d11, dc_v), max_v);
+        store_i32x8_u16_clip(d2, vaddq_s32(d20, dc_v), vaddq_s32(d21, dc_v), max_v);
+        store_i32x8_u16_clip(d3, vaddq_s32(d30, dc_v), vaddq_s32(d31, dc_v), max_v);
+    }
+    let (d8, r8) = r32.as_chunks_mut::<8>();
     for d in d8.iter_mut() {
         let (d0, d1) = load_u16x8_i32x2(&*d);
         store_i32x8_u16_clip(d, vaddq_s32(d0, dc_v), vaddq_s32(d1, dc_v), max_v);
@@ -551,10 +570,29 @@ pub(crate) fn gdf_gradient_group_hbd_neon(
         acc = vaddq_s16(acc, vabsq_s16(t));
     }
     let pair = vpaddq_s16(acc, acc);
-    let mut out = [0i16; 8];
-    unsafe { vst1q_s16(out.as_mut_ptr(), pair) };
-    for k in 0..ncells {
-        dst[base_cell + k][d] = out[k] as u16;
+    store_gdf_gradient_cells_i16x8(dst, d, base_cell, ncells, pair);
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn store_gdf_gradient_cells_i16x8(
+    dst: &mut [[u16; 4]],
+    d: usize,
+    base_cell: usize,
+    ncells: usize,
+    v: int16x8_t,
+) {
+    if ncells > 0 {
+        dst[base_cell][d] = vgetq_lane_s16::<0>(v) as u16;
+    }
+    if ncells > 1 {
+        dst[base_cell + 1][d] = vgetq_lane_s16::<1>(v) as u16;
+    }
+    if ncells > 2 {
+        dst[base_cell + 2][d] = vgetq_lane_s16::<2>(v) as u16;
+    }
+    if ncells > 3 {
+        dst[base_cell + 3][d] = vgetq_lane_s16::<3>(v) as u16;
     }
 }
 
@@ -590,12 +628,16 @@ fn gdf_clip_i32x4(v: int32x4_t, lo: int32x4_t, hi: int32x4_t) -> int32x4_t {
     vminq_s32(vmaxq_s32(v, lo), hi)
 }
 
-#[inline]
-#[target_feature(enable = "neon")]
-fn gdf_store_i32x4(v: int32x4_t) -> [i32; 4] {
-    let mut out = [0i32; 4];
-    unsafe { vst1q_s32(out.as_mut_ptr(), v) };
-    out
+#[inline(always)]
+fn gdf_prep_full_idx(v0: i32, v1: i32, v2: i32, scale: i32) -> usize {
+    let scale2 = scale as usize * 2;
+    let v0 = gdf_prep_apply_sign(v0 * scale);
+    let v1 = gdf_prep_apply_sign(v1 * scale);
+    let v2 = gdf_prep_apply_sign(v2 * scale);
+    let s0 = (v0.clamp(-scale, scale - 1) + scale) as usize;
+    let s1 = (v1.clamp(-scale, scale - 1) + scale) as usize;
+    let s2 = (v2.clamp(-scale, scale - 1) + scale) as usize;
+    ((s0 * scale2) + s1) * scale2 + s2
 }
 
 /// HBD GDF prep inner 2-pixel pair.
@@ -659,20 +701,26 @@ pub(crate) fn gdf_prep_pair_hbd_neon(
         );
     }
 
-    let vals = [
-        gdf_store_i32x4(acc0),
-        gdf_store_i32x4(acc1),
-        gdf_store_i32x4(acc2),
-    ];
-    let mut out = [0i8; 2];
-    for lane in 0..2 {
-        let mut full_idx = 0usize;
-        for idx_vals in &vals {
-            let v = gdf_prep_apply_sign(idx_vals[lane] * scale);
-            let sub_idx = (v.clamp(-scale, scale - 1) + scale) as usize;
-            full_idx = full_idx * (scale as usize * 2) + sub_idx;
-        }
-        out[lane] = gdf_prep_lookup_error(ref_dst_idx, error_lut_base, full_idx);
-    }
-    out
+    [
+        gdf_prep_lookup_error(
+            ref_dst_idx,
+            error_lut_base,
+            gdf_prep_full_idx(
+                vgetq_lane_s32::<0>(acc0),
+                vgetq_lane_s32::<0>(acc1),
+                vgetq_lane_s32::<0>(acc2),
+                scale,
+            ),
+        ),
+        gdf_prep_lookup_error(
+            ref_dst_idx,
+            error_lut_base,
+            gdf_prep_full_idx(
+                vgetq_lane_s32::<1>(acc0),
+                vgetq_lane_s32::<1>(acc1),
+                vgetq_lane_s32::<1>(acc2),
+                scale,
+            ),
+        ),
+    ]
 }

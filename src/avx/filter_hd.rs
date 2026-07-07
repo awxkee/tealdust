@@ -238,7 +238,46 @@ pub(crate) fn dc_add_row_hbd_avx2(dst: &mut [u16], dc: i32, n: usize, bitdepth_m
     }
     let dc_v = _mm256_set1_epi32(dc);
     let max_v = _mm256_set1_epi32(bitdepth_max);
-    let (d16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (d64, r64) = dst[..n].as_chunks_mut::<64>();
+    for d in d64.iter_mut() {
+        let (d01, d23) = d.split_at_mut(32);
+        let (d0, d1) = d01.split_at_mut(16);
+        let (d2, d3) = d23.split_at_mut(16);
+        let d0: &mut [u16; 16] = d0.try_into().unwrap();
+        let d1: &mut [u16; 16] = d1.try_into().unwrap();
+        let d2: &mut [u16; 16] = d2.try_into().unwrap();
+        let d3: &mut [u16; 16] = d3.try_into().unwrap();
+
+        let (d00, d01) = load_u16x16_i32x2(&*d0);
+        let (d10, d11) = load_u16x16_i32x2(&*d1);
+        let (d20, d21) = load_u16x16_i32x2(&*d2);
+        let (d30, d31) = load_u16x16_i32x2(&*d3);
+        store_i32x16_u16_clip(
+            d0,
+            _mm256_add_epi32(d00, dc_v),
+            _mm256_add_epi32(d01, dc_v),
+            max_v,
+        );
+        store_i32x16_u16_clip(
+            d1,
+            _mm256_add_epi32(d10, dc_v),
+            _mm256_add_epi32(d11, dc_v),
+            max_v,
+        );
+        store_i32x16_u16_clip(
+            d2,
+            _mm256_add_epi32(d20, dc_v),
+            _mm256_add_epi32(d21, dc_v),
+            max_v,
+        );
+        store_i32x16_u16_clip(
+            d3,
+            _mm256_add_epi32(d30, dc_v),
+            _mm256_add_epi32(d31, dc_v),
+            max_v,
+        );
+    }
+    let (d16, r16) = r64.as_chunks_mut::<16>();
     for d in d16.iter_mut() {
         let (d0, d1) = load_u16x16_i32x2(&*d);
         store_i32x16_u16_clip(
@@ -588,10 +627,29 @@ pub(crate) fn gdf_gradient_group_hbd_avx2(
         acc = _mm_add_epi16(acc, _mm_abs_epi16(t));
     }
     let pair = _mm_madd_epi16(acc, _mm_set1_epi16(1));
-    let mut out = [0i32; 4];
-    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), pair) };
-    for k in 0..ncells {
-        dst[base_cell + k][d] = out[k] as u16;
+    store_gdf_gradient_cells_i32x4(dst, d, base_cell, ncells, pair);
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_gdf_gradient_cells_i32x4(
+    dst: &mut [[u16; 4]],
+    d: usize,
+    base_cell: usize,
+    ncells: usize,
+    v: __m128i,
+) {
+    if ncells > 0 {
+        dst[base_cell][d] = _mm_cvtsi128_si32(v) as u16;
+    }
+    if ncells > 1 {
+        dst[base_cell + 1][d] = _mm_extract_epi32::<1>(v) as u16;
+    }
+    if ncells > 2 {
+        dst[base_cell + 2][d] = _mm_extract_epi32::<2>(v) as u16;
+    }
+    if ncells > 3 {
+        dst[base_cell + 3][d] = _mm_extract_epi32::<3>(v) as u16;
     }
 }
 
@@ -626,12 +684,16 @@ fn gdf_clip_i32x4(v: __m128i, lo: __m128i, hi: __m128i) -> __m128i {
     _mm_min_epi32(_mm_max_epi32(v, lo), hi)
 }
 
-#[inline]
-#[target_feature(enable = "avx2")]
-fn gdf_store_i32x4(v: __m128i) -> [i32; 4] {
-    let mut out = [0i32; 4];
-    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), v) };
-    out
+#[inline(always)]
+fn gdf_prep_full_idx(v0: i32, v1: i32, v2: i32, scale: i32) -> usize {
+    let scale2 = scale as usize * 2;
+    let v0 = gdf_prep_apply_sign(v0 * scale);
+    let v1 = gdf_prep_apply_sign(v1 * scale);
+    let v2 = gdf_prep_apply_sign(v2 * scale);
+    let s0 = (v0.clamp(-scale, scale - 1) + scale) as usize;
+    let s1 = (v1.clamp(-scale, scale - 1) + scale) as usize;
+    let s2 = (v2.clamp(-scale, scale - 1) + scale) as usize;
+    ((s0 * scale2) + s1) * scale2 + s2
 }
 
 /// HBD GDF prep inner 2-pixel pair.
@@ -706,20 +768,26 @@ pub(crate) fn gdf_prep_pair_hbd_avx2(
         );
     }
 
-    let vals = [
-        gdf_store_i32x4(acc0),
-        gdf_store_i32x4(acc1),
-        gdf_store_i32x4(acc2),
-    ];
-    let mut out = [0i8; 2];
-    for lane in 0..2 {
-        let mut full_idx = 0usize;
-        for idx_vals in &vals {
-            let v = gdf_prep_apply_sign(idx_vals[lane] * scale);
-            let sub_idx = (v.clamp(-scale, scale - 1) + scale) as usize;
-            full_idx = full_idx * (scale as usize * 2) + sub_idx;
-        }
-        out[lane] = gdf_prep_lookup_error(ref_dst_idx, error_lut_base, full_idx);
-    }
-    out
+    [
+        gdf_prep_lookup_error(
+            ref_dst_idx,
+            error_lut_base,
+            gdf_prep_full_idx(
+                _mm_cvtsi128_si32(acc0),
+                _mm_cvtsi128_si32(acc1),
+                _mm_cvtsi128_si32(acc2),
+                scale,
+            ),
+        ),
+        gdf_prep_lookup_error(
+            ref_dst_idx,
+            error_lut_base,
+            gdf_prep_full_idx(
+                _mm_extract_epi32::<1>(acc0),
+                _mm_extract_epi32::<1>(acc1),
+                _mm_extract_epi32::<1>(acc2),
+                scale,
+            ),
+        ),
+    ]
 }

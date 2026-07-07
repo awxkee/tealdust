@@ -280,11 +280,26 @@ pub(crate) fn dc_add_row_8bpc_neon(dst: &mut [u8], dc: i32, n: usize) {
         dc.saturating_neg().min(255) as u8
     };
 
-    let (c16, r16) = dst[..n].as_chunks_mut::<16>();
+    let (c64, r64) = dst[..n].as_chunks_mut::<64>();
+    let (c16, r16) = r64.as_chunks_mut::<16>();
     let (c8, r8) = r16.as_chunks_mut::<8>();
 
     if dc > 0 {
         let amt16 = vdupq_n_u8(amt);
+        for d in c64.iter_mut() {
+            let (d01, d23) = d.split_at_mut(32);
+            let (d0, d1) = d01.split_at_mut(16);
+            let (d2, d3) = d23.split_at_mut(16);
+            let d0: &mut [u8; 16] = d0.try_into().unwrap();
+            let d1: &mut [u8; 16] = d1.try_into().unwrap();
+            let d2: &mut [u8; 16] = d2.try_into().unwrap();
+            let d3: &mut [u8; 16] = d3.try_into().unwrap();
+            store_u8x16(d0, vqaddq_u8(load_u8x16(&*d0), amt16));
+            store_u8x16(d1, vqaddq_u8(load_u8x16(&*d1), amt16));
+            store_u8x16(d2, vqaddq_u8(load_u8x16(&*d2), amt16));
+            store_u8x16(d3, vqaddq_u8(load_u8x16(&*d3), amt16));
+        }
+
         for d in c16.iter_mut() {
             store_u8x16(d, vqaddq_u8(load_u8x16(&*d), amt16));
         }
@@ -299,6 +314,20 @@ pub(crate) fn dc_add_row_8bpc_neon(dst: &mut [u8], dc: i32, n: usize) {
         }
     } else {
         let amt16 = vdupq_n_u8(amt);
+        for d in c64.iter_mut() {
+            let (d01, d23) = d.split_at_mut(32);
+            let (d0, d1) = d01.split_at_mut(16);
+            let (d2, d3) = d23.split_at_mut(16);
+            let d0: &mut [u8; 16] = d0.try_into().unwrap();
+            let d1: &mut [u8; 16] = d1.try_into().unwrap();
+            let d2: &mut [u8; 16] = d2.try_into().unwrap();
+            let d3: &mut [u8; 16] = d3.try_into().unwrap();
+            store_u8x16(d0, vqsubq_u8(load_u8x16(&*d0), amt16));
+            store_u8x16(d1, vqsubq_u8(load_u8x16(&*d1), amt16));
+            store_u8x16(d2, vqsubq_u8(load_u8x16(&*d2), amt16));
+            store_u8x16(d3, vqsubq_u8(load_u8x16(&*d3), amt16));
+        }
+
         for d in c16.iter_mut() {
             store_u8x16(d, vqsubq_u8(load_u8x16(&*d), amt16));
         }
@@ -324,7 +353,28 @@ pub(crate) fn row_clip_neon(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min
     let max_v = vdupq_n_s32(max);
     let clip =
         |v: int32x4_t| vminq_s32(vmaxq_s32(vshlq_s32(vaddq_s32(v, rnd_v), nsh), min_v), max_v);
-    let (c8, r8) = tmp[..n].as_chunks_mut::<8>();
+    let (c32, r32) = tmp[..n].as_chunks_mut::<32>();
+    macro_rules! clip8 {
+        ($c:expr) => {{
+            let (lo, hi) = $c.split_at_mut(4);
+            let lo: &mut [i32; 4] = lo.try_into().unwrap();
+            let hi: &mut [i32; 4] = hi.try_into().unwrap();
+            let r_lo = clip(load_i32x4(&*lo));
+            let r_hi = clip(load_i32x4(&*hi));
+            store_i32x4(lo, r_lo);
+            store_i32x4(hi, r_hi);
+        }};
+    }
+    for ch in c32.iter_mut() {
+        let (c01, c23) = ch.split_at_mut(16);
+        let (c0, c1) = c01.split_at_mut(8);
+        let (c2, c3) = c23.split_at_mut(8);
+        clip8!(c0);
+        clip8!(c1);
+        clip8!(c2);
+        clip8!(c3);
+    }
+    let (c8, r8) = r32.as_chunks_mut::<8>();
     for ch in c8.iter_mut() {
         let r_lo = clip(load_i32x4((&ch[..4]).try_into().unwrap()));
         let r_hi = clip(load_i32x4((&ch[4..]).try_into().unwrap()));
@@ -750,10 +800,29 @@ pub(crate) fn gdf_gradient_group_neon(
         acc = vaddq_s16(acc, vabsq_s16(t));
     }
     let pair = vpaddq_s16(acc, acc);
-    let mut out = [0i16; 8];
-    unsafe { vst1q_s16(out.as_mut_ptr(), pair) };
-    for k in 0..ncells {
-        dst[base_cell + k][d] = out[k] as u16;
+    store_gdf_gradient_cells_i16x8(dst, d, base_cell, ncells, pair);
+}
+
+#[inline]
+#[target_feature(enable = "neon")]
+fn store_gdf_gradient_cells_i16x8(
+    dst: &mut [[u16; 4]],
+    d: usize,
+    base_cell: usize,
+    ncells: usize,
+    v: int16x8_t,
+) {
+    if ncells > 0 {
+        dst[base_cell][d] = vgetq_lane_s16::<0>(v) as u16;
+    }
+    if ncells > 1 {
+        dst[base_cell + 1][d] = vgetq_lane_s16::<1>(v) as u16;
+    }
+    if ncells > 2 {
+        dst[base_cell + 2][d] = vgetq_lane_s16::<2>(v) as u16;
+    }
+    if ncells > 3 {
+        dst[base_cell + 3][d] = vgetq_lane_s16::<3>(v) as u16;
     }
 }
 
@@ -793,12 +862,16 @@ fn gdf_clip_i32x4(v: int32x4_t, lo: int32x4_t, hi: int32x4_t) -> int32x4_t {
     vminq_s32(vmaxq_s32(v, lo), hi)
 }
 
-#[inline]
-#[target_feature(enable = "neon")]
-fn gdf_store_i32x4(v: int32x4_t) -> [i32; 4] {
-    let mut out = [0i32; 4];
-    unsafe { vst1q_s32(out.as_mut_ptr(), v) };
-    out
+#[inline(always)]
+fn gdf_prep_full_idx(v0: i32, v1: i32, v2: i32, scale: i32) -> usize {
+    let scale2 = scale as usize * 2;
+    let v0 = gdf_prep_apply_sign(v0 * scale);
+    let v1 = gdf_prep_apply_sign(v1 * scale);
+    let v2 = gdf_prep_apply_sign(v2 * scale);
+    let s0 = (v0.clamp(-scale, scale - 1) + scale) as usize;
+    let s1 = (v1.clamp(-scale, scale - 1) + scale) as usize;
+    let s2 = (v2.clamp(-scale, scale - 1) + scale) as usize;
+    ((s0 * scale2) + s1) * scale2 + s2
 }
 #[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "neon")]
@@ -853,22 +926,28 @@ pub(crate) fn gdf_prep_pair_8bpc_neon(
         );
     }
 
-    let vals = [
-        gdf_store_i32x4(acc0),
-        gdf_store_i32x4(acc1),
-        gdf_store_i32x4(acc2),
-    ];
-    let mut out = [0i8; 2];
-    for (lane, out) in out.iter_mut().enumerate() {
-        let mut full_idx = 0usize;
-        for idx_vals in &vals {
-            let v = gdf_prep_apply_sign(idx_vals[lane] * scale);
-            let sub_idx = (v.clamp(-scale, scale - 1) + scale) as usize;
-            full_idx = full_idx * (scale as usize * 2) + sub_idx;
-        }
-        *out = gdf_prep_lookup_error(ref_dst_idx, error_lut_base, full_idx);
-    }
-    out
+    [
+        gdf_prep_lookup_error(
+            ref_dst_idx,
+            error_lut_base,
+            gdf_prep_full_idx(
+                vgetq_lane_s32::<0>(acc0),
+                vgetq_lane_s32::<0>(acc1),
+                vgetq_lane_s32::<0>(acc2),
+                scale,
+            ),
+        ),
+        gdf_prep_lookup_error(
+            ref_dst_idx,
+            error_lut_base,
+            gdf_prep_full_idx(
+                vgetq_lane_s32::<1>(acc0),
+                vgetq_lane_s32::<1>(acc1),
+                vgetq_lane_s32::<1>(acc2),
+                scale,
+            ),
+        ),
+    ]
 }
 
 /// cctx rotate+clip over two i16 coefficient planes, widening only inside the SIMD arithmetic.

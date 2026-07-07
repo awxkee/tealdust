@@ -1482,10 +1482,33 @@ pub(crate) fn cfl_mhccp_pred_hbd_avx2(args: CflMhccpPredHbd<'_>) {
     let mut y = 0usize;
     if dir_t && has_t && y < h {
         let dst_row = &mut dst[..w];
-        let (dst16, r16) = dst_row.as_chunks_mut::<16>();
+        let (dst32, r32) = dst_row.as_chunks_mut::<32>();
         let prev = sp - src_top_stride;
+        for (i, chunk) in dst32.iter_mut().enumerate() {
+            let x = i * 32;
+            let (lo_dst, hi_dst) = chunk.split_at_mut(16);
+            let (lo, hi) = mhccp_pred_hbd_x16_avx2(
+                (&src[prev + x..prev + x + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+                bitdepth,
+            );
+            store_i32x16_u16_clip(lo_dst.try_into().unwrap(), lo, hi, max_v);
+            let x = x + 16;
+            let (lo, hi) = mhccp_pred_hbd_x16_avx2(
+                (&src[prev + x..prev + x + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+                bitdepth,
+            );
+            store_i32x16_u16_clip(hi_dst.try_into().unwrap(), lo, hi, max_v);
+        }
+        let done32 = dst32.len() * 32;
+        let (dst16, r16) = r32.as_chunks_mut::<16>();
         for (i, chunk) in dst16.iter_mut().enumerate() {
-            let x = i * 16;
+            let x = done32 + i * 16;
             let (lo, hi) = mhccp_pred_hbd_x16_avx2(
                 (&src[prev + x..prev + x + 16]).try_into().unwrap(),
                 (&src[sp + x..sp + x + 16]).try_into().unwrap(),
@@ -1495,7 +1518,7 @@ pub(crate) fn cfl_mhccp_pred_hbd_avx2(args: CflMhccpPredHbd<'_>) {
             );
             store_i32x16_u16_clip(chunk, lo, hi, max_v);
         }
-        let done16 = dst16.len() * 16;
+        let done16 = done32 + dst16.len() * 16;
         let (dst8, dst_tail) = r16.as_chunks_mut::<8>();
         for (i, chunk) in dst8.iter_mut().enumerate() {
             let x = done16 + i * 8;
@@ -1543,9 +1566,47 @@ pub(crate) fn cfl_mhccp_pred_hbd_avx2(args: CflMhccpPredHbd<'_>) {
             x0 = 1;
         }
 
-        let (dst16, r16) = dst_row[x0..].as_chunks_mut::<16>();
+        let (dst32, r32) = dst_row[x0..].as_chunks_mut::<32>();
+        for (i, chunk) in dst32.iter_mut().enumerate() {
+            let x = x0 + i * 32;
+            let (lo_dst, hi_dst) = chunk.split_at_mut(16);
+            let v0_off = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x - 1
+            } else {
+                sp + x
+            };
+            let (lo, hi) = mhccp_pred_hbd_x16_avx2(
+                (&src[v0_off..v0_off + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+                bitdepth,
+            );
+            store_i32x16_u16_clip(lo_dst.try_into().unwrap(), lo, hi, max_v);
+
+            let x = x + 16;
+            let v0_off = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x - 1
+            } else {
+                sp + x
+            };
+            let (lo, hi) = mhccp_pred_hbd_x16_avx2(
+                (&src[v0_off..v0_off + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+                bitdepth,
+            );
+            store_i32x16_u16_clip(hi_dst.try_into().unwrap(), lo, hi, max_v);
+        }
+        let done32 = x0 + dst32.len() * 32;
+        let (dst16, r16) = r32.as_chunks_mut::<16>();
         for (i, chunk) in dst16.iter_mut().enumerate() {
-            let x = x0 + i * 16;
+            let x = done32 + i * 16;
             let v0_off = if dir_t {
                 sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
             } else if dir_l {
@@ -1562,7 +1623,7 @@ pub(crate) fn cfl_mhccp_pred_hbd_avx2(args: CflMhccpPredHbd<'_>) {
             );
             store_i32x16_u16_clip(chunk, lo, hi, max_v);
         }
-        let done16 = x0 + dst16.len() * 16;
+        let done16 = done32 + dst16.len() * 16;
         let (dst8, dst_tail) = r16.as_chunks_mut::<8>();
         for (i, chunk) in dst8.iter_mut().enumerate() {
             let x = done16 + i * 8;

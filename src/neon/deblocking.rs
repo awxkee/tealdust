@@ -29,6 +29,16 @@
 
 use std::arch::aarch64::*;
 
+#[inline(always)]
+unsafe fn load_deblock_unchecked<T: Copy>(buf: &[T], idx: isize) -> T {
+    unsafe { *buf.get_unchecked(idx as usize) }
+}
+
+#[inline(always)]
+unsafe fn store_deblock_unchecked<T>(buf: &mut [T], idx: isize, value: T) {
+    unsafe { *buf.get_unchecked_mut(idx as usize) = value };
+}
+
 #[inline]
 fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> int32x4_t {
     unsafe {
@@ -40,13 +50,17 @@ fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> int32x4_t {
             ));
             vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(vmovl_u8(b))))
         } else {
-            let arr = [
-                *p.add(base as usize) as i32,
-                *p.add((base + stride_line) as usize) as i32,
-                *p.add((base + 2 * stride_line) as usize) as i32,
-                *p.add((base + 3 * stride_line) as usize) as i32,
-            ];
-            vld1q_s32(arr.as_ptr())
+            let mut v = vdupq_n_s32(0);
+            v = vsetq_lane_s32::<0>(load_deblock_unchecked(dst, base) as i32, v);
+            v = vsetq_lane_s32::<1>(load_deblock_unchecked(dst, base + stride_line) as i32, v);
+            v = vsetq_lane_s32::<2>(
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i32,
+                v,
+            );
+            vsetq_lane_s32::<3>(
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i32,
+                v,
+            )
         }
     }
 }
@@ -65,10 +79,10 @@ fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: int32x4_t)
             );
         } else {
             let packed = vget_lane_u32::<0>(vreinterpret_u32_u8(u8x8));
-            *p.add(base as usize) = (packed & 0xff) as u8;
-            *p.add((base + stride_line) as usize) = ((packed >> 8) & 0xff) as u8;
-            *p.add((base + 2 * stride_line) as usize) = ((packed >> 16) & 0xff) as u8;
-            *p.add((base + 3 * stride_line) as usize) = (packed >> 24) as u8;
+            store_deblock_unchecked(dst, base, (packed & 0xff) as u8);
+            store_deblock_unchecked(dst, base + stride_line, ((packed >> 8) & 0xff) as u8);
+            store_deblock_unchecked(dst, base + 2 * stride_line, ((packed >> 16) & 0xff) as u8);
+            store_deblock_unchecked(dst, base + 3 * stride_line, (packed >> 24) as u8);
         }
     }
 }
@@ -90,10 +104,16 @@ fn load4_u8_i16_oriented<const CONTIG: bool>(
             vreinterpretq_s16_u16(vmovl_u8(b))
         } else {
             let mut v = vdupq_n_s16(0);
-            v = vsetq_lane_s16::<0>(*p.add(base as usize) as i16, v);
-            v = vsetq_lane_s16::<1>(*p.add((base + stride_line) as usize) as i16, v);
-            v = vsetq_lane_s16::<2>(*p.add((base + 2 * stride_line) as usize) as i16, v);
-            vsetq_lane_s16::<3>(*p.add((base + 3 * stride_line) as usize) as i16, v)
+            v = vsetq_lane_s16::<0>(load_deblock_unchecked(dst, base) as i16, v);
+            v = vsetq_lane_s16::<1>(load_deblock_unchecked(dst, base + stride_line) as i16, v);
+            v = vsetq_lane_s16::<2>(
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i16,
+                v,
+            );
+            vsetq_lane_s16::<3>(
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i16,
+                v,
+            )
         }
     }
 }
@@ -113,10 +133,10 @@ fn store4_clip_u8_i16_oriented<const CONTIG: bool>(
             vst1_lane_u32::<0>(p.add(base as usize).cast::<u32>(), u8x8);
         } else {
             let packed = vget_lane_u32::<0>(u8x8);
-            *p.add(base as usize) = (packed & 0xff) as u8;
-            *p.add((base + stride_line) as usize) = ((packed >> 8) & 0xff) as u8;
-            *p.add((base + 2 * stride_line) as usize) = ((packed >> 16) & 0xff) as u8;
-            *p.add((base + 3 * stride_line) as usize) = (packed >> 24) as u8;
+            store_deblock_unchecked(dst, base, (packed & 0xff) as u8);
+            store_deblock_unchecked(dst, base + stride_line, ((packed >> 8) & 0xff) as u8);
+            store_deblock_unchecked(dst, base + 2 * stride_line, ((packed >> 16) & 0xff) as u8);
+            store_deblock_unchecked(dst, base + 3 * stride_line, (packed >> 24) as u8);
         }
     }
 }
@@ -942,13 +962,17 @@ fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> int32x4_t {
         if stride_line == 1 {
             vreinterpretq_s32_u32(vmovl_u16(vld1_u16(p.add(base as usize))))
         } else {
-            let arr = [
-                *p.add(base as usize) as i32,
-                *p.add((base + stride_line) as usize) as i32,
-                *p.add((base + 2 * stride_line) as usize) as i32,
-                *p.add((base + 3 * stride_line) as usize) as i32,
-            ];
-            vld1q_s32(arr.as_ptr())
+            let mut v = vdupq_n_s32(0);
+            v = vsetq_lane_s32::<0>(load_deblock_unchecked(dst, base) as i32, v);
+            v = vsetq_lane_s32::<1>(load_deblock_unchecked(dst, base + stride_line) as i32, v);
+            v = vsetq_lane_s32::<2>(
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i32,
+                v,
+            );
+            vsetq_lane_s32::<3>(
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i32,
+                v,
+            )
         }
     }
 }
@@ -962,10 +986,10 @@ fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: int32x4_
         if stride_line == 1 {
             vst1_u16(p.add(base as usize), u16x4);
         } else {
-            *p.add(base as usize) = vget_lane_u16::<0>(u16x4);
-            *p.add((base + stride_line) as usize) = vget_lane_u16::<1>(u16x4);
-            *p.add((base + 2 * stride_line) as usize) = vget_lane_u16::<2>(u16x4);
-            *p.add((base + 3 * stride_line) as usize) = vget_lane_u16::<3>(u16x4);
+            store_deblock_unchecked(dst, base, vget_lane_u16::<0>(u16x4));
+            store_deblock_unchecked(dst, base + stride_line, vget_lane_u16::<1>(u16x4));
+            store_deblock_unchecked(dst, base + 2 * stride_line, vget_lane_u16::<2>(u16x4));
+            store_deblock_unchecked(dst, base + 3 * stride_line, vget_lane_u16::<3>(u16x4));
         }
     }
 }
@@ -983,10 +1007,16 @@ fn load4_u16_i32_oriented<const CONTIG: bool>(
             vreinterpretq_s32_u32(vmovl_u16(vld1_u16(p.add(base as usize))))
         } else {
             let mut v = vdupq_n_s32(0);
-            v = vsetq_lane_s32::<0>(*p.add(base as usize) as i32, v);
-            v = vsetq_lane_s32::<1>(*p.add((base + stride_line) as usize) as i32, v);
-            v = vsetq_lane_s32::<2>(*p.add((base + 2 * stride_line) as usize) as i32, v);
-            vsetq_lane_s32::<3>(*p.add((base + 3 * stride_line) as usize) as i32, v)
+            v = vsetq_lane_s32::<0>(load_deblock_unchecked(dst, base) as i32, v);
+            v = vsetq_lane_s32::<1>(load_deblock_unchecked(dst, base + stride_line) as i32, v);
+            v = vsetq_lane_s32::<2>(
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i32,
+                v,
+            );
+            vsetq_lane_s32::<3>(
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i32,
+                v,
+            )
         }
     }
 }
@@ -1005,10 +1035,10 @@ fn store4_clip_u16_oriented<const CONTIG: bool>(
         if CONTIG {
             vst1_u16(p.add(base as usize), u16x4);
         } else {
-            *p.add(base as usize) = vget_lane_u16::<0>(u16x4);
-            *p.add((base + stride_line) as usize) = vget_lane_u16::<1>(u16x4);
-            *p.add((base + 2 * stride_line) as usize) = vget_lane_u16::<2>(u16x4);
-            *p.add((base + 3 * stride_line) as usize) = vget_lane_u16::<3>(u16x4);
+            store_deblock_unchecked(dst, base, vget_lane_u16::<0>(u16x4));
+            store_deblock_unchecked(dst, base + stride_line, vget_lane_u16::<1>(u16x4));
+            store_deblock_unchecked(dst, base + 2 * stride_line, vget_lane_u16::<2>(u16x4));
+            store_deblock_unchecked(dst, base + 3 * stride_line, vget_lane_u16::<3>(u16x4));
         }
     }
 }
@@ -1562,13 +1592,12 @@ fn filter_second_deriv_8bpc_neon(
     dist: isize,
 ) -> u32 {
     unsafe {
-        let p = buf.as_ptr();
-        let s0 = *p.add((s + (dist - 1) * stride) as usize) as i16;
-        let s1 = *p.add((s + dist * stride) as usize) as i16;
-        let s2 = *p.add((s + (dist + 1) * stride) as usize) as i16;
-        let t0 = *p.add((t + (dist - 1) * stride) as usize) as i16;
-        let t1 = *p.add((t + dist * stride) as usize) as i16;
-        let t2 = *p.add((t + (dist + 1) * stride) as usize) as i16;
+        let s0 = load_deblock_unchecked(buf, s + (dist - 1) * stride) as i16;
+        let s1 = load_deblock_unchecked(buf, s + dist * stride) as i16;
+        let s2 = load_deblock_unchecked(buf, s + (dist + 1) * stride) as i16;
+        let t0 = load_deblock_unchecked(buf, t + (dist - 1) * stride) as i16;
+        let t1 = load_deblock_unchecked(buf, t + dist * stride) as i16;
+        let t2 = load_deblock_unchecked(buf, t + (dist + 1) * stride) as i16;
         let a = vset_lane_s16::<1>(t0, vset_lane_s16::<0>(s0, vdup_n_s16(0)));
         let b = vset_lane_s16::<1>(t1, vset_lane_s16::<0>(s1, vdup_n_s16(0)));
         let c = vset_lane_s16::<1>(t2, vset_lane_s16::<0>(s2, vdup_n_s16(0)));
@@ -1593,18 +1622,17 @@ fn filter_end_deriv_8bpc_neon(
     c2: i16,
 ) -> u32 {
     unsafe {
-        let p = buf.as_ptr();
         let a = vset_lane_s16::<1>(
-            *p.add(t0 as usize) as i16,
-            vset_lane_s16::<0>(*p.add(s0 as usize) as i16, vdup_n_s16(0)),
+            load_deblock_unchecked(buf, t0) as i16,
+            vset_lane_s16::<0>(load_deblock_unchecked(buf, s0) as i16, vdup_n_s16(0)),
         );
         let b = vset_lane_s16::<1>(
-            *p.add(t1 as usize) as i16,
-            vset_lane_s16::<0>(*p.add(s1 as usize) as i16, vdup_n_s16(0)),
+            load_deblock_unchecked(buf, t1) as i16,
+            vset_lane_s16::<0>(load_deblock_unchecked(buf, s1) as i16, vdup_n_s16(0)),
         );
         let c = vset_lane_s16::<1>(
-            *p.add(t2 as usize) as i16,
-            vset_lane_s16::<0>(*p.add(s2 as usize) as i16, vdup_n_s16(0)),
+            load_deblock_unchecked(buf, t2) as i16,
+            vset_lane_s16::<0>(load_deblock_unchecked(buf, s2) as i16, vdup_n_s16(0)),
         );
         let v = vadd_s16(
             vadd_s16(vmul_n_s16(a, c0), vmul_n_s16(b, c1)),
@@ -2827,25 +2855,12 @@ fn setup_load_seg_u8x16_neon(seg: &[u8], off: usize, w: usize) -> uint8x16_t {
 
 #[inline]
 fn setup_mask_bits_u8x16_neon(bits: u16) -> uint8x16_t {
-    let tmp = [
-        if bits & (1 << 0) != 0 { 0xff } else { 0 },
-        if bits & (1 << 1) != 0 { 0xff } else { 0 },
-        if bits & (1 << 2) != 0 { 0xff } else { 0 },
-        if bits & (1 << 3) != 0 { 0xff } else { 0 },
-        if bits & (1 << 4) != 0 { 0xff } else { 0 },
-        if bits & (1 << 5) != 0 { 0xff } else { 0 },
-        if bits & (1 << 6) != 0 { 0xff } else { 0 },
-        if bits & (1 << 7) != 0 { 0xff } else { 0 },
-        if bits & (1 << 8) != 0 { 0xff } else { 0 },
-        if bits & (1 << 9) != 0 { 0xff } else { 0 },
-        if bits & (1 << 10) != 0 { 0xff } else { 0 },
-        if bits & (1 << 11) != 0 { 0xff } else { 0 },
-        if bits & (1 << 12) != 0 { 0xff } else { 0 },
-        if bits & (1 << 13) != 0 { 0xff } else { 0 },
-        if bits & (1 << 14) != 0 { 0xff } else { 0 },
-        if bits & (1 << 15) != 0 { 0xff } else { 0 },
-    ];
-    unsafe { vld1q_u8(tmp.as_ptr()) }
+    const BIT_MASKS: [u8; 16] = [1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128];
+    unsafe {
+        let bit_masks = vld1q_u8(BIT_MASKS.as_ptr());
+        let bytemask = vcombine_u8(vdup_n_u8(bits as u8), vdup_n_u8((bits >> 8) as u8));
+        vtstq_u8(bytemask, bit_masks)
+    }
 }
 
 #[inline]
@@ -2860,6 +2875,11 @@ fn setup_edge_u8x16_neon(cur: uint8x16_t, prev: uint8x16_t) -> uint8x16_t {
         let both = vmvnq_u8(vorrq_u8(vceqq_u8(cur, z), vceqq_u8(prev, z)));
         vbslq_u8(both, vrhaddq_u8(cur, prev), vorrq_u8(cur, prev))
     }
+}
+
+#[inline]
+fn setup_prev_from_left_u8x16_neon(cur: uint8x16_t, left: u8) -> uint8x16_t {
+    unsafe { vsetq_lane_u8::<0>(left, vextq_u8(vdupq_n_u8(0), cur, 15)) }
 }
 
 #[inline]
@@ -3165,14 +3185,8 @@ pub(crate) fn setup_thr_cols_seg_8bpc_neon(
             let cur_s = vqtbl1q_u8(slut, segv);
             let cur_q_arr = setup_store_tmp_u8x16_neon(cur_q);
             let cur_s_arr = setup_store_tmp_u8x16_neon(cur_s);
-            let mut prev_q_arr = [0u8; 16];
-            let mut prev_s_arr = [0u8; 16];
-            prev_q_arr[0] = left_q_thr[y];
-            prev_s_arr[0] = left_side_thr[y];
-            prev_q_arr[1..].copy_from_slice(&cur_q_arr[..15]);
-            prev_s_arr[1..].copy_from_slice(&cur_s_arr[..15]);
-            let prev_q = vld1q_u8(prev_q_arr.as_ptr());
-            let prev_s = vld1q_u8(prev_s_arr.as_ptr());
+            let prev_q = setup_prev_from_left_u8x16_neon(cur_q, left_q_thr[y]);
+            let prev_s = setup_prev_from_left_u8x16_neon(cur_s, left_side_thr[y]);
             let mut bits = 0u16;
             let shift = mask_shift + y as u32;
             for x in 0..w {

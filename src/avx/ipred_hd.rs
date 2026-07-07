@@ -313,25 +313,91 @@ fn splat_fill_avx2(dst: &mut [u16], stride: usize, off: usize, w: usize, h: usiz
 
 #[inline]
 #[target_feature(enable = "avx2")]
+unsafe fn dip_load_u16x4_i32_avx2(src: *const u16) -> __m128i {
+    unsafe { _mm_cvtepu16_epi32(_mm_loadl_epi64(src.cast())) }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn dip_dot_hbd_avx2(inp: &[i32; 11], weights: &[u16; 11]) -> i32 {
-    let mut s = 0i32;
-    for i in 0..11 {
-        s += weights[i] as i32 * inp[i];
-    }
+    let inp8 = unsafe { _mm256_loadu_si256(inp.as_ptr().cast()) };
+    let w8 = _mm256_cvtepu16_epi32(unsafe { _mm_loadu_si128(weights.as_ptr().cast()) });
+    let mut s = _mm256_hsum_epi32(_mm256_mullo_epi32(inp8, w8)) as i32;
+    s += weights[8] as i32 * inp[8];
+    s += weights[9] as i32 * inp[9];
+    s += weights[10] as i32 * inp[10];
     s
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn dip_dot2_hbd_avx2(inp: &[i32; 11], w0: &[u16; 11], w1: &[u16; 11]) -> [i32; 2] {
+fn dip_dot2_block4_hbd_avx2(
+    mut acc: __m128i,
+    inp: &[i32; 11],
+    w0: &[u16; 11],
+    w1: &[u16; 11],
+    base: usize,
+) -> __m128i {
+    let r0 = unsafe { dip_load_u16x4_i32_avx2(w0.as_ptr().add(base)) };
+    let r1 = unsafe { dip_load_u16x4_i32_avx2(w1.as_ptr().add(base)) };
+    let z = _mm_setzero_si128();
+
+    let t01 = _mm_unpacklo_epi32(r0, r1);
+    let t23 = _mm_unpackhi_epi32(r0, r1);
+    let c0 = _mm_unpacklo_epi64(t01, z);
+    let c1 = _mm_unpackhi_epi64(t01, z);
+    let c2 = _mm_unpacklo_epi64(t23, z);
+    let c3 = _mm_unpackhi_epi64(t23, z);
+
+    acc = _mm_add_epi32(acc, _mm_mullo_epi32(c0, _mm_set1_epi32(inp[base])));
+    acc = _mm_add_epi32(acc, _mm_mullo_epi32(c1, _mm_set1_epi32(inp[base + 1])));
+    acc = _mm_add_epi32(acc, _mm_mullo_epi32(c2, _mm_set1_epi32(inp[base + 2])));
+    _mm_add_epi32(acc, _mm_mullo_epi32(c3, _mm_set1_epi32(inp[base + 3])))
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn dip_dot2_hbd_avx2(inp: &[i32; 11], w0: &[u16; 11], w1: &[u16; 11]) -> __m128i {
     let mut acc = _mm_setzero_si128();
-    for i in 0..11 {
+    acc = dip_dot2_block4_hbd_avx2(acc, inp, w0, w1, 0);
+    acc = dip_dot2_block4_hbd_avx2(acc, inp, w0, w1, 4);
+    for i in 8..11 {
         let w = _mm_setr_epi32(w0[i] as i32, w1[i] as i32, 0, 0);
         acc = _mm_add_epi32(acc, _mm_mullo_epi32(_mm_set1_epi32(inp[i]), w));
     }
-    let mut out = [0i32; 4];
-    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), acc) };
-    [out[0], out[1]]
+    acc
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn dip_dot4_block4_hbd_avx2(
+    mut acc: __m128i,
+    inp: &[i32; 11],
+    w0: &[u16; 11],
+    w1: &[u16; 11],
+    w2: &[u16; 11],
+    w3: &[u16; 11],
+    base: usize,
+) -> __m128i {
+    let r0 = unsafe { dip_load_u16x4_i32_avx2(w0.as_ptr().add(base)) };
+    let r1 = unsafe { dip_load_u16x4_i32_avx2(w1.as_ptr().add(base)) };
+    let r2 = unsafe { dip_load_u16x4_i32_avx2(w2.as_ptr().add(base)) };
+    let r3 = unsafe { dip_load_u16x4_i32_avx2(w3.as_ptr().add(base)) };
+
+    let t01 = _mm_unpacklo_epi32(r0, r1);
+    let t23 = _mm_unpacklo_epi32(r2, r3);
+    let c0 = _mm_unpacklo_epi64(t01, t23);
+    let c1 = _mm_unpackhi_epi64(t01, t23);
+
+    let t01 = _mm_unpackhi_epi32(r0, r1);
+    let t23 = _mm_unpackhi_epi32(r2, r3);
+    let c2 = _mm_unpacklo_epi64(t01, t23);
+    let c3 = _mm_unpackhi_epi64(t01, t23);
+
+    acc = _mm_add_epi32(acc, _mm_mullo_epi32(c0, _mm_set1_epi32(inp[base])));
+    acc = _mm_add_epi32(acc, _mm_mullo_epi32(c1, _mm_set1_epi32(inp[base + 1])));
+    acc = _mm_add_epi32(acc, _mm_mullo_epi32(c2, _mm_set1_epi32(inp[base + 2])));
+    _mm_add_epi32(acc, _mm_mullo_epi32(c3, _mm_set1_epi32(inp[base + 3])))
 }
 
 #[inline]
@@ -342,15 +408,127 @@ fn dip_dot4_hbd_avx2(
     w1: &[u16; 11],
     w2: &[u16; 11],
     w3: &[u16; 11],
-) -> [i32; 4] {
+) -> __m128i {
     let mut acc = _mm_setzero_si128();
-    for i in 0..11 {
+    acc = dip_dot4_block4_hbd_avx2(acc, inp, w0, w1, w2, w3, 0);
+    acc = dip_dot4_block4_hbd_avx2(acc, inp, w0, w1, w2, w3, 4);
+    for i in 8..11 {
         let w = _mm_setr_epi32(w0[i] as i32, w1[i] as i32, w2[i] as i32, w3[i] as i32);
         acc = _mm_add_epi32(acc, _mm_mullo_epi32(_mm_set1_epi32(inp[i]), w));
     }
-    let mut out = [0i32; 4];
-    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), acc) };
-    out
+    acc
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn dip_finish_u16x4_avx2(s: __m128i, in_sum: i32, bitdepth_max: i32) -> __m128i {
+    let v = _mm_sub_epi32(
+        _mm_srai_epi32::<12>(_mm_add_epi32(s, _mm_set1_epi32(2048))),
+        _mm_set1_epi32(in_sum),
+    );
+    let v = _mm_min_epi32(
+        _mm_max_epi32(v, _mm_setzero_si128()),
+        _mm_set1_epi32(bitdepth_max),
+    );
+    _mm_packus_epi32(v, _mm_setzero_si128())
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_dip_u16x4_avx2<const STEP_X: usize>(dst_row: &mut [u16], x: usize, v: __m128i) {
+    if STEP_X == 1 {
+        unsafe { _mm_storel_epi64(dst_row.as_mut_ptr().add(x).cast(), v) };
+    } else {
+        dst_row[x] = _mm_extract_epi16::<0>(v) as u16;
+        dst_row[x + STEP_X] = _mm_extract_epi16::<1>(v) as u16;
+        dst_row[x + STEP_X * 2] = _mm_extract_epi16::<2>(v) as u16;
+        dst_row[x + STEP_X * 3] = _mm_extract_epi16::<3>(v) as u16;
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn store_dip_u16x2_avx2<const STEP_X: usize>(dst_row: &mut [u16], x: usize, v: __m128i) {
+    if STEP_X == 1 {
+        unsafe { _mm_store_ss(dst_row.as_mut_ptr().add(x).cast(), _mm_castsi128_ps(v)) };
+    } else {
+        dst_row[x] = _mm_extract_epi16::<0>(v) as u16;
+        dst_row[x + STEP_X] = _mm_extract_epi16::<1>(v) as u16;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "avx2")]
+fn dip_emit_hbd_avx2<const STEP_X: usize>(
+    dst: &mut [u16],
+    stride: usize,
+    width: usize,
+    trans: bool,
+    dw: usize,
+    dh: usize,
+    step_y: usize,
+    grid_h: usize,
+    grid_w: usize,
+    inp: &[i32; 11],
+    weights: &[[u16; 11]; 64],
+    in_sum: i32,
+    bitdepth_max: i32,
+) {
+    let mut y = step_y - 1;
+    for gy in 0..grid_h {
+        let iy = gy * dh;
+        let mut gx = 0usize;
+        let mut x = STEP_X - 1;
+        let dst_row = &mut dst[y * stride..y * stride + width];
+        while gx + 4 <= grid_w {
+            let ix0 = gx * dw;
+            let ix1 = ix0 + dw;
+            let ix2 = ix1 + dw;
+            let ix3 = ix2 + dw;
+            let idx0 = if trans { ix0 * 8 + iy } else { iy * 8 + ix0 };
+            let idx1 = if trans { ix1 * 8 + iy } else { iy * 8 + ix1 };
+            let idx2 = if trans { ix2 * 8 + iy } else { iy * 8 + ix2 };
+            let idx3 = if trans { ix3 * 8 + iy } else { iy * 8 + ix3 };
+            let s = dip_finish_u16x4_avx2(
+                dip_dot4_hbd_avx2(
+                    inp,
+                    &weights[idx0],
+                    &weights[idx1],
+                    &weights[idx2],
+                    &weights[idx3],
+                ),
+                in_sum,
+                bitdepth_max,
+            );
+            store_dip_u16x4_avx2::<STEP_X>(dst_row, x, s);
+            gx += 4;
+            x += STEP_X * 4;
+        }
+        if gx + 2 <= grid_w {
+            let ix0 = gx * dw;
+            let ix1 = ix0 + dw;
+            let idx0 = if trans { ix0 * 8 + iy } else { iy * 8 + ix0 };
+            let idx1 = if trans { ix1 * 8 + iy } else { iy * 8 + ix1 };
+            let s = dip_finish_u16x4_avx2(
+                dip_dot2_hbd_avx2(inp, &weights[idx0], &weights[idx1]),
+                in_sum,
+                bitdepth_max,
+            );
+            store_dip_u16x2_avx2::<STEP_X>(dst_row, x, s);
+            gx += 2;
+            x += STEP_X * 2;
+        }
+        while gx < grid_w {
+            let ix = gx * dw;
+            let idx = if trans { ix * 8 + iy } else { iy * 8 + ix };
+            let s = dip_dot_hbd_avx2(inp, &weights[idx]);
+            dst_row[x] = (((s + 2048) >> 12) - in_sum).clamp(0, bitdepth_max) as u16;
+            gx += 1;
+            x += STEP_X;
+        }
+        y += step_y;
+    }
 }
 
 #[inline]
@@ -667,6 +845,141 @@ pub(crate) fn ipred_smooth_v_hbd_avx2(
 
     let mut y = 0usize;
     let mut off = 0usize;
+    while y + 3 < h {
+        let (row0_s, rest) = dst[off..].split_at_mut(stride);
+        let (row1_s, rest) = rest.split_at_mut(stride);
+        let (row2_s, row3_s) = rest.split_at_mut(stride);
+        let row0 = &mut row0_s[..w];
+        let row1 = &mut row1_s[..w];
+        let row2 = &mut row2_s[..w];
+        let row3 = &mut row3_s[..w];
+        let off_y0 = _mm256_set1_epi32((h - 1 - y) as i32);
+        let off_y1 = _mm256_set1_epi32((h - 2 - y) as i32);
+        let off_y2 = _mm256_set1_epi32((h - 3 - y) as i32);
+        let off_y3 = _mm256_set1_epi32((h - 4 - y) as i32);
+        let w_ver0 = _mm256_set1_epi32(weights[y] as i32);
+        let w_ver1 = _mm256_set1_epi32(weights[y + 1] as i32);
+        let w_ver2 = _mm256_set1_epi32(weights[y + 2] as i32);
+        let w_ver3 = _mm256_set1_epi32(weights[y + 3] as i32);
+        let (chunks0, rem0) = row0.as_chunks_mut::<8>();
+        let (chunks1, rem1) = row1.as_chunks_mut::<8>();
+        let (chunks2, rem2) = row2.as_chunks_mut::<8>();
+        let (chunks3, rem3) = row3.as_chunks_mut::<8>();
+        for ((((d0, d1), d2), d3), t) in chunks0
+            .iter_mut()
+            .zip(chunks1.iter_mut())
+            .zip(chunks2.iter_mut())
+            .zip(chunks3.iter_mut())
+            .zip(top_src.as_chunks::<8>().0.iter())
+        {
+            let above = load_u16x8_i32_slice(t);
+            let pred0 = _mm256_add_epi32(
+                bottom,
+                sra_i32x8(
+                    _mm256_add_epi32(
+                        _mm256_mullo_epi32(_mm256_sub_epi32(above, bottom), off_y0),
+                        rnd,
+                    ),
+                    bhl2,
+                ),
+            );
+            let out0 = _mm256_add_epi32(
+                pred0,
+                _mm256_srai_epi32::<6>(_mm256_add_epi32(
+                    _mm256_mullo_epi32(_mm256_sub_epi32(above, pred0), w_ver0),
+                    add32,
+                )),
+            );
+            store_i32x8_u16_max(d0, out0, bitdepth_max);
+
+            let pred1 = _mm256_add_epi32(
+                bottom,
+                sra_i32x8(
+                    _mm256_add_epi32(
+                        _mm256_mullo_epi32(_mm256_sub_epi32(above, bottom), off_y1),
+                        rnd,
+                    ),
+                    bhl2,
+                ),
+            );
+            let out1 = _mm256_add_epi32(
+                pred1,
+                _mm256_srai_epi32::<6>(_mm256_add_epi32(
+                    _mm256_mullo_epi32(_mm256_sub_epi32(above, pred1), w_ver1),
+                    add32,
+                )),
+            );
+            store_i32x8_u16_max(d1, out1, bitdepth_max);
+
+            let pred2 = _mm256_add_epi32(
+                bottom,
+                sra_i32x8(
+                    _mm256_add_epi32(
+                        _mm256_mullo_epi32(_mm256_sub_epi32(above, bottom), off_y2),
+                        rnd,
+                    ),
+                    bhl2,
+                ),
+            );
+            let out2 = _mm256_add_epi32(
+                pred2,
+                _mm256_srai_epi32::<6>(_mm256_add_epi32(
+                    _mm256_mullo_epi32(_mm256_sub_epi32(above, pred2), w_ver2),
+                    add32,
+                )),
+            );
+            store_i32x8_u16_max(d2, out2, bitdepth_max);
+
+            let pred3 = _mm256_add_epi32(
+                bottom,
+                sra_i32x8(
+                    _mm256_add_epi32(
+                        _mm256_mullo_epi32(_mm256_sub_epi32(above, bottom), off_y3),
+                        rnd,
+                    ),
+                    bhl2,
+                ),
+            );
+            let out3 = _mm256_add_epi32(
+                pred3,
+                _mm256_srai_epi32::<6>(_mm256_add_epi32(
+                    _mm256_mullo_epi32(_mm256_sub_epi32(above, pred3), w_ver3),
+                    add32,
+                )),
+            );
+            store_i32x8_u16_max(d3, out3, bitdepth_max);
+        }
+        let base = chunks0.len() * 8;
+        for (i, (((d0, d1), d2), d3)) in rem0
+            .iter_mut()
+            .zip(rem1.iter_mut())
+            .zip(rem2.iter_mut())
+            .zip(rem3.iter_mut())
+            .enumerate()
+        {
+            let x = base + i;
+            let above = tl[o + 1 + x] as i32;
+            let pred0 = bottom_s
+                + (((above - bottom_s) * (h as i32 - 1 - y as i32) + (h >> 1) as i32) >> bhl2);
+            let pred1 = bottom_s
+                + (((above - bottom_s) * (h as i32 - 2 - y as i32) + (h >> 1) as i32) >> bhl2);
+            let pred2 = bottom_s
+                + (((above - bottom_s) * (h as i32 - 3 - y as i32) + (h >> 1) as i32) >> bhl2);
+            let pred3 = bottom_s
+                + (((above - bottom_s) * (h as i32 - 4 - y as i32) + (h >> 1) as i32) >> bhl2);
+            *d0 = (pred0 + (((above - pred0) * weights[y] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+            *d1 = (pred1 + (((above - pred1) * weights[y + 1] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+            *d2 = (pred2 + (((above - pred2) * weights[y + 2] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+            *d3 = (pred3 + (((above - pred3) * weights[y + 3] as i32 + 32) >> 6))
+                .clamp(0, bitdepth_max as i32) as u16;
+        }
+        y += 4;
+        off += stride * 4;
+    }
+
     while y + 1 < h {
         let (head, tail) = dst[off..].split_at_mut(stride);
         let row0 = &mut head[..w];
@@ -1164,6 +1477,104 @@ pub(crate) fn ipred_paeth_hbd_avx2(
 
     let mut y = 0usize;
     let mut off = 0usize;
+    while y + 3 < h {
+        let (row0_s, rest) = dst[off..].split_at_mut(stride);
+        let (row1_s, rest) = rest.split_at_mut(stride);
+        let (row2_s, row3_s) = rest.split_at_mut(stride);
+        let row0 = &mut row0_s[..w];
+        let row1 = &mut row1_s[..w];
+        let row2 = &mut row2_s[..w];
+        let row3 = &mut row3_s[..w];
+
+        let left0_s = tl[o - 1 - y] as i32;
+        let left1_s = tl[o - 2 - y] as i32;
+        let left2_s = tl[o - 3 - y] as i32;
+        let left3_s = tl[o - 4 - y] as i32;
+        let left0 = _mm256_set1_epi32(left0_s);
+        let left1 = _mm256_set1_epi32(left1_s);
+        let left2 = _mm256_set1_epi32(left2_s);
+        let left3 = _mm256_set1_epi32(left3_s);
+
+        let (chunks0, rem0) = row0.as_chunks_mut::<8>();
+        let (chunks1, rem1) = row1.as_chunks_mut::<8>();
+        let (chunks2, rem2) = row2.as_chunks_mut::<8>();
+        let (chunks3, rem3) = row3.as_chunks_mut::<8>();
+        for ((((d0, d1), d2), d3), t) in chunks0
+            .iter_mut()
+            .zip(chunks1.iter_mut())
+            .zip(chunks2.iter_mut())
+            .zip(chunks3.iter_mut())
+            .zip(top_src.as_chunks::<8>().0.iter())
+        {
+            let top = load_u16x8_i32_slice(t);
+            store_i32x8_u16_max(d0, paeth_i32x8_avx2(left0, top, topleft), bitdepth_max);
+            store_i32x8_u16_max(d1, paeth_i32x8_avx2(left1, top, topleft), bitdepth_max);
+            store_i32x8_u16_max(d2, paeth_i32x8_avx2(left2, top, topleft), bitdepth_max);
+            store_i32x8_u16_max(d3, paeth_i32x8_avx2(left3, top, topleft), bitdepth_max);
+        }
+
+        let base_x = chunks0.len() * 8;
+        for (i, (((d0, d1), d2), d3)) in rem0
+            .iter_mut()
+            .zip(rem1.iter_mut())
+            .zip(rem2.iter_mut())
+            .zip(rem3.iter_mut())
+            .enumerate()
+        {
+            let top_s = tl[o + 1 + base_x + i] as i32;
+            let base0 = left0_s + top_s - topleft_s;
+            let ld0 = (left0_s - base0).abs();
+            let td0 = (top_s - base0).abs();
+            let tld0 = (topleft_s - base0).abs();
+            *d0 = if ld0 <= td0 && ld0 <= tld0 {
+                left0_s
+            } else if td0 <= tld0 {
+                top_s
+            } else {
+                topleft_s
+            } as u16;
+
+            let base1 = left1_s + top_s - topleft_s;
+            let ld1 = (left1_s - base1).abs();
+            let td1 = (top_s - base1).abs();
+            let tld1 = (topleft_s - base1).abs();
+            *d1 = if ld1 <= td1 && ld1 <= tld1 {
+                left1_s
+            } else if td1 <= tld1 {
+                top_s
+            } else {
+                topleft_s
+            } as u16;
+
+            let base2 = left2_s + top_s - topleft_s;
+            let ld2 = (left2_s - base2).abs();
+            let td2 = (top_s - base2).abs();
+            let tld2 = (topleft_s - base2).abs();
+            *d2 = if ld2 <= td2 && ld2 <= tld2 {
+                left2_s
+            } else if td2 <= tld2 {
+                top_s
+            } else {
+                topleft_s
+            } as u16;
+
+            let base3 = left3_s + top_s - topleft_s;
+            let ld3 = (left3_s - base3).abs();
+            let td3 = (top_s - base3).abs();
+            let tld3 = (topleft_s - base3).abs();
+            *d3 = if ld3 <= td3 && ld3 <= tld3 {
+                left3_s
+            } else if td3 <= tld3 {
+                top_s
+            } else {
+                topleft_s
+            } as u16;
+        }
+
+        y += 4;
+        off += stride * 4;
+    }
+
     while y + 1 < h {
         let (head, tail) = dst[off..].split_at_mut(stride);
         let row0 = &mut head[..w];
@@ -1310,9 +1721,34 @@ fn z1_luma_row_hbd_avx2(
     let n_filter = ((max_base_x - base0 + 1).max(0) as usize).min(w);
     let base_const = (top_off as i32 + base0) as usize;
     let (body, fill_tail) = dst_row[..w].split_at_mut(n_filter);
-    let (chunks, rem) = body.as_chunks_mut::<8>();
+    let (chunks16, rem16) = body.as_chunks_mut::<16>();
+    for (ci, d) in chunks16.iter_mut().enumerate() {
+        let bi = base_const + ci * 16;
+        let (d0, d1) = d.split_at_mut(8);
+        let v = dr_filter8_hbd_avx2(
+            f,
+            bitdepth_max,
+            load_u16x8_i32_slice(&filt[bi - 1..]),
+            load_u16x8_i32_slice(&filt[bi..]),
+            load_u16x8_i32_slice(&filt[bi + 1..]),
+            load_u16x8_i32_slice(&filt[bi + 2..]),
+        );
+        store_i32x8_u16_max(d0, v, bitdepth_max);
+        let bi = bi + 8;
+        let v = dr_filter8_hbd_avx2(
+            f,
+            bitdepth_max,
+            load_u16x8_i32_slice(&filt[bi - 1..]),
+            load_u16x8_i32_slice(&filt[bi..]),
+            load_u16x8_i32_slice(&filt[bi + 1..]),
+            load_u16x8_i32_slice(&filt[bi + 2..]),
+        );
+        store_i32x8_u16_max(d1, v, bitdepth_max);
+    }
+    let done16 = chunks16.len() * 16;
+    let (chunks, rem) = rem16.as_chunks_mut::<8>();
     for (ci, d) in chunks.iter_mut().enumerate() {
-        let bi = base_const + ci * 8;
+        let bi = base_const + done16 + ci * 8;
         let v = dr_filter8_hbd_avx2(
             f,
             bitdepth_max,
@@ -1323,7 +1759,7 @@ fn z1_luma_row_hbd_avx2(
         );
         store_i32x8_u16_max(d, v, bitdepth_max);
     }
-    let base_x = chunks.len() * 8;
+    let base_x = done16 + chunks.len() * 8;
     for (xi, d) in rem.iter_mut().enumerate() {
         let bi = base_const + base_x + xi;
         let v = f.a as i32 * filt[bi - 1] as i32
@@ -1379,13 +1815,24 @@ fn z1_chroma_row_hbd_avx2(
     let rnd = _mm256_set1_epi32(16);
     let base_const = (top_off as i32 + base0) as usize;
     let (body, fill_tail) = dst_row[..w].split_at_mut(n_filter);
-    let (chunks, rem) = body.as_chunks_mut::<8>();
+    let (chunks16, rem16) = body.as_chunks_mut::<16>();
+    for (ci, d) in chunks16.iter_mut().enumerate() {
+        let bi = base_const + ci * 16;
+        let (d0, d1) = d.split_at_mut(8);
+        let v = z_chroma_hbd8_avx2(&filt[bi..], &filt[bi + 1..], weights, rnd);
+        store_i32x8_u16_max(d0, v, bitdepth_max);
+        let bi = bi + 8;
+        let v = z_chroma_hbd8_avx2(&filt[bi..], &filt[bi + 1..], weights, rnd);
+        store_i32x8_u16_max(d1, v, bitdepth_max);
+    }
+    let done16 = chunks16.len() * 16;
+    let (chunks, rem) = rem16.as_chunks_mut::<8>();
     for (ci, d) in chunks.iter_mut().enumerate() {
-        let bi = base_const + ci * 8;
+        let bi = base_const + done16 + ci * 8;
         let v = z_chroma_hbd8_avx2(&filt[bi..], &filt[bi + 1..], weights, rnd);
         store_i32x8_u16_max(d, v, bitdepth_max);
     }
-    let base_x = chunks.len() * 8;
+    let base_x = done16 + chunks.len() * 8;
     for (xi, d) in rem.iter_mut().enumerate() {
         let bi = base_const + base_x + xi;
         let v = (32 - shift as i32) * filt[bi] as i32 + shift as i32 * filt[bi + 1] as i32;
@@ -1744,10 +2191,13 @@ fn z3_chroma_col_hbd_avx2(
 fn store_z3_cols4_u16(dst: &mut [u16], stride: usize, x: usize, h: usize, cols: &[[u16; 128]; 4]) {
     for y in 0..h {
         let row_off = y * stride + x;
-        dst[row_off] = cols[0][y];
-        dst[row_off + 1] = cols[1][y];
-        dst[row_off + 2] = cols[2][y];
-        dst[row_off + 3] = cols[3][y];
+        let v = u64::from(cols[0][y])
+            | (u64::from(cols[1][y]) << 16)
+            | (u64::from(cols[2][y]) << 32)
+            | (u64::from(cols[3][y]) << 48);
+        unsafe {
+            core::ptr::write_unaligned(dst.as_mut_ptr().add(row_off).cast::<u64>(), v);
+        }
     }
 }
 
@@ -2513,63 +2963,73 @@ pub(crate) fn ipred_dip_hbd_avx2(
 
     let weights = &DIP_WEIGHTS[m];
 
-    let mut y = step_y - 1;
-    for gy in 0..grid_h {
-        let iy = gy * dh;
-        let mut gx = 0usize;
-        let mut x = step_x - 1;
-        let dst_row = &mut dst[y * stride..y * stride + width];
-        while gx + 4 <= grid_w {
-            let ix0 = gx * dw;
-            let ix1 = ix0 + dw;
-            let ix2 = ix1 + dw;
-            let ix3 = ix2 + dw;
-            let idx0 = if trans { ix0 * 8 + iy } else { iy * 8 + ix0 };
-            let idx1 = if trans { ix1 * 8 + iy } else { iy * 8 + ix1 };
-            let idx2 = if trans { ix2 * 8 + iy } else { iy * 8 + ix2 };
-            let idx3 = if trans { ix3 * 8 + iy } else { iy * 8 + ix3 };
-            let s = dip_dot4_hbd_avx2(
-                &inp,
-                &weights[idx0],
-                &weights[idx1],
-                &weights[idx2],
-                &weights[idx3],
-            );
-            dst_row[x] = (((s[0] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
-            dst_row[x + step_x] =
-                (((s[1] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
-            dst_row[x + step_x * 2] =
-                (((s[2] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
-            dst_row[x + step_x * 3] =
-                (((s[3] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
-            gx += 4;
-            x += step_x * 4;
-        }
-        if gx + 2 <= grid_w {
-            let ix0 = gx * dw;
-            let ix1 = ix0 + dw;
-            let idx0 = if trans { ix0 * 8 + iy } else { iy * 8 + ix0 };
-            let idx1 = if trans { ix1 * 8 + iy } else { iy * 8 + ix1 };
-            let s = dip_dot2_hbd_avx2(&inp, &weights[idx0], &weights[idx1]);
-            dst_row[x] = (((s[0] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
-            dst_row[x + step_x] =
-                (((s[1] + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
-            gx += 2;
-            x += step_x * 2;
-        }
-        while gx < grid_w {
-            let ix = gx * dw;
-            let idx = if trans { ix * 8 + iy } else { iy * 8 + ix };
-            let s = dip_dot_hbd_avx2(&inp, &weights[idx]);
-            dst_row[x] = (((s + 2048) >> 12) - in_sum).clamp(0, bitdepth_max as i32) as u16;
-            gx += 1;
-            x += step_x;
-        }
-        y += step_y;
+    let bitdepth_max_i32 = bitdepth_max as i32;
+    match step_x {
+        1 => dip_emit_hbd_avx2::<1>(
+            dst,
+            stride,
+            width,
+            trans,
+            dw,
+            dh,
+            step_y,
+            grid_h,
+            grid_w,
+            &inp,
+            weights,
+            in_sum,
+            bitdepth_max_i32,
+        ),
+        2 => dip_emit_hbd_avx2::<2>(
+            dst,
+            stride,
+            width,
+            trans,
+            dw,
+            dh,
+            step_y,
+            grid_h,
+            grid_w,
+            &inp,
+            weights,
+            in_sum,
+            bitdepth_max_i32,
+        ),
+        4 => dip_emit_hbd_avx2::<4>(
+            dst,
+            stride,
+            width,
+            trans,
+            dw,
+            dh,
+            step_y,
+            grid_h,
+            grid_w,
+            &inp,
+            weights,
+            in_sum,
+            bitdepth_max_i32,
+        ),
+        8 => dip_emit_hbd_avx2::<8>(
+            dst,
+            stride,
+            width,
+            trans,
+            dw,
+            dh,
+            step_y,
+            grid_h,
+            grid_w,
+            &inp,
+            weights,
+            in_sum,
+            bitdepth_max_i32,
+        ),
+        _ => unreachable!(),
     }
 
     if step_x > 1 {
-        y = step_y - 1;
+        let mut y = step_y - 1;
         for _gy in 0..grid_h {
             let mut p1 = tl[o - (y + 1)] as i32;
             let mut x = 0usize;

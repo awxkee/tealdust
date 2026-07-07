@@ -32,6 +32,16 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
+#[inline(always)]
+unsafe fn load_deblock_unchecked<T: Copy>(buf: &[T], idx: isize) -> T {
+    unsafe { *buf.get_unchecked(idx as usize) }
+}
+
+#[inline(always)]
+unsafe fn store_deblock_unchecked<T>(buf: &mut [T], idx: isize, value: T) {
+    unsafe { *buf.get_unchecked_mut(idx as usize) = value };
+}
+
 #[inline]
 #[target_feature(enable = "avx2")]
 fn mul3_i32(v: __m128i) -> __m128i {
@@ -73,12 +83,11 @@ fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> __m128i {
         // Four rows of the same horizontal edge.  This is still a gather, but it
         // stays register-only instead of using a temporary stack array.
         unsafe {
-            let p = dst.as_ptr();
             _mm_setr_epi32(
-                *p.add(base as usize) as i32,
-                *p.add((base + stride_line) as usize) as i32,
-                *p.add((base + 2 * stride_line) as usize) as i32,
-                *p.add((base + 3 * stride_line) as usize) as i32,
+                load_deblock_unchecked(dst, base) as i32,
+                load_deblock_unchecked(dst, base + stride_line) as i32,
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i32,
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i32,
             )
         }
     }
@@ -98,11 +107,10 @@ fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: __m128i) {
         }
     } else {
         unsafe {
-            let p = dst.as_mut_ptr();
-            *p.add(base as usize) = _mm_cvtsi128_si32(v) as u8;
-            *p.add((base + stride_line) as usize) = _mm_extract_epi32::<1>(v) as u8;
-            *p.add((base + 2 * stride_line) as usize) = _mm_extract_epi32::<2>(v) as u8;
-            *p.add((base + 3 * stride_line) as usize) = _mm_extract_epi32::<3>(v) as u8;
+            store_deblock_unchecked(dst, base, _mm_cvtsi128_si32(v) as u8);
+            store_deblock_unchecked(dst, base + stride_line, _mm_extract_epi32::<1>(v) as u8);
+            store_deblock_unchecked(dst, base + 2 * stride_line, _mm_extract_epi32::<2>(v) as u8);
+            store_deblock_unchecked(dst, base + 3 * stride_line, _mm_extract_epi32::<3>(v) as u8);
         }
     }
 }
@@ -120,10 +128,10 @@ fn load4_u8_i16_oriented<const CONTIG: bool>(
             _mm_cvtepu8_epi16(_mm_castps_si128(_mm_load_ss(p.add(base as usize).cast())))
         } else {
             _mm_setr_epi16(
-                *p.add(base as usize) as i16,
-                *p.add((base + stride_line) as usize) as i16,
-                *p.add((base + 2 * stride_line) as usize) as i16,
-                *p.add((base + 3 * stride_line) as usize) as i16,
+                load_deblock_unchecked(dst, base) as i16,
+                load_deblock_unchecked(dst, base + stride_line) as i16,
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i16,
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i16,
                 0,
                 0,
                 0,
@@ -148,10 +156,10 @@ fn store4_clip_u8_i16_oriented<const CONTIG: bool>(
             _mm_store_ss(p.add(base as usize).cast(), _mm_castsi128_ps(p8));
         } else {
             let packed = _mm_cvtsi128_si32(p8) as u32;
-            *p.add(base as usize) = (packed & 0xff) as u8;
-            *p.add((base + stride_line) as usize) = ((packed >> 8) & 0xff) as u8;
-            *p.add((base + 2 * stride_line) as usize) = ((packed >> 16) & 0xff) as u8;
-            *p.add((base + 3 * stride_line) as usize) = (packed >> 24) as u8;
+            store_deblock_unchecked(dst, base, (packed & 0xff) as u8);
+            store_deblock_unchecked(dst, base + stride_line, ((packed >> 8) & 0xff) as u8);
+            store_deblock_unchecked(dst, base + 2 * stride_line, ((packed >> 16) & 0xff) as u8);
+            store_deblock_unchecked(dst, base + 3 * stride_line, (packed >> 24) as u8);
         }
     }
 }
@@ -885,12 +893,11 @@ fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> __m128i {
         }
     } else {
         unsafe {
-            let p = dst.as_ptr();
             _mm_setr_epi32(
-                *p.add(base as usize) as i32,
-                *p.add((base + stride_line) as usize) as i32,
-                *p.add((base + 2 * stride_line) as usize) as i32,
-                *p.add((base + 3 * stride_line) as usize) as i32,
+                load_deblock_unchecked(dst, base) as i32,
+                load_deblock_unchecked(dst, base + stride_line) as i32,
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i32,
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i32,
             )
         }
     }
@@ -907,11 +914,18 @@ fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: __m128i)
         }
     } else {
         unsafe {
-            let p = dst.as_mut_ptr();
-            *p.add(base as usize) = _mm_cvtsi128_si32(v) as u16;
-            *p.add((base + stride_line) as usize) = _mm_extract_epi32::<1>(v) as u16;
-            *p.add((base + 2 * stride_line) as usize) = _mm_extract_epi32::<2>(v) as u16;
-            *p.add((base + 3 * stride_line) as usize) = _mm_extract_epi32::<3>(v) as u16;
+            store_deblock_unchecked(dst, base, _mm_cvtsi128_si32(v) as u16);
+            store_deblock_unchecked(dst, base + stride_line, _mm_extract_epi32::<1>(v) as u16);
+            store_deblock_unchecked(
+                dst,
+                base + 2 * stride_line,
+                _mm_extract_epi32::<2>(v) as u16,
+            );
+            store_deblock_unchecked(
+                dst,
+                base + 3 * stride_line,
+                _mm_extract_epi32::<3>(v) as u16,
+            );
         }
     }
 }
@@ -929,10 +943,10 @@ fn load4_u16_i32_oriented<const CONTIG: bool>(
             _mm_cvtepu16_epi32(_mm_loadl_epi64(p.add(base as usize) as *const __m128i))
         } else {
             _mm_setr_epi32(
-                *p.add(base as usize) as i32,
-                *p.add((base + stride_line) as usize) as i32,
-                *p.add((base + 2 * stride_line) as usize) as i32,
-                *p.add((base + 3 * stride_line) as usize) as i32,
+                load_deblock_unchecked(dst, base) as i32,
+                load_deblock_unchecked(dst, base + stride_line) as i32,
+                load_deblock_unchecked(dst, base + 2 * stride_line) as i32,
+                load_deblock_unchecked(dst, base + 3 * stride_line) as i32,
             )
         }
     }
@@ -952,10 +966,18 @@ fn store4_clip_u16_oriented<const CONTIG: bool>(
             let p16 = _mm_packus_epi32(v, v);
             _mm_storel_epi64(p.add(base as usize) as *mut __m128i, p16);
         } else {
-            *p.add(base as usize) = _mm_cvtsi128_si32(v) as u16;
-            *p.add((base + stride_line) as usize) = _mm_extract_epi32::<1>(v) as u16;
-            *p.add((base + 2 * stride_line) as usize) = _mm_extract_epi32::<2>(v) as u16;
-            *p.add((base + 3 * stride_line) as usize) = _mm_extract_epi32::<3>(v) as u16;
+            store_deblock_unchecked(dst, base, _mm_cvtsi128_si32(v) as u16);
+            store_deblock_unchecked(dst, base + stride_line, _mm_extract_epi32::<1>(v) as u16);
+            store_deblock_unchecked(
+                dst,
+                base + 2 * stride_line,
+                _mm_extract_epi32::<2>(v) as u16,
+            );
+            store_deblock_unchecked(
+                dst,
+                base + 3 * stride_line,
+                _mm_extract_epi32::<3>(v) as u16,
+            );
         }
     }
 }
@@ -1447,13 +1469,12 @@ fn filter_second_deriv_8bpc_avx2(
     dist: isize,
 ) -> u32 {
     unsafe {
-        let p = buf.as_ptr();
-        let s0 = *p.add((s + (dist - 1) * stride) as usize) as i16;
-        let s1 = *p.add((s + dist * stride) as usize) as i16;
-        let s2 = *p.add((s + (dist + 1) * stride) as usize) as i16;
-        let t0 = *p.add((t + (dist - 1) * stride) as usize) as i16;
-        let t1 = *p.add((t + dist * stride) as usize) as i16;
-        let t2 = *p.add((t + (dist + 1) * stride) as usize) as i16;
+        let s0 = load_deblock_unchecked(buf, s + (dist - 1) * stride) as i16;
+        let s1 = load_deblock_unchecked(buf, s + dist * stride) as i16;
+        let s2 = load_deblock_unchecked(buf, s + (dist + 1) * stride) as i16;
+        let t0 = load_deblock_unchecked(buf, t + (dist - 1) * stride) as i16;
+        let t1 = load_deblock_unchecked(buf, t + dist * stride) as i16;
+        let t2 = load_deblock_unchecked(buf, t + (dist + 1) * stride) as i16;
         let a = _mm_setr_epi16(s0, t0, 0, 0, 0, 0, 0, 0);
         let b = _mm_setr_epi16(s1, t1, 0, 0, 0, 0, 0, 0);
         let c = _mm_setr_epi16(s2, t2, 0, 0, 0, 0, 0, 0);
@@ -1477,10 +1498,9 @@ fn filter_end_deriv_8bpc_avx2(
     c2: i16,
 ) -> u32 {
     unsafe {
-        let p = buf.as_ptr();
         let a = _mm_setr_epi16(
-            *p.add(s0 as usize) as i16,
-            *p.add(t0 as usize) as i16,
+            load_deblock_unchecked(buf, s0) as i16,
+            load_deblock_unchecked(buf, t0) as i16,
             0,
             0,
             0,
@@ -1489,8 +1509,8 @@ fn filter_end_deriv_8bpc_avx2(
             0,
         );
         let b = _mm_setr_epi16(
-            *p.add(s1 as usize) as i16,
-            *p.add(t1 as usize) as i16,
+            load_deblock_unchecked(buf, s1) as i16,
+            load_deblock_unchecked(buf, t1) as i16,
             0,
             0,
             0,
@@ -1499,8 +1519,8 @@ fn filter_end_deriv_8bpc_avx2(
             0,
         );
         let c = _mm_setr_epi16(
-            *p.add(s2 as usize) as i16,
-            *p.add(t2 as usize) as i16,
+            load_deblock_unchecked(buf, s2) as i16,
+            load_deblock_unchecked(buf, t2) as i16,
             0,
             0,
             0,
@@ -2895,23 +2915,31 @@ fn setup_load_seg_u8x16_avx2(seg: &[u8], off: usize, w: usize) -> __m128i {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn setup_mask_bits_u8x16_avx2(bits: u16) -> __m128i {
-    _mm_setr_epi8(
-        if bits & (1 << 0) != 0 { -1 } else { 0 },
-        if bits & (1 << 1) != 0 { -1 } else { 0 },
-        if bits & (1 << 2) != 0 { -1 } else { 0 },
-        if bits & (1 << 3) != 0 { -1 } else { 0 },
-        if bits & (1 << 4) != 0 { -1 } else { 0 },
-        if bits & (1 << 5) != 0 { -1 } else { 0 },
-        if bits & (1 << 6) != 0 { -1 } else { 0 },
-        if bits & (1 << 7) != 0 { -1 } else { 0 },
-        if bits & (1 << 8) != 0 { -1 } else { 0 },
-        if bits & (1 << 9) != 0 { -1 } else { 0 },
-        if bits & (1 << 10) != 0 { -1 } else { 0 },
-        if bits & (1 << 11) != 0 { -1 } else { 0 },
-        if bits & (1 << 12) != 0 { -1 } else { 0 },
-        if bits & (1 << 13) != 0 { -1 } else { 0 },
-        if bits & (1 << 14) != 0 { -1 } else { 0 },
-        if bits & (1 << 15) != 0 { -1 } else { 0 },
+    let bit_masks = _mm_setr_epi8(
+        1,
+        2,
+        4,
+        8,
+        16,
+        32,
+        64,
+        0x80u8 as i8,
+        1,
+        2,
+        4,
+        8,
+        16,
+        32,
+        64,
+        0x80u8 as i8,
+    );
+    let lo = _mm_set1_epi8(bits as u8 as i8);
+    let hi = _mm_set1_epi8((bits >> 8) as u8 as i8);
+    let bytemask = _mm_unpacklo_epi64(lo, hi);
+    let hit = _mm_and_si128(bytemask, bit_masks);
+    _mm_andnot_si128(
+        _mm_cmpeq_epi8(hit, _mm_setzero_si128()),
+        _mm_cmpeq_epi8(hit, hit),
     )
 }
 
@@ -2942,6 +2970,12 @@ fn setup_edge_u8x16_avx2(cur: __m128i, prev: __m128i) -> __m128i {
     let avg = _mm_avg_epu8(cur, prev);
     let ored = _mm_or_si128(cur, prev);
     _mm_blendv_epi8(ored, avg, both)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_prev_from_left_u8x16_avx2(cur: __m128i, left: u8) -> __m128i {
+    _mm_insert_epi8::<0>(_mm_slli_si128::<1>(cur), left as i32)
 }
 
 #[inline]
@@ -3247,14 +3281,8 @@ pub(crate) fn setup_thr_cols_seg_8bpc_avx2(
         let cur_s = _mm_shuffle_epi8(slut, segv);
         let cur_q_arr = setup_store_tmp_u8x16_avx2(cur_q);
         let cur_s_arr = setup_store_tmp_u8x16_avx2(cur_s);
-        let mut prev_q_arr = [0u8; 16];
-        let mut prev_s_arr = [0u8; 16];
-        prev_q_arr[0] = left_q_thr[y];
-        prev_s_arr[0] = left_side_thr[y];
-        prev_q_arr[1..].copy_from_slice(&cur_q_arr[..15]);
-        prev_s_arr[1..].copy_from_slice(&cur_s_arr[..15]);
-        let prev_q = unsafe { _mm_loadu_si128(prev_q_arr.as_ptr().cast()) };
-        let prev_s = unsafe { _mm_loadu_si128(prev_s_arr.as_ptr().cast()) };
+        let prev_q = setup_prev_from_left_u8x16_avx2(cur_q, left_q_thr[y]);
+        let prev_s = setup_prev_from_left_u8x16_avx2(cur_s, left_side_thr[y]);
         let mut bits = 0u16;
         let shift = mask_shift + y as u32;
         for x in 0..w {

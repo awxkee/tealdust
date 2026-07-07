@@ -233,6 +233,16 @@ fn scatter_stx8_i16(cf: &mut [i16], sums: &[i16; 48], scan_out: &[u8; 64], mappi
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn zero_stx4_scan_tail_i16_avx2(sums: __m256i, scan_out: &[u8; 16]) -> __m256i {
+    let idx = unsafe { _mm256_cvtepu8_epi16(_mm_loadu_si128(scan_out.as_ptr().cast())) };
+    let ge4 = _mm256_cmpgt_epi16(idx, _mm256_set1_epi16(3));
+    let lt8 = _mm256_cmpgt_epi16(_mm256_set1_epi16(8), idx);
+    let mask = _mm256_and_si256(ge4, lt8);
+    _mm256_blendv_epi8(sums, _mm256_setzero_si256(), mask)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn zero_stx8_i16_avx2(cf: &mut [i16]) {
     let zero = _mm256_setzero_si256();
     let dst = cf.as_mut_ptr() as *mut __m256i;
@@ -248,11 +258,10 @@ pub(crate) fn stxfm4_8bpc_avx2(cf: &mut [i16], kernel: &[i8], eob: usize, scan_o
     debug_assert!(eob < 8);
     debug_assert!(kernel.len() >= 8 * 16);
 
-    let sums_v = stx4_sums(kernel, cf, eob);
+    let sums_v = zero_stx4_scan_tail_i16_avx2(stx4_sums(kernel, cf, eob), scan_out);
     let mut sums = [0i16; 16];
     store_i16x16(&mut sums, sums_v);
 
-    cf[4..8].fill(0);
     scatter_stx4_i16(cf, &sums, scan_out);
 }
 
@@ -453,6 +462,16 @@ fn scatter_stx8_i32(cf: &mut [i32], sums: &[i32; 48], scan_out: &[u8; 64], mappi
 
 #[inline]
 #[target_feature(enable = "avx2")]
+fn zero_stx4_scan_tail_i32_avx2(sums: __m256i, scan_out: *const u8) -> __m256i {
+    let idx = unsafe { _mm256_cvtepu8_epi32(_mm_loadl_epi64(scan_out.cast())) };
+    let ge4 = _mm256_cmpgt_epi32(idx, _mm256_set1_epi32(3));
+    let lt8 = _mm256_cmpgt_epi32(_mm256_set1_epi32(8), idx);
+    let mask = _mm256_and_si256(ge4, lt8);
+    _mm256_blendv_epi8(sums, _mm256_setzero_si256(), mask)
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 fn zero_stx8_i32_avx2(cf: &mut [i32]) {
     let zero = _mm256_setzero_si256();
     let dst = cf.as_mut_ptr() as *mut __m256i;
@@ -477,13 +496,14 @@ pub(crate) fn stxfm4_hbd_avx2(
     debug_assert!(kernel.len() >= 8 * 16);
 
     let (s0, s1) = stx4_sums_hbd(kernel, cf, eob, bitdepth_max);
+    let s0 = zero_stx4_scan_tail_i32_avx2(s0, scan_out.as_ptr());
+    let s1 = zero_stx4_scan_tail_i32_avx2(s1, unsafe { scan_out.as_ptr().add(8) });
     let mut sums = [0i32; 16];
     unsafe {
         _mm256_storeu_si256((&mut sums[..8]).as_mut_ptr().cast(), s0);
         _mm256_storeu_si256((&mut sums[8..16]).as_mut_ptr().cast(), s1);
     }
 
-    cf[4..8].fill(0);
     scatter_stx4_i32(cf, &sums, scan_out);
 }
 

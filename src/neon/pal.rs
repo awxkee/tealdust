@@ -226,14 +226,25 @@ pub(crate) fn pal_pred_hbd_neon(
                 store_u16x8(&mut dst_row[24..], hi);
             }
             64 => {
-                let (dst_chunks, _) = dst_row[..64].as_chunks_mut::<16>();
-                let (idx_chunks, _) = idx_row[..32].as_chunks::<8>();
-                for (dst_chunk, idx_chunk) in dst_chunks.iter_mut().zip(idx_chunks.iter()) {
-                    let idx_v = pal16_indices_from_packed8(load_idx8(idx_chunk));
-                    let (lo, hi) = pal16_shuffle16(pal_v, idx_v);
-                    store_u16x8(&mut dst_chunk[..8], lo);
-                    store_u16x8(&mut dst_chunk[8..], hi);
-                }
+                let idx_v = pal16_indices_from_packed8(load_idx8(idx_row));
+                let (lo, hi) = pal16_shuffle16(pal_v, idx_v);
+                store_u16x8(&mut dst_row[..8], lo);
+                store_u16x8(&mut dst_row[8..16], hi);
+
+                let idx_v = pal16_indices_from_packed8(load_idx8(&idx_row[8..]));
+                let (lo, hi) = pal16_shuffle16(pal_v, idx_v);
+                store_u16x8(&mut dst_row[16..24], lo);
+                store_u16x8(&mut dst_row[24..32], hi);
+
+                let idx_v = pal16_indices_from_packed8(load_idx8(&idx_row[16..]));
+                let (lo, hi) = pal16_shuffle16(pal_v, idx_v);
+                store_u16x8(&mut dst_row[32..40], lo);
+                store_u16x8(&mut dst_row[40..48], hi);
+
+                let idx_v = pal16_indices_from_packed8(load_idx8(&idx_row[24..]));
+                let (lo, hi) = pal16_shuffle16(pal_v, idx_v);
+                store_u16x8(&mut dst_row[48..56], lo);
+                store_u16x8(&mut dst_row[56..], hi);
             }
             _ => crate::ipred::pal_pred(dst_row, stride, pal, idx_row, w, 1),
         }

@@ -27,9 +27,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-use std::arch::x86_64::*;
-
+use crate::avx::cfl::reduce_i32x8;
 use crate::cfl_dispatch::{CflAlphaAccum8, CflApply8, CflGenMat8, CflGenYRow8, CflMhccpPred8};
+use std::arch::x86_64::*;
 
 const CFL_FLT_TYPE_VSTRIP: u32 = 1;
 const CFL_FLT_TYPE_GAUSS: u32 = 2;
@@ -106,16 +106,19 @@ fn store_u8x32(dst: &mut [u8], v: __m256i) {
 
 #[inline]
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
-fn store_i32x16(dst: &mut [i32; 16], v: __m512i) {
-    unsafe { _mm512_storeu_si512(dst.as_mut_ptr().cast(), v) };
+fn store_i32x16_u16(dst: &mut [u16], v: __m512i) {
+    debug_assert!(dst.len() >= 16);
+    let out = _mm512_cvtusepi32_epi16(v);
+    unsafe { _mm256_storeu_si256(dst.as_mut_ptr().cast(), out) };
 }
 
 #[inline]
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn reduce_i32x16(v: __m512i) -> i32 {
-    let mut tmp = [0i32; 16];
-    store_i32x16(&mut tmp, v);
-    tmp.iter().sum()
+    reduce_i32x8(_mm256_add_epi32(
+        _mm512_castsi512_si256(v),
+        _mm512_extracti64x4_epi64::<1>(v),
+    ))
 }
 
 #[inline]
@@ -508,15 +511,9 @@ pub(crate) fn cfl_gen_mat_8bpc_avx512(args: CflGenMat8<'_>) {
         acc11 = _mm512_add_epi32(acc11, _mm512_mullo_epi32(v1, v1));
         acc1 = _mm512_add_epi32(acc1, v1);
 
-        let mut v0_tmp = [0i32; 16];
-        let mut v1_tmp = [0i32; 16];
-        store_i32x16(&mut v0_tmp, v0);
-        store_i32x16(&mut v1_tmp, v1);
         let out = imat_off + rel;
-        for (i, (&a, &b)) in v0_tmp.iter().zip(v1_tmp.iter()).enumerate() {
-            imat0[out + i] = a as u16;
-            imat1[out + i] = b as u16;
-        }
+        store_i32x16_u16(&mut imat0[out..], v0);
+        store_i32x16_u16(&mut imat1[out..], v1);
     }
 
     sums.m00 += reduce_i32x16(acc00);
@@ -526,7 +523,7 @@ pub(crate) fn cfl_gen_mat_8bpc_avx512(args: CflGenMat8<'_>) {
     sums.sum1 += reduce_i32x16(acc1);
 
     if processed < len {
-        crate::cfl_dispatch::cfl_gen_mat_8bpc_scalar(crate::cfl_dispatch::CflGenMat8 {
+        crate::cfl_dispatch::cfl_gen_mat_8bpc_scalar(CflGenMat8 {
             sums,
             imat0,
             imat1,
@@ -654,11 +651,8 @@ fn mhccp_pred16(v0: __m512i, v1: __m512i, alpha: [i32; 3], a2v2: __m512i) -> __m
 #[inline]
 #[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn mhccp_store_u8x16(dst: &mut [u8; 16], v: __m512i) {
-    let mut tmp = [0i32; 16];
-    store_i32x16(&mut tmp, v);
-    for (d, &s) in dst.iter_mut().zip(tmp.iter()) {
-        *d = s.clamp(0, 255) as u8;
-    }
+    let out = _mm512_cvtusepi32_epi8(v);
+    unsafe { _mm_storeu_si128(dst.as_mut_ptr().cast(), out) };
 }
 
 #[inline(always)]

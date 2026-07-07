@@ -1534,7 +1534,7 @@ fn mhccp_load_u8x8_i32(src: &[u8]) -> __m256i {
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn reduce_i32x8(v: __m256i) -> i32 {
+pub(crate) fn reduce_i32x8(v: __m256i) -> i32 {
     let hi = _mm256_extracti128_si256::<1>(v);
     let lo = _mm256_castsi256_si128(v);
     let sum = _mm_add_epi32(lo, hi);
@@ -1866,10 +1866,31 @@ pub(crate) fn cfl_mhccp_pred_8bpc_avx2(args: CflMhccpPred8<'_>) {
     let mut y = 0usize;
     if dir_t && has_t && y < h {
         let dst_row = &mut dst[..w];
-        let (dst32, r32) = dst_row.as_chunks_mut::<32>();
+        let (dst64, r64) = dst_row.as_chunks_mut::<64>();
         let prev = sp - src_top_stride;
+        for (i, chunk) in dst64.iter_mut().enumerate() {
+            let x = i * 64;
+            let (lo, hi) = chunk.split_at_mut(32);
+            let out = mhccp_pred32_avx2(
+                (&src[prev + x..prev + x + 32]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 32]).try_into().unwrap(),
+                alpha,
+                a2v2,
+            );
+            store_u8x32(lo.try_into().unwrap(), out);
+            let x = x + 32;
+            let out = mhccp_pred32_avx2(
+                (&src[prev + x..prev + x + 32]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 32]).try_into().unwrap(),
+                alpha,
+                a2v2,
+            );
+            store_u8x32(hi.try_into().unwrap(), out);
+        }
+        let done64 = dst64.len() * 64;
+        let (dst32, r32) = r64.as_chunks_mut::<32>();
         for (i, chunk) in dst32.iter_mut().enumerate() {
-            let x = i * 32;
+            let x = done64 + i * 32;
             let out = mhccp_pred32_avx2(
                 (&src[prev + x..prev + x + 32]).try_into().unwrap(),
                 (&src[sp + x..sp + x + 32]).try_into().unwrap(),
@@ -1878,7 +1899,7 @@ pub(crate) fn cfl_mhccp_pred_8bpc_avx2(args: CflMhccpPred8<'_>) {
             );
             store_u8x32(chunk, out);
         }
-        let done32 = dst32.len() * 32;
+        let done32 = done64 + dst32.len() * 32;
         let (dst8, dst_tail) = r32.as_chunks_mut::<8>();
         for (i, chunk) in dst8.iter_mut().enumerate() {
             let x = done32 + i * 8;
@@ -1916,9 +1937,45 @@ pub(crate) fn cfl_mhccp_pred_8bpc_avx2(args: CflMhccpPred8<'_>) {
             x0 = 1;
         }
 
-        let (dst32, r32) = dst_row[x0..].as_chunks_mut::<32>();
+        let (dst64, r64) = dst_row[x0..].as_chunks_mut::<64>();
+        for (i, chunk) in dst64.iter_mut().enumerate() {
+            let x = x0 + i * 64;
+            let (lo, hi) = chunk.split_at_mut(32);
+            let v0_off = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x - 1
+            } else {
+                sp + x
+            };
+            let out = mhccp_pred32_avx2(
+                (&src[v0_off..v0_off + 32]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 32]).try_into().unwrap(),
+                alpha,
+                a2v2,
+            );
+            store_u8x32(lo.try_into().unwrap(), out);
+
+            let x = x + 32;
+            let v0_off = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x - 1
+            } else {
+                sp + x
+            };
+            let out = mhccp_pred32_avx2(
+                (&src[v0_off..v0_off + 32]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 32]).try_into().unwrap(),
+                alpha,
+                a2v2,
+            );
+            store_u8x32(hi.try_into().unwrap(), out);
+        }
+        let done64 = x0 + dst64.len() * 64;
+        let (dst32, r32) = r64.as_chunks_mut::<32>();
         for (i, chunk) in dst32.iter_mut().enumerate() {
-            let x = x0 + i * 32;
+            let x = done64 + i * 32;
             let v0_off = if dir_t {
                 sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
             } else if dir_l {
@@ -1934,7 +1991,7 @@ pub(crate) fn cfl_mhccp_pred_8bpc_avx2(args: CflMhccpPred8<'_>) {
             );
             store_u8x32(chunk, out);
         }
-        let done32 = x0 + dst32.len() * 32;
+        let done32 = done64 + dst32.len() * 32;
         let (dst8, dst_tail) = r32.as_chunks_mut::<8>();
         for (i, chunk) in dst8.iter_mut().enumerate() {
             let x = done32 + i * 8;

@@ -1263,12 +1263,12 @@ fn mhccp_load_u8x8_i32_halves(src: &[u8]) -> (int32x4_t, int32x4_t) {
 fn mhccp_load_u8x16_i32_quads(src: &[u8; 16]) -> (int32x4_t, int32x4_t, int32x4_t, int32x4_t) {
     let v = load_u8x16(src);
     let lo16 = vmovl_u8(vget_low_u8(v));
-    let hi16 = vmovl_u8(vget_high_u8(v));
+    let hi16 = vmovl_high_u8(v);
     (
         vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(lo16))),
-        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(lo16))),
+        vreinterpretq_s32_u32(vmovl_high_u16(lo16)),
         vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(hi16))),
-        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(hi16))),
+        vreinterpretq_s32_u32(vmovl_high_u16(hi16)),
     )
 }
 
@@ -1563,10 +1563,31 @@ pub(crate) fn cfl_mhccp_pred_8bpc_neon(args: CflMhccpPred8<'_>) {
     let mut y = 0usize;
     if dir_t && has_t && y < h {
         let dst_row = &mut dst[..w];
-        let (dst16, r16) = dst_row.as_chunks_mut::<16>();
+        let (dst32, r32) = dst_row.as_chunks_mut::<32>();
         let prev = sp - src_top_stride;
+        for (i, chunk) in dst32.iter_mut().enumerate() {
+            let x = i * 32;
+            let (lo, hi) = chunk.split_at_mut(16);
+            mhccp_pred16_store_neon(
+                lo.try_into().unwrap(),
+                (&src[prev + x..prev + x + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+            );
+            let x = x + 16;
+            mhccp_pred16_store_neon(
+                hi.try_into().unwrap(),
+                (&src[prev + x..prev + x + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+            );
+        }
+        let done32 = dst32.len() * 32;
+        let (dst16, r16) = r32.as_chunks_mut::<16>();
         for (i, chunk) in dst16.iter_mut().enumerate() {
-            let x = i * 16;
+            let x = done32 + i * 16;
             mhccp_pred16_store_neon(
                 chunk,
                 (&src[prev + x..prev + x + 16]).try_into().unwrap(),
@@ -1575,7 +1596,7 @@ pub(crate) fn cfl_mhccp_pred_8bpc_neon(args: CflMhccpPred8<'_>) {
                 a2v2,
             );
         }
-        let done16 = dst16.len() * 16;
+        let done16 = done32 + dst16.len() * 16;
         let (dst8, dst_tail) = r16.as_chunks_mut::<8>();
         for (i, chunk) in dst8.iter_mut().enumerate() {
             let x = done16 + i * 8;
@@ -1612,9 +1633,45 @@ pub(crate) fn cfl_mhccp_pred_8bpc_neon(args: CflMhccpPred8<'_>) {
             dst_row[0] = mhccp_pred_one_8_neon(&alpha, a2v2_scalar, v0, src[sp] as i32);
             x0 = 1;
         }
-        let (dst16, r16) = dst_row[x0..].as_chunks_mut::<16>();
+        let (dst32, r32) = dst_row[x0..].as_chunks_mut::<32>();
+        for (i, chunk) in dst32.iter_mut().enumerate() {
+            let x = x0 + i * 32;
+            let (lo, hi) = chunk.split_at_mut(16);
+            let v0_off = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x - 1
+            } else {
+                sp + x
+            };
+            mhccp_pred16_store_neon(
+                lo.try_into().unwrap(),
+                (&src[v0_off..v0_off + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+            );
+
+            let x = x + 16;
+            let v0_off = if dir_t {
+                sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
+            } else if dir_l {
+                sp + x - 1
+            } else {
+                sp + x
+            };
+            mhccp_pred16_store_neon(
+                hi.try_into().unwrap(),
+                (&src[v0_off..v0_off + 16]).try_into().unwrap(),
+                (&src[sp + x..sp + x + 16]).try_into().unwrap(),
+                alpha,
+                a2v2,
+            );
+        }
+        let done32 = x0 + dst32.len() * 32;
+        let (dst16, r16) = r32.as_chunks_mut::<16>();
         for (i, chunk) in dst16.iter_mut().enumerate() {
-            let x = x0 + i * 16;
+            let x = done32 + i * 16;
             let v0_off = if dir_t {
                 sp + x - ((((row_y > 0) as usize) | has_t as usize) * w)
             } else if dir_l {
@@ -1630,7 +1687,7 @@ pub(crate) fn cfl_mhccp_pred_8bpc_neon(args: CflMhccpPred8<'_>) {
                 a2v2,
             );
         }
-        let done16 = x0 + dst16.len() * 16;
+        let done16 = done32 + dst16.len() * 16;
         let (dst8, dst_tail) = r16.as_chunks_mut::<8>();
         for (i, chunk) in dst8.iter_mut().enumerate() {
             let x = done16 + i * 8;
