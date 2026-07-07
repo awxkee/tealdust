@@ -39,8 +39,7 @@ const ENABLE_NEON_CFL_RDM_8BPC: bool = true;
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn x86_cfl_has_avx512() -> bool {
-    std::is_x86_feature_detected!("avx2")
-        && std::is_x86_feature_detected!("avx512f")
+    std::is_x86_feature_detected!("avx512f")
         && std::is_x86_feature_detected!("avx512bw")
         && std::is_x86_feature_detected!("avx512vl")
         && std::is_x86_feature_detected!("avx512vnni")

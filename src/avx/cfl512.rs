@@ -70,48 +70,48 @@ fn cfl_ac_422_scalar(y: &[u8], yrow: usize, x: usize, dc0: i32) -> i32 {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn load_u8x16_i32(src: &[u8]) -> __m512i {
     debug_assert!(src.len() >= 16);
     unsafe { _mm512_cvtepu8_epi32(_mm_loadu_si128(src.as_ptr().cast())) }
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn load_u8x32_i16(src: &[u8]) -> __m512i {
     debug_assert!(src.len() >= 32);
     unsafe { _mm512_cvtepu8_epi16(_mm256_loadu_si256(src.as_ptr().cast())) }
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn load_u8x64(src: &[u8]) -> __m512i {
     debug_assert!(src.len() >= 64);
     unsafe { _mm512_loadu_si512(src.as_ptr().cast()) }
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn load_u16x32(src: &[u16]) -> __m512i {
     debug_assert!(src.len() >= 32);
     unsafe { _mm512_loadu_si512(src.as_ptr().cast()) }
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn store_u8x32(dst: &mut [u8], v: __m256i) {
     debug_assert!(dst.len() >= 32);
     unsafe { _mm256_storeu_si256(dst.as_mut_ptr().cast(), v) };
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn store_i32x16(dst: &mut [i32; 16], v: __m512i) {
     unsafe { _mm512_storeu_si512(dst.as_mut_ptr().cast(), v) };
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn reduce_i32x16(v: __m512i) -> i32 {
     let mut tmp = [0i32; 16];
     store_i32x16(&mut tmp, v);
@@ -119,13 +119,13 @@ fn reduce_i32x16(v: __m512i) -> i32 {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn alpha_abs_i16(alpha: i32) -> __m512i {
     _mm512_set1_epi16((if alpha < 0 { -alpha } else { alpha }) as i16)
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn apply32_i16_ac(ac: __m512i, alpha_abs: __m512i, alpha: i32, dc_v: __m512i) -> __m256i {
     let zero = _mm512_setzero_si512();
     let ac_neg = _mm512_cmpgt_epi16_mask(zero, ac);
@@ -137,7 +137,7 @@ fn apply32_i16_ac(ac: __m512i, alpha_abs: __m512i, alpha: i32, dc_v: __m512i) ->
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn ac32_420_uniform(cur: __m512i, bot: __m512i, dc0v: __m512i) -> __m512i {
     let ones = _mm512_set1_epi8(1);
     let csum = _mm512_maddubs_epi16(cur, ones);
@@ -146,7 +146,7 @@ fn ac32_420_uniform(cur: __m512i, bot: __m512i, dc0v: __m512i) -> __m512i {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn ac32_422_uniform(row: __m512i, dc0v: __m512i) -> __m512i {
     let ones = _mm512_set1_epi8(1);
     _mm512_sub_epi16(
@@ -156,12 +156,12 @@ fn ac32_422_uniform(row: __m512i, dc0v: __m512i) -> __m512i {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn ac32_444(row: __m512i, dc0v: __m512i) -> __m512i {
     _mm512_sub_epi16(_mm512_slli_epi16::<3>(row), dc0v)
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn cfl_apply_420_8bpc_avx512(args: CflApply8<'_>) {
     if args.params.filter_type == CFL_FLT_TYPE_VSTRIP
         || args.params.filter_type == CFL_FLT_TYPE_GAUSS
@@ -258,7 +258,7 @@ pub(crate) fn cfl_apply_420_8bpc_avx512(args: CflApply8<'_>) {
     }
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn cfl_apply_422_8bpc_avx512(args: CflApply8<'_>) {
     if args.params.filter_type == CFL_FLT_TYPE_VSTRIP
         || args.params.filter_type == CFL_FLT_TYPE_GAUSS
@@ -350,7 +350,7 @@ pub(crate) fn cfl_apply_422_8bpc_avx512(args: CflApply8<'_>) {
     }
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn cfl_apply_444_8bpc_avx512(args: CflApply8<'_>) {
     let CflApply8 {
         y,
@@ -455,7 +455,7 @@ fn load_strided_u8x32(samples: &[u8], mut off: usize, stride: usize) -> [u8; 32]
     tmp
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn cfl_gen_mat_8bpc_avx512(args: CflGenMat8<'_>) {
     if args.len < 16 {
         crate::cfl_dispatch::cfl_gen_mat_8bpc_scalar(args);
@@ -541,7 +541,7 @@ pub(crate) fn cfl_gen_mat_8bpc_avx512(args: CflGenMat8<'_>) {
     }
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn cfl_alpha_accum_8bpc_avx512(args: CflAlphaAccum8<'_>) {
     if args.len < 32 {
         crate::cfl_dispatch::cfl_alpha_accum_8bpc_scalar(args);
@@ -613,7 +613,7 @@ pub(crate) fn cfl_alpha_accum_8bpc_avx512(args: CflAlphaAccum8<'_>) {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn mhccp_round_signed_shift16(v: __m512i) -> __m512i {
     let zero = _mm512_setzero_si512();
     let neg = _mm512_cmpgt_epi32_mask(zero, v);
@@ -625,13 +625,13 @@ fn mhccp_round_signed_shift16(v: __m512i) -> __m512i {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn mhccp_mul32(v: __m512i, alpha: i32) -> __m512i {
     mhccp_round_signed_shift16(_mm512_mullo_epi32(v, _mm512_set1_epi32(alpha)))
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn mhccp_sqrnd8(v: __m512i) -> __m512i {
     _mm512_srai_epi32::<8>(_mm512_add_epi32(
         _mm512_mullo_epi32(v, v),
@@ -640,7 +640,7 @@ fn mhccp_sqrnd8(v: __m512i) -> __m512i {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn mhccp_pred16(v0: __m512i, v1: __m512i, alpha: [i32; 3], a2v2: __m512i) -> __m512i {
     _mm512_add_epi32(
         _mm512_add_epi32(
@@ -652,7 +652,7 @@ fn mhccp_pred16(v0: __m512i, v1: __m512i, alpha: [i32; 3], a2v2: __m512i) -> __m
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn mhccp_store_u8x16(dst: &mut [u8; 16], v: __m512i) {
     let mut tmp = [0i32; 16];
     store_i32x16(&mut tmp, v);
@@ -668,7 +668,7 @@ fn mhccp_pred_one_8(alpha: &[i32; 3], a2v2: i32, v0: i32, v1: i32) -> u8 {
         .clamp(0, 255) as u8
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn cfl_mhccp_pred_8bpc_avx512(args: CflMhccpPred8<'_>) {
     if !crate::cfl_dispatch::cfl_mhccp_coeffs_fit_fast_mul(&args.alpha) || args.w < 16 {
         crate::cfl_dispatch::cfl_mhccp_pred_8bpc_scalar(args);
@@ -773,7 +773,7 @@ pub(crate) fn cfl_mhccp_pred_8bpc_avx512(args: CflMhccpPred8<'_>) {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn gen_y32_uniform(src: &[u8], src_off: usize, bottom_offset: usize, x: usize) -> __m256i {
     let xl = x << 1;
     let ones = _mm512_set1_epi8(1);
@@ -786,7 +786,7 @@ fn gen_y32_uniform(src: &[u8], src_off: usize, bottom_offset: usize, x: usize) -
     _mm512_cvtusepi16_epi8(_mm512_srli_epi16::<2>(sum))
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn cfl_gen_y_row_8bpc_avx512(args: CflGenYRow8<'_>) {
     if args.filter_type != 0 {
         crate::avx::cfl_gen_y_row_8bpc_avx2(args);

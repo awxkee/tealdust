@@ -35,9 +35,37 @@ use crate::itx_2d::ITX_TMP_PIXELS;
 
 #[inline(always)]
 fn with_sse41_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -> R {
-    assert!(len <= ITX_TMP_PIXELS);
-    let mut scratch = [0i16; ITX_TMP_PIXELS];
-    f(&mut scratch[..len])
+    match len {
+        16 => {
+            let mut scratch = [0i16; 16];
+            f(&mut scratch)
+        }
+        32 => {
+            let mut scratch = [0i16; 32];
+            f(&mut scratch)
+        }
+        64 => {
+            let mut scratch = [0i16; 64];
+            f(&mut scratch)
+        }
+        128 => {
+            let mut scratch = [0i16; 128];
+            f(&mut scratch)
+        }
+        256 => {
+            let mut scratch = [0i16; 256];
+            f(&mut scratch)
+        }
+        512 => {
+            let mut scratch = [0i16; 512];
+            f(&mut scratch)
+        }
+        1024 => {
+            let mut scratch = [0i16; 1024];
+            f(&mut scratch)
+        }
+        _ => unreachable!("unsupported ITX i16 scratch len {}", len),
+    }
 }
 
 #[inline]
@@ -1903,7 +1931,7 @@ fn idct_dequant_dct_i16_sse41_impl_const<const N: usize, const IS_RECT2: bool>(
     let minv = _mm_set1_epi32(row_clip_min);
     let maxv = _mm_set1_epi32(row_clip_max);
 
-    with_sse41_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
+    with_sse41_itx_i16_scratch(N * N, |scratch| {
         let y = if N == 16 {
             sse41_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, 16>(
                 coeff, scratch, 0, ncols, rnd, sh, minv, maxv,
@@ -1960,7 +1988,7 @@ fn idct_dequant_dct_i16_sse41_fused_8bpc_impl_const<const N: usize, const IS_REC
     let minv = _mm_set1_epi32(row_clip_min);
     let maxv = _mm_set1_epi32(row_clip_max);
 
-    with_sse41_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
+    with_sse41_itx_i16_scratch(N * N, |scratch| {
         let y = if N == 16 {
             sse41_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, 16>(
                 coeff, scratch, 0, ncols, rnd, sh, minv, maxv,

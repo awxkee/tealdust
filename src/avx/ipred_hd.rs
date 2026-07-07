@@ -49,6 +49,37 @@ fn store_u16x16(a: &mut [u16; 16], v: __m256i) {
 }
 
 #[inline(always)]
+fn splat_u16x64_avx2(a: &mut [u16; 64], v: __m256i) {
+    let (chunks, _) = a.as_chunks_mut::<16>();
+    store_u16x16(&mut chunks[0], v);
+    store_u16x16(&mut chunks[1], v);
+    store_u16x16(&mut chunks[2], v);
+    store_u16x16(&mut chunks[3], v);
+}
+
+#[inline(always)]
+fn splat_row_u16_avx2_with_v(row: &mut [u16], v: u16, vv: __m256i, vv8: __m128i) {
+    let (chunks64, rem64) = row.as_chunks_mut::<64>();
+    for c in chunks64.iter_mut() {
+        splat_u16x64_avx2(c, vv);
+    }
+
+    let (chunks16, rem16) = rem64.as_chunks_mut::<16>();
+    for c in chunks16.iter_mut() {
+        store_u16x16(c, vv);
+    }
+
+    let (chunks8, rem) = rem16.as_chunks_mut::<8>();
+    for c in chunks8.iter_mut() {
+        store_u16x8(c, vv8);
+    }
+
+    for d in rem.iter_mut() {
+        *d = v;
+    }
+}
+
+#[inline(always)]
 fn store_u16x8(a: &mut [u16; 8], v: __m128i) {
     unsafe { _mm_storeu_si128(a.as_mut_ptr().cast(), v) };
 }
@@ -57,18 +88,8 @@ fn store_u16x8(a: &mut [u16; 8], v: __m128i) {
 #[target_feature(enable = "avx2")]
 fn splat_row_u16_avx2(row: &mut [u16], v: u16) {
     let vv = _mm256_set1_epi16(v as i16);
-    let (chunks, rem16) = row.as_chunks_mut::<16>();
-    for c in chunks.iter_mut() {
-        store_u16x16(c, vv);
-    }
-    let (chunks8, rem) = rem16.as_chunks_mut::<8>();
     let vv8 = _mm256_castsi256_si128(vv);
-    for c in chunks8.iter_mut() {
-        store_u16x8(c, vv8);
-    }
-    for d in rem.iter_mut() {
-        *d = v;
-    }
+    splat_row_u16_avx2_with_v(row, v, vv, vv8);
 }
 
 #[inline]
@@ -88,10 +109,26 @@ fn splat_h_rows4_u16_avx2(dst: &mut [u16], stride: usize, off: usize, w: usize, 
     let v2 = _mm256_set1_epi16(v[2] as i16);
     let v3 = _mm256_set1_epi16(v[3] as i16);
 
-    let (r0_16, r0_rem16) = row0.as_chunks_mut::<16>();
-    let (r1_16, r1_rem16) = row1.as_chunks_mut::<16>();
-    let (r2_16, r2_rem16) = row2.as_chunks_mut::<16>();
-    let (r3_16, r3_rem16) = row3.as_chunks_mut::<16>();
+    let (r0_64, r0_rem64) = row0.as_chunks_mut::<64>();
+    let (r1_64, r1_rem64) = row1.as_chunks_mut::<64>();
+    let (r2_64, r2_rem64) = row2.as_chunks_mut::<64>();
+    let (r3_64, r3_rem64) = row3.as_chunks_mut::<64>();
+    for (((r0, r1), r2), r3) in r0_64
+        .iter_mut()
+        .zip(r1_64.iter_mut())
+        .zip(r2_64.iter_mut())
+        .zip(r3_64.iter_mut())
+    {
+        splat_u16x64_avx2(r0, v0);
+        splat_u16x64_avx2(r1, v1);
+        splat_u16x64_avx2(r2, v2);
+        splat_u16x64_avx2(r3, v3);
+    }
+
+    let (r0_16, r0_rem16) = r0_rem64.as_chunks_mut::<16>();
+    let (r1_16, r1_rem16) = r1_rem64.as_chunks_mut::<16>();
+    let (r2_16, r2_rem16) = r2_rem64.as_chunks_mut::<16>();
+    let (r3_16, r3_rem16) = r3_rem64.as_chunks_mut::<16>();
     for (((r0, r1), r2), r3) in r0_16
         .iter_mut()
         .zip(r1_16.iter_mut())
@@ -253,30 +290,23 @@ fn sum_u16_avx2(s: &[u16]) -> u32 {
 
 #[target_feature(enable = "avx2")]
 fn splat_fill_avx2(dst: &mut [u16], stride: usize, off: usize, w: usize, h: usize, dc: u16) {
-    let v = _mm256_set1_epi16(dc as i16);
+    let vv = _mm256_set1_epi16(dc as i16);
+    let vv8 = _mm256_castsi256_si128(vv);
     let mut p = off;
     let mut rows = h;
     while rows >= 4 {
-        for _ in 0..4 {
-            let (chunks, rem) = dst[p..p + w].as_chunks_mut::<16>();
-            for c in chunks.iter_mut() {
-                store_u16x16(c, v);
-            }
-            for d in rem.iter_mut() {
-                *d = dc;
-            }
-            p += stride;
-        }
+        splat_row_u16_avx2_with_v(&mut dst[p..p + w], dc, vv, vv8);
+        p += stride;
+        splat_row_u16_avx2_with_v(&mut dst[p..p + w], dc, vv, vv8);
+        p += stride;
+        splat_row_u16_avx2_with_v(&mut dst[p..p + w], dc, vv, vv8);
+        p += stride;
+        splat_row_u16_avx2_with_v(&mut dst[p..p + w], dc, vv, vv8);
+        p += stride;
         rows -= 4;
     }
     for _ in 0..rows {
-        let (chunks, rem) = dst[p..p + w].as_chunks_mut::<16>();
-        for c in chunks.iter_mut() {
-            store_u16x16(c, v);
-        }
-        for d in rem.iter_mut() {
-            *d = dc;
-        }
+        splat_row_u16_avx2_with_v(&mut dst[p..p + w], dc, vv, vv8);
         p += stride;
     }
 }

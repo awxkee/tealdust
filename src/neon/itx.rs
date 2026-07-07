@@ -32,9 +32,37 @@ use std::arch::aarch64::*;
 
 #[inline(always)]
 fn with_neon_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -> R {
-    assert!(len <= ITX_TMP_PIXELS);
-    let mut scratch = [0i16; ITX_TMP_PIXELS];
-    f(&mut scratch[..len])
+    match len {
+        16 => {
+            let mut scratch = [0i16; 16];
+            f(&mut scratch)
+        }
+        32 => {
+            let mut scratch = [0i16; 32];
+            f(&mut scratch)
+        }
+        64 => {
+            let mut scratch = [0i16; 64];
+            f(&mut scratch)
+        }
+        128 => {
+            let mut scratch = [0i16; 128];
+            f(&mut scratch)
+        }
+        256 => {
+            let mut scratch = [0i16; 256];
+            f(&mut scratch)
+        }
+        512 => {
+            let mut scratch = [0i16; 512];
+            f(&mut scratch)
+        }
+        1024 => {
+            let mut scratch = [0i16; 1024];
+            f(&mut scratch)
+        }
+        _ => unreachable!("unsupported ITX i16 scratch len {}", len),
+    }
 }
 
 #[inline]

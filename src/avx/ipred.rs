@@ -157,6 +157,46 @@ fn store_u8x32_fixed(a: &mut [u8; 32], v: __m256i) {
 }
 
 #[inline(always)]
+fn splat_u8x128_avx2(a: &mut [u8; 128], v: __m256i) {
+    let (chunks, _) = a.as_chunks_mut::<32>();
+    store_u8x32_fixed(&mut chunks[0], v);
+    store_u8x32_fixed(&mut chunks[1], v);
+    store_u8x32_fixed(&mut chunks[2], v);
+    store_u8x32_fixed(&mut chunks[3], v);
+}
+
+#[inline(always)]
+fn splat_row_u8_avx2_with_v(row: &mut [u8], v: u8, vv: __m256i, vv16: __m128i) {
+    let (c128, r128) = row.as_chunks_mut::<128>();
+    for c in c128.iter_mut() {
+        splat_u8x128_avx2(c, vv);
+    }
+
+    let (c32, r32) = r128.as_chunks_mut::<32>();
+    for c in c32.iter_mut() {
+        store_u8x32_fixed(c, vv);
+    }
+
+    let (c16, rem16) = r32.as_chunks_mut::<16>();
+    for c in c16.iter_mut() {
+        store_u8x16_fixed(c, vv16);
+    }
+
+    let (c8, rem) = rem16.as_chunks_mut::<8>();
+    for c in c8.iter_mut() {
+        store_u8x8_fixed(c, vv16);
+    }
+
+    let (c4, rem4) = rem.as_chunks_mut::<4>();
+    for c in c4.iter_mut() {
+        *c = [v; 4];
+    }
+    for b in rem4.iter_mut() {
+        *b = v;
+    }
+}
+
+#[inline(always)]
 fn load_u8x16_i16_avx2(a: &[u8; 16]) -> __m256i {
     unsafe { _mm256_cvtepu8_epi16(_mm_loadu_si128(a.as_ptr().cast())) }
 }
@@ -176,27 +216,8 @@ fn store_i16x16_u8_fixed(a: &mut [u8; 16], v: __m256i) {
 #[target_feature(enable = "avx2")]
 fn splat_row_u8_avx2(row: &mut [u8], v: u8) {
     let vv = _mm256_set1_epi8(v as i8);
-    let (c32, r32) = row.as_chunks_mut::<32>();
-    for c in c32.iter_mut() {
-        store_u8x32_fixed(c, vv);
-    }
-    let (c16, rem16) = r32.as_chunks_mut::<16>();
     let vv16 = _mm_set1_epi8(v as i8);
-    for c in c16.iter_mut() {
-        store_u8x16_fixed(c, vv16);
-    }
-    let (c8, rem) = rem16.as_chunks_mut::<8>();
-    for c in c8.iter_mut() {
-        store_u8x8_fixed(c, vv16);
-    }
-    // Widths of 4 land entirely here; direct stores avoid a memset call.
-    let (c4, rem4) = rem.as_chunks_mut::<4>();
-    for c in c4.iter_mut() {
-        *c = [v; 4];
-    }
-    for b in rem4.iter_mut() {
-        *b = v;
-    }
+    splat_row_u8_avx2_with_v(row, v, vv, vv16);
 }
 
 #[inline]
@@ -216,10 +237,26 @@ fn splat_h_rows4_u8_avx2(dst: &mut [u8], stride: usize, off: usize, w: usize, v:
     let v2 = _mm256_set1_epi8(v[2] as i8);
     let v3 = _mm256_set1_epi8(v[3] as i8);
 
-    let (r0_32, r0_rem32) = row0.as_chunks_mut::<32>();
-    let (r1_32, r1_rem32) = row1.as_chunks_mut::<32>();
-    let (r2_32, r2_rem32) = row2.as_chunks_mut::<32>();
-    let (r3_32, r3_rem32) = row3.as_chunks_mut::<32>();
+    let (r0_128, r0_rem128) = row0.as_chunks_mut::<128>();
+    let (r1_128, r1_rem128) = row1.as_chunks_mut::<128>();
+    let (r2_128, r2_rem128) = row2.as_chunks_mut::<128>();
+    let (r3_128, r3_rem128) = row3.as_chunks_mut::<128>();
+    for (((r0, r1), r2), r3) in r0_128
+        .iter_mut()
+        .zip(r1_128.iter_mut())
+        .zip(r2_128.iter_mut())
+        .zip(r3_128.iter_mut())
+    {
+        splat_u8x128_avx2(r0, v0);
+        splat_u8x128_avx2(r1, v1);
+        splat_u8x128_avx2(r2, v2);
+        splat_u8x128_avx2(r3, v3);
+    }
+
+    let (r0_32, r0_rem32) = r0_rem128.as_chunks_mut::<32>();
+    let (r1_32, r1_rem32) = r1_rem128.as_chunks_mut::<32>();
+    let (r2_32, r2_rem32) = r2_rem128.as_chunks_mut::<32>();
+    let (r3_32, r3_rem32) = r3_rem128.as_chunks_mut::<32>();
     for (((r0, r1), r2), r3) in r0_32
         .iter_mut()
         .zip(r1_32.iter_mut())
@@ -1193,21 +1230,23 @@ fn sum_u8_avx2(s: &[u8]) -> u32 {
 #[inline]
 #[target_feature(enable = "avx2")]
 fn splat_fill_avx2(dst: &mut [u8], stride: usize, off: usize, w: usize, h: usize, dc: u8) {
+    let vv = _mm256_set1_epi8(dc as i8);
+    let vv16 = _mm_set1_epi8(dc as i8);
     let mut p = off;
     let mut rows = h;
     while rows >= 4 {
-        splat_row_u8_avx2(&mut dst[p..p + w], dc);
+        splat_row_u8_avx2_with_v(&mut dst[p..p + w], dc, vv, vv16);
         p += stride;
-        splat_row_u8_avx2(&mut dst[p..p + w], dc);
+        splat_row_u8_avx2_with_v(&mut dst[p..p + w], dc, vv, vv16);
         p += stride;
-        splat_row_u8_avx2(&mut dst[p..p + w], dc);
+        splat_row_u8_avx2_with_v(&mut dst[p..p + w], dc, vv, vv16);
         p += stride;
-        splat_row_u8_avx2(&mut dst[p..p + w], dc);
+        splat_row_u8_avx2_with_v(&mut dst[p..p + w], dc, vv, vv16);
         p += stride;
         rows -= 4;
     }
     for _ in 0..rows {
-        splat_row_u8_avx2(&mut dst[p..p + w], dc);
+        splat_row_u8_avx2_with_v(&mut dst[p..p + w], dc, vv, vv16);
         p += stride;
     }
 }

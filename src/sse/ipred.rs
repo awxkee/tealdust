@@ -115,7 +115,8 @@ pub(crate) fn ipred_h_8bpc_sse41(
             tl[o - 1 - y]
         };
         let row = &mut dst[off..off + width];
-        row.fill(v);
+        let vv = _mm_set1_epi8(v as i8);
+        splat_row_u8_sse41_with_v(row, v, vv);
         off += stride;
     }
 }
@@ -480,6 +481,32 @@ fn store_u8x16_fixed(a: &mut [u8; 16], v: __m128i) {
     unsafe { _mm_storeu_si128(a.as_mut_ptr() as *mut __m128i, v) };
 }
 
+#[inline(always)]
+fn splat_u8x64_sse41(a: &mut [u8; 64], v: __m128i) {
+    let (chunks, _) = a.as_chunks_mut::<16>();
+    store_u8x16_fixed(&mut chunks[0], v);
+    store_u8x16_fixed(&mut chunks[1], v);
+    store_u8x16_fixed(&mut chunks[2], v);
+    store_u8x16_fixed(&mut chunks[3], v);
+}
+
+#[inline(always)]
+fn splat_row_u8_sse41_with_v(row: &mut [u8], dc: u8, v: __m128i) {
+    let (chunks64, rem64) = row.as_chunks_mut::<64>();
+    for c in chunks64.iter_mut() {
+        splat_u8x64_sse41(c, v);
+    }
+
+    let (chunks16, rem) = rem64.as_chunks_mut::<16>();
+    for c in chunks16.iter_mut() {
+        store_u8x16_fixed(c, v);
+    }
+
+    for d in rem.iter_mut() {
+        *d = dc;
+    }
+}
+
 #[inline]
 #[target_feature(enable = "sse4.1")]
 fn sum_u8_sse41(s: &[u8]) -> u32 {
@@ -503,14 +530,20 @@ fn sum_u8_sse41(s: &[u8]) -> u32 {
 fn splat_fill_sse41(dst: &mut [u8], stride: usize, off: usize, w: usize, h: usize, dc: u8) {
     let v = _mm_set1_epi8(dc as i8);
     let mut p = off;
-    for _ in 0..h {
-        let (chunks, rem) = dst[p..p + w].as_chunks_mut::<16>();
-        for c in chunks.iter_mut() {
-            store_u8x16_fixed(c, v);
-        }
-        for d in rem.iter_mut() {
-            *d = dc;
-        }
+    let mut rows = h;
+    while rows >= 4 {
+        splat_row_u8_sse41_with_v(&mut dst[p..p + w], dc, v);
+        p += stride;
+        splat_row_u8_sse41_with_v(&mut dst[p..p + w], dc, v);
+        p += stride;
+        splat_row_u8_sse41_with_v(&mut dst[p..p + w], dc, v);
+        p += stride;
+        splat_row_u8_sse41_with_v(&mut dst[p..p + w], dc, v);
+        p += stride;
+        rows -= 4;
+    }
+    for _ in 0..rows {
+        splat_row_u8_sse41_with_v(&mut dst[p..p + w], dc, v);
         p += stride;
     }
 }

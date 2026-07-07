@@ -30,7 +30,7 @@
 use std::arch::x86_64::*;
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn load_i8x16_i16_512(ptr: *const i8) -> __m512i {
     let bytes = unsafe { _mm_loadu_si128(ptr.cast()) };
     let words = _mm256_cvtepi8_epi16(bytes);
@@ -38,14 +38,14 @@ fn load_i8x16_i16_512(ptr: *const i8) -> __m512i {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn coeff_pair_512(c0: i16, c1: i16) -> __m512i {
     let pair = (c0 as u16 as u32) | ((c1 as u16 as u32) << 16);
     _mm512_set1_epi32(pair as i32)
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn madd_pair_16_512(
     acc_lo: __m512i,
     acc_hi: __m512i,
@@ -74,7 +74,7 @@ fn round_pack_16(acc_lo: __m512i, acc_hi: __m512i) -> __m512i {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn stx16_sums_vnni(kernel: &[i8], cf: &[i16], eob: usize, row_stride: usize, x: usize) -> __m512i {
     let mut acc_lo = _mm512_set1_epi32(63);
     let mut acc_hi = acc_lo;
@@ -104,7 +104,7 @@ fn stx16_sums_vnni(kernel: &[i8], cf: &[i16], eob: usize, row_stride: usize, x: 
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn store_low_i16x16(dst: &mut [i16], v: __m512i) {
     let v = _mm512_castsi512_si256(v);
     unsafe { _mm256_storeu_si256(dst.as_mut_ptr().cast(), v) };
@@ -133,7 +133,7 @@ fn zero_stx8_i16_avx512(cf: &mut [i16]) {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn stxfm4_8bpc_avx512(cf: &mut [i16], kernel: &[i8], eob: usize, scan_out: &[u8; 16]) {
     debug_assert!(eob < 8);
     debug_assert!(kernel.len() >= 8 * 16);
@@ -147,7 +147,7 @@ pub(crate) fn stxfm4_8bpc_avx512(cf: &mut [i16], kernel: &[i8], eob: usize, scan
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn stxfm8_8bpc_avx512(
     cf: &mut [i16],
     kernel: &[i8],

@@ -91,30 +91,30 @@ pub type FilterMasks = [[[u16; 4]; 5]; 64];
 pub fn mask_outer_edge_l(masks: &mut [[u16; 4]], by4: i32, h4: i32, bwl4c: u8, l: &mut [u8]) {
     debug_assert!((bwl4c as u32) <= 3);
     let mut mask: u64 = 1 << by4;
-    for y in 0..h4 as usize {
+    for (y, &l) in l[..h4 as usize].iter().enumerate() {
         let sidx = ((by4 as usize) + y) >> 4;
         let smask = (mask >> (sidx << 4)) as u16;
-        let lvl = imin(bwl4c as i32, l[y] as i32) as usize;
+        let lvl = imin(bwl4c as i32, l as i32) as usize;
         masks[lvl][sidx] |= smask;
         mask <<= 1;
     }
-    for y in 0..h4 as usize {
-        l[y] = bwl4c;
+    for dst in l[..h4 as usize].iter_mut() {
+        *dst = bwl4c;
     }
 }
 
 pub fn mask_outer_edge_t(masks: &mut [[u16; 4]], bx4: i32, w4: i32, bhl4c: u8, a: &mut [u8]) {
     debug_assert!((bhl4c as u32) <= 3);
     let mut mask: u64 = 1 << bx4;
-    for x in 0..w4 as usize {
+    for (x, &a) in a[..w4 as usize].iter().enumerate() {
         let sidx = ((bx4 as usize) + x) >> 4;
         let smask = (mask >> (sidx << 4)) as u16;
-        let lvl = imin(bhl4c as i32, a[x] as i32) as usize;
+        let lvl = imin(bhl4c as i32, a as i32) as usize;
         masks[lvl][sidx] |= smask;
         mask <<= 1;
     }
-    for x in 0..w4 as usize {
-        a[x] = bhl4c;
+    for dst in a[..w4 as usize].iter_mut() {
+        *dst = bhl4c;
     }
 }
 

@@ -29,13 +29,39 @@
 
 use std::arch::x86_64::*;
 
-use crate::itx_2d::ITX_TMP_PIXELS;
-
 #[inline(always)]
 fn with_avx512_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -> R {
-    assert!(len <= ITX_TMP_PIXELS);
-    let mut scratch = [0i16; ITX_TMP_PIXELS];
-    f(&mut scratch[..len])
+    match len {
+        16 => {
+            let mut scratch = [0i16; 16];
+            f(&mut scratch)
+        }
+        32 => {
+            let mut scratch = [0i16; 32];
+            f(&mut scratch)
+        }
+        64 => {
+            let mut scratch = [0i16; 64];
+            f(&mut scratch)
+        }
+        128 => {
+            let mut scratch = [0i16; 128];
+            f(&mut scratch)
+        }
+        256 => {
+            let mut scratch = [0i16; 256];
+            f(&mut scratch)
+        }
+        512 => {
+            let mut scratch = [0i16; 512];
+            f(&mut scratch)
+        }
+        1024 => {
+            let mut scratch = [0i16; 1024];
+            f(&mut scratch)
+        }
+        _ => unreachable!("unsupported ITX i16 scratch len {}", len),
+    }
 }
 
 #[inline(always)]
@@ -49,7 +75,7 @@ fn avx512_mask16(live: usize) -> __mmask16 {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_load_coeff_i16x16<const IS_RECT2: bool, const STRIDE: usize>(
     coeff: &[i16],
     base: usize,
@@ -70,7 +96,7 @@ fn avx512_load_coeff_i16x16<const IS_RECT2: bool, const STRIDE: usize>(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_load_scratch_i16x16<const STRIDE: usize>(
     scratch: &[i16],
     base: usize,
@@ -92,7 +118,7 @@ fn avx512_pair_coeff(table: &[i32], idx: usize) -> (i16, i16) {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_i16_interleave_x16(a: __m256i, b: __m256i) -> __m512i {
     let lo = _mm256_unpacklo_epi16(a, b);
     let hi = _mm256_unpackhi_epi16(a, b);
@@ -108,14 +134,14 @@ fn avx512_i16_interleave_x16(a: __m256i, b: __m256i) -> __m512i {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_coeff_pair_512(k0: i16, k1: i16) -> __m512i {
     let pair = (k0 as u16 as u32) | ((k1 as u16 as u32) << 16);
     _mm512_set1_epi32(pair as i32)
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_madd_pair_i16_i32(a: __m256i, b: __m256i, table: &[i32], idx: usize) -> __m512i {
     let (k0, k1) = avx512_pair_coeff(table, idx);
     let ab = avx512_i16_interleave_x16(a, b);
@@ -137,7 +163,7 @@ fn avx512_round_clip_i32_to_i16(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
 fn avx512_transpose16x16_i16_store<const STRIDE: usize>(
     dst: &mut [i16],
     off: usize,
@@ -219,7 +245,7 @@ fn avx512_transpose16x16_i16_store<const STRIDE: usize>(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
 fn avx512_store_rowpass_i16x16<const STRIDE: usize>(
     scratch: &mut [i16],
     row_base: usize,
@@ -256,7 +282,7 @@ fn avx512_store_rowpass_i16x16<const STRIDE: usize>(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
 fn avx512_writeback_i32x16_u8(
     dst: &mut [u8],
     dst_off: usize,
@@ -440,7 +466,7 @@ macro_rules! avx512_dct32_body {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_dct16_rows_to_scratch<const IS_RECT2: bool>(
     coeff: &[i16],
     scratch: &mut [i16],
@@ -483,7 +509,7 @@ fn avx512_dct16_rows_to_scratch<const IS_RECT2: bool>(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_dct32_rows_to_scratch<const IS_RECT2: bool>(
     coeff: &[i16],
     scratch: &mut [i16],
@@ -536,7 +562,7 @@ fn avx512_dct32_rows_to_scratch<const IS_RECT2: bool>(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_dct16_scratch_to_dst(
     scratch: &[i16],
     base: usize,
@@ -577,7 +603,7 @@ fn avx512_dct16_scratch_to_dst(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_dct32_scratch_to_dst(
     scratch: &[i16],
     base: usize,
@@ -632,7 +658,7 @@ fn avx512_active_cols(eob: i32, tx: usize, n: usize) -> usize {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn idct_dequant_dct_i16_avx512_fused_8bpc_impl_const<const N: usize, const IS_RECT2: bool>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -650,7 +676,7 @@ fn idct_dequant_dct_i16_avx512_fused_8bpc_impl_const<const N: usize, const IS_RE
     let ncols = avx512_active_cols(eob, tx, N);
     let rnd0 = (1 << shift0) >> 1;
 
-    with_avx512_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
+    with_avx512_itx_i16_scratch(N * N, |scratch| {
         let mut y = 0usize;
         while y < ncols {
             let live = (ncols - y).min(16);
@@ -700,7 +726,7 @@ fn idct_dequant_dct_i16_avx512_fused_8bpc_impl_const<const N: usize, const IS_RE
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn idct_dequant_dct_i16_avx512_fused_8bpc_impl<const N: usize>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -762,7 +788,7 @@ fn avx512_tx16_supported(kind: usize) -> bool {
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_tx16_dense_rows_to_scratch<const IS_RECT2: bool>(
     coeff: &[i16],
     scratch: &mut [i16],
@@ -799,7 +825,7 @@ fn avx512_tx16_dense_rows_to_scratch<const IS_RECT2: bool>(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn avx512_tx16_dense_scratch_to_dst(
     scratch: &[i16],
     active: usize,
@@ -833,7 +859,7 @@ fn avx512_tx16_dense_scratch_to_dst(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn tx16_dequant_dense_i16_avx512_fused_8bpc_impl_const<const IS_RECT2: bool>(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -885,7 +911,7 @@ fn tx16_dequant_dense_i16_avx512_fused_8bpc_impl_const<const IS_RECT2: bool>(
 }
 
 #[inline]
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 fn tx16_dequant_dense_i16_avx512_fused_8bpc_impl(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -934,7 +960,7 @@ fn tx16_dequant_dense_i16_avx512_fused_8bpc_impl(
     }
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn idct_dequant_16x16_i16_avx512_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -963,7 +989,7 @@ pub(crate) fn idct_dequant_16x16_i16_avx512_fused_8bpc(
     )
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn idct_dequant_32x32_i16_avx512_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],
@@ -992,7 +1018,7 @@ pub(crate) fn idct_dequant_32x32_i16_avx512_fused_8bpc(
     )
 }
 
-#[target_feature(enable = "avx2,avx512f,avx512bw,avx512vl,avx512vnni")]
+#[target_feature(enable = "avx512f,avx512bw,avx512vl,avx512vnni")]
 pub(crate) fn itx_dequant_i16_avx512_fused_8bpc(
     coeff: &mut [i16],
     dst: &mut [u8],

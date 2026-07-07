@@ -32,9 +32,37 @@ use crate::itx_2d::ITX_TMP_PIXELS;
 
 #[inline(always)]
 fn with_avx2_itx_i16_scratch<R>(len: usize, f: impl FnOnce(&mut [i16]) -> R) -> R {
-    assert!(len <= ITX_TMP_PIXELS);
-    let mut scratch = [0i16; ITX_TMP_PIXELS];
-    f(&mut scratch[..len])
+    match len {
+        16 => {
+            let mut scratch = [0i16; 16];
+            f(&mut scratch)
+        }
+        32 => {
+            let mut scratch = [0i16; 32];
+            f(&mut scratch)
+        }
+        64 => {
+            let mut scratch = [0i16; 64];
+            f(&mut scratch)
+        }
+        128 => {
+            let mut scratch = [0i16; 128];
+            f(&mut scratch)
+        }
+        256 => {
+            let mut scratch = [0i16; 256];
+            f(&mut scratch)
+        }
+        512 => {
+            let mut scratch = [0i16; 512];
+            f(&mut scratch)
+        }
+        1024 => {
+            let mut scratch = [0i16; 1024];
+            f(&mut scratch)
+        }
+        _ => unreachable!("unsupported ITX i16 scratch len {}", len),
+    }
 }
 
 // Concrete 32x32 DCT kernels.  These are intentionally backend-local and do not
@@ -5065,7 +5093,7 @@ fn idct_dequant_dct_i16_avx2_impl_const<const N: usize, const IS_RECT2: bool>(
     let minv = _mm_set1_epi32(row_clip_min);
     let maxv = _mm_set1_epi32(row_clip_max);
 
-    with_avx2_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
+    with_avx2_itx_i16_scratch(N * N, |scratch| {
         let mut y = 0usize;
         if N == 16 {
             y = avx2_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, 16>(
@@ -5138,7 +5166,7 @@ fn idct_dequant_dct_i16_avx2_fused_8bpc_impl_const<const N: usize, const IS_RECT
     let minv = _mm_set1_epi32(row_clip_min);
     let maxv = _mm_set1_epi32(row_clip_max);
 
-    with_avx2_itx_i16_scratch(ITX_TMP_PIXELS, |scratch| {
+    with_avx2_itx_i16_scratch(N * N, |scratch| {
         let mut y = 0usize;
         if N == 16 {
             y = avx2_dct16_i16x4_coeff_rows_to_scratch::<IS_RECT2, 16>(

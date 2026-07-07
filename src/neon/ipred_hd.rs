@@ -130,17 +130,37 @@ fn store_u16x8(a: &mut [u16; 8], v: uint16x8_t) {
     unsafe { vst1q_u16(a.as_mut_ptr(), v) };
 }
 
+#[inline(always)]
+fn splat_u16x32_neon(a: &mut [u16; 32], v: uint16x8_t) {
+    let (chunks, _) = a.as_chunks_mut::<8>();
+    store_u16x8(&mut chunks[0], v);
+    store_u16x8(&mut chunks[1], v);
+    store_u16x8(&mut chunks[2], v);
+    store_u16x8(&mut chunks[3], v);
+}
+
+#[inline(always)]
+fn splat_row_u16_neon_with_v(row: &mut [u16], v: u16, vv: uint16x8_t) {
+    let (chunks32, rem32) = row.as_chunks_mut::<32>();
+    for c in chunks32.iter_mut() {
+        splat_u16x32_neon(c, vv);
+    }
+
+    let (chunks8, rem) = rem32.as_chunks_mut::<8>();
+    for c in chunks8.iter_mut() {
+        store_u16x8(c, vv);
+    }
+
+    for d in rem.iter_mut() {
+        *d = v;
+    }
+}
+
 #[inline]
 #[target_feature(enable = "neon")]
 fn splat_row_u16_neon(row: &mut [u16], v: u16) {
     let vv = vdupq_n_u16(v);
-    let (chunks, rem) = row.as_chunks_mut::<8>();
-    for c in chunks.iter_mut() {
-        store_u16x8(c, vv);
-    }
-    for d in rem.iter_mut() {
-        *d = v;
-    }
+    splat_row_u16_neon_with_v(row, v, vv);
 }
 
 #[inline]
@@ -160,10 +180,26 @@ fn splat_h_rows4_u16_neon(dst: &mut [u16], stride: usize, off: usize, w: usize, 
     let v2 = vdupq_n_u16(v[2]);
     let v3 = vdupq_n_u16(v[3]);
 
-    let (r0_8, r0_rem) = row0.as_chunks_mut::<8>();
-    let (r1_8, r1_rem) = row1.as_chunks_mut::<8>();
-    let (r2_8, r2_rem) = row2.as_chunks_mut::<8>();
-    let (r3_8, r3_rem) = row3.as_chunks_mut::<8>();
+    let (r0_32, r0_rem32) = row0.as_chunks_mut::<32>();
+    let (r1_32, r1_rem32) = row1.as_chunks_mut::<32>();
+    let (r2_32, r2_rem32) = row2.as_chunks_mut::<32>();
+    let (r3_32, r3_rem32) = row3.as_chunks_mut::<32>();
+    for (((r0, r1), r2), r3) in r0_32
+        .iter_mut()
+        .zip(r1_32.iter_mut())
+        .zip(r2_32.iter_mut())
+        .zip(r3_32.iter_mut())
+    {
+        splat_u16x32_neon(r0, v0);
+        splat_u16x32_neon(r1, v1);
+        splat_u16x32_neon(r2, v2);
+        splat_u16x32_neon(r3, v3);
+    }
+
+    let (r0_8, r0_rem) = r0_rem32.as_chunks_mut::<8>();
+    let (r1_8, r1_rem) = r1_rem32.as_chunks_mut::<8>();
+    let (r2_8, r2_rem) = r2_rem32.as_chunks_mut::<8>();
+    let (r3_8, r3_rem) = r3_rem32.as_chunks_mut::<8>();
     for (((r0, r1), r2), r3) in r0_8
         .iter_mut()
         .zip(r1_8.iter_mut())
@@ -207,30 +243,22 @@ fn sum_u16_neon(s: &[u16]) -> u32 {
 
 #[target_feature(enable = "neon")]
 fn splat_fill_neon(dst: &mut [u16], stride: usize, off: usize, w: usize, h: usize, dc: u16) {
-    let v = vdupq_n_u16(dc);
+    let vv = vdupq_n_u16(dc);
     let mut p = off;
     let mut rows = h;
     while rows >= 4 {
-        for _ in 0..4 {
-            let (chunks, rem) = dst[p..p + w].as_chunks_mut::<8>();
-            for c in chunks.iter_mut() {
-                store_u16x8(c, v);
-            }
-            for d in rem.iter_mut() {
-                *d = dc;
-            }
-            p += stride;
-        }
+        splat_row_u16_neon_with_v(&mut dst[p..p + w], dc, vv);
+        p += stride;
+        splat_row_u16_neon_with_v(&mut dst[p..p + w], dc, vv);
+        p += stride;
+        splat_row_u16_neon_with_v(&mut dst[p..p + w], dc, vv);
+        p += stride;
+        splat_row_u16_neon_with_v(&mut dst[p..p + w], dc, vv);
+        p += stride;
         rows -= 4;
     }
     for _ in 0..rows {
-        let (chunks, rem) = dst[p..p + w].as_chunks_mut::<8>();
-        for c in chunks.iter_mut() {
-            store_u16x8(c, v);
-        }
-        for d in rem.iter_mut() {
-            *d = dc;
-        }
+        splat_row_u16_neon_with_v(&mut dst[p..p + w], dc, vv);
         p += stride;
     }
 }

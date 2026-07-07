@@ -1000,22 +1000,43 @@ fn store_u8x16_fixed(a: &mut [u8; 16], v: uint8x16_t) {
     unsafe { vst1q_u8(a.as_mut_ptr(), v) };
 }
 
+#[inline(always)]
+fn splat_u8x64_neon(a: &mut [u8; 64], v: uint8x16_t) {
+    let (chunks, _) = a.as_chunks_mut::<16>();
+    store_u8x16_fixed(&mut chunks[0], v);
+    store_u8x16_fixed(&mut chunks[1], v);
+    store_u8x16_fixed(&mut chunks[2], v);
+    store_u8x16_fixed(&mut chunks[3], v);
+}
+
+#[inline(always)]
+fn splat_row_u8_neon_with_v(row: &mut [u8], v: u8, vv: uint8x16_t, vv8: uint8x8_t) {
+    let (chunks64, rem64) = row.as_chunks_mut::<64>();
+    for c in chunks64.iter_mut() {
+        splat_u8x64_neon(c, vv);
+    }
+
+    let (chunks16, rem16) = rem64.as_chunks_mut::<16>();
+    for c in chunks16.iter_mut() {
+        store_u8x16_fixed(c, vv);
+    }
+
+    let (chunks8, rem) = rem16.as_chunks_mut::<8>();
+    for c in chunks8.iter_mut() {
+        store_u8x8_fixed(c, vv8);
+    }
+
+    for d in rem.iter_mut() {
+        *d = v;
+    }
+}
+
 #[inline]
 #[target_feature(enable = "neon")]
 fn splat_row_u8_neon(row: &mut [u8], v: u8) {
     let vv = vdupq_n_u8(v);
-    let (chunks, rem16) = row.as_chunks_mut::<16>();
-    for c in chunks.iter_mut() {
-        store_u8x16_fixed(c, vv);
-    }
-    let (chunks8, rem) = rem16.as_chunks_mut::<8>();
     let vv8 = vdup_n_u8(v);
-    for c in chunks8.iter_mut() {
-        store_u8x8_fixed(c, vv8);
-    }
-    for d in rem.iter_mut() {
-        *d = v;
-    }
+    splat_row_u8_neon_with_v(row, v, vv, vv8);
 }
 
 #[inline]
@@ -1035,10 +1056,26 @@ fn splat_h_rows4_u8_neon(dst: &mut [u8], stride: usize, off: usize, w: usize, v:
     let v2 = vdupq_n_u8(v[2]);
     let v3 = vdupq_n_u8(v[3]);
 
-    let (r0_16, r0_rem16) = row0.as_chunks_mut::<16>();
-    let (r1_16, r1_rem16) = row1.as_chunks_mut::<16>();
-    let (r2_16, r2_rem16) = row2.as_chunks_mut::<16>();
-    let (r3_16, r3_rem16) = row3.as_chunks_mut::<16>();
+    let (r0_64, r0_rem64) = row0.as_chunks_mut::<64>();
+    let (r1_64, r1_rem64) = row1.as_chunks_mut::<64>();
+    let (r2_64, r2_rem64) = row2.as_chunks_mut::<64>();
+    let (r3_64, r3_rem64) = row3.as_chunks_mut::<64>();
+    for (((r0, r1), r2), r3) in r0_64
+        .iter_mut()
+        .zip(r1_64.iter_mut())
+        .zip(r2_64.iter_mut())
+        .zip(r3_64.iter_mut())
+    {
+        splat_u8x64_neon(r0, v0);
+        splat_u8x64_neon(r1, v1);
+        splat_u8x64_neon(r2, v2);
+        splat_u8x64_neon(r3, v3);
+    }
+
+    let (r0_16, r0_rem16) = r0_rem64.as_chunks_mut::<16>();
+    let (r1_16, r1_rem16) = r1_rem64.as_chunks_mut::<16>();
+    let (r2_16, r2_rem16) = r2_rem64.as_chunks_mut::<16>();
+    let (r3_16, r3_rem16) = r3_rem64.as_chunks_mut::<16>();
     for (((r0, r1), r2), r3) in r0_16
         .iter_mut()
         .zip(r1_16.iter_mut())
@@ -1125,30 +1162,23 @@ fn sum_u8_neon(s: &[u8]) -> u32 {
 #[inline]
 #[target_feature(enable = "neon")]
 fn splat_fill_neon(dst: &mut [u8], stride: usize, off: usize, w: usize, h: usize, dc: u8) {
-    let v = vdupq_n_u8(dc);
+    let vv = vdupq_n_u8(dc);
+    let vv8 = vdup_n_u8(dc);
     let mut p = off;
     let mut rows = h;
     while rows >= 4 {
-        for _ in 0..4 {
-            let (chunks, rem) = dst[p..p + w].as_chunks_mut::<16>();
-            for c in chunks.iter_mut() {
-                store_u8x16_fixed(c, v);
-            }
-            for d in rem.iter_mut() {
-                *d = dc;
-            }
-            p += stride;
-        }
+        splat_row_u8_neon_with_v(&mut dst[p..p + w], dc, vv, vv8);
+        p += stride;
+        splat_row_u8_neon_with_v(&mut dst[p..p + w], dc, vv, vv8);
+        p += stride;
+        splat_row_u8_neon_with_v(&mut dst[p..p + w], dc, vv, vv8);
+        p += stride;
+        splat_row_u8_neon_with_v(&mut dst[p..p + w], dc, vv, vv8);
+        p += stride;
         rows -= 4;
     }
     for _ in 0..rows {
-        let (chunks, rem) = dst[p..p + w].as_chunks_mut::<16>();
-        for c in chunks.iter_mut() {
-            store_u8x16_fixed(c, v);
-        }
-        for d in rem.iter_mut() {
-            *d = dc;
-        }
+        splat_row_u8_neon_with_v(&mut dst[p..p + w], dc, vv, vv8);
         p += stride;
     }
 }
