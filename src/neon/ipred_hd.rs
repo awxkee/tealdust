@@ -45,9 +45,8 @@ fn avg_pred_hbd_neon(dst: &mut [u16], stride: usize, tmp: &[u16], w: usize, h: u
             let b = unsafe { vld1q_u16(t.as_ptr()) };
             unsafe { vst1q_u16(d.as_mut_ptr(), vrhaddq_u16(a, b)) };
         }
-        let base = d8.len() * 8;
-        for (i, d) in drem.iter_mut().enumerate() {
-            *d = ((*d as u32 + tmp_row[base + i] as u32 + 1) >> 1) as u16;
+        for (d, &t) in drem.iter_mut().zip(tmp_row.as_chunks::<8>().1.iter()) {
+            *d = ((*d as u32 + t as u32 + 1) >> 1) as u16;
         }
     }
 }
@@ -69,24 +68,31 @@ fn ibp_blend_hbd_neon(
     let c128 = vdupq_n_u32(128);
     let c64 = vdupq_n_u32(64);
     let maxv = vdupq_n_u16(bitdepth_max);
+    let bitdepth_max = bitdepth_max as u32;
     let mut wrow = [0u16; 128];
     for y in 0..h {
         let wy = y >> y_shift;
-        for x in 0..w {
-            let wx = x >> x_shift;
-            wrow[x] = (if inv {
-                weights[wx][wy]
-            } else {
-                weights[wy][wx]
-            }) as u16;
+        let wrow = &mut wrow[..w];
+        if inv {
+            for (x, wx_out) in wrow.iter_mut().enumerate() {
+                *wx_out = weights[x >> x_shift][wy] as u16;
+            }
+        } else {
+            for (x, wx_out) in wrow.iter_mut().enumerate() {
+                *wx_out = weights[wy][x >> x_shift] as u16;
+            }
         }
+
         let dst_row = &mut dst[y * stride..y * stride + w];
         let tmp_row = &tmp[y * 64..y * 64 + w];
-        let mut x = 0usize;
-        while x + 8 <= w {
-            let wv = unsafe { vld1q_u16(wrow[x..].as_ptr()) };
-            let dv = unsafe { vld1q_u16(dst_row[x..].as_ptr()) };
-            let tv = unsafe { vld1q_u16(tmp_row[x..].as_ptr()) };
+        let (dst8, dst_rem) = dst_row.as_chunks_mut::<8>();
+        let (tmp8, tmp_rem) = tmp_row.as_chunks::<8>();
+        let (w8, w_rem) = wrow.as_chunks::<8>();
+
+        for ((d, t), wv) in dst8.iter_mut().zip(tmp8.iter()).zip(w8.iter()) {
+            let wv = unsafe { vld1q_u16(wv.as_ptr()) };
+            let dv = unsafe { vld1q_u16(d.as_ptr()) };
+            let tv = unsafe { vld1q_u16(t.as_ptr()) };
             let wl = vmovl_u16(vget_low_u16(wv));
             let wh = vmovl_u16(vget_high_u16(wv));
             let dl = vmovl_u16(vget_low_u16(dv));
@@ -102,21 +108,14 @@ fn ibp_blend_hbd_neon(
                 c64,
             ));
             let packed = vminq_u16(vcombine_u16(vqmovn_u32(rl), vqmovn_u32(rh)), maxv);
-            unsafe { vst1q_u16(dst_row[x..].as_mut_ptr(), packed) };
-            x += 8;
+            unsafe { vst1q_u16(d.as_mut_ptr(), packed) };
         }
-        while x < w {
-            let wx = x >> x_shift;
-            let weight = (if inv {
-                weights[wx][wy]
-            } else {
-                weights[wy][wx]
-            }) as u32;
-            let t = tmp_row[x] as u32;
-            let d = dst_row[x] as u32;
-            dst_row[x] =
-                ((t * (128 - weight) + d * weight + 64) >> 7).min(bitdepth_max as u32) as u16;
-            x += 1;
+
+        for ((d, &t), &weight) in dst_rem.iter_mut().zip(tmp_rem.iter()).zip(w_rem.iter()) {
+            let t = t as u32;
+            let d0 = *d as u32;
+            let weight = weight as u32;
+            *d = ((t * (128 - weight) + d0 * weight + 64) >> 7).min(bitdepth_max) as u16;
         }
     }
 }
@@ -2414,10 +2413,12 @@ fn dip_vertical_interp_hbd_neon(
             let w1 = z1;
             let row_off = (base_y + z) * stride;
             let row = &mut dst[row_off..row_off + w];
-            let mut x = 0usize;
-            while x + 8 <= w {
-                let a = unsafe { vld1q_u16(p0_buf[x..].as_ptr()) };
-                let b = unsafe { vld1q_u16(p1_buf[x..].as_ptr()) };
+            let (row8, row_tail) = row.as_chunks_mut::<8>();
+            let (p0_8, p0_tail) = p0_buf[..w].as_chunks::<8>();
+            let (p1_8, p1_tail) = p1_buf[..w].as_chunks::<8>();
+            for ((out, p0), p1) in row8.iter_mut().zip(p0_8.iter()).zip(p1_8.iter()) {
+                let a = unsafe { vld1q_u16(p0.as_ptr()) };
+                let b = unsafe { vld1q_u16(p1.as_ptr()) };
                 let lo = vshlq_u32(
                     vaddq_u32(
                         vmull_n_u16(vget_low_u16(a), w0),
@@ -2434,17 +2435,15 @@ fn dip_vertical_interp_hbd_neon(
                 );
                 unsafe {
                     vst1q_u16(
-                        row[x..].as_mut_ptr(),
+                        out.as_mut_ptr(),
                         vcombine_u16(vqmovn_u32(lo), vqmovn_u32(hi)),
                     )
                 };
-                x += 8;
             }
-            while x < w {
-                row[x] = ((p0_buf[x] as i32 * (step_y as i32 - z as i32 - 1)
-                    + p1_buf[x] as i32 * (z as i32 + 1))
+
+            for ((out, &p0), &p1) in row_tail.iter_mut().zip(p0_tail.iter()).zip(p1_tail.iter()) {
+                *out = ((p0 as i32 * (step_y as i32 - z as i32 - 1) + p1 as i32 * (z as i32 + 1))
                     >> uhl2) as u16;
-                x += 1;
             }
         }
     }

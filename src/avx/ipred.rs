@@ -80,9 +80,9 @@ fn ibp_blend_8bpc_avx2(
     let mut wrow = [0u8; 128];
     for y in 0..h {
         let wy = y >> y_shift;
-        for x in 0..w {
+        for (x, weight) in wrow[..w].iter_mut().enumerate() {
             let wx = x >> x_shift;
-            wrow[x] = if inv {
+            *weight = if inv {
                 weights[wx][wy]
             } else {
                 weights[wy][wx]
@@ -90,17 +90,14 @@ fn ibp_blend_8bpc_avx2(
         }
         let dst_row = &mut dst[y * stride..y * stride + w];
         let tmp_row = &tmp[y * 64..y * 64 + w];
-        let mut x = 0usize;
-        while x + 16 <= w {
-            let wv = _mm256_cvtepu8_epi16(unsafe {
-                _mm_loadu_si128(wrow[x..].as_ptr() as *const __m128i)
-            });
-            let dv = _mm256_cvtepu8_epi16(unsafe {
-                _mm_loadu_si128(dst_row[x..].as_ptr() as *const __m128i)
-            });
-            let tv = _mm256_cvtepu8_epi16(unsafe {
-                _mm_loadu_si128(tmp_row[x..].as_ptr() as *const __m128i)
-            });
+
+        let (dst16, dst_rem16) = dst_row.as_chunks_mut::<16>();
+        let (tmp16, tmp_rem16) = tmp_row.as_chunks::<16>();
+        let (w16, w_rem16) = wrow[..w].as_chunks::<16>();
+        for ((d, t), weight) in dst16.iter_mut().zip(tmp16.iter()).zip(w16.iter()) {
+            let wv = load_u8x16_i16_avx2(weight);
+            let dv = load_u8x16_i16_avx2(d);
+            let tv = load_u8x16_i16_avx2(t);
             let acc = _mm256_add_epi16(
                 _mm256_add_epi16(
                     _mm256_mullo_epi16(tv, _mm256_sub_epi16(c128, wv)),
@@ -108,19 +105,16 @@ fn ibp_blend_8bpc_avx2(
                 ),
                 c64,
             );
-            let res = _mm256_srli_epi16::<7>(acc);
-            store_i16x16_u8_fixed((&mut dst_row[x..x + 16]).try_into().unwrap(), res);
-            x += 16;
+            store_i16x16_u8_fixed(d, _mm256_srli_epi16::<7>(acc));
         }
-        while x + 8 <= w {
-            let wv =
-                _mm_cvtepu8_epi16(unsafe { _mm_loadl_epi64(wrow[x..].as_ptr() as *const __m128i) });
-            let dv = _mm_cvtepu8_epi16(unsafe {
-                _mm_loadl_epi64(dst_row[x..].as_ptr() as *const __m128i)
-            });
-            let tv = _mm_cvtepu8_epi16(unsafe {
-                _mm_loadl_epi64(tmp_row[x..].as_ptr() as *const __m128i)
-            });
+
+        let (dst8, dst_tail) = dst_rem16.as_chunks_mut::<8>();
+        let (tmp8, tmp_tail) = tmp_rem16.as_chunks::<8>();
+        let (w8, w_tail) = w_rem16.as_chunks::<8>();
+        for ((d, t), weight) in dst8.iter_mut().zip(tmp8.iter()).zip(w8.iter()) {
+            let wv = load_u8x8_i16_fixed(weight);
+            let dv = load_u8x8_i16_fixed(d);
+            let tv = load_u8x8_i16_fixed(t);
             let acc = _mm_add_epi16(
                 _mm_add_epi16(
                     _mm_mullo_epi16(tv, _mm_sub_epi16(_mm_set1_epi16(128), wv)),
@@ -128,23 +122,14 @@ fn ibp_blend_8bpc_avx2(
                 ),
                 _mm_set1_epi16(64),
             );
-            store_i16x8_u8_fixed(
-                (&mut dst_row[x..x + 8]).try_into().unwrap(),
-                _mm_srli_epi16::<7>(acc),
-            );
-            x += 8;
+            store_i16x8_u8_fixed(d, _mm_srli_epi16::<7>(acc));
         }
-        while x < w {
-            let wx = x >> x_shift;
-            let weight = (if inv {
-                weights[wx][wy]
-            } else {
-                weights[wy][wx]
-            }) as u16;
-            let t = tmp_row[x] as u16;
-            let d = dst_row[x] as u16;
-            dst_row[x] = ((t * (128 - weight) + d * weight + 64) >> 7) as u8;
-            x += 1;
+
+        for ((d, &t), &weight) in dst_tail.iter_mut().zip(tmp_tail.iter()).zip(w_tail.iter()) {
+            let weight = weight as u16;
+            let t = t as u16;
+            let d0 = *d as u16;
+            *d = ((t * (128 - weight) + d0 * weight + 64) >> 7) as u8;
         }
     }
 }
@@ -1143,6 +1128,17 @@ fn store_u8x8_fixed(a: &mut [u8; 8], v: __m128i) {
     unsafe { _mm_storel_epi64(a.as_mut_ptr().cast(), v) };
 }
 
+#[inline]
+#[target_feature(enable = "avx2")]
+fn reduce_i64x4(v: __m256i) -> i64 {
+    let lo = _mm256_castsi256_si128(v);
+    let hi = _mm256_extracti128_si256::<1>(v);
+    let sum2 = _mm_add_epi64(lo, hi);
+    let hi64 = _mm_unpackhi_epi64(sum2, sum2);
+    let sum1 = _mm_add_epi64(sum2, hi64);
+    _mm_cvtsi128_si64(sum1)
+}
+
 /// Horizontal sum of all bytes in `s` (each lane widened to u32).
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -1154,11 +1150,7 @@ fn sum_u8_avx2(s: &[u8]) -> u32 {
         // SAD against zero gives four u64 partial sums for 32 bytes.
         acc = _mm256_add_epi64(acc, _mm256_sad_epu8(load_u8x32_fixed(c), zero));
     }
-    let lo = _mm256_castsi256_si128(acc);
-    let hi = _mm256_extracti128_si256::<1>(acc);
-    let acc128 = _mm_add_epi64(lo, hi);
-    let mut total =
-        (_mm_extract_epi64::<0>(acc128) as u64 + _mm_extract_epi64::<1>(acc128) as u64) as u32;
+    let mut total = reduce_i64x4(acc) as u32;
     for &b in rem {
         total += b as u32;
     }
@@ -2752,6 +2744,8 @@ fn dip_vertical_interp_8bpc_avx2(
         let p1_off = sparse_y * stride;
         p1_buf[..w].copy_from_slice(&dst[p1_off..p1_off + w]);
 
+        let p0 = &p0_buf[..w];
+        let p1 = &p1_buf[..w];
         for z in 0..step_y - 1 {
             let z1 = (z + 1) as i16;
             let w0 = _mm256_set1_epi16((step_y as i16) - z1);
@@ -2759,40 +2753,39 @@ fn dip_vertical_interp_8bpc_avx2(
             let sh = _mm_cvtsi32_si128(uhl2);
             let row_off = (base_y + z) * stride;
             let row = &mut dst[row_off..row_off + w];
-            let mut x = 0usize;
-            while x + 16 <= w {
-                let a = unsafe { _mm_loadu_si128(p0_buf[x..].as_ptr() as *const __m128i) };
-                let b = unsafe { _mm_loadu_si128(p1_buf[x..].as_ptr() as *const __m128i) };
-                let al = _mm256_cvtepu8_epi16(a);
-                let bl = _mm256_cvtepu8_epi16(b);
+
+            let (row16, row_rem16) = row.as_chunks_mut::<16>();
+            let (p0_16, p0_rem16) = p0.as_chunks::<16>();
+            let (p1_16, p1_rem16) = p1.as_chunks::<16>();
+            for ((d, a), b) in row16.iter_mut().zip(p0_16.iter()).zip(p1_16.iter()) {
+                let al = load_u8x16_i16_avx2(a);
+                let bl = load_u8x16_i16_avx2(b);
                 let r = _mm256_srl_epi16(
                     _mm256_add_epi16(_mm256_mullo_epi16(al, w0), _mm256_mullo_epi16(bl, w1)),
                     sh,
                 );
-                store_i16x16_u8_fixed((&mut row[x..x + 16]).try_into().unwrap(), r);
-                x += 16;
+                store_i16x16_u8_fixed(d, r);
             }
-            while x + 8 <= w {
-                let a = _mm_cvtepu8_epi16(unsafe {
-                    _mm_loadl_epi64(p0_buf[x..].as_ptr() as *const __m128i)
-                });
-                let b = _mm_cvtepu8_epi16(unsafe {
-                    _mm_loadl_epi64(p1_buf[x..].as_ptr() as *const __m128i)
-                });
+
+            let (row8, row_tail) = row_rem16.as_chunks_mut::<8>();
+            let (p0_8, p0_tail) = p0_rem16.as_chunks::<8>();
+            let (p1_8, p1_tail) = p1_rem16.as_chunks::<8>();
+            for ((d, a), b) in row8.iter_mut().zip(p0_8.iter()).zip(p1_8.iter()) {
+                let a = load_u8x8_i16_fixed(a);
+                let b = load_u8x8_i16_fixed(b);
                 let w0_128 = _mm_set1_epi16((step_y as i16) - z1);
                 let w1_128 = _mm_set1_epi16(z1);
                 let r = _mm_srl_epi16(
                     _mm_add_epi16(_mm_mullo_epi16(a, w0_128), _mm_mullo_epi16(b, w1_128)),
                     sh,
                 );
-                store_i16x8_u8_fixed((&mut row[x..x + 8]).try_into().unwrap(), r);
-                x += 8;
+                store_i16x8_u8_fixed(d, r);
             }
-            while x < w {
-                row[x] = ((p0_buf[x] as i32 * (step_y as i32 - z as i32 - 1)
-                    + p1_buf[x] as i32 * (z as i32 + 1))
-                    >> uhl2) as u8;
-                x += 1;
+
+            let tail_w0 = step_y as i32 - z as i32 - 1;
+            let tail_w1 = z as i32 + 1;
+            for ((d, &a), &b) in row_tail.iter_mut().zip(p0_tail.iter()).zip(p1_tail.iter()) {
+                *d = ((a as i32 * tail_w0 + b as i32 * tail_w1) >> uhl2) as u8;
             }
         }
     }

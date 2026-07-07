@@ -632,9 +632,10 @@ fn z1_luma_row_hbd_sse41(
 ) {
     let n_filter = ((max_base_x - base0 + 1).max(0) as usize).min(w);
     let base_const = (top_off as i32 + base0) as usize;
-    let mut x = 0usize;
-    while x + 4 <= n_filter {
-        let bi = base_const + x;
+    let (body, fill_tail) = dst_row[..w].split_at_mut(n_filter);
+    let (chunks, rem) = body.as_chunks_mut::<4>();
+    for (ci, d) in chunks.iter_mut().enumerate() {
+        let bi = base_const + ci * 4;
         let v = dr_filter4_hbd_sse41(
             f,
             bitdepth_max,
@@ -643,19 +644,18 @@ fn z1_luma_row_hbd_sse41(
             load_u16x4_i32_slice(&filt[bi + 1..]),
             load_u16x4_i32_slice(&filt[bi + 2..]),
         );
-        store_i32x4_u16_max(&mut dst_row[x..], v, bitdepth_max);
-        x += 4;
+        store_i32x4_u16_max(d, v, bitdepth_max);
     }
-    while x < n_filter {
-        let bi = base_const + x;
+    let base_x = chunks.len() * 4;
+    for (xi, d) in rem.iter_mut().enumerate() {
+        let bi = base_const + base_x + xi;
         let v = f.a as i32 * filt[bi - 1] as i32
             + f.b as i32 * filt[bi] as i32
             + f.c as i32 * filt[bi + 1] as i32
             + f.d as i32 * filt[bi + 2] as i32;
-        dst_row[x] = (((v + 64) >> 7).clamp(0, bitdepth_max as i32)) as u16;
-        x += 1;
+        *d = (((v + 64) >> 7).clamp(0, bitdepth_max as i32)) as u16;
     }
-    dst_row[n_filter..w].fill(fill);
+    fill_tail.fill(fill);
 }
 
 #[allow(clippy::too_many_arguments)]
