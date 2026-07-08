@@ -29,7 +29,7 @@
 
 use crate::{
     cdef_dispatch, cfl_dispatch, deblock_dispatch, filter, ipred_dispatch, itx_wht_dispatch,
-    mc_dispatch, rowops_dispatch,
+    lf_mask, mc_dispatch, rowops_dispatch,
 };
 
 /// Decoder-local table of already-resolved DSP entry points.
@@ -96,6 +96,8 @@ pub(crate) struct ExecContext {
     pub(crate) cdef_filter_hbd: cdef_dispatch::CdefFilterHbdFn,
     pub(crate) cdef_filter_shapes: [cdef_dispatch::CdefFilterShapeFn; 4],
     pub(crate) cdef_filter_hbd_shapes: [cdef_dispatch::CdefFilterHbdShapeFn; 4],
+
+    pub(crate) deblock_thr_cache: &'static lf_mask::DeblockThrCache,
 
     pub(crate) deblock_apply_8bpc: deblock_dispatch::DeblockApply8bpcFn,
     pub(crate) deblock_apply_hbd: deblock_dispatch::DeblockApplyHbdFn,
@@ -229,6 +231,8 @@ impl ExecContext {
             cdef_filter_hbd: cdef_dispatch::resolve_cdef_filter_hbd(),
             cdef_filter_shapes: *cdef_dispatch::resolve_cdef_filter_shapes(),
             cdef_filter_hbd_shapes: *cdef_dispatch::resolve_cdef_filter_hbd_shapes(),
+
+            deblock_thr_cache: lf_mask::deblock_thr_cache(),
 
             deblock_apply_8bpc: deblock_dispatch::resolve_deblock_apply_8bpc(),
             deblock_apply_hbd: deblock_dispatch::resolve_deblock_apply_hbd(),

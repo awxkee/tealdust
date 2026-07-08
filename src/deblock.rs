@@ -29,7 +29,7 @@
 
 use crate::headers::FrameHeader;
 use crate::intops::{iclip, imin};
-use crate::lf_mask::{deblock_thr_cache, deblock_thr_from_cache};
+use crate::lf_mask::{DeblockThrCache, deblock_thr_from_cache};
 use crate::pixel::{BitDepth, Pixel};
 
 pub(crate) static MAX_WIDTH_Y: [i8; 4] = [1, 3, 6, 8];
@@ -40,6 +40,7 @@ pub(crate) static Q_THRESH_MULTS: [i8; 8] = [32, 25, 19, 19, 0, 18, 0, 17];
 pub(crate) static W_MULT: [i8; 8] = [85, 51, 37, 28, 0, 20, 0, 15];
 
 pub(crate) fn init_deblock_thr_lut_y(
+    thr_cache: &DeblockThrCache,
     frame_hdr: &FrameHeader,
     hbd: i32,
     dir: usize,
@@ -49,7 +50,6 @@ pub(crate) fn init_deblock_thr_lut_y(
     let qmax = 255 + 48 * hbd;
     let seg = &frame_hdr.segmentation;
     let n = if seg.enabled != 0 { 8 } else { 1 };
-    let thr_cache = deblock_thr_cache();
     for i in 0..n {
         let yac = if seg.enabled != 0 {
             iclip(qidx + seg.d.delta_q[i] as i32, 0, qmax)
@@ -64,6 +64,7 @@ pub(crate) fn init_deblock_thr_lut_y(
 }
 
 pub(crate) fn init_deblock_thr_lut_uv(
+    thr_cache: &DeblockThrCache,
     frame_hdr: &FrameHeader,
     hbd: i32,
     qidx: i32,
@@ -72,7 +73,6 @@ pub(crate) fn init_deblock_thr_lut_uv(
     let qmax = 255 + 48 * hbd;
     let seg = &frame_hdr.segmentation;
     let n = if seg.enabled != 0 { 8 } else { 1 };
-    let thr_cache = deblock_thr_cache();
     for i in 0..n {
         let yac = if seg.enabled != 0 {
             iclip(qidx + seg.d.delta_q[i] as i32, 0, qmax)
@@ -1463,13 +1463,26 @@ pub(crate) fn deblock_crop_bottom_edge(
 
 fn init_lut_y(ctx: &DeblockCtx, dir: usize, qidx: i32) -> [[u32; 16]; 2] {
     let mut lut = [[0u32; 16]; 2];
-    init_deblock_thr_lut_y(ctx.frame_hdr, ctx.hbd, dir, qidx, &mut lut);
+    init_deblock_thr_lut_y(
+        ctx.exec.deblock_thr_cache,
+        ctx.frame_hdr,
+        ctx.hbd,
+        dir,
+        qidx,
+        &mut lut,
+    );
     lut
 }
 
 fn init_lut_uv(ctx: &DeblockCtx, qidx: i32) -> [[[u32; 16]; 2]; 2] {
     let mut lut = [[[0u32; 16]; 2]; 2];
-    init_deblock_thr_lut_uv(ctx.frame_hdr, ctx.hbd, qidx, &mut lut);
+    init_deblock_thr_lut_uv(
+        ctx.exec.deblock_thr_cache,
+        ctx.frame_hdr,
+        ctx.hbd,
+        qidx,
+        &mut lut,
+    );
     lut
 }
 
