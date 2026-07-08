@@ -603,6 +603,7 @@ impl SbFrameInfo {
 
 /// Read-only per-frame reconstruction scalars (shared ref).
 pub struct ReconFrameCtx<'a> {
+    pub exec: &'a crate::exec_context::ExecContext,
     pub dq: &'a [[[u32; 2]; 3]; MAX_SEGMENTS],
     pub qm: &'a [[Option<Vec<u8>>; 3]; crate::levels::N_RECT_TX_SIZES],
     pub y_stride_px: usize,
@@ -2027,6 +2028,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
     let crate::internal::FrameContext {
+        exec,
         seq_hdr,
         frame_hdr,
         a,
@@ -2066,6 +2068,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
         svc,
         ..
     } = fc;
+    let exec = &*exec;
     let fc_sb256h = *sb256h;
     let fc_sbh = *sbh;
     let fc_inloop_filters = *inloop_filters;
@@ -2152,6 +2155,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     // once per frame for the compound + interintra recon paths.
     let masks = crate::wedge::masks();
     let recon_frame = ReconFrameCtx {
+        exec,
         dq: &*dq,
         qm: &*qm,
         y_stride_px,
@@ -2837,6 +2841,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                         filter_sb64(
                                             bd_local,
                                             crate::decode::loopfilter::FilterSb64Ctx {
+                                                exec,
                                                 seq_hdr,
                                                 frame_hdr,
                                                 sh: &sh,
@@ -3328,6 +3333,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                         filter_sb64(
                                             bd_local,
                                             crate::decode::loopfilter::FilterSb64Ctx {
+                                                exec,
                                                 seq_hdr,
                                                 frame_hdr,
                                                 sh: &sh,
@@ -3643,6 +3649,7 @@ fn submit_frame_inner(
 
     fc.seq_hdr = seq_hdr.clone();
     fc.frame_hdr = frame_hdr.clone();
+    fc.exec = c.exec.clone();
     fc.in_cdf = in_cdf;
 
     let use_rfm = is_inter_or_switch || allow_intrabc;

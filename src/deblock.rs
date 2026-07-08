@@ -202,6 +202,7 @@ fn filter_choice_bd<P: Pixel>(
 #[inline(never)]
 fn deblock_bd<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     off: isize,
     q_thr: u32,
@@ -238,8 +239,25 @@ fn deblock_bd<BD: BitDepth>(
 
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            crate::deblock_dispatch::deblock_apply_8bpc(
-                d8,
+            unsafe {
+                (exec.deblock_apply_8bpc)(
+                    d8,
+                    off,
+                    stridea,
+                    strideb,
+                    width_neg,
+                    width_pos,
+                    q_thr_clamp,
+                    neg_lossless,
+                    pos_lossless,
+                );
+            }
+            return;
+        }
+    } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
+        unsafe {
+            (exec.deblock_apply_hbd)(
+                d16,
                 off,
                 stridea,
                 strideb,
@@ -248,22 +266,9 @@ fn deblock_bd<BD: BitDepth>(
                 q_thr_clamp,
                 neg_lossless,
                 pos_lossless,
+                bdmax,
             );
-            return;
         }
-    } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-        crate::deblock_dispatch::deblock_apply_hbd(
-            d16,
-            off,
-            stridea,
-            strideb,
-            width_neg,
-            width_pos,
-            q_thr_clamp,
-            neg_lossless,
-            pos_lossless,
-            bdmax,
-        );
         return;
     }
 
@@ -307,6 +312,7 @@ fn deblock_bd<BD: BitDepth>(
 #[inline(always)]
 pub(crate) fn deblock_h_sb64y_bd<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     dst_off: usize,
     stride: usize,
@@ -318,24 +324,26 @@ pub(crate) fn deblock_h_sb64y_bd<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            if crate::deblock_dispatch::try_deblock_h_sb64y_8bpc(
-                d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
-            ) {
+            if let Some(f) = exec.deblock_h_sb64y_8bpc {
+                unsafe { f(d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge) };
                 return;
             }
         }
     } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-        if crate::deblock_dispatch::try_deblock_h_sb64y_hbd(
-            d16,
-            dst_off,
-            stride,
-            vmask,
-            ll_mask,
-            q_thr,
-            side_thr,
-            edge,
-            bd.bitdepth_max(),
-        ) {
+        if let Some(f) = exec.deblock_h_sb64y_hbd {
+            unsafe {
+                f(
+                    d16,
+                    dst_off,
+                    stride,
+                    vmask,
+                    ll_mask,
+                    q_thr,
+                    side_thr,
+                    edge,
+                    bd.bitdepth_max(),
+                )
+            };
             return;
         }
         crate::deblock_dispatch::deblock_h_sb64y_hbd_fast(
@@ -371,6 +379,7 @@ pub(crate) fn deblock_h_sb64y_bd<BD: BitDepth>(
         };
         deblock_bd(
             bd,
+            exec,
             dst,
             (dst_off + qi * 4 * stride) as isize,
             q_thr[qi] as u32,
@@ -390,6 +399,7 @@ pub(crate) fn deblock_h_sb64y_bd<BD: BitDepth>(
 #[inline(always)]
 pub(crate) fn deblock_v_sb64y_bd<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     dst_off: usize,
     stride: usize,
@@ -401,24 +411,26 @@ pub(crate) fn deblock_v_sb64y_bd<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            if crate::deblock_dispatch::try_deblock_v_sb64y_8bpc(
-                d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
-            ) {
+            if let Some(f) = exec.deblock_v_sb64y_8bpc {
+                unsafe { f(d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge) };
                 return;
             }
         }
     } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-        if crate::deblock_dispatch::try_deblock_v_sb64y_hbd(
-            d16,
-            dst_off,
-            stride,
-            vmask,
-            ll_mask,
-            q_thr,
-            side_thr,
-            edge,
-            bd.bitdepth_max(),
-        ) {
+        if let Some(f) = exec.deblock_v_sb64y_hbd {
+            unsafe {
+                f(
+                    d16,
+                    dst_off,
+                    stride,
+                    vmask,
+                    ll_mask,
+                    q_thr,
+                    side_thr,
+                    edge,
+                    bd.bitdepth_max(),
+                )
+            };
             return;
         }
         crate::deblock_dispatch::deblock_v_sb64y_hbd_fast(
@@ -454,6 +466,7 @@ pub(crate) fn deblock_v_sb64y_bd<BD: BitDepth>(
         };
         deblock_bd(
             bd,
+            exec,
             dst,
             (dst_off + qi * 4) as isize,
             q_thr[qi] as u32,
@@ -473,6 +486,7 @@ pub(crate) fn deblock_v_sb64y_bd<BD: BitDepth>(
 #[inline(always)]
 pub(crate) fn deblock_h_sb64uv_bd<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     dst_off: usize,
     stride: usize,
@@ -484,24 +498,26 @@ pub(crate) fn deblock_h_sb64uv_bd<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            if crate::deblock_dispatch::try_deblock_h_sb64uv_8bpc(
-                d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
-            ) {
+            if let Some(f) = exec.deblock_h_sb64uv_8bpc {
+                unsafe { f(d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge) };
                 return;
             }
         }
     } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-        if crate::deblock_dispatch::try_deblock_h_sb64uv_hbd(
-            d16,
-            dst_off,
-            stride,
-            vmask,
-            ll_mask,
-            q_thr,
-            side_thr,
-            edge,
-            bd.bitdepth_max(),
-        ) {
+        if let Some(f) = exec.deblock_h_sb64uv_hbd {
+            unsafe {
+                f(
+                    d16,
+                    dst_off,
+                    stride,
+                    vmask,
+                    ll_mask,
+                    q_thr,
+                    side_thr,
+                    edge,
+                    bd.bitdepth_max(),
+                )
+            };
             return;
         }
         crate::deblock_dispatch::deblock_h_sb64uv_hbd_fast(
@@ -535,6 +551,7 @@ pub(crate) fn deblock_h_sb64uv_bd<BD: BitDepth>(
         };
         deblock_bd(
             bd,
+            exec,
             dst,
             (dst_off + qi * 4 * stride) as isize,
             q_thr[qi] as u32,
@@ -554,6 +571,7 @@ pub(crate) fn deblock_h_sb64uv_bd<BD: BitDepth>(
 #[inline(always)]
 pub(crate) fn deblock_v_sb64uv_bd<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     dst_off: usize,
     stride: usize,
@@ -565,24 +583,26 @@ pub(crate) fn deblock_v_sb64uv_bd<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            if crate::deblock_dispatch::try_deblock_v_sb64uv_8bpc(
-                d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge,
-            ) {
+            if let Some(f) = exec.deblock_v_sb64uv_8bpc {
+                unsafe { f(d8, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge) };
                 return;
             }
         }
     } else if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-        if crate::deblock_dispatch::try_deblock_v_sb64uv_hbd(
-            d16,
-            dst_off,
-            stride,
-            vmask,
-            ll_mask,
-            q_thr,
-            side_thr,
-            edge,
-            bd.bitdepth_max(),
-        ) {
+        if let Some(f) = exec.deblock_v_sb64uv_hbd {
+            unsafe {
+                f(
+                    d16,
+                    dst_off,
+                    stride,
+                    vmask,
+                    ll_mask,
+                    q_thr,
+                    side_thr,
+                    edge,
+                    bd.bitdepth_max(),
+                )
+            };
             return;
         }
         crate::deblock_dispatch::deblock_v_sb64uv_hbd_fast(
@@ -616,6 +636,7 @@ pub(crate) fn deblock_v_sb64uv_bd<BD: BitDepth>(
         };
         deblock_bd(
             bd,
+            exec,
             dst,
             (dst_off + qi * 4) as isize,
             q_thr[qi] as u32,
@@ -726,6 +747,7 @@ use crate::lf_mask::{Av2Filter, transpose_lossless_mask as lf_transpose_lossless
 
 /// Bundled per-frame inputs for the deblock pass, mirroring the fields
 pub(crate) struct DeblockCtx<'a> {
+    pub(crate) exec: &'a crate::exec_context::ExecContext,
     pub(crate) frame_hdr: &'a FrameHeader,
     pub(crate) mask: &'a [Av2Filter],
     pub(crate) mask_row: usize,
@@ -863,6 +885,7 @@ fn fill_left_thr_from_lut(
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn setup_thr_cols(
+    exec: &crate::exec_context::ExecContext,
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     segmap: &[u8],
@@ -878,22 +901,25 @@ fn setup_thr_cols(
     w4: i32,
     h4: i32,
 ) {
-    if crate::deblock_dispatch::try_setup_thr_cols_seg_8bpc(
-        q_thr_dst,
-        side_thr_dst,
-        segmap,
-        seg_off,
-        seg_stride,
-        mask,
-        bx4_base,
-        thr_lut,
-        left_q_thr,
-        left_side_thr,
-        y64,
-        ss_ver,
-        w4,
-        h4,
-    ) {
+    if let Some(f) = exec.setup_thr_cols_seg_8bpc {
+        unsafe {
+            f(
+                q_thr_dst,
+                side_thr_dst,
+                segmap,
+                seg_off,
+                seg_stride,
+                mask,
+                bx4_base,
+                thr_lut,
+                left_q_thr,
+                left_side_thr,
+                y64,
+                ss_ver,
+                w4,
+                h4,
+            );
+        }
         return;
     }
     // Use real asserts, not debug_asserts, because they give LLVM facts in release.
@@ -968,6 +994,7 @@ fn setup_thr_cols(
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn setup_thr_cols_simple(
+    exec: &crate::exec_context::ExecContext,
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -978,17 +1005,20 @@ fn setup_thr_cols_simple(
     w4: i32,
     h4: i32,
 ) {
-    if crate::deblock_dispatch::try_setup_thr_cols_simple_8bpc(
-        q_thr_dst,
-        side_thr_dst,
-        mask,
-        bx4_base,
-        thr_lut,
-        y64,
-        ss_ver,
-        w4,
-        h4,
-    ) {
+    if let Some(f) = exec.setup_thr_cols_simple_8bpc {
+        unsafe {
+            f(
+                q_thr_dst,
+                side_thr_dst,
+                mask,
+                bx4_base,
+                thr_lut,
+                y64,
+                ss_ver,
+                w4,
+                h4,
+            );
+        }
         return;
     }
     assert!((0..=16).contains(&w4));
@@ -1020,6 +1050,7 @@ fn setup_thr_cols_simple(
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn setup_thr_cols_dq(
+    exec: &crate::exec_context::ExecContext,
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -1032,19 +1063,22 @@ fn setup_thr_cols_dq(
     w4: i32,
     h4: i32,
 ) {
-    if crate::deblock_dispatch::try_setup_thr_cols_dq_8bpc(
-        q_thr_dst,
-        side_thr_dst,
-        mask,
-        bx4_base,
-        thr_lut,
-        left_q_thr,
-        left_side_thr,
-        y64,
-        ss_ver,
-        w4,
-        h4,
-    ) {
+    if let Some(f) = exec.setup_thr_cols_dq_8bpc {
+        unsafe {
+            f(
+                q_thr_dst,
+                side_thr_dst,
+                mask,
+                bx4_base,
+                thr_lut,
+                left_q_thr,
+                left_side_thr,
+                y64,
+                ss_ver,
+                w4,
+                h4,
+            );
+        }
         return;
     }
     assert!((0..=16).contains(&w4));
@@ -1094,6 +1128,7 @@ fn setup_thr_cols_dq(
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn setup_thr_rows_simple(
+    exec: &crate::exec_context::ExecContext,
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -1104,17 +1139,20 @@ fn setup_thr_rows_simple(
     w4: i32,
     h4: i32,
 ) {
-    if crate::deblock_dispatch::try_setup_thr_rows_simple_8bpc(
-        q_thr_dst,
-        side_thr_dst,
-        mask,
-        starty4,
-        thr_lut,
-        sb64x,
-        ss_hor,
-        w4,
-        h4,
-    ) {
+    if let Some(f) = exec.setup_thr_rows_simple_8bpc {
+        unsafe {
+            f(
+                q_thr_dst,
+                side_thr_dst,
+                mask,
+                starty4,
+                thr_lut,
+                sb64x,
+                ss_hor,
+                w4,
+                h4,
+            );
+        }
         return;
     }
     assert!((0..=16).contains(&w4));
@@ -1152,6 +1190,7 @@ fn setup_thr_rows_simple(
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn setup_thr_rows_dq(
+    exec: &crate::exec_context::ExecContext,
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     mask: &[[[u16; 4]; 5]; 64],
@@ -1164,19 +1203,22 @@ fn setup_thr_rows_dq(
     w4: i32,
     h4: i32,
 ) {
-    if crate::deblock_dispatch::try_setup_thr_rows_dq_8bpc(
-        q_thr_dst,
-        side_thr_dst,
-        mask,
-        starty4,
-        thr_lut,
-        above_thr_lut,
-        above_seg,
-        sb64x,
-        ss_hor,
-        w4,
-        h4,
-    ) {
+    if let Some(f) = exec.setup_thr_rows_dq_8bpc {
+        unsafe {
+            f(
+                q_thr_dst,
+                side_thr_dst,
+                mask,
+                starty4,
+                thr_lut,
+                above_thr_lut,
+                above_seg,
+                sb64x,
+                ss_hor,
+                w4,
+                h4,
+            );
+        }
         return;
     }
     assert!((0..=16).contains(&w4));
@@ -1243,6 +1285,7 @@ fn setup_thr_rows_dq(
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn setup_thr_rows(
+    exec: &crate::exec_context::ExecContext,
     q_thr_dst: &mut [u8; 256],
     side_thr_dst: &mut [u8; 256],
     segmap: &[u8],
@@ -1258,22 +1301,25 @@ fn setup_thr_rows(
     w4: i32,
     h4: i32,
 ) {
-    if crate::deblock_dispatch::try_setup_thr_rows_seg_8bpc(
-        q_thr_dst,
-        side_thr_dst,
-        segmap,
-        seg_off,
-        seg_stride,
-        mask,
-        starty4,
-        thr_lut,
-        above_thr_lut,
-        above_seg,
-        sb64x,
-        ss_hor,
-        w4,
-        h4,
-    ) {
+    if let Some(f) = exec.setup_thr_rows_seg_8bpc {
+        unsafe {
+            f(
+                q_thr_dst,
+                side_thr_dst,
+                segmap,
+                seg_off,
+                seg_stride,
+                mask,
+                starty4,
+                thr_lut,
+                above_thr_lut,
+                above_seg,
+                sb64x,
+                ss_hor,
+                w4,
+                h4,
+            );
+        }
         return;
     }
     assert!((0..=16).contains(&w4));
@@ -1501,6 +1547,7 @@ fn deblock64_cols<BD: BitDepth>(
             }
             if seg_enabled {
                 setup_thr_cols(
+                    ctx.exec,
                     &mut q_thr,
                     &mut side_thr,
                     ctx.cur_segmap,
@@ -1518,6 +1565,7 @@ fn deblock64_cols<BD: BitDepth>(
                 );
             } else if q_changed {
                 setup_thr_cols_dq(
+                    ctx.exec,
                     &mut q_thr,
                     &mut side_thr,
                     &col_lflvl.filter_y[0],
@@ -1532,6 +1580,7 @@ fn deblock64_cols<BD: BitDepth>(
                 );
             } else {
                 setup_thr_cols_simple(
+                    ctx.exec,
                     &mut q_thr,
                     &mut side_thr,
                     &col_lflvl.filter_y[0],
@@ -1583,6 +1632,7 @@ fn deblock64_cols<BD: BitDepth>(
                 // clamp max_width_neg at every superblock-column's left edge.
                 deblock_h_sb64y_bd(
                     bd,
+                    ctx.exec,
                     p_y,
                     cur_off + x * 4,
                     ls.unsigned_abs(),
@@ -1664,6 +1714,7 @@ fn deblock64_cols<BD: BitDepth>(
         for pl in 0..2 {
             if !ctx.segmap_uv.is_empty() {
                 setup_thr_cols(
+                    ctx.exec,
                     &mut q_thr[pl],
                     &mut side_thr[pl],
                     ctx.segmap_uv,
@@ -1681,6 +1732,7 @@ fn deblock64_cols<BD: BitDepth>(
                 );
             } else if q_changed {
                 setup_thr_cols_dq(
+                    ctx.exec,
                     &mut q_thr[pl],
                     &mut side_thr[pl],
                     &col_lflvl.filter_uv[0],
@@ -1695,6 +1747,7 @@ fn deblock64_cols<BD: BitDepth>(
                 );
             } else {
                 setup_thr_cols_simple(
+                    ctx.exec,
                     &mut q_thr[pl],
                     &mut side_thr[pl],
                     &col_lflvl.filter_uv[0],
@@ -1743,6 +1796,7 @@ fn deblock64_cols<BD: BitDepth>(
             if apply_u {
                 deblock_h_sb64uv_bd(
                     bd,
+                    ctx.exec,
                     p_u,
                     cur_off + x * 4,
                     ls.unsigned_abs(),
@@ -1756,6 +1810,7 @@ fn deblock64_cols<BD: BitDepth>(
             if apply_v {
                 deblock_h_sb64uv_bd(
                     bd,
+                    ctx.exec,
                     p_v,
                     cur_off + x * 4,
                     ls.unsigned_abs(),
@@ -1877,6 +1932,7 @@ fn deblock64_rows<BD: BitDepth>(
             }
             if seg_enabled {
                 setup_thr_rows(
+                    ctx.exec,
                     &mut q_thr,
                     &mut side_thr,
                     ctx.cur_segmap,
@@ -1894,6 +1950,7 @@ fn deblock64_rows<BD: BitDepth>(
                 );
             } else if above_qdiff {
                 setup_thr_rows_dq(
+                    ctx.exec,
                     &mut q_thr,
                     &mut side_thr,
                     &col_lflvl.filter_y[1],
@@ -1908,6 +1965,7 @@ fn deblock64_rows<BD: BitDepth>(
                 );
             } else {
                 setup_thr_rows_simple(
+                    ctx.exec,
                     &mut q_thr,
                     &mut side_thr,
                     &col_lflvl.filter_y[1],
@@ -1943,6 +2001,7 @@ fn deblock64_rows<BD: BitDepth>(
                 };
                 deblock_v_sb64y_bd(
                     bd,
+                    ctx.exec,
                     p_y,
                     (cur_off as isize + y as isize * 4 * ls) as usize,
                     ls.unsigned_abs(),
@@ -2048,6 +2107,7 @@ fn deblock64_rows<BD: BitDepth>(
             };
             if !ctx.segmap_uv.is_empty() {
                 setup_thr_rows(
+                    ctx.exec,
                     &mut q_thr[pl],
                     &mut side_thr[pl],
                     ctx.segmap_uv,
@@ -2065,6 +2125,7 @@ fn deblock64_rows<BD: BitDepth>(
                 );
             } else if above_qdiff {
                 setup_thr_rows_dq(
+                    ctx.exec,
                     &mut q_thr[pl],
                     &mut side_thr[pl],
                     &col_lflvl.filter_uv[1],
@@ -2079,6 +2140,7 @@ fn deblock64_rows<BD: BitDepth>(
                 );
             } else {
                 setup_thr_rows_simple(
+                    ctx.exec,
                     &mut q_thr[pl],
                     &mut side_thr[pl],
                     &col_lflvl.filter_uv[1],
@@ -2117,6 +2179,7 @@ fn deblock64_rows<BD: BitDepth>(
             if apply_u {
                 deblock_v_sb64uv_bd(
                     bd,
+                    ctx.exec,
                     p_u,
                     (cur_off as isize + y as isize * 4 * ls) as usize,
                     ls.unsigned_abs(),
@@ -2130,6 +2193,7 @@ fn deblock64_rows<BD: BitDepth>(
             if apply_v {
                 deblock_v_sb64uv_bd(
                     bd,
+                    ctx.exec,
                     p_v,
                     (cur_off as isize + y as isize * 4 * ls) as usize,
                     ls.unsigned_abs(),

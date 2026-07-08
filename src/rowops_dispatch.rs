@@ -90,7 +90,7 @@ pub(crate) fn residual_add_row_8bpc_scalar(
 static RESIDUAL_ADD: OnceLock<ResidualAddFn> = OnceLock::new();
 
 #[inline]
-fn resolve_residual_add() -> ResidualAddFn {
+pub(crate) fn resolve_residual_add() -> ResidualAddFn {
     *RESIDUAL_ADD.get_or_init(|| {
         let mut _f = residual_add_row_8bpc_scalar as ResidualAddFn;
         #[cfg(target_arch = "aarch64")]
@@ -114,13 +114,6 @@ fn resolve_residual_add() -> ResidualAddFn {
     })
 }
 
-#[inline]
-pub(crate) fn residual_add_row_8bpc(dst: &mut [u8], c: &[i32], n: usize, rnd: i32, shift: i32) {
-    // SAFETY: `resolve_residual_add` only returns the SSE/NEON kernel when the
-    // corresponding feature was detected; the scalar default is always sound.
-    unsafe { resolve_residual_add()(dst, c, n, rnd, shift) };
-}
-
 pub(crate) type DcAddFn = unsafe fn(&mut [u8], i32, usize);
 
 pub(crate) fn dc_add_row_8bpc_scalar(dst: &mut [u8], dc: i32, n: usize) {
@@ -132,7 +125,7 @@ pub(crate) fn dc_add_row_8bpc_scalar(dst: &mut [u8], dc: i32, n: usize) {
 static DC_ADD: OnceLock<DcAddFn> = OnceLock::new();
 
 #[inline]
-fn resolve_dc_add() -> DcAddFn {
+pub(crate) fn resolve_dc_add() -> DcAddFn {
     *DC_ADD.get_or_init(|| {
         let mut _f = dc_add_row_8bpc_scalar as DcAddFn;
         #[cfg(target_arch = "aarch64")]
@@ -156,12 +149,6 @@ fn resolve_dc_add() -> DcAddFn {
     })
 }
 
-#[inline]
-pub(crate) fn dc_add_row_8bpc(dst: &mut [u8], dc: i32, n: usize) {
-    // SAFETY: see `residual_add_row_8bpc`.
-    unsafe { resolve_dc_add()(dst, dc, n) };
-}
-
 pub(crate) type RowClipFn = unsafe fn(&mut [i32], usize, i32, i32, i32, i32);
 
 pub(crate) fn row_clip_scalar(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min: i32, max: i32) {
@@ -173,7 +160,7 @@ pub(crate) fn row_clip_scalar(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, m
 static ROW_CLIP: OnceLock<RowClipFn> = OnceLock::new();
 
 #[inline]
-fn resolve_row_clip() -> RowClipFn {
+pub(crate) fn resolve_row_clip() -> RowClipFn {
     *ROW_CLIP.get_or_init(|| {
         let mut _f = row_clip_scalar as RowClipFn;
         #[cfg(target_arch = "aarch64")]
@@ -195,12 +182,6 @@ fn resolve_row_clip() -> RowClipFn {
         }
         _f
     })
-}
-
-#[inline]
-pub(crate) fn row_clip(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min: i32, max: i32) {
-    // SAFETY: resolved kernel matches a detected feature; scalar default is sound.
-    unsafe { resolve_row_clip()(tmp, n, rnd, shift, min, max) };
 }
 
 pub(crate) type CctxFn = unsafe fn(&mut [i32], &mut [i32], i32, i32, usize, i32, i32);
@@ -227,7 +208,7 @@ pub(crate) fn cctx_row_scalar(
 static CCTX: OnceLock<CctxFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cctx() -> CctxFn {
+pub(crate) fn resolve_cctx() -> CctxFn {
     *CCTX.get_or_init(|| {
         let mut _f = cctx_row_scalar as CctxFn;
         #[cfg(target_arch = "aarch64")]
@@ -251,21 +232,6 @@ fn resolve_cctx() -> CctxFn {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn cctx_row(
-    u: &mut [i32],
-    v: &mut [i32],
-    sina: i32,
-    cosa: i32,
-    sz: usize,
-    min: i32,
-    max: i32,
-) {
-    // SAFETY: see `row_clip`.
-    unsafe { resolve_cctx()(u, v, sina, cosa, sz, min, max) };
-}
-
 pub(crate) type AvgFn = unsafe fn(&mut [u8], &[i16], &[i16], usize, i32, i32);
 
 pub(crate) fn avg_row_8bpc_scalar(
@@ -284,7 +250,7 @@ pub(crate) fn avg_row_8bpc_scalar(
 static AVG: OnceLock<AvgFn> = OnceLock::new();
 
 #[inline]
-fn resolve_avg() -> AvgFn {
+pub(crate) fn resolve_avg() -> AvgFn {
     *AVG.get_or_init(|| {
         let mut _f = avg_row_8bpc_scalar as AvgFn;
         #[cfg(target_arch = "aarch64")]
@@ -308,12 +274,6 @@ fn resolve_avg() -> AvgFn {
     })
 }
 
-#[inline]
-pub(crate) fn avg_row_8bpc(dst: &mut [u8], t1: &[i16], t2: &[i16], n: usize, rnd: i32, sh: i32) {
-    // SAFETY: resolved kernel matches a detected feature; scalar default sound.
-    unsafe { resolve_avg()(dst, t1, t2, n, rnd, sh) };
-}
-
 pub(crate) type WAvgFn = unsafe fn(&mut [u8], &[i16], &[i16], usize, i32, i32, i32);
 
 #[allow(clippy::too_many_arguments)]
@@ -334,7 +294,7 @@ pub(crate) fn w_avg_row_8bpc_scalar(
 static W_AVG: OnceLock<WAvgFn> = OnceLock::new();
 
 #[inline]
-fn resolve_w_avg() -> WAvgFn {
+pub(crate) fn resolve_w_avg() -> WAvgFn {
     *W_AVG.get_or_init(|| {
         let mut _f = w_avg_row_8bpc_scalar as WAvgFn;
         #[cfg(target_arch = "aarch64")]
@@ -356,21 +316,6 @@ fn resolve_w_avg() -> WAvgFn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn w_avg_row_8bpc(
-    dst: &mut [u8],
-    t1: &[i16],
-    t2: &[i16],
-    n: usize,
-    weight: i32,
-    rnd: i32,
-    sh: i32,
-) {
-    // SAFETY: see `avg_row_8bpc`.
-    unsafe { resolve_w_avg()(dst, t1, t2, n, weight, rnd, sh) };
 }
 
 pub(crate) type MaskFn = unsafe fn(&mut [u8], &[i16], &[i16], &[u8], usize, i32, i32);
@@ -399,7 +344,7 @@ pub(crate) fn mask_row_8bpc_scalar(
 static MASK: OnceLock<MaskFn> = OnceLock::new();
 
 #[inline]
-fn resolve_mask() -> MaskFn {
+pub(crate) fn resolve_mask() -> MaskFn {
     *MASK.get_or_init(|| {
         let mut _f = mask_row_8bpc_scalar as MaskFn;
         #[cfg(target_arch = "aarch64")]
@@ -423,21 +368,6 @@ fn resolve_mask() -> MaskFn {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn mask_row_8bpc(
-    dst: &mut [u8],
-    t1: &[i16],
-    t2: &[i16],
-    mask: &[u8],
-    n: usize,
-    rnd: i32,
-    sh: i32,
-) {
-    // SAFETY: see `avg_row_8bpc`.
-    unsafe { resolve_mask()(dst, t1, t2, mask, n, rnd, sh) };
-}
-
 pub(crate) type BlendFn = unsafe fn(&mut [u8], &[u8], &[u8], usize);
 
 pub(crate) fn blend_row_8bpc_scalar(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: usize) {
@@ -452,7 +382,7 @@ pub(crate) fn blend_row_8bpc_scalar(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: 
 static BLEND: OnceLock<BlendFn> = OnceLock::new();
 
 #[inline]
-fn resolve_blend() -> BlendFn {
+pub(crate) fn resolve_blend() -> BlendFn {
     *BLEND.get_or_init(|| {
         let mut _f = blend_row_8bpc_scalar as BlendFn;
         #[cfg(target_arch = "aarch64")]
@@ -476,12 +406,6 @@ fn resolve_blend() -> BlendFn {
     })
 }
 
-#[inline]
-pub(crate) fn blend_row_8bpc(dst: &mut [u8], tmp: &[u8], mask: &[u8], n: usize) {
-    // SAFETY: see `avg_row_8bpc`.
-    unsafe { resolve_blend()(dst, tmp, mask, n) };
-}
-
 pub(crate) type MorphFn = unsafe fn(&mut [u8], i32, i32, usize);
 
 pub(crate) fn morph_row_8bpc_scalar(dst: &mut [u8], alpha: i32, beta: i32, n: usize) {
@@ -493,7 +417,7 @@ pub(crate) fn morph_row_8bpc_scalar(dst: &mut [u8], alpha: i32, beta: i32, n: us
 static MORPH: OnceLock<MorphFn> = OnceLock::new();
 
 #[inline]
-fn resolve_morph() -> MorphFn {
+pub(crate) fn resolve_morph() -> MorphFn {
     *MORPH.get_or_init(|| {
         let mut _f = morph_row_8bpc_scalar as MorphFn;
         #[cfg(target_arch = "aarch64")]
@@ -517,19 +441,6 @@ fn resolve_morph() -> MorphFn {
     })
 }
 
-#[inline]
-pub(crate) fn morph_row_8bpc(dst: &mut [u8], alpha: i32, beta: i32, n: usize) {
-    if n == 0 || (alpha == 256 && beta == 0) {
-        return;
-    }
-    if alpha == 256 {
-        dc_add_row_8bpc(dst, beta >> 8, n);
-        return;
-    }
-    // SAFETY: see `avg_row_8bpc`.
-    unsafe { resolve_morph()(dst, alpha, beta, n) };
-}
-
 pub(crate) type ResidualAddHbdFn = unsafe fn(&mut [u16], &[i32], usize, i32, i32, i32);
 
 pub(crate) fn residual_add_row_hbd_scalar(
@@ -548,7 +459,7 @@ pub(crate) fn residual_add_row_hbd_scalar(
 static RESIDUAL_ADD_HBD: OnceLock<ResidualAddHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_residual_add_hbd() -> ResidualAddHbdFn {
+pub(crate) fn resolve_residual_add_hbd() -> ResidualAddHbdFn {
     *RESIDUAL_ADD_HBD.get_or_init(|| {
         let mut _f = residual_add_row_hbd_scalar as ResidualAddHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -571,18 +482,6 @@ fn resolve_residual_add_hbd() -> ResidualAddHbdFn {
     })
 }
 
-#[inline]
-pub(crate) fn residual_add_row_hbd(
-    dst: &mut [u16],
-    c: &[i32],
-    n: usize,
-    rnd: i32,
-    shift: i32,
-    bitdepth_max: i32,
-) {
-    unsafe { resolve_residual_add_hbd()(dst, c, n, rnd, shift, bitdepth_max) };
-}
-
 pub(crate) type DcAddHbdFn = unsafe fn(&mut [u16], i32, usize, i32);
 
 pub(crate) fn dc_add_row_hbd_scalar(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
@@ -594,7 +493,7 @@ pub(crate) fn dc_add_row_hbd_scalar(dst: &mut [u16], dc: i32, n: usize, bitdepth
 static DC_ADD_HBD: OnceLock<DcAddHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_dc_add_hbd() -> DcAddHbdFn {
+pub(crate) fn resolve_dc_add_hbd() -> DcAddHbdFn {
     *DC_ADD_HBD.get_or_init(|| {
         let mut _f = dc_add_row_hbd_scalar as DcAddHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -617,11 +516,6 @@ fn resolve_dc_add_hbd() -> DcAddHbdFn {
     })
 }
 
-#[inline]
-pub(crate) fn dc_add_row_hbd(dst: &mut [u16], dc: i32, n: usize, bitdepth_max: i32) {
-    unsafe { resolve_dc_add_hbd()(dst, dc, n, bitdepth_max) };
-}
-
 pub(crate) type AvgHbdFn = unsafe fn(&mut [u16], &[i16], &[i16], usize, i32, i32, i32);
 
 pub(crate) fn avg_row_hbd_scalar(
@@ -641,7 +535,7 @@ pub(crate) fn avg_row_hbd_scalar(
 static AVG_HBD: OnceLock<AvgHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_avg_hbd() -> AvgHbdFn {
+pub(crate) fn resolve_avg_hbd() -> AvgHbdFn {
     *AVG_HBD.get_or_init(|| {
         let mut _f = avg_row_hbd_scalar as AvgHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -662,19 +556,6 @@ fn resolve_avg_hbd() -> AvgHbdFn {
         }
         _f
     })
-}
-
-#[inline]
-pub(crate) fn avg_row_hbd(
-    dst: &mut [u16],
-    t1: &[i16],
-    t2: &[i16],
-    n: usize,
-    rnd: i32,
-    sh: i32,
-    bitdepth_max: i32,
-) {
-    unsafe { resolve_avg_hbd()(dst, t1, t2, n, rnd, sh, bitdepth_max) };
 }
 
 pub(crate) type WAvgHbdFn = unsafe fn(&mut [u16], &[i16], &[i16], usize, i32, i32, i32, i32);
@@ -699,7 +580,7 @@ pub(crate) fn w_avg_row_hbd_scalar(
 static W_AVG_HBD: OnceLock<WAvgHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_w_avg_hbd() -> WAvgHbdFn {
+pub(crate) fn resolve_w_avg_hbd() -> WAvgHbdFn {
     *W_AVG_HBD.get_or_init(|| {
         let mut _f = w_avg_row_hbd_scalar as WAvgHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -720,21 +601,6 @@ fn resolve_w_avg_hbd() -> WAvgHbdFn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn w_avg_row_hbd(
-    dst: &mut [u16],
-    t1: &[i16],
-    t2: &[i16],
-    n: usize,
-    weight: i32,
-    rnd: i32,
-    sh: i32,
-    bitdepth_max: i32,
-) {
-    unsafe { resolve_w_avg_hbd()(dst, t1, t2, n, weight, rnd, sh, bitdepth_max) };
 }
 
 pub(crate) type MaskHbdFn = unsafe fn(&mut [u16], &[i16], &[i16], &[u8], usize, i32, i32, i32);
@@ -764,7 +630,7 @@ pub(crate) fn mask_row_hbd_scalar(
 static MASK_HBD: OnceLock<MaskHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_mask_hbd() -> MaskHbdFn {
+pub(crate) fn resolve_mask_hbd() -> MaskHbdFn {
     *MASK_HBD.get_or_init(|| {
         let mut _f = mask_row_hbd_scalar as MaskHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -787,21 +653,6 @@ fn resolve_mask_hbd() -> MaskHbdFn {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn mask_row_hbd(
-    dst: &mut [u16],
-    t1: &[i16],
-    t2: &[i16],
-    mask: &[u8],
-    n: usize,
-    rnd: i32,
-    sh: i32,
-    bitdepth_max: i32,
-) {
-    unsafe { resolve_mask_hbd()(dst, t1, t2, mask, n, rnd, sh, bitdepth_max) };
-}
-
 pub(crate) type BlendHbdFn = unsafe fn(&mut [u16], &[u16], &[u8], usize);
 
 pub(crate) fn blend_row_hbd_scalar(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
@@ -814,7 +665,7 @@ pub(crate) fn blend_row_hbd_scalar(dst: &mut [u16], tmp: &[u16], mask: &[u8], n:
 static BLEND_HBD: OnceLock<BlendHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_blend_hbd() -> BlendHbdFn {
+pub(crate) fn resolve_blend_hbd() -> BlendHbdFn {
     *BLEND_HBD.get_or_init(|| {
         let mut _f = blend_row_hbd_scalar as BlendHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -837,11 +688,6 @@ fn resolve_blend_hbd() -> BlendHbdFn {
     })
 }
 
-#[inline]
-pub(crate) fn blend_row_hbd(dst: &mut [u16], tmp: &[u16], mask: &[u8], n: usize) {
-    unsafe { resolve_blend_hbd()(dst, tmp, mask, n) };
-}
-
 pub(crate) type MorphHbdFn = unsafe fn(&mut [u16], i32, i32, usize, i32);
 
 pub(crate) fn morph_row_hbd_scalar(
@@ -859,7 +705,7 @@ pub(crate) fn morph_row_hbd_scalar(
 static MORPH_HBD: OnceLock<MorphHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_morph_hbd() -> MorphHbdFn {
+pub(crate) fn resolve_morph_hbd() -> MorphHbdFn {
     *MORPH_HBD.get_or_init(|| {
         let mut _f = morph_row_hbd_scalar as MorphHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -882,18 +728,6 @@ fn resolve_morph_hbd() -> MorphHbdFn {
     })
 }
 
-#[inline]
-pub(crate) fn morph_row_hbd(dst: &mut [u16], alpha: i32, beta: i32, n: usize, bitdepth_max: i32) {
-    if n == 0 || (alpha == 256 && beta == 0) {
-        return;
-    }
-    if alpha == 256 {
-        dc_add_row_hbd(dst, beta >> 8, n, bitdepth_max);
-        return;
-    }
-    unsafe { resolve_morph_hbd()(dst, alpha, beta, n, bitdepth_max) };
-}
-
 pub(crate) type GdfAddFn = unsafe fn(&mut [u8], &[i8], i32, usize);
 
 pub(crate) fn gdf_add_run_8bpc_scalar(dst: &mut [u8], err: &[i8], scale: i32, n: usize) {
@@ -908,7 +742,7 @@ pub(crate) fn gdf_add_run_8bpc_scalar(dst: &mut [u8], err: &[i8], scale: i32, n:
 static GDF_ADD: OnceLock<GdfAddFn> = OnceLock::new();
 
 #[inline]
-fn resolve_gdf_add() -> GdfAddFn {
+pub(crate) fn resolve_gdf_add() -> GdfAddFn {
     *GDF_ADD.get_or_init(|| {
         let mut _f = gdf_add_run_8bpc_scalar as GdfAddFn;
         #[cfg(target_arch = "aarch64")]
@@ -930,15 +764,6 @@ fn resolve_gdf_add() -> GdfAddFn {
         }
         _f
     })
-}
-
-#[inline]
-pub(crate) fn gdf_add_run_8bpc(dst: &mut [u8], err: &[i8], scale: i32, n: usize) {
-    if n == 0 || scale == 0 {
-        return;
-    }
-    // SAFETY: see `avg_row_8bpc`.
-    unsafe { resolve_gdf_add()(dst, err, scale, n) };
 }
 
 #[inline]
@@ -976,7 +801,7 @@ pub(crate) type GdfAddHbdFn = unsafe fn(&mut [u16], &[i8], i32, usize, i32);
 static GDF_ADD_HBD: OnceLock<GdfAddHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_gdf_add_hbd() -> GdfAddHbdFn {
+pub(crate) fn resolve_gdf_add_hbd() -> GdfAddHbdFn {
     *GDF_ADD_HBD.get_or_init(|| {
         let mut _f = gdf_add_run_hbd_scalar as GdfAddHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -991,22 +816,6 @@ fn resolve_gdf_add_hbd() -> GdfAddHbdFn {
         }
         _f
     })
-}
-
-#[inline]
-pub(crate) fn gdf_add_run_hbd(
-    dst: &mut [u16],
-    err: &[i8],
-    scale: i32,
-    n: usize,
-    bitdepth_max: i32,
-) {
-    if n == 0 || scale == 0 {
-        return;
-    }
-    // SAFETY: the resolver only selects target-feature implementations when
-    // the CPU supports them; otherwise it keeps the scalar implementation.
-    unsafe { resolve_gdf_add_hbd()(dst, err, scale, n, bitdepth_max) };
 }
 
 pub(crate) type GdfGradFn = unsafe fn(
@@ -1110,7 +919,7 @@ pub(crate) fn gdf_gradient_group_hbd_scalar(
 static GDF_GRAD: OnceLock<GdfGradFn> = OnceLock::new();
 
 #[inline]
-fn resolve_gdf_grad() -> GdfGradFn {
+pub(crate) fn resolve_gdf_grad() -> GdfGradFn {
     *GDF_GRAD.get_or_init(|| {
         let mut _f = gdf_gradient_group_scalar as GdfGradFn;
         #[cfg(target_arch = "aarch64")]
@@ -1134,41 +943,10 @@ fn resolve_gdf_grad() -> GdfGradFn {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn gdf_gradient_group(
-    dst: &mut [[u16; 4]],
-    d: usize,
-    base_cell: usize,
-    ncells: usize,
-    center_rows: [&[u8]; 2],
-    a_rows: [&[u8]; 2],
-    c_rows: [&[u8]; 2],
-    col0: usize,
-    dx: i32,
-    shift: u32,
-) {
-    // SAFETY: see `avg_row_8bpc`.
-    unsafe {
-        resolve_gdf_grad()(
-            dst,
-            d,
-            base_cell,
-            ncells,
-            center_rows,
-            a_rows,
-            c_rows,
-            col0,
-            dx,
-            shift,
-        )
-    };
-}
-
 static GDF_GRAD_HBD: OnceLock<GdfGradHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_gdf_grad_hbd() -> GdfGradHbdFn {
+pub(crate) fn resolve_gdf_grad_hbd() -> GdfGradHbdFn {
     *GDF_GRAD_HBD.get_or_init(|| {
         let mut _f = gdf_gradient_group_hbd_scalar as GdfGradHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -1183,38 +961,6 @@ fn resolve_gdf_grad_hbd() -> GdfGradHbdFn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn gdf_gradient_group_hbd(
-    dst: &mut [[u16; 4]],
-    d: usize,
-    base_cell: usize,
-    ncells: usize,
-    center_rows: [&[u16]; 2],
-    a_rows: [&[u16]; 2],
-    c_rows: [&[u16]; 2],
-    col0: usize,
-    dx: i32,
-    shift: u32,
-) {
-    // SAFETY: the resolver only selects target-feature implementations when
-    // the CPU supports them; otherwise it keeps the scalar implementation.
-    unsafe {
-        resolve_gdf_grad_hbd()(
-            dst,
-            d,
-            base_cell,
-            ncells,
-            center_rows,
-            a_rows,
-            c_rows,
-            col0,
-            dx,
-            shift,
-        )
-    };
 }
 
 #[inline]
@@ -1305,7 +1051,7 @@ pub(crate) type GdfPrepPair8bpcFn =
 static GDF_PREP_PAIR_8BPC: OnceLock<GdfPrepPair8bpcFn> = OnceLock::new();
 
 #[inline]
-fn resolve_gdf_prep_pair_8bpc() -> GdfPrepPair8bpcFn {
+pub(crate) fn resolve_gdf_prep_pair_8bpc() -> GdfPrepPair8bpcFn {
     *GDF_PREP_PAIR_8BPC.get_or_init(|| {
         let mut _f = gdf_prep_pair_8bpc_scalar as GdfPrepPair8bpcFn;
         #[cfg(target_arch = "aarch64")]
@@ -1320,36 +1066,6 @@ fn resolve_gdf_prep_pair_8bpc() -> GdfPrepPair8bpcFn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn gdf_prep_pair_8bpc(
-    rows: [&[u8]; 13],
-    col: usize,
-    cls: usize,
-    shared_vals: [i32; 3],
-    alpha_base: usize,
-    weight_base: usize,
-    error_lut_base: usize,
-    scale: i32,
-    ref_dst_idx: usize,
-) -> [i8; 2] {
-    // SAFETY: the resolver only selects target-feature implementations when
-    // the CPU supports them; otherwise it keeps the scalar implementation.
-    unsafe {
-        resolve_gdf_prep_pair_8bpc()(
-            rows,
-            col,
-            cls,
-            shared_vals,
-            alpha_base,
-            weight_base,
-            error_lut_base,
-            scale,
-            ref_dst_idx,
-        )
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1413,7 +1129,7 @@ pub(crate) type GdfPrepPairHbdFn = unsafe fn(
 static GDF_PREP_PAIR_HBD: OnceLock<GdfPrepPairHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_gdf_prep_pair_hbd() -> GdfPrepPairHbdFn {
+pub(crate) fn resolve_gdf_prep_pair_hbd() -> GdfPrepPairHbdFn {
     *GDF_PREP_PAIR_HBD.get_or_init(|| {
         let mut _f = gdf_prep_pair_hbd_scalar as GdfPrepPairHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -1428,40 +1144,6 @@ fn resolve_gdf_prep_pair_hbd() -> GdfPrepPairHbdFn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn gdf_prep_pair_hbd(
-    rows: [&[u16]; 13],
-    col: usize,
-    cls: usize,
-    shared_vals: [i32; 3],
-    alpha_base: usize,
-    weight_base: usize,
-    error_lut_base: usize,
-    scale: i32,
-    down_shift: u32,
-    up_scale: i32,
-    ref_dst_idx: usize,
-) -> [i8; 2] {
-    // SAFETY: the resolver only selects target-feature implementations when
-    // the CPU supports them; otherwise it keeps the scalar implementation.
-    unsafe {
-        resolve_gdf_prep_pair_hbd()(
-            rows,
-            col,
-            cls,
-            shared_vals,
-            alpha_base,
-            weight_base,
-            error_lut_base,
-            scale,
-            down_shift,
-            up_scale,
-            ref_dst_idx,
-        )
-    }
 }
 
 pub(crate) type CctxI16Fn = unsafe fn(&mut [i16], &mut [i16], i32, i32, usize, i32, i32);
@@ -1488,7 +1170,7 @@ pub(crate) fn cctx_row_i16_scalar(
 static CCTX_I16: OnceLock<CctxI16Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_cctx_i16() -> CctxI16Fn {
+pub(crate) fn resolve_cctx_i16() -> CctxI16Fn {
     *CCTX_I16.get_or_init(|| {
         let mut _f = cctx_row_i16_scalar as CctxI16Fn;
         #[cfg(target_arch = "aarch64")]
@@ -1509,18 +1191,4 @@ fn resolve_cctx_i16() -> CctxI16Fn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn cctx_row_i16(
-    u: &mut [i16],
-    v: &mut [i16],
-    sina: i32,
-    cosa: i32,
-    sz: usize,
-    min: i32,
-    max: i32,
-) {
-    unsafe { resolve_cctx_i16()(u, v, sina, cosa, sz, min, max) };
 }

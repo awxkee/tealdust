@@ -27,6 +27,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use crate::exec_context::ExecContext;
 use crate::intops::{iclip, imax, imin};
 use crate::pixel::{BitDepth, BitDepth8, Pixel};
 use crate::tables::{EXT_WARP_FILTER, MC_SUBPEL_FILTERS, MC_WARP_FILTER};
@@ -64,24 +65,6 @@ pub(crate) fn put<P: Pixel>(
     }
 }
 
-pub(crate) fn prep<BD: BitDepth>(
-    bd: BD,
-    tmp: &mut [i16],
-    tmp_stride: usize,
-    src: &[BD::Pixel],
-    src_stride: usize,
-    w: usize,
-    h: usize,
-) {
-    if BD::BPC == 16 {
-        if let Some(src16) = <BD::Pixel as Pixel>::try_as_u16_slice(src) {
-            crate::mc_dispatch::prep_hbd(tmp, tmp_stride, src16, src_stride, w, h, bd.bitdepth());
-            return;
-        }
-    }
-    prep_scalar(bd, tmp, tmp_stride, src, src_stride, w, h);
-}
-
 pub(crate) fn prep_scalar<BD: BitDepth>(
     bd: BD,
     tmp: &mut [i16],
@@ -106,6 +89,7 @@ pub(crate) fn prep_scalar<BD: BitDepth>(
 }
 
 pub(crate) fn avg_8bpc(
+    exec: &ExecContext,
     dst: &mut [u8],
     dst_stride: usize,
     tmp1: &[i16],
@@ -113,10 +97,11 @@ pub(crate) fn avg_8bpc(
     w: usize,
     h: usize,
 ) {
-    avg(BitDepth8, dst, dst_stride, tmp1, tmp2, w, h);
+    avg(exec, BitDepth8, dst, dst_stride, tmp1, tmp2, w, h);
 }
 
 pub(crate) fn avg<BD: BitDepth>(
+    exec: &ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -138,11 +123,12 @@ pub(crate) fn avg<BD: BitDepth>(
         let t1 = &tmp1[yw.min(tmp1.len())..];
         let t2 = &tmp2[yw.min(tmp2.len())..];
         let n = w.min(d.len()).min(t1.len()).min(t2.len());
-        crate::filter::avg_row(bd, d, t1, t2, n, rnd, sh);
+        crate::filter::avg_row_ctx(exec, bd, d, t1, t2, n, rnd, sh);
     }
 }
 
 pub(crate) fn w_avg_8bpc(
+    exec: &ExecContext,
     dst: &mut [u8],
     dst_stride: usize,
     tmp1: &[i16],
@@ -151,11 +137,12 @@ pub(crate) fn w_avg_8bpc(
     h: usize,
     weight: i32,
 ) {
-    w_avg(BitDepth8, dst, dst_stride, tmp1, tmp2, w, h, weight);
+    w_avg(exec, BitDepth8, dst, dst_stride, tmp1, tmp2, w, h, weight);
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn w_avg<BD: BitDepth>(
+    exec: &ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -178,11 +165,12 @@ pub(crate) fn w_avg<BD: BitDepth>(
         let t1 = &tmp1[yw.min(tmp1.len())..];
         let t2 = &tmp2[yw.min(tmp2.len())..];
         let n = w.min(d.len()).min(t1.len()).min(t2.len());
-        crate::filter::w_avg_row(bd, d, t1, t2, n, weight, rnd, sh);
+        crate::filter::w_avg_row_ctx(exec, bd, d, t1, t2, n, weight, rnd, sh);
     }
 }
 
 pub(crate) fn mask_8bpc(
+    exec: &ExecContext,
     dst: &mut [u8],
     dst_stride: usize,
     tmp1: &[i16],
@@ -191,11 +179,12 @@ pub(crate) fn mask_8bpc(
     h: usize,
     mask: &[u8],
 ) {
-    mask_fn(BitDepth8, dst, dst_stride, tmp1, tmp2, w, h, mask);
+    mask_fn(exec, BitDepth8, dst, dst_stride, tmp1, tmp2, w, h, mask);
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn mask_fn<BD: BitDepth>(
+    exec: &ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -219,11 +208,12 @@ pub(crate) fn mask_fn<BD: BitDepth>(
         let t2 = &tmp2[yw.min(tmp2.len())..];
         let mk = &mask[yw.min(mask.len())..];
         let n = w.min(d.len()).min(t1.len()).min(t2.len()).min(mk.len());
-        crate::filter::mask_row(bd, d, t1, t2, mk, n, rnd, sh);
+        crate::filter::mask_row_ctx(exec, bd, d, t1, t2, mk, n, rnd, sh);
     }
 }
 
 pub(crate) fn blend_8bpc(
+    exec: &ExecContext,
     dst: &mut [u8],
     dst_stride: usize,
     tmp: &[u8],
@@ -231,10 +221,11 @@ pub(crate) fn blend_8bpc(
     h: usize,
     mask: &[u8],
 ) {
-    blend(dst, dst_stride, tmp, w, h, mask);
+    blend(exec, dst, dst_stride, tmp, w, h, mask);
 }
 
 pub(crate) fn blend<P: Pixel>(
+    exec: &ExecContext,
     dst: &mut [P],
     dst_stride: usize,
     tmp: &[P],
@@ -252,11 +243,12 @@ pub(crate) fn blend<P: Pixel>(
         let t = &tmp[yw.min(tmp.len())..];
         let mk = &mask[yw.min(mask.len())..];
         let n = w.min(d.len()).min(t.len()).min(mk.len());
-        crate::filter::blend_row(d, t, mk, n);
+        crate::filter::blend_row_ctx(exec, d, t, mk, n);
     }
 }
 
 pub(crate) fn morph<BD: BitDepth>(
+    exec: &ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -272,7 +264,7 @@ pub(crate) fn morph<BD: BitDepth>(
         }
         let d = &mut dst[row..];
         let n = w.min(d.len());
-        crate::filter::morph_row(bd, d, alpha, beta, n);
+        crate::filter::morph_row_ctx(exec, bd, d, alpha, beta, n);
     }
 }
 
@@ -735,7 +727,7 @@ pub(crate) fn prep_8tap_scalar<BD: BitDepth>(
             }
         }
         (None, None) => {
-            prep(bd, tmp, tmp_stride, &src[src_off..], src_stride, w, h);
+            prep_scalar(bd, tmp, tmp_stride, &src[src_off..], src_stride, w, h);
         }
     }
 }

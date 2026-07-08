@@ -143,6 +143,7 @@ pub(crate) struct LoopFilterState {
 
 #[derive(Default)]
 pub(crate) struct FrameContext {
+    pub(crate) exec: crate::exec_context::ExecContext,
     pub(crate) seq_hdr: Arc<SequenceHeader>,
     pub(crate) frame_hdr: Arc<FrameHeader>,
 
@@ -231,6 +232,7 @@ pub(crate) struct TileGroup {
 }
 
 pub(crate) struct DecoderContext {
+    pub(crate) exec: crate::exec_context::ExecContext,
     pub(crate) seq_hdr: Option<Arc<SequenceHeader>>,
     pub(crate) frame_hdr: Option<Arc<FrameHeader>>,
 

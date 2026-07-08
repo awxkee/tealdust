@@ -457,6 +457,7 @@ struct FilterSb64DstHbd<'a> {
 }
 
 pub(crate) struct FilterSb64Ctx<'a> {
+    pub(crate) exec: &'a crate::exec_context::ExecContext,
     pub(crate) seq_hdr: &'a crate::headers::SequenceHeader,
     pub(crate) frame_hdr: &'a FrameHeader,
     pub(crate) sh: &'a FilterShared<'a>,
@@ -506,6 +507,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
         return;
     }
     let FilterSb64Ctx {
+        exec,
         seq_hdr,
         frame_hdr,
         sh,
@@ -568,6 +570,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
             & 1)
             != 0;
         let dctx = crate::deblock::DeblockCtx {
+            exec,
             frame_hdr,
             mask: sh.mask,
             mask_row,
@@ -703,6 +706,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                     sb128: sb128 != 0,
                 };
                 crate::cdef::cdef_brow_8bpc(
+                    exec,
                     crate::cdef::CdefPlaneSetMut {
                         y: &mut *dst_y,
                         u: &mut *dst_u,
@@ -747,6 +751,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                 sb128: sb128 != 0,
             };
             crate::cdef::cdef_brow_8bpc(
+                exec,
                 crate::cdef::CdefPlaneSetMut {
                     y: &mut *dst_y,
                     u: &mut *dst_u,
@@ -863,6 +868,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
             };
             let empty_lr_db = EMPTY_LR_DB_LINE;
             let ctx = crate::looprestoration::LrContext {
+                exec,
                 restoration_p: &frame_hdr.restoration.p,
                 gdf_qp_idx: frame_hdr.gdf.qp_idx as i32,
                 gdf_scale: frame_hdr.gdf.scale as i32,
@@ -904,6 +910,7 @@ fn filter_sb64_hbd(
     band: FilterSb64Band,
 ) {
     let FilterSb64Ctx {
+        exec,
         seq_hdr,
         frame_hdr,
         sh,
@@ -969,6 +976,7 @@ fn filter_sb64_hbd(
             & 1)
             != 0;
         let dctx = crate::deblock::DeblockCtx {
+            exec,
             frame_hdr,
             mask: sh.mask,
             mask_row,
@@ -1098,6 +1106,7 @@ fn filter_sb64_hbd(
                 };
                 crate::cdef::cdef_brow(
                     bd,
+                    exec,
                     crate::cdef::CdefPlaneSetMut {
                         y: &mut *dst_y,
                         u: &mut *dst_u,
@@ -1143,6 +1152,7 @@ fn filter_sb64_hbd(
             };
             crate::cdef::cdef_brow(
                 bd,
+                exec,
                 crate::cdef::CdefPlaneSetMut {
                     y: &mut *dst_y,
                     u: &mut *dst_u,
@@ -1243,6 +1253,7 @@ fn filter_sb64_hbd(
             };
             let empty_lr_db = crate::looprestoration::EMPTY_LR_DB_LINE_HBD;
             let ctx = crate::looprestoration::LrContextHbd {
+                exec,
                 restoration_p: &frame_hdr.restoration.p,
                 gdf_qp_idx: frame_hdr.gdf.qp_idx as i32,
                 gdf_scale: frame_hdr.gdf.scale as i32,

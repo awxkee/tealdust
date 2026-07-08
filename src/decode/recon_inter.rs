@@ -314,6 +314,7 @@ where
             let mv = b.intra_data().intrabc_mv.xy();
             crate::recon::intrabc_pred(
                 recon.bd,
+                recon.frame.exec,
                 recon.dst_y,
                 recon.frame.y_stride_px,
                 bw4,
@@ -329,6 +330,7 @@ where
             );
             if b.intra_data().morph_pred != 0 {
                 intrabc_morph_pred_luma(
+                    recon.frame.exec,
                     recon.bd,
                     recon.dst_y,
                     recon.frame.y_stride_px,
@@ -372,6 +374,7 @@ where
                 let dst_plane: &mut [BD::Pixel] = if pl == 0 { recon.dst_u } else { recon.dst_v };
                 crate::recon::intrabc_pred(
                     bd,
+                    recon.frame.exec,
                     dst_plane,
                     recon.frame.uv_stride_px,
                     cbw4,
@@ -461,6 +464,7 @@ pub(crate) fn bawp_plane<BD: BitDepth>(
         let (alpha, beta) = recon.bawp_ab[plane];
         if alpha != 256 || beta != 0 {
             crate::mc::morph(
+                recon.frame.exec,
                 bd,
                 &mut dst[dst_off..],
                 stride,
@@ -605,6 +609,7 @@ pub(crate) fn bawp_plane<BD: BitDepth>(
     recon.bawp_ab[plane].1 = beta;
 
     crate::mc::morph(
+        recon.frame.exec,
         bd,
         &mut dst[dst_off..],
         stride,
@@ -621,6 +626,7 @@ pub(crate) fn bawp_plane<BD: BitDepth>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
     ref_pic: &crate::picture::Picture,
@@ -728,7 +734,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
         let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_dispatch::put_bilin_8bpc_with_scratch(
+            exec.put_bilin_8bpc_with_scratch(
                 dst8,
                 dst_stride,
                 &src8[src_off..],
@@ -740,7 +746,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
                 inter_scratch,
             );
         } else {
-            crate::mc_dispatch::put_8tap_8bpc_with_scratch(
+            exec.put_8tap_8bpc_with_scratch(
                 dst8,
                 dst_stride,
                 src8,
@@ -759,7 +765,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
         <BD::Pixel as Pixel>::try_as_u16_slice(src),
     ) {
         if is_bilin {
-            crate::mc_dispatch::put_bilin_hbd_with_scratch(
+            exec.put_bilin_hbd_with_scratch(
                 dst16,
                 dst_stride,
                 &src16[src_off..],
@@ -772,7 +778,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
                 inter_scratch,
             );
         } else {
-            crate::mc_dispatch::put_8tap_hbd_with_scratch(
+            exec.put_8tap_hbd_with_scratch(
                 dst16,
                 dst_stride,
                 src16,
@@ -793,6 +799,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
 #[allow(clippy::too_many_arguments)]
 fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     tmp: &mut [i16],
     ref_pic: &crate::picture::Picture,
     pl: usize,
@@ -896,7 +903,7 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8; the prep kernels write i16 `tmp`.
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_dispatch::prep_bilin_8bpc_with_scratch(
+            exec.prep_bilin_8bpc_with_scratch(
                 tmp,
                 tmp_stride,
                 &src8[src_off..],
@@ -908,7 +915,7 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
                 inter_scratch,
             );
         } else {
-            crate::mc_dispatch::prep_8tap_8bpc_with_scratch(
+            exec.prep_8tap_8bpc_with_scratch(
                 tmp,
                 tmp_stride,
                 src8,
@@ -924,7 +931,7 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
         }
     } else if let Some(src16) = <BD::Pixel as Pixel>::try_as_u16_slice(src) {
         if is_bilin {
-            crate::mc_dispatch::prep_bilin_hbd_with_scratch(
+            exec.prep_bilin_hbd_with_scratch(
                 tmp,
                 tmp_stride,
                 &src16[src_off..],
@@ -937,7 +944,7 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
                 inter_scratch,
             );
         } else {
-            crate::mc_dispatch::prep_8tap_hbd_with_scratch(
+            exec.prep_8tap_hbd_with_scratch(
                 tmp,
                 tmp_stride,
                 src16,
@@ -962,6 +969,7 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn warp_affine_plane_8bpc<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
     ref_pic: &crate::picture::Picture,
@@ -1036,26 +1044,28 @@ pub(crate) fn warp_affine_plane_8bpc<BD: BitDepth>(
                 // SAFETY: BPC==8 => BD::Pixel == u8.
                 let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(&mut dst[dst_sub..]);
                 let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                crate::mc_dispatch::warp_affine_8x8_8bpc(
-                    dst8, dst_stride, src8, src_stride, src_off, &abcd, mx, my,
-                );
+                unsafe {
+                    (exec.warp_8bpc)(dst8, dst_stride, src8, src_stride, src_off, &abcd, mx, my)
+                };
             } else {
                 // SAFETY by type convention: HBD decode uses u16 pixel storage.
                 let dst16 = BD::Pixel::try_as_u16_slice_mut(&mut dst[dst_sub..])
                     .expect("HBD warp destination must be u16-backed");
                 let src16 =
                     BD::Pixel::try_as_u16_slice(src).expect("HBD warp source must be u16-backed");
-                crate::mc_dispatch::warp_affine_8x8_hbd(
-                    dst16,
-                    dst_stride,
-                    src16,
-                    src_stride,
-                    src_off,
-                    &abcd,
-                    mx,
-                    my,
-                    bd.bitdepth(),
-                );
+                unsafe {
+                    (exec.warp_hbd)(
+                        dst16,
+                        dst_stride,
+                        src16,
+                        src_stride,
+                        src_off,
+                        &abcd,
+                        mx,
+                        my,
+                        bd.bitdepth(),
+                    )
+                };
             }
             x += 8;
         }
@@ -1070,6 +1080,7 @@ pub(crate) fn warp_affine_plane_8bpc<BD: BitDepth>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
     ref_pic: &crate::picture::Picture,
@@ -1167,7 +1178,7 @@ pub(crate) fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
                         // SAFETY: BPC==8 => BD::Pixel == u8.
                         let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(&mut dst[dst_sub..]);
                         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                        crate::mc_dispatch::put_8tap_8bpc_with_scratch(
+                        exec.put_8tap_8bpc_with_scratch(
                             dst8,
                             dst_stride,
                             src8,
@@ -1184,7 +1195,7 @@ pub(crate) fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
                         <BD::Pixel as Pixel>::try_as_u16_slice_mut(&mut dst[dst_sub..]),
                         <BD::Pixel as Pixel>::try_as_u16_slice(src),
                     ) {
-                        crate::mc_dispatch::put_8tap_hbd_with_scratch(
+                        exec.put_8tap_hbd_with_scratch(
                             dst16,
                             dst_stride,
                             src16,
@@ -1216,6 +1227,7 @@ pub(crate) fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
 #[allow(clippy::too_many_arguments)]
 fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     tmp: &mut [i16],
     tmp_stride: usize,
     ref_pic: &crate::picture::Picture,
@@ -1237,6 +1249,7 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     if wmp.affine == 0 || imin(b_dim[0] as i32 * h_mul, b_dim[1] as i32 * v_mul) < 8 {
         ext_warp_plane_prep_8bpc::<BD>(
             bd,
+            exec,
             tmp,
             tmp_stride,
             ref_pic,
@@ -1309,31 +1322,35 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
             if BD::BPC == 8 {
                 // SAFETY: BPC==8 => BD::Pixel == u8.
                 let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                crate::mc_dispatch::warp_affine_8x8t_8bpc(
-                    &mut tmp[dst_sub..],
-                    tmp_stride,
-                    src8,
-                    src_stride,
-                    src_off,
-                    &abcd,
-                    mx,
-                    my,
-                );
+                unsafe {
+                    (exec.warp_t_8bpc)(
+                        &mut tmp[dst_sub..],
+                        tmp_stride,
+                        src8,
+                        src_stride,
+                        src_off,
+                        &abcd,
+                        mx,
+                        my,
+                    )
+                };
             } else {
                 // SAFETY by type convention: HBD decode uses u16 pixel storage.
                 let src16 =
                     BD::Pixel::try_as_u16_slice(src).expect("HBD warp source must be u16-backed");
-                crate::mc_dispatch::warp_affine_8x8t_hbd(
-                    &mut tmp[dst_sub..],
-                    tmp_stride,
-                    src16,
-                    src_stride,
-                    src_off,
-                    &abcd,
-                    mx,
-                    my,
-                    bd.bitdepth(),
-                );
+                unsafe {
+                    (exec.warp_t_hbd)(
+                        &mut tmp[dst_sub..],
+                        tmp_stride,
+                        src16,
+                        src_stride,
+                        src_off,
+                        &abcd,
+                        mx,
+                        my,
+                        bd.bitdepth(),
+                    )
+                };
             }
             x += 8;
         }
@@ -1346,6 +1363,7 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
 #[allow(clippy::too_many_arguments)]
 fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     tmp: &mut [i16],
     tmp_stride: usize,
     ref_pic: &crate::picture::Picture,
@@ -1442,7 +1460,7 @@ fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                     if BD::BPC == 8 {
                         // SAFETY: BPC==8 => BD::Pixel == u8.
                         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-                        crate::mc_dispatch::prep_8tap_8bpc_with_scratch(
+                        exec.prep_8tap_8bpc_with_scratch(
                             &mut tmp[dst_sub..],
                             tmp_stride,
                             src8,
@@ -1456,7 +1474,7 @@ fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
                             inter_scratch,
                         );
                     } else if let Some(src16) = <BD::Pixel as Pixel>::try_as_u16_slice(src) {
-                        crate::mc_dispatch::prep_8tap_hbd_with_scratch(
+                        exec.prep_8tap_hbd_with_scratch(
                             &mut tmp[dst_sub..],
                             tmp_stride,
                             src16,
@@ -1738,7 +1756,8 @@ where
     let _ = IntraPredMode::DcPred;
 
     let _ = (tw, th);
-    crate::itx::inv_txfm_add(
+    crate::itx::inv_txfm_add_ctx(
+        recon.frame.exec,
         bd,
         dst,
         dst_off,
@@ -2004,7 +2023,8 @@ where
             };
             if cctx_type != 0 {
                 let sz = imin(txw * 4, 32) as usize * imin(txh * 4, 32) as usize;
-                crate::itx::cctx_bd(
+                crate::itx::cctx_bd_ctx(
+                    recon.frame.exec,
                     bd,
                     &mut cf_u[i * 16..],
                     &mut cf_v[i * 16..],
@@ -2031,7 +2051,8 @@ where
                     4 * (((by >> ss_ver) as usize) * uv_stride + ((bx >> ss_hor) as usize));
                 let cf = if pl == 0 { &mut *cf_u } else { &mut *cf_v };
                 let dst_plane: &mut [BD::Pixel] = if pl == 0 { recon.dst_u } else { recon.dst_v };
-                crate::itx::inv_txfm_add(
+                crate::itx::inv_txfm_add_ctx(
+                    recon.frame.exec,
                     bd,
                     dst_plane,
                     dst_off,
@@ -2217,6 +2238,7 @@ fn iiblend_plane_8bpc<BD: BitDepth>(
             edge_o,
         );
         dispatch_ipred(
+            frame.exec,
             bd,
             m,
             &mut tmp,
@@ -2265,9 +2287,17 @@ fn iiblend_plane_8bpc<BD: BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8.
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(&mut dst_plane[dst_off..]);
         let t8: &[u8] = BD::Pixel::slice_as_ne_bytes(&tmp);
-        crate::mc_dispatch::blend_8bpc(d8, stride, t8, w, h, &mask);
+        crate::mc::blend_8bpc(recon.frame.exec, d8, stride, t8, w, h, &mask);
     } else {
-        crate::mc::blend(&mut dst_plane[dst_off..], stride, &tmp, w, h, &mask);
+        crate::mc::blend(
+            recon.frame.exec,
+            &mut dst_plane[dst_off..],
+            stride,
+            &tmp,
+            w,
+            h,
+            &mask,
+        );
     }
 }
 
@@ -2702,6 +2732,7 @@ where
                 if warp_use[i] {
                     warp_affine_plane_prep_8bpc(
                         recon.bd,
+                        recon.frame.exec,
                         &mut tmp[i],
                         w,
                         refp[i],
@@ -2719,6 +2750,7 @@ where
                 } else {
                     inter_mc_plane_prep_8bpc(
                         recon.bd,
+                        recon.frame.exec,
                         &mut tmp[i],
                         refp[i],
                         0,
@@ -2756,6 +2788,7 @@ where
                     (&tmp1[0], &tmp0[0])
                 };
                 mc_mask(
+                    recon.frame.exec,
                     recon.bd,
                     &mut recon.dst_y[dst_off..],
                     y_stride,
@@ -2775,6 +2808,7 @@ where
                     (&tmp1[0], &tmp0[0])
                 };
                 mc_w_mask(
+                    recon.frame.exec,
                     recon.bd,
                     &mut recon.dst_y[dst_off..],
                     y_stride,
@@ -2818,6 +2852,7 @@ where
                     }
                     if bacp != 0 {
                         mc_mask(
+                            recon.frame.exec,
                             recon.bd,
                             &mut recon.dst_y[dst_off..],
                             y_stride,
@@ -2829,6 +2864,7 @@ where
                         );
                     } else {
                         mc_avg(
+                            recon.frame.exec,
                             recon.bd,
                             &mut recon.dst_y[dst_off..],
                             y_stride,
@@ -2840,6 +2876,7 @@ where
                     }
                 } else {
                     mc_w_avg(
+                        recon.frame.exec,
                         recon.bd,
                         &mut recon.dst_y[dst_off..],
                         y_stride,
@@ -2972,6 +3009,7 @@ where
                         };
                         inter_mc_plane_8bpc(
                             bd,
+                            recon.frame.exec,
                             dst,
                             uv_stride,
                             &s_refp,
@@ -3024,6 +3062,7 @@ where
                     if warp_use[i] {
                         warp_affine_plane_prep_8bpc(
                             bd,
+                            recon.frame.exec,
                             &mut tmp[i],
                             cw,
                             refp[i],
@@ -3041,6 +3080,7 @@ where
                     } else {
                         inter_mc_plane_prep_8bpc(
                             bd,
+                            recon.frame.exec,
                             &mut tmp[i],
                             refp[i],
                             pl,
@@ -3080,7 +3120,7 @@ where
                     } else {
                         (&tmp1[0], &tmp0[0])
                     };
-                    mc_mask(bd, dst, uv_stride, a0, a1, cw, ch, mask);
+                    mc_mask(recon.frame.exec, bd, dst, uv_stride, a0, a1, cw, ch, mask);
                 }
                 3 => {
                     let (a0, a1) = if mask_sign == 0 {
@@ -3088,7 +3128,17 @@ where
                     } else {
                         (&tmp1[0], &tmp0[0])
                     };
-                    mc_mask(bd, dst, uv_stride, a0, a1, cw, ch, &seg_mask);
+                    mc_mask(
+                        recon.frame.exec,
+                        bd,
+                        dst,
+                        uv_stride,
+                        a0,
+                        a1,
+                        cw,
+                        ch,
+                        &seg_mask,
+                    );
                 }
                 _ => {
                     if cwp_idx == 8 {
@@ -3099,9 +3149,28 @@ where
                         // NOT inherited from the luma plane.
                         if is_opfl {
                             if chroma_bacp {
-                                mc_mask(bd, dst, uv_stride, &tmp0[0], &tmp1[0], cw, ch, &seg_mask);
+                                mc_mask(
+                                    recon.frame.exec,
+                                    bd,
+                                    dst,
+                                    uv_stride,
+                                    &tmp0[0],
+                                    &tmp1[0],
+                                    cw,
+                                    ch,
+                                    &seg_mask,
+                                );
                             } else {
-                                mc_avg(bd, dst, uv_stride, &tmp0[0], &tmp1[0], cw, ch);
+                                mc_avg(
+                                    recon.frame.exec,
+                                    bd,
+                                    dst,
+                                    uv_stride,
+                                    &tmp0[0],
+                                    &tmp1[0],
+                                    cw,
+                                    ch,
+                                );
                             }
                         } else {
                             if pl == 1 {
@@ -3126,13 +3195,42 @@ where
                                 };
                             }
                             if chroma_bacp {
-                                mc_mask(bd, dst, uv_stride, &tmp0[0], &tmp1[0], cw, ch, &seg_mask);
+                                mc_mask(
+                                    recon.frame.exec,
+                                    bd,
+                                    dst,
+                                    uv_stride,
+                                    &tmp0[0],
+                                    &tmp1[0],
+                                    cw,
+                                    ch,
+                                    &seg_mask,
+                                );
                             } else {
-                                mc_avg(bd, dst, uv_stride, &tmp0[0], &tmp1[0], cw, ch);
+                                mc_avg(
+                                    recon.frame.exec,
+                                    bd,
+                                    dst,
+                                    uv_stride,
+                                    &tmp0[0],
+                                    &tmp1[0],
+                                    cw,
+                                    ch,
+                                );
                             }
                         }
                     } else {
-                        mc_w_avg(bd, dst, uv_stride, &tmp0[0], &tmp1[0], cw, ch, cwp_idx);
+                        mc_w_avg(
+                            recon.frame.exec,
+                            bd,
+                            dst,
+                            uv_stride,
+                            &tmp0[0],
+                            &tmp1[0],
+                            cw,
+                            ch,
+                            cwp_idx,
+                        );
                     }
                 }
             }

@@ -139,6 +139,7 @@ pub(crate) fn backup_row_lpf_8bpc(
 /// `rows[row_off]` is the first center row. `col_off` is the column origin
 /// in each row (matching the C convention where row pointers are pre-offset).
 pub(crate) fn compute_gradient_row_8bpc(
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [[u16; 4]],
     rows: &[&[u8]],
     row_off: usize,
@@ -169,7 +170,8 @@ pub(crate) fn compute_gradient_row_8bpc(
                 rows[(row_off as i32 - 1 + dy) as usize],
                 rows[(row_off as i32 + dy) as usize],
             ];
-            crate::filter::gdf_gradient_group(
+            crate::filter::gdf_gradient_group_ctx(
+                exec,
                 dst,
                 d,
                 base_cell,
@@ -216,6 +218,7 @@ pub(crate) fn compute_gradient_row_8bpc(
 /// GDF: 10-bit keeps the sample precision, while 12-bit is down-shifted by 2
 /// before the gradient is formed.
 pub(crate) fn compute_gradient_row_hbd(
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [[u16; 4]],
     rows: &[&[u16]],
     row_off: usize,
@@ -245,7 +248,8 @@ pub(crate) fn compute_gradient_row_hbd(
                 rows[(row_off as i32 - 1 + dy) as usize],
                 rows[(row_off as i32 + dy) as usize],
             ];
-            crate::filter::gdf_gradient_group_hbd(
+            crate::filter::gdf_gradient_group_hbd_ctx(
+                exec,
                 dst,
                 d,
                 base_cell,
@@ -360,6 +364,7 @@ pub(crate) fn get_class_lut_idx_8bpc(
 }
 
 pub(crate) fn gdf_add_8bpc(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u8],
     stride: usize,
     err: &[i8],
@@ -387,7 +392,8 @@ pub(crate) fn gdf_add_8bpc(
             let x0 = bx_start << 2;
             let n = (bx - bx_start) << 2;
             for y in by * 4..by * 4 + 4 {
-                crate::filter::gdf_add_run(
+                crate::filter::gdf_add_run_ctx(
+                    exec,
                     &mut p[y * stride + x0..],
                     &err[y * err_stride + x0..],
                     scale,
@@ -399,6 +405,7 @@ pub(crate) fn gdf_add_8bpc(
 }
 
 pub(crate) fn gdf_add_hbd(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u16],
     stride: usize,
     err: &[i8],
@@ -427,7 +434,8 @@ pub(crate) fn gdf_add_hbd(
             let x0 = bx_start << 2;
             let n = (bx - bx_start) << 2;
             for y in by * 4..by * 4 + 4 {
-                crate::filter::gdf_add_run_hbd(
+                crate::filter::gdf_add_run_hbd_ctx(
+                    exec,
                     &mut p[y * stride + x0..],
                     &err[y * err_stride + x0..],
                     scale,
@@ -599,6 +607,7 @@ pub(crate) fn backup_row_luma_8bpc(
 }
 
 pub(crate) fn ns_wiener_single_y_8bpc(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u8],
     p_off: usize,
     stride: usize,
@@ -756,13 +765,7 @@ pub(crate) fn ns_wiener_single_y_8bpc(
             // SAFETY: filter FIR resolver only returns target-feature kernels after
             // the corresponding runtime CPU feature check succeeds.
             unsafe {
-                (crate::filter::ns_wiener_fir_run())(
-                    &mut dst_row[x0..x0 + n],
-                    refs[4],
-                    o + x0,
-                    &taps,
-                    n,
-                );
+                (exec.ns_wiener_fir)(&mut dst_row[x0..x0 + n], refs[4], o + x0, &taps, n);
             }
         }
 
@@ -773,6 +776,7 @@ pub(crate) fn ns_wiener_single_y_8bpc(
 }
 
 fn wiener_multi_8bpc(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u8],
     p_off: usize,
     stride: usize,
@@ -1031,13 +1035,7 @@ fn wiener_multi_8bpc(
                     // SAFETY: filter FIR resolver only returns target-feature kernels after
                     // the corresponding runtime CPU feature check succeeds.
                     unsafe {
-                        (crate::filter::ns_wiener_fir_run())(
-                            &mut dst_row[x0..x0 + n],
-                            refs[4],
-                            col0,
-                            &taps,
-                            n,
-                        );
+                        (exec.ns_wiener_fir)(&mut dst_row[x0..x0 + n], refs[4], col0, &taps, n);
                     }
                 } else if let Some(fp) = filters_pretrained {
                     let filter = &fp[cls as usize];
@@ -1054,7 +1052,7 @@ fn wiener_multi_8bpc(
                     // SAFETY: filter FIR resolver only returns target-feature kernels after
                     // the corresponding runtime CPU feature check succeeds.
                     unsafe {
-                        (crate::filter::pc_wiener_fir_run())(
+                        (exec.pc_wiener_fir)(
                             &mut dst_row[x0..x0 + n],
                             refs[4],
                             filter[12] as i32,
@@ -1074,6 +1072,7 @@ fn wiener_multi_8bpc(
 }
 
 pub(crate) fn ns_wiener_multi_8bpc(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u8],
     p_off: usize,
     stride: usize,
@@ -1092,6 +1091,7 @@ pub(crate) fn ns_wiener_multi_8bpc(
     ll_mask: &[[u16; 4]],
 ) {
     wiener_multi_8bpc(
+        exec,
         p,
         p_off,
         stride,
@@ -1113,6 +1113,7 @@ pub(crate) fn ns_wiener_multi_8bpc(
 }
 
 pub(crate) fn pc_wiener_8bpc(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u8],
     p_off: usize,
     stride: usize,
@@ -1131,6 +1132,7 @@ pub(crate) fn pc_wiener_8bpc(
     ll_mask: &[[u16; 4]],
 ) {
     wiener_multi_8bpc(
+        exec,
         p,
         p_off,
         stride,
@@ -1154,6 +1156,7 @@ pub(crate) fn pc_wiener_8bpc(
 const LUMA_BUF_STRIDE: usize = REST_UNIT_STRIDE + 64;
 
 pub(crate) fn ns_wiener_single_uv_8bpc(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u8],
     p_off: usize,
     stride: usize,
@@ -1439,7 +1442,7 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
             // SAFETY: filter FIR resolver only returns target-feature kernels after
             // the corresponding runtime CPU feature check succeeds.
             unsafe {
-                (crate::filter::ns_wiener_uv_fir_run())(
+                (exec.ns_wiener_uv_fir)(
                     &mut dst_row[x0..x0 + n],
                     c_refs[2],
                     o + x0,
@@ -1464,6 +1467,7 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
 }
 
 pub(crate) fn gdf_prep_8bpc(
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [i8],
     dst_stride: usize,
     p: &[u8],
@@ -1545,7 +1549,7 @@ pub(crate) fn gdf_prep_8bpc(
     let mut grad = [[[0u16; 4]; GRADIENT_BUF_STRIDE]; 2];
     {
         let refs: [&[u8]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u8]);
-        compute_gradient_row_8bpc(&mut grad[0], &refs, 6, o, w, 0);
+        compute_gradient_row_8bpc(exec, &mut grad[0], &refs, 6, o, w, 0);
     }
     let mut grad_bit: usize = 1;
 
@@ -1596,7 +1600,7 @@ pub(crate) fn gdf_prep_8bpc(
 
         if y & 1 == 0 {
             let refs: [&[u8]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u8]);
-            compute_gradient_row_8bpc(&mut grad[grad_bit], &refs, 8, o, w, 0);
+            compute_gradient_row_8bpc(exec, &mut grad[grad_bit], &refs, 8, o, w, 0);
             grad_bit ^= 1;
         }
 
@@ -1628,7 +1632,8 @@ pub(crate) fn gdf_prep_8bpc(
             }
 
             if x1 + 1 < w {
-                let err_pair = crate::filter::gdf_prep_pair_8bpc(
+                let err_pair = crate::filter::gdf_prep_pair_8bpc_ctx(
+                    exec,
                     refs,
                     o + x1,
                     cls,
@@ -1664,6 +1669,7 @@ pub(crate) fn gdf_prep_8bpc(
 }
 
 pub(crate) fn gdf_prep_hbd(
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [i8],
     dst_stride: usize,
     p: &[u16],
@@ -1752,7 +1758,7 @@ pub(crate) fn gdf_prep_hbd(
     let mut grad = [[[0u16; 4]; GRADIENT_BUF_STRIDE]; 2];
     {
         let refs: [&[u16]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u16]);
-        compute_gradient_row_hbd(&mut grad[0], &refs, 6, o, w, down_shift);
+        compute_gradient_row_hbd(exec, &mut grad[0], &refs, 6, o, w, down_shift);
     }
     let mut grad_bit: usize = 1;
 
@@ -1803,7 +1809,7 @@ pub(crate) fn gdf_prep_hbd(
 
         if y & 1 == 0 {
             let refs: [&[u16]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u16]);
-            compute_gradient_row_hbd(&mut grad[grad_bit], &refs, 8, o, w, down_shift);
+            compute_gradient_row_hbd(exec, &mut grad[grad_bit], &refs, 8, o, w, down_shift);
             grad_bit ^= 1;
         }
 
@@ -1834,7 +1840,8 @@ pub(crate) fn gdf_prep_hbd(
                 }
             }
 
-            let err_pair = crate::filter::gdf_prep_pair_hbd(
+            let err_pair = crate::filter::gdf_prep_pair_hbd_ctx(
+                exec,
                 refs,
                 o + x1,
                 cls,
@@ -1890,6 +1897,7 @@ pub(crate) enum FirstSbInTileRow {
 }
 
 pub(crate) struct LrContext<'a> {
+    pub(crate) exec: &'a crate::exec_context::ExecContext,
     pub(crate) restoration_p: &'a [FhRestorationPlane; 3],
     pub(crate) gdf_qp_idx: i32,
     pub(crate) gdf_scale: i32,
@@ -2078,6 +2086,7 @@ fn lr_stripe_8bpc(
                 None => (&ctx.lr_db_line[plane_u], lpf_off),
             };
             gdf_prep_8bpc(
+                ctx.exec,
                 &mut gdf_err,
                 64,
                 &*p,
@@ -2166,6 +2175,7 @@ fn lr_stripe_8bpc(
                         (db_line, lpf_off)
                     };
                     ns_wiener_single_y_8bpc(
+                        ctx.exec,
                         p,
                         cur_off,
                         stride_u,
@@ -2199,6 +2209,7 @@ fn lr_stripe_8bpc(
                         (db_line, lpf_off)
                     };
                     ns_wiener_single_uv_8bpc(
+                        ctx.exec,
                         p,
                         cur_off,
                         stride_u,
@@ -2244,6 +2255,7 @@ fn lr_stripe_8bpc(
                         (db_line, lpf_off)
                     };
                     ns_wiener_multi_8bpc(
+                        ctx.exec,
                         p,
                         cur_off,
                         stride_u,
@@ -2270,6 +2282,7 @@ fn lr_stripe_8bpc(
                         (db_line, lpf_off)
                     };
                     pc_wiener_8bpc(
+                        ctx.exec,
                         p,
                         cur_off,
                         stride_u,
@@ -2295,6 +2308,7 @@ fn lr_stripe_8bpc(
 
         if gdf_enabled {
             gdf_add_8bpc(
+                ctx.exec,
                 &mut p[cur_off..],
                 stride_u,
                 &gdf_err,
@@ -2832,6 +2846,7 @@ pub(crate) fn get_class_lut_idx_hbd(
     lut_idx
 }
 pub(crate) fn ns_wiener_single_y_hbd(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u16],
     p_off: usize,
     stride: usize,
@@ -2990,7 +3005,7 @@ pub(crate) fn ns_wiener_single_y_hbd(
             // SAFETY: filter FIR resolver only returns target-feature kernels after
             // the corresponding runtime CPU feature check succeeds.
             unsafe {
-                (crate::filter::ns_wiener_fir_run_hbd())(
+                (exec.ns_wiener_fir_hbd)(
                     &mut dst_row[x0..x0 + n],
                     refs[4],
                     o + x0,
@@ -3007,6 +3022,7 @@ pub(crate) fn ns_wiener_single_y_hbd(
     }
 }
 fn wiener_multi_hbd(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u16],
     p_off: usize,
     stride: usize,
@@ -3277,7 +3293,7 @@ fn wiener_multi_hbd(
                     // SAFETY: filter FIR resolver only returns target-feature kernels after
                     // the corresponding runtime CPU feature check succeeds.
                     unsafe {
-                        (crate::filter::ns_wiener_fir_run_hbd())(
+                        (exec.ns_wiener_fir_hbd)(
                             &mut dst_row[x0..x0 + n],
                             refs[4],
                             col0,
@@ -3301,7 +3317,7 @@ fn wiener_multi_hbd(
                     // SAFETY: filter FIR resolver only returns target-feature kernels after
                     // the corresponding runtime CPU feature check succeeds.
                     unsafe {
-                        (crate::filter::pc_wiener_fir_run_hbd())(
+                        (exec.pc_wiener_fir_hbd)(
                             &mut dst_row[x0..x0 + n],
                             refs[4],
                             filter[12] as i32,
@@ -3321,6 +3337,7 @@ fn wiener_multi_hbd(
     }
 }
 pub(crate) fn ns_wiener_multi_hbd(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u16],
     p_off: usize,
     stride: usize,
@@ -3341,6 +3358,7 @@ pub(crate) fn ns_wiener_multi_hbd(
     bitdepth_max: i32,
 ) {
     wiener_multi_hbd(
+        exec,
         p,
         p_off,
         stride,
@@ -3363,6 +3381,7 @@ pub(crate) fn ns_wiener_multi_hbd(
     );
 }
 pub(crate) fn pc_wiener_hbd(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u16],
     p_off: usize,
     stride: usize,
@@ -3383,6 +3402,7 @@ pub(crate) fn pc_wiener_hbd(
     bitdepth_max: i32,
 ) {
     wiener_multi_hbd(
+        exec,
         p,
         p_off,
         stride,
@@ -3405,6 +3425,7 @@ pub(crate) fn pc_wiener_hbd(
     );
 }
 pub(crate) fn ns_wiener_single_uv_hbd(
+    exec: &crate::exec_context::ExecContext,
     p: &mut [u16],
     p_off: usize,
     stride: usize,
@@ -3691,7 +3712,7 @@ pub(crate) fn ns_wiener_single_uv_hbd(
             // SAFETY: filter FIR resolver only returns target-feature kernels after
             // the corresponding runtime CPU feature check succeeds.
             unsafe {
-                (crate::filter::ns_wiener_uv_fir_run_hbd())(
+                (exec.ns_wiener_uv_fir_hbd)(
                     &mut dst_row[x0..x0 + n],
                     c_refs[2],
                     o + x0,
@@ -3717,6 +3738,7 @@ pub(crate) fn ns_wiener_single_uv_hbd(
 }
 
 pub(crate) struct LrContextHbd<'a> {
+    pub(crate) exec: &'a crate::exec_context::ExecContext,
     pub(crate) restoration_p: &'a [FhRestorationPlane; 3],
     pub(crate) gdf_qp_idx: i32,
     pub(crate) gdf_scale: i32,
@@ -3904,6 +3926,7 @@ fn lr_stripe_hbd(
                 None => (&ctx.lr_db_line[plane_u], lpf_off),
             };
             gdf_prep_hbd(
+                ctx.exec,
                 &mut gdf_err,
                 64,
                 &*p,
@@ -3993,6 +4016,7 @@ fn lr_stripe_hbd(
                         (db_line, lpf_off)
                     };
                     ns_wiener_single_y_hbd(
+                        ctx.exec,
                         p,
                         cur_off,
                         stride_u,
@@ -4027,6 +4051,7 @@ fn lr_stripe_hbd(
                         (db_line, lpf_off)
                     };
                     ns_wiener_single_uv_hbd(
+                        ctx.exec,
                         p,
                         cur_off,
                         stride_u,
@@ -4073,6 +4098,7 @@ fn lr_stripe_hbd(
                         (db_line, lpf_off)
                     };
                     ns_wiener_multi_hbd(
+                        ctx.exec,
                         p,
                         cur_off,
                         stride_u,
@@ -4101,6 +4127,7 @@ fn lr_stripe_hbd(
                         (db_line, lpf_off)
                     };
                     pc_wiener_hbd(
+                        ctx.exec,
                         p,
                         cur_off,
                         stride_u,
@@ -4128,6 +4155,7 @@ fn lr_stripe_hbd(
 
         if gdf_enabled {
             gdf_add_hbd(
+                ctx.exec,
                 &mut p[cur_off..],
                 stride_u,
                 &gdf_err,

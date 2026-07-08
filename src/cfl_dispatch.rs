@@ -1383,7 +1383,7 @@ static CFL_GEN_MAT_8BPC: OnceLock<CflGenMat8Fn> = OnceLock::new();
 static CFL_GEN_MAT_HBD: OnceLock<CflGenMatHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cfl_gen_mat_8bpc() -> CflGenMat8Fn {
+pub(crate) fn resolve_cfl_gen_mat_8bpc() -> CflGenMat8Fn {
     *CFL_GEN_MAT_8BPC.get_or_init(|| {
         let mut _f: CflGenMat8Fn = cfl_gen_mat_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1404,7 +1404,7 @@ fn resolve_cfl_gen_mat_8bpc() -> CflGenMat8Fn {
 }
 
 #[inline]
-fn resolve_cfl_gen_mat_hbd() -> CflGenMatHbdFn {
+pub(crate) fn resolve_cfl_gen_mat_hbd() -> CflGenMatHbdFn {
     *CFL_GEN_MAT_HBD.get_or_init(|| {
         let mut _f: CflGenMatHbdFn = cfl_gen_mat_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1421,21 +1421,11 @@ fn resolve_cfl_gen_mat_hbd() -> CflGenMatHbdFn {
     })
 }
 
-#[inline]
-pub(crate) fn cfl_gen_mat_8bpc(args: CflGenMat8<'_>) {
-    unsafe { resolve_cfl_gen_mat_8bpc()(args) };
-}
-
-#[inline]
-pub(crate) fn cfl_gen_mat_hbd(args: CflGenMatHbd<'_>) {
-    unsafe { resolve_cfl_gen_mat_hbd()(args) };
-}
-
 static CFL_ALPHA_ACCUM_8BPC: OnceLock<CflAlphaAccum8Fn> = OnceLock::new();
 static CFL_ALPHA_ACCUM_HBD: OnceLock<CflAlphaAccumHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cfl_alpha_accum_8bpc() -> CflAlphaAccum8Fn {
+pub(crate) fn resolve_cfl_alpha_accum_8bpc() -> CflAlphaAccum8Fn {
     *CFL_ALPHA_ACCUM_8BPC.get_or_init(|| {
         let mut _f: CflAlphaAccum8Fn = cfl_alpha_accum_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1456,7 +1446,7 @@ fn resolve_cfl_alpha_accum_8bpc() -> CflAlphaAccum8Fn {
 }
 
 #[inline]
-fn resolve_cfl_alpha_accum_hbd() -> CflAlphaAccumHbdFn {
+pub(crate) fn resolve_cfl_alpha_accum_hbd() -> CflAlphaAccumHbdFn {
     *CFL_ALPHA_ACCUM_HBD.get_or_init(|| {
         let mut _f: CflAlphaAccumHbdFn = cfl_alpha_accum_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1473,21 +1463,11 @@ fn resolve_cfl_alpha_accum_hbd() -> CflAlphaAccumHbdFn {
     })
 }
 
-#[inline]
-pub(crate) fn cfl_alpha_accum_8bpc(args: CflAlphaAccum8<'_>) {
-    unsafe { resolve_cfl_alpha_accum_8bpc()(args) };
-}
-
-#[inline]
-pub(crate) fn cfl_alpha_accum_hbd(args: CflAlphaAccumHbd<'_>) {
-    unsafe { resolve_cfl_alpha_accum_hbd()(args) };
-}
-
 static CFL_GEN_Y_ROW_8BPC: OnceLock<CflGenYRow8Fn> = OnceLock::new();
 static CFL_GEN_Y_ROW_HBD: OnceLock<CflGenYRowHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cfl_gen_y_row_8bpc() -> CflGenYRow8Fn {
+pub(crate) fn resolve_cfl_gen_y_row_8bpc() -> CflGenYRow8Fn {
     *CFL_GEN_Y_ROW_8BPC.get_or_init(|| {
         let mut _f: CflGenYRow8Fn = cfl_gen_y_row_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1508,7 +1488,7 @@ fn resolve_cfl_gen_y_row_8bpc() -> CflGenYRow8Fn {
 }
 
 #[inline]
-fn resolve_cfl_gen_y_row_hbd() -> CflGenYRowHbdFn {
+pub(crate) fn resolve_cfl_gen_y_row_hbd() -> CflGenYRowHbdFn {
     *CFL_GEN_Y_ROW_HBD.get_or_init(|| {
         let mut _f: CflGenYRowHbdFn = cfl_gen_y_row_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1525,21 +1505,11 @@ fn resolve_cfl_gen_y_row_hbd() -> CflGenYRowHbdFn {
     })
 }
 
-#[inline]
-pub(crate) fn cfl_gen_y_row_8bpc(args: CflGenYRow8<'_>) {
-    unsafe { resolve_cfl_gen_y_row_8bpc()(args) };
-}
-
-#[inline]
-pub(crate) fn cfl_gen_y_row_hbd(args: CflGenYRowHbd<'_>) {
-    unsafe { resolve_cfl_gen_y_row_hbd()(args) };
-}
-
 static CFL_MHCCP_PRED_8BPC: OnceLock<CflMhccpPred8Fn> = OnceLock::new();
 static CFL_MHCCP_PRED_HBD: OnceLock<CflMhccpPredHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cfl_mhccp_pred_8bpc() -> CflMhccpPred8Fn {
+pub(crate) fn resolve_cfl_mhccp_pred_8bpc() -> CflMhccpPred8Fn {
     *CFL_MHCCP_PRED_8BPC.get_or_init(|| {
         let mut _f: CflMhccpPred8Fn = cfl_mhccp_pred_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1560,7 +1530,7 @@ fn resolve_cfl_mhccp_pred_8bpc() -> CflMhccpPred8Fn {
 }
 
 #[inline]
-fn resolve_cfl_mhccp_pred_hbd() -> CflMhccpPredHbdFn {
+pub(crate) fn resolve_cfl_mhccp_pred_hbd() -> CflMhccpPredHbdFn {
     *CFL_MHCCP_PRED_HBD.get_or_init(|| {
         let mut _f: CflMhccpPredHbdFn = cfl_mhccp_pred_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1577,16 +1547,6 @@ fn resolve_cfl_mhccp_pred_hbd() -> CflMhccpPredHbdFn {
     })
 }
 
-#[inline]
-pub(crate) fn cfl_mhccp_pred_8bpc(args: CflMhccpPred8<'_>) {
-    unsafe { resolve_cfl_mhccp_pred_8bpc()(args) };
-}
-
-#[inline]
-pub(crate) fn cfl_mhccp_pred_hbd(args: CflMhccpPredHbd<'_>) {
-    unsafe { resolve_cfl_mhccp_pred_hbd()(args) };
-}
-
 static CFL_APPLY_420_8BPC: OnceLock<CflApplyFn> = OnceLock::new();
 static CFL_APPLY_420_8BPC_FILTERED: OnceLock<CflApplyFn> = OnceLock::new();
 static CFL_APPLY_422_8BPC: OnceLock<CflApplyFn> = OnceLock::new();
@@ -1597,7 +1557,7 @@ static CFL_APPLY_422_HBD: OnceLock<CflApplyHbdFn> = OnceLock::new();
 static CFL_APPLY_444_HBD: OnceLock<CflApplyHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cfl_apply_420() -> CflApplyFn {
+pub(crate) fn resolve_cfl_apply_420() -> CflApplyFn {
     *CFL_APPLY_420_8BPC.get_or_init(|| {
         let mut _f: CflApplyFn = cfl_apply_420_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1628,7 +1588,7 @@ fn resolve_cfl_apply_420() -> CflApplyFn {
 }
 
 #[inline]
-fn resolve_cfl_apply_420_filtered() -> CflApplyFn {
+pub(crate) fn resolve_cfl_apply_420_filtered() -> CflApplyFn {
     *CFL_APPLY_420_8BPC_FILTERED.get_or_init(|| {
         let mut _f: CflApplyFn = cfl_apply_420_8bpc_scalar;
         // Filtered 4:2:0 variants (VSTRIP/GAUSS) have NEON and AVX2 entries.
@@ -1652,7 +1612,7 @@ fn resolve_cfl_apply_420_filtered() -> CflApplyFn {
 }
 
 #[inline]
-fn resolve_cfl_apply_422() -> CflApplyFn {
+pub(crate) fn resolve_cfl_apply_422() -> CflApplyFn {
     *CFL_APPLY_422_8BPC.get_or_init(|| {
         let mut _f: CflApplyFn = cfl_apply_422_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1683,7 +1643,7 @@ fn resolve_cfl_apply_422() -> CflApplyFn {
 }
 
 #[inline]
-fn resolve_cfl_apply_444() -> CflApplyFn {
+pub(crate) fn resolve_cfl_apply_444() -> CflApplyFn {
     *CFL_APPLY_444_8BPC.get_or_init(|| {
         let mut _f: CflApplyFn = cfl_apply_444_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1714,36 +1674,7 @@ fn resolve_cfl_apply_444() -> CflApplyFn {
 }
 
 #[inline]
-pub(crate) fn cfl_apply_420_8bpc(args: CflApply8<'_>) {
-    let f = if args.params.filter_type == CFL_FLT_TYPE_VSTRIP
-        || args.params.filter_type == CFL_FLT_TYPE_GAUSS
-    {
-        resolve_cfl_apply_420_filtered()
-    } else {
-        resolve_cfl_apply_420()
-    };
-
-    // SAFETY: the resolvers only install target-feature entries after the
-    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
-    unsafe { f(args) };
-}
-
-#[inline]
-pub(crate) fn cfl_apply_422_8bpc(args: CflApply8<'_>) {
-    // SAFETY: the resolver only installs a target-feature entry after the
-    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
-    unsafe { resolve_cfl_apply_422()(args) };
-}
-
-#[inline]
-pub(crate) fn cfl_apply_444_8bpc(args: CflApply8<'_>) {
-    // SAFETY: the resolver only installs a target-feature entry after the
-    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
-    unsafe { resolve_cfl_apply_444()(args) };
-}
-
-#[inline]
-fn resolve_cfl_apply_420_hbd() -> CflApplyHbdFn {
+pub(crate) fn resolve_cfl_apply_420_hbd() -> CflApplyHbdFn {
     *CFL_APPLY_420_HBD.get_or_init(|| {
         let mut _f: CflApplyHbdFn = cfl_apply_420_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1767,7 +1698,7 @@ fn resolve_cfl_apply_420_hbd() -> CflApplyHbdFn {
 }
 
 #[inline]
-fn resolve_cfl_apply_420_hbd_filtered() -> CflApplyHbdFn {
+pub(crate) fn resolve_cfl_apply_420_hbd_filtered() -> CflApplyHbdFn {
     *CFL_APPLY_420_HBD_FILTERED.get_or_init(|| {
         let mut _f: CflApplyHbdFn = cfl_apply_420_hbd_scalar;
         // Filtered HBD 4:2:0 has NEON and AVX2 implementations; keep SSE on
@@ -1787,7 +1718,7 @@ fn resolve_cfl_apply_420_hbd_filtered() -> CflApplyHbdFn {
 }
 
 #[inline]
-fn resolve_cfl_apply_422_hbd() -> CflApplyHbdFn {
+pub(crate) fn resolve_cfl_apply_422_hbd() -> CflApplyHbdFn {
     *CFL_APPLY_422_HBD.get_or_init(|| {
         let mut _f: CflApplyHbdFn = cfl_apply_422_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1811,7 +1742,7 @@ fn resolve_cfl_apply_422_hbd() -> CflApplyHbdFn {
 }
 
 #[inline]
-fn resolve_cfl_apply_444_hbd() -> CflApplyHbdFn {
+pub(crate) fn resolve_cfl_apply_444_hbd() -> CflApplyHbdFn {
     *CFL_APPLY_444_HBD.get_or_init(|| {
         let mut _f: CflApplyHbdFn = cfl_apply_444_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1832,33 +1763,4 @@ fn resolve_cfl_apply_444_hbd() -> CflApplyHbdFn {
         }
         _f
     })
-}
-
-#[inline]
-pub(crate) fn cfl_apply_420_hbd(args: CflApplyHbd<'_>) {
-    let f = if args.params.filter_type == CFL_FLT_TYPE_VSTRIP
-        || args.params.filter_type == CFL_FLT_TYPE_GAUSS
-    {
-        resolve_cfl_apply_420_hbd_filtered()
-    } else {
-        resolve_cfl_apply_420_hbd()
-    };
-
-    // SAFETY: the resolvers only install target-feature entries after the
-    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
-    unsafe { f(args) };
-}
-
-#[inline]
-pub(crate) fn cfl_apply_422_hbd(args: CflApplyHbd<'_>) {
-    // SAFETY: the resolver only installs a target-feature entry after the
-    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
-    unsafe { resolve_cfl_apply_422_hbd()(args) };
-}
-
-#[inline]
-pub(crate) fn cfl_apply_444_hbd(args: CflApplyHbd<'_>) {
-    // SAFETY: the resolver only installs a target-feature entry after the
-    // matching runtime CPU feature check succeeds; scalar fallback is always valid.
-    unsafe { resolve_cfl_apply_444_hbd()(args) };
 }
