@@ -134,27 +134,24 @@ pub(crate) fn ensure_filter_lines(
 
     let lr_y = y_ls * 20;
     let lr_uv = uv_ls * 20;
-    if cdef_line.len() == n_units
-        && cdef_top.len() == n_units
-        && lr_db_line.len() == n_roots
-        && cdef_line
-            .first()
-            .map_or(n_units == 0, |s| slot_has(s, need_y, need_uv, mono))
-        && cdef_line
-            .last()
-            .map_or(n_units == 0, |s| slot_has(s, need_y, need_uv, mono))
-        && cdef_top
-            .first()
-            .map_or(n_units == 0, |s| slot_has(s, need_y, need_uv, mono))
-        && cdef_top
-            .last()
-            .map_or(n_units == 0, |s| slot_has(s, need_y, need_uv, mono))
-        && lr_db_line
-            .first()
-            .map_or(n_roots == 0, |s| slot_has(s, lr_y, lr_uv, mono))
-        && lr_db_line
-            .last()
-            .map_or(n_roots == 0, |s| slot_has(s, lr_y, lr_uv, mono))
+    fn active_edges_have(
+        v: &[[Vec<u8>; 3]],
+        active: usize,
+        y_len: usize,
+        uv_len: usize,
+        mono: bool,
+    ) -> bool {
+        if active == 0 {
+            return true;
+        }
+        v.len() >= active
+            && slot_has(&v[0], y_len, uv_len, mono)
+            && slot_has(&v[active - 1], y_len, uv_len, mono)
+    }
+
+    if active_edges_have(cdef_line, n_units, need_y, need_uv, mono)
+        && active_edges_have(cdef_top, n_units, need_y, need_uv, mono)
+        && active_edges_have(lr_db_line, n_roots, lr_y, lr_uv, mono)
     {
         return Ok(());
     }
@@ -226,32 +223,30 @@ pub(crate) fn ensure_filter_lines(
         Ok(())
     }
 
-    if n_units > cdef_line.len() {
-        cdef_line
-            .try_reserve_exact(n_units - cdef_line.len())
-            .map_err(|_| ())?;
+    fn ensure_outer_len<T>(v: &mut Vec<[Vec<T>; 3]>, len: usize) -> Result<(), ()> {
+        // Keep old slots when the active count shrinks.  Truncating the outer
+        // vector drops the three inner plane buffers per slot, and alternating
+        // tile/root counts then reallocates them on the next larger frame.
+        // Treat the outer vector as a small per-frame scratch pool and use only
+        // the active prefix below.
+        if len > v.len() {
+            v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+            v.resize_with(len, || [Vec::new(), Vec::new(), Vec::new()]);
+        }
+        Ok(())
     }
-    cdef_line.resize_with(n_units, || [Vec::new(), Vec::new(), Vec::new()]);
-    if n_units > cdef_top.len() {
-        cdef_top
-            .try_reserve_exact(n_units - cdef_top.len())
-            .map_err(|_| ())?;
-    }
-    cdef_top.resize_with(n_units, || [Vec::new(), Vec::new(), Vec::new()]);
-    if n_roots > lr_db_line.len() {
-        lr_db_line
-            .try_reserve_exact(n_roots - lr_db_line.len())
-            .map_err(|_| ())?;
-    }
-    lr_db_line.resize_with(n_roots, || [Vec::new(), Vec::new(), Vec::new()]);
 
-    for slot in cdef_line.iter_mut() {
+    ensure_outer_len(cdef_line, n_units)?;
+    ensure_outer_len(cdef_top, n_units)?;
+    ensure_outer_len(lr_db_line, n_roots)?;
+
+    for slot in cdef_line.iter_mut().take(n_units) {
         ensure_cdef_slot(slot, need_y, need_uv, mono)?;
     }
-    for slot in cdef_top.iter_mut() {
+    for slot in cdef_top.iter_mut().take(n_units) {
         ensure_cdef_slot(slot, need_y, need_uv, mono)?;
     }
-    for slot in lr_db_line.iter_mut() {
+    for slot in lr_db_line.iter_mut().take(n_roots) {
         ensure_lr_db_slot(slot, lr_y, lr_uv, mono)?;
     }
     Ok(())
@@ -299,27 +294,24 @@ pub(crate) fn ensure_filter_lines_hbd(
 
     let lr_y = y_ls * 20;
     let lr_uv = uv_ls * 20;
-    if cdef_line.len() == n_units
-        && cdef_top.len() == n_units
-        && lr_db_line.len() == n_roots
-        && cdef_line
-            .first()
-            .map_or(n_units == 0, |s| slot_has(s, need_y, need_uv, mono))
-        && cdef_line
-            .last()
-            .map_or(n_units == 0, |s| slot_has(s, need_y, need_uv, mono))
-        && cdef_top
-            .first()
-            .map_or(n_units == 0, |s| slot_has(s, need_y, need_uv, mono))
-        && cdef_top
-            .last()
-            .map_or(n_units == 0, |s| slot_has(s, need_y, need_uv, mono))
-        && lr_db_line
-            .first()
-            .map_or(n_roots == 0, |s| slot_has(s, lr_y, lr_uv, mono))
-        && lr_db_line
-            .last()
-            .map_or(n_roots == 0, |s| slot_has(s, lr_y, lr_uv, mono))
+    fn active_edges_have(
+        v: &[[Vec<u16>; 3]],
+        active: usize,
+        y_len: usize,
+        uv_len: usize,
+        mono: bool,
+    ) -> bool {
+        if active == 0 {
+            return true;
+        }
+        v.len() >= active
+            && slot_has(&v[0], y_len, uv_len, mono)
+            && slot_has(&v[active - 1], y_len, uv_len, mono)
+    }
+
+    if active_edges_have(cdef_line, n_units, need_y, need_uv, mono)
+        && active_edges_have(cdef_top, n_units, need_y, need_uv, mono)
+        && active_edges_have(lr_db_line, n_roots, lr_y, lr_uv, mono)
     {
         return Ok(());
     }
@@ -392,32 +384,30 @@ pub(crate) fn ensure_filter_lines_hbd(
         Ok(())
     }
 
-    if n_units > cdef_line.len() {
-        cdef_line
-            .try_reserve_exact(n_units - cdef_line.len())
-            .map_err(|_| ())?;
+    fn ensure_outer_len<T>(v: &mut Vec<[Vec<T>; 3]>, len: usize) -> Result<(), ()> {
+        // Keep old slots when the active count shrinks.  Truncating the outer
+        // vector drops the three inner plane buffers per slot, and alternating
+        // tile/root counts then reallocates them on the next larger frame.
+        // Treat the outer vector as a small per-frame scratch pool and use only
+        // the active prefix below.
+        if len > v.len() {
+            v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+            v.resize_with(len, || [Vec::new(), Vec::new(), Vec::new()]);
+        }
+        Ok(())
     }
-    cdef_line.resize_with(n_units, || [Vec::new(), Vec::new(), Vec::new()]);
-    if n_units > cdef_top.len() {
-        cdef_top
-            .try_reserve_exact(n_units - cdef_top.len())
-            .map_err(|_| ())?;
-    }
-    cdef_top.resize_with(n_units, || [Vec::new(), Vec::new(), Vec::new()]);
-    if n_roots > lr_db_line.len() {
-        lr_db_line
-            .try_reserve_exact(n_roots - lr_db_line.len())
-            .map_err(|_| ())?;
-    }
-    lr_db_line.resize_with(n_roots, || [Vec::new(), Vec::new(), Vec::new()]);
 
-    for slot in cdef_line.iter_mut() {
+    ensure_outer_len(cdef_line, n_units)?;
+    ensure_outer_len(cdef_top, n_units)?;
+    ensure_outer_len(lr_db_line, n_roots)?;
+
+    for slot in cdef_line.iter_mut().take(n_units) {
         ensure_cdef_slot(slot, need_y, need_uv, mono)?;
     }
-    for slot in cdef_top.iter_mut() {
+    for slot in cdef_top.iter_mut().take(n_units) {
         ensure_cdef_slot(slot, need_y, need_uv, mono)?;
     }
-    for slot in lr_db_line.iter_mut() {
+    for slot in lr_db_line.iter_mut().take(n_roots) {
         ensure_lr_db_slot(slot, lr_y, lr_uv, mono)?;
     }
     Ok(())
