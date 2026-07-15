@@ -2513,7 +2513,7 @@ mod packed_level_ctx_tests {
 
     #[test]
     fn packed_ctx_matches_reference() {
-        let mut s: u64 = 0xc0ffee_15_600d;
+        let mut s: u64 = 0xc0ff_ee15_600d;
         let mut next = move || {
             s ^= s << 13;
             s ^= s >> 7;
