@@ -62,7 +62,7 @@
 #![allow(clippy::collapsible_if)]
 #![allow(clippy::doc_lazy_continuation)]
 
-pub(crate) mod ccso;
+mod ccso;
 pub(crate) mod cdef;
 pub(crate) mod cdf;
 pub(crate) mod ctx;
@@ -70,6 +70,7 @@ pub(crate) mod deblock;
 pub(crate) mod decode;
 pub(crate) mod dip_tables;
 pub(crate) mod env;
+pub(crate) mod exec_context;
 pub(crate) mod filmgrain;
 pub(crate) mod gdf_tables;
 pub(crate) mod getbits;

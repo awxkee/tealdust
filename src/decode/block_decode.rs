@@ -935,17 +935,15 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
             let s_off = by4r * 128 + (bx & 127) as usize;
             // splat_intraref temporal block: ref=-1, mv=INVALID_TRAJ
             // inter/switch frames so later frames don't read stale candidates at
-            let t_src = crate::refmvs::TemporalBlock {
-                mv: crate::refmvs::TemporalBlockMv::from_packed(
-                    crate::refmvs::INVALID_TRAJ as u32 * 0x10001,
-                ),
+            let t_src = refmvs::TemporalBlock {
+                mv: refmvs::TemporalBlockMv::from_packed(refmvs::INVALID_TRAJ as u32 * 0x10001),
                 reference: RefPair::from_pair(-1),
             };
             let write_temporal = recon.seq_hdr.ref_frame_mvs && !recon.cur_mvs.is_empty();
             if write_temporal {
                 let t_stride = recon.rf.rp_stride;
                 let t_off = (by >> 1) as isize * t_stride + (bx >> 1) as isize;
-                crate::refmvs::splat_mv(
+                refmvs::splat_mv(
                     &mut recon.rt.r[s_off..],
                     &mut s_src,
                     Some(&mut recon.cur_mvs[t_off as usize..]),
@@ -955,7 +953,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                     bh4,
                 );
             } else {
-                crate::refmvs::splat_mv(
+                refmvs::splat_mv(
                     &mut recon.rt.r[s_off..],
                     &mut s_src,
                     None,
@@ -966,14 +964,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                 );
             }
             if recon.seq_hdr.refmv_bank {
-                crate::refmvs::bank_update(
-                    &mut recon.rt.bank,
-                    bs,
-                    by,
-                    bx,
-                    fi.sb_step,
-                    fi.sb128 != 0,
-                );
+                refmvs::bank_update(&mut recon.rt.bank, bs, by, bx, fi.sb_step, fi.sb128 != 0);
             }
         }
     }
@@ -993,7 +984,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
 
         if !is_comp {
             // Resolve the single-ref block MV (including TIP single-ref, ref0 ==
-            // neighbouring blocks see ref[0] == TIP_FRAME in the refmvs grid).
+            // neighboring blocks see ref[0] == TIP_FRAME in the refmvs grid).
             if inter_mode == InterPredMode::GlobalMv as u8 {
                 let gmv = crate::env::get_gmv_2d(
                     &recon.frm_hdr.gmv.m[refs[0] as usize],
@@ -1007,14 +998,14 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                 );
                 b.inter_data_mut().mv[0] = Mv::from_xy(gmv.y, gmv.x);
             } else {
-                let mut mvstack = [crate::refmvs::Candidate::default(); 6];
+                let mut mvstack = [refmvs::Candidate::default(); 6];
                 let mut n_mvs = 0i32;
                 let mut warp_cnt = 0i32;
                 let want_warp = inter_mode > InterPredMode::NewMv as u8;
                 let mut warp_arr = [[0i32; 7]; 6];
                 let rp_proj_off = recon.rt.rp_proj_off;
-                let rp_proj_slice: &[crate::refmvs::SnglMvBlock] = &recon.rf.rp_proj;
-                crate::refmvs::refmvs_find(
+                let rp_proj_slice: &[refmvs::SnglMvBlock] = &recon.rf.rp_proj;
+                refmvs::refmvs_find(
                     recon.rt,
                     recon.rf,
                     rp_proj_slice,
@@ -1232,15 +1223,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
             }
 
             if recon.seq_hdr.refmv_bank {
-                crate::refmvs::bank_add(
-                    &mut recon.rt.bank,
-                    bs,
-                    by,
-                    bx,
-                    fi.sb_step,
-                    fi.sb128 != 0,
-                    b,
-                );
+                refmvs::bank_add(&mut recon.rt.bank, bs, by, bx, fi.sb_step, fi.sb128 != 0, b);
             }
             // derived warp matrix to the per-ref warp bank so later WARP_DELTA /
             // WARP_MV blocks can use it as a base candidate.
@@ -1261,7 +1244,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                     > crate::headers::WarpedMotionType::Translation;
             if motion_mode <= MotionMode::InterIntra as u8 && !gmv_affine {
                 let mf = (inter_mode == InterPredMode::GlobalMv as u8 && imin(bw4, bh4) > 1) as i8;
-                let mut s_src = crate::refmvs::Block {
+                let mut s_src = refmvs::Block {
                     mv: [
                         blk_mv,
                         Mv {
@@ -1397,12 +1380,12 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
             // the two-ref/skip flag set, then copy mvstack[drl_idx[0]].
             use crate::tables::COMP_INTER_PRED_MODES;
             let _ = COMP_INTER_PRED_MODES; // keep import path consistent
-            let mut mvstack = [crate::refmvs::Candidate::default(); 6];
+            let mut mvstack = [refmvs::Candidate::default(); 6];
             let mut n_mvs = 0i32;
             let mut warp_cnt = 0i32;
             let rp_proj_off = recon.rt.rp_proj_off;
-            let rp_proj_slice: &[crate::refmvs::SnglMvBlock] = &recon.rf.rp_proj;
-            crate::refmvs::refmvs_find(
+            let rp_proj_slice: &[refmvs::SnglMvBlock] = &recon.rf.rp_proj;
+            refmvs::refmvs_find(
                 recon.rt,
                 recon.rf,
                 rp_proj_slice,
@@ -1453,17 +1436,17 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                     b.inter_data_mut().mv[n] = Mv::from_xy(gmv.y, gmv.x);
                 }
             } else {
-                let mut mvstack = [crate::refmvs::Candidate::default(); 6];
+                let mut mvstack = [refmvs::Candidate::default(); 6];
                 let mut n_mvs = 0i32;
                 let mut warp_cnt = 0i32;
                 let rp_proj_off = recon.rt.rp_proj_off;
-                let rp_proj_slice: &[crate::refmvs::SnglMvBlock] = &recon.rf.rp_proj;
+                let rp_proj_slice: &[refmvs::SnglMvBlock] = &recon.rf.rp_proj;
                 // NEARMV_NEWMV) the full compound ref pair is used. For NEAR
                 // modes with equal refs, single-ref find then mirror mv[0]->mv[1].
                 // Cross-ref NEAR (two separate single-ref finds) is deferred (not
                 // present in the bring-up clip — all blocks are same-ref).
                 if inter_mode > CompInterPredMode::NearMvNewMv as u8 {
-                    crate::refmvs::refmvs_find(
+                    refmvs::refmvs_find(
                         recon.rt,
                         recon.rf,
                         rp_proj_slice,
@@ -1485,7 +1468,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                     );
                 } else if refs[0] == refs[1] {
                     // Same-ref NEAR: single-ref find then mirror mv[0]->mv[1]
-                    crate::refmvs::refmvs_find(
+                    refmvs::refmvs_find(
                         recon.rt,
                         recon.rf,
                         rp_proj_slice,
@@ -1573,7 +1556,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                     b.inter_data_mut().mv[n] = Mv::from_xy(mv.y, mv.x);
                 }
                 // Per-ref warp model fit for compound WARP_CAUSAL
-                // from its neighbour samples so recon can do warp-affine MC.
+                // from its neighbor samples so recon can do warp-affine MC.
                 if b.inter_data().motion_mode == MotionMode::WarpCausal as u8 {
                     let w4 = imin(bw4, fi.bw - bx);
                     let h4 = imin(bh4, fi.bh - by);
@@ -1683,7 +1666,7 @@ where
             return Err(());
         }
 
-        if (pass & crate::internal::Pass::Recon as u8) != 0 {
+        if (pass & Pass::Recon as u8) != 0 {
             recon_b_intra_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
@@ -1709,9 +1692,9 @@ where
         return Ok(b);
     }
 
-    // Pre-compute cross-SB boundary neighbor context values.  Keep this out of
+    // Pre-compute cross-SB boundary neighbor context values. Keep this out of
     // the MSAC-generic decode body so UPDATE_CDF / reader variants do not clone
-    // this neighbour-gather code.
+    // this neighbor-gather code.
     let DecodeEdgeCtx {
         skip_mode: nx_skip_mode,
         skip_txfm: nx_skip_txfm,
@@ -1785,7 +1768,7 @@ where
                 if sid > last_active {
                     sid = 0;
                 }
-                if sid >= crate::headers::MAX_SEGMENTS as i32 {
+                if sid >= MAX_SEGMENTS as i32 {
                     sid = 0;
                 }
                 b.seg_id = sid as u8;
@@ -1799,7 +1782,7 @@ where
     // stream, which would overflow the `1 << seg_id` mask and index the
     // MAX_SEGMENTS-sized per-segment tables out of bounds. Clamp once here; this
     // is a no-op for valid input.
-    if b.seg_id >= crate::headers::MAX_SEGMENTS as u8 {
+    if b.seg_id >= MAX_SEGMENTS as u8 {
         b.seg_id = 0;
     }
 
@@ -1929,13 +1912,13 @@ where
                 }
                 b.seg_id = sid as u8;
             }
-            if b.seg_id >= crate::headers::MAX_SEGMENTS as u8 {
+            if b.seg_id >= MAX_SEGMENTS as u8 {
                 b.seg_id = 0;
             }
         }
         // Same defensive clamp as the pre-skip path: keep seg_id in range for the
         // segment-map / predicted-id branches above. No-op for valid input.
-        if b.seg_id >= crate::headers::MAX_SEGMENTS as u8 {
+        if b.seg_id >= MAX_SEGMENTS as u8 {
             b.seg_id = 0;
         }
     }
@@ -2086,7 +2069,7 @@ where
             let mut delta_q = msac.decode_symbol_adapt_n_padded::<7, 8>(cdf_m.delta_q()) as i32;
             if delta_q == 7 {
                 let n_bits = 1 + msac.decode_bools_bypass(3) as i32;
-                delta_q = msac.decode_bools_bypass(n_bits as u32) as i32 + 1 + (1 << n_bits);
+                delta_q = msac.decode_bools_bypass(n_bits as u32) as i32 + 5 + (1 << n_bits);
             }
             if delta_q != 0 {
                 if msac.decode_bool_bypass() != 0 {
@@ -2114,8 +2097,8 @@ where
         let m = &mut recon.lf_mask[recon.lf_idx];
         let mut qoff = qbase;
         for _ in 0..sbsz64 {
-            for x64 in 0..sbsz64 {
-                m.qidx[qoff + x64] = new_qidx as u16;
+            for dst in m.qidx[qoff..sbsz64 + qoff].iter_mut() {
+                *dst = new_qidx as u16;
             }
             qoff += 4;
         }

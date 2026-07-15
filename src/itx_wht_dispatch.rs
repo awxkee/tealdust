@@ -39,7 +39,7 @@ static INV_WHT_WHT_4X4_8BPC: OnceLock<Option<InvWht4x4Fn8bpc>> = OnceLock::new()
 static INV_WHT_WHT_4X4_HBD: OnceLock<Option<InvWht4x4FnHbd>> = OnceLock::new();
 
 #[inline]
-fn resolve_inv_wht_wht_4x4_8bpc() -> Option<InvWht4x4Fn8bpc> {
+pub(crate) fn resolve_inv_wht_wht_4x4_8bpc() -> Option<InvWht4x4Fn8bpc> {
     *INV_WHT_WHT_4X4_8BPC.get_or_init(|| {
         let mut _f: Option<InvWht4x4Fn8bpc> = None;
         #[cfg(target_arch = "aarch64")]
@@ -57,7 +57,7 @@ fn resolve_inv_wht_wht_4x4_8bpc() -> Option<InvWht4x4Fn8bpc> {
 }
 
 #[inline]
-fn resolve_inv_wht_wht_4x4_hbd() -> Option<InvWht4x4FnHbd> {
+pub(crate) fn resolve_inv_wht_wht_4x4_hbd() -> Option<InvWht4x4FnHbd> {
     *INV_WHT_WHT_4X4_HBD.get_or_init(|| {
         let mut _f: Option<InvWht4x4FnHbd> = None;
         #[cfg(target_arch = "aarch64")]
@@ -108,7 +108,8 @@ fn inv_wht_wht_4x4_scalar<BD: BitDepth, C: Coeff>(
 }
 
 #[inline]
-pub(crate) fn inv_wht_wht_4x4_dispatch<BD: BitDepth, C: Coeff>(
+pub(crate) fn inv_wht_wht_4x4_dispatch_ctx<BD: BitDepth, C: Coeff>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_off: usize,
@@ -122,11 +123,8 @@ pub(crate) fn inv_wht_wht_4x4_dispatch<BD: BitDepth, C: Coeff>(
         if let (Some(coeff16), Some(dst8), Some(f)) = (
             C::try_as_i16_slice_mut(coeff),
             <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst),
-            resolve_inv_wht_wht_4x4_8bpc(),
+            exec.inv_wht_wht_4x4_8bpc,
         ) {
-            // SAFETY: the resolver installs target-feature kernels only when the
-            // CPU supports them. `has_contiguous_4x4` proves each 4-wide output
-            // row is inside `dst`; WHT always reads/writes exactly 16 coeffs.
             unsafe { f(coeff16, dst8, dst_off, stride) };
             return;
         }
@@ -134,10 +132,8 @@ pub(crate) fn inv_wht_wht_4x4_dispatch<BD: BitDepth, C: Coeff>(
         if let (Some(coeff32), Some(dst16), Some(f)) = (
             C::try_as_i32_slice_mut(coeff),
             <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst),
-            resolve_inv_wht_wht_4x4_hbd(),
+            exec.inv_wht_wht_4x4_hbd,
         ) {
-            // SAFETY: same dispatch and bounds guarantee as the 8bpc path.  The
-            // HBD kernel clips to the coded bit depth carried by `bd`.
             unsafe { f(coeff32, dst16, dst_off, stride, bd.bitdepth_max()) };
             return;
         }

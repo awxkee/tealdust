@@ -886,7 +886,7 @@ pub(crate) unsafe fn cdef_filter_block_4x4_hbd_scalar(
 static CDEF_DIR_8BPC: OnceLock<CdefDir8Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_cdef_dir_8bpc() -> CdefDir8Fn {
+pub(crate) fn resolve_cdef_dir_8bpc() -> CdefDir8Fn {
     *CDEF_DIR_8BPC.get_or_init(|| {
         let mut _f = cdef_find_dir_8bpc_scalar as CdefDir8Fn;
         #[cfg(target_arch = "aarch64")]
@@ -912,7 +912,7 @@ fn resolve_cdef_dir_8bpc() -> CdefDir8Fn {
 static CDEF_DIR_HBD: OnceLock<CdefDirHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cdef_dir_hbd() -> CdefDirHbdFn {
+pub(crate) fn resolve_cdef_dir_hbd() -> CdefDirHbdFn {
     *CDEF_DIR_HBD.get_or_init(|| {
         let mut _f = cdef_find_dir_hbd_scalar as CdefDirHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -935,29 +935,10 @@ fn resolve_cdef_dir_hbd() -> CdefDirHbdFn {
     })
 }
 
-#[inline]
-pub(crate) fn cdef_find_dir_8bpc(img: &[u8], stride: usize, var: &mut u32) -> i32 {
-    // SAFETY: architecture-specific entries are installed only after runtime
-    // feature detection; the scalar default is always sound.
-    unsafe { resolve_cdef_dir_8bpc()(img, stride, var) }
-}
-
-#[inline]
-pub(crate) fn cdef_find_dir_hbd(
-    img: &[u16],
-    stride: usize,
-    bitdepth_min_8: i32,
-    var: &mut u32,
-) -> i32 {
-    // SAFETY: architecture-specific entries are installed only after runtime
-    // feature detection; the scalar default is always sound.
-    unsafe { resolve_cdef_dir_hbd()(img, stride, bitdepth_min_8, var) }
-}
-
 static CDEF_PADDING_8BPC: OnceLock<CdefPadding8Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_cdef_padding_8bpc() -> CdefPadding8Fn {
+pub(crate) fn resolve_cdef_padding_8bpc() -> CdefPadding8Fn {
     *CDEF_PADDING_8BPC.get_or_init(|| {
         let mut _f = cdef_padding_8bpc_scalar as CdefPadding8Fn;
         #[cfg(target_arch = "aarch64")]
@@ -977,7 +958,7 @@ fn resolve_cdef_padding_8bpc() -> CdefPadding8Fn {
 static CDEF_PADDING_HBD: OnceLock<CdefPaddingHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cdef_padding_hbd() -> CdefPaddingHbdFn {
+pub(crate) fn resolve_cdef_padding_hbd() -> CdefPaddingHbdFn {
     *CDEF_PADDING_HBD.get_or_init(|| {
         let mut _f = cdef_padding_hbd_scalar as CdefPaddingHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -994,86 +975,10 @@ fn resolve_cdef_padding_hbd() -> CdefPaddingHbdFn {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn cdef_padding_8bpc(
-    tmp: &mut [i16],
-    tmp_stride: usize,
-    src: &[u8],
-    src_stride: usize,
-    src_off: usize,
-    left: &[[u8; 2]],
-    top: &[u8],
-    top_off: usize,
-    bottom: &[u8],
-    bottom_off: usize,
-    bottom_stride: usize,
-    w: usize,
-    h: usize,
-    edges: u8,
-) {
-    unsafe {
-        resolve_cdef_padding_8bpc()(
-            tmp,
-            tmp_stride,
-            src,
-            src_stride,
-            src_off,
-            left,
-            top,
-            top_off,
-            bottom,
-            bottom_off,
-            bottom_stride,
-            w,
-            h,
-            edges,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn cdef_padding_hbd(
-    tmp: &mut [i16],
-    tmp_stride: usize,
-    src: &[u16],
-    src_stride: usize,
-    src_off: usize,
-    left: &[[u16; 2]],
-    top: &[u16],
-    top_off: usize,
-    bottom: &[u16],
-    bottom_off: usize,
-    bottom_stride: usize,
-    w: usize,
-    h: usize,
-    edges: u8,
-) {
-    unsafe {
-        resolve_cdef_padding_hbd()(
-            tmp,
-            tmp_stride,
-            src,
-            src_stride,
-            src_off,
-            left,
-            top,
-            top_off,
-            bottom,
-            bottom_off,
-            bottom_stride,
-            w,
-            h,
-            edges,
-        )
-    }
-}
-
 static CDEF_FILTER: OnceLock<CdefFilterFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cdef_filter() -> CdefFilterFn {
+pub(crate) fn resolve_cdef_filter() -> CdefFilterFn {
     *CDEF_FILTER.get_or_init(|| {
         let mut _f = cdef_filter_block_8bpc_scalar as CdefFilterFn;
         #[cfg(target_arch = "aarch64")]
@@ -1100,7 +1005,7 @@ fn resolve_cdef_filter() -> CdefFilterFn {
 static CDEF_FILTER_HBD: OnceLock<CdefFilterHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_cdef_filter_hbd() -> CdefFilterHbdFn {
+pub(crate) fn resolve_cdef_filter_hbd() -> CdefFilterHbdFn {
     *CDEF_FILTER_HBD.get_or_init(|| {
         let mut _f = cdef_filter_block_hbd_scalar as CdefFilterHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -1127,7 +1032,7 @@ fn resolve_cdef_filter_hbd() -> CdefFilterHbdFn {
 static CDEF_FILTER_SHAPES: OnceLock<[CdefFilterShapeFn; 4]> = OnceLock::new();
 
 #[inline]
-fn resolve_cdef_filter_shapes() -> &'static [CdefFilterShapeFn; 4] {
+pub(crate) fn resolve_cdef_filter_shapes() -> &'static [CdefFilterShapeFn; 4] {
     CDEF_FILTER_SHAPES.get_or_init(|| {
         let mut _f = [
             cdef_filter_block_8x8_8bpc_scalar as CdefFilterShapeFn,
@@ -1173,7 +1078,7 @@ fn resolve_cdef_filter_shapes() -> &'static [CdefFilterShapeFn; 4] {
 static CDEF_FILTER_HBD_SHAPES: OnceLock<[CdefFilterHbdShapeFn; 4]> = OnceLock::new();
 
 #[inline]
-fn resolve_cdef_filter_hbd_shapes() -> &'static [CdefFilterHbdShapeFn; 4] {
+pub(crate) fn resolve_cdef_filter_hbd_shapes() -> &'static [CdefFilterHbdShapeFn; 4] {
     CDEF_FILTER_HBD_SHAPES.get_or_init(|| {
         let mut _f = [
             cdef_filter_block_8x8_hbd_scalar as CdefFilterHbdShapeFn,
@@ -1214,154 +1119,4 @@ fn resolve_cdef_filter_hbd_shapes() -> &'static [CdefFilterHbdShapeFn; 4] {
         }
         _f
     })
-}
-
-#[inline(always)]
-fn cdef_shape_index(w: usize, h: usize) -> Option<usize> {
-    match (w, h) {
-        (8, 8) => Some(0),
-        (4, 8) => Some(1),
-        (4, 4) => Some(2),
-        (8, 4) => Some(3),
-        _ => None,
-    }
-}
-
-/// Dispatched 8-bit CDEF filter apply. See `CdefFilterFn` for the argument layout.
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn cdef_filter_block_8bpc(
-    dst: &mut [u8],
-    dst_stride: usize,
-    dst_off: usize,
-    tmp: &[i16],
-    tmp_stride: usize,
-    o: usize,
-    pri_strength: i32,
-    sec_strength: i32,
-    pri_shift: i32,
-    sec_shift: i32,
-    pri_tap: i32,
-    dir: usize,
-    w: usize,
-    h: usize,
-) {
-    if pri_strength == 0 && sec_strength == 0 {
-        return;
-    }
-
-    // Match dav1d's fb[shape] model for full and cropped CDEF blocks:
-    // 8x8, 8x4, 4x8, and 4x4 are dispatched to fixed-shape kernels.
-    // The generic `(w, h)` entry remains only as a safety fallback.
-    if let Some(shape) = cdef_shape_index(w, h) {
-        // SAFETY: architecture-specific entries are installed only after
-        // runtime feature detection; scalar defaults are always sound.
-        unsafe {
-            resolve_cdef_filter_shapes()[shape](
-                dst,
-                dst_stride,
-                dst_off,
-                tmp,
-                tmp_stride,
-                o,
-                pri_strength,
-                sec_strength,
-                pri_shift,
-                sec_shift,
-                pri_tap,
-                dir,
-            )
-        };
-        return;
-    }
-
-    // SAFETY: resolve only returns the SSE/NEON kernel when the feature was
-    // detected; the scalar default is always sound.
-    unsafe {
-        resolve_cdef_filter()(
-            dst,
-            dst_stride,
-            dst_off,
-            tmp,
-            tmp_stride,
-            o,
-            pri_strength,
-            sec_strength,
-            pri_shift,
-            sec_shift,
-            pri_tap,
-            dir,
-            w,
-            h,
-        )
-    };
-}
-
-/// Dispatched high-bit-depth CDEF filter apply. The same function is used for
-/// 10-bit and 12-bit because both are stored as native-endian `u16` samples.
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn cdef_filter_block_hbd(
-    dst: &mut [u16],
-    dst_stride: usize,
-    dst_off: usize,
-    tmp: &[i16],
-    tmp_stride: usize,
-    o: usize,
-    pri_strength: i32,
-    sec_strength: i32,
-    pri_shift: i32,
-    sec_shift: i32,
-    pri_tap: i32,
-    dir: usize,
-    w: usize,
-    h: usize,
-) {
-    if pri_strength == 0 && sec_strength == 0 {
-        return;
-    }
-
-    // Match dav1d's fb[shape] model for HBD as well.
-    if let Some(shape) = cdef_shape_index(w, h) {
-        // SAFETY: architecture-specific entries are installed only after
-        // runtime feature detection; scalar defaults are always sound.
-        unsafe {
-            resolve_cdef_filter_hbd_shapes()[shape](
-                dst,
-                dst_stride,
-                dst_off,
-                tmp,
-                tmp_stride,
-                o,
-                pri_strength,
-                sec_strength,
-                pri_shift,
-                sec_shift,
-                pri_tap,
-                dir,
-            )
-        };
-        return;
-    }
-
-    // SAFETY: resolve only returns architecture-specific kernels after runtime
-    // feature detection; the scalar default is always sound.
-    unsafe {
-        resolve_cdef_filter_hbd()(
-            dst,
-            dst_stride,
-            dst_off,
-            tmp,
-            tmp_stride,
-            o,
-            pri_strength,
-            sec_strength,
-            pri_shift,
-            sec_shift,
-            pri_tap,
-            dir,
-            w,
-            h,
-        )
-    };
 }

@@ -603,6 +603,7 @@ impl SbFrameInfo {
 
 /// Read-only per-frame reconstruction scalars (shared ref).
 pub struct ReconFrameCtx<'a> {
+    pub exec: &'a crate::exec_context::ExecContext,
     pub dq: &'a [[[u32; 2]; 3]; MAX_SEGMENTS],
     pub qm: &'a [[Option<Vec<u8>>; 3]; crate::levels::N_RECT_TX_SIZES],
     pub y_stride_px: usize,
@@ -1980,6 +1981,15 @@ impl<T> DisjointMut<T> {
     }
 }
 
+#[inline]
+fn parallel_tiles_complete(progress: &[std::sync::atomic::AtomicUsize], totals: &[usize]) -> bool {
+    use std::sync::atomic::Ordering::Acquire;
+    progress
+        .iter()
+        .zip(totals)
+        .all(|(done, &total)| done.load(Acquire) >= total)
+}
+
 pub fn decode_frame_main(
     fc: &mut crate::internal::FrameContext,
     n_passes: i32,
@@ -2027,6 +2037,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     pool: Option<&crate::mtpool::ThreadPool>,
 ) -> Result<(), ()> {
     let crate::internal::FrameContext {
+        exec,
         seq_hdr,
         frame_hdr,
         a,
@@ -2066,6 +2077,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
         svc,
         ..
     } = fc;
+    let exec = &*exec;
     let fc_sb256h = *sb256h;
     let fc_sbh = *sbh;
     let fc_inloop_filters = *inloop_filters;
@@ -2152,6 +2164,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     // once per frame for the compound + interintra recon paths.
     let masks = crate::wedge::masks();
     let recon_frame = ReconFrameCtx {
+        exec,
         dq: &*dq,
         qm: &*qm,
         y_stride_px,
@@ -2793,6 +2806,23 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                     continue;
                                 }
 
+                                // Reconstruction writes disjoint tile rows, but the
+                                // in-loop filters deliberately reach across sb64
+                                // boundaries. Running either filter work beside
+                                // reconstruction, or two adjacent filter bands beside
+                                // each other, aliases those boundary pixels. Finish the
+                                // parallel tile decode first, then let worker zero run
+                                // the ordered filter pipeline while the dispatch keeps
+                                // the other workers joined.
+                                let decode_done = parallel_tiles_complete(tile_sbrow, tile_nsb);
+                                if !decode_done {
+                                    std::thread::yield_now();
+                                    continue;
+                                }
+                                if worker_id != 0 {
+                                    return;
+                                }
+
                                 // (2) Filter pipeline
                                 let mut did_work = false;
                                 macro_rules! run_stage {
@@ -2837,6 +2867,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                         filter_sb64(
                                             bd_local,
                                             crate::decode::loopfilter::FilterSb64Ctx {
+                                                exec,
                                                 seq_hdr,
                                                 frame_hdr,
                                                 sh: &sh,
@@ -2884,7 +2915,15 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                 // decode-ready band's columns. CAS-claim ready bands.
                                 loop {
                                     let k = deblock_cols_claim.load(Acquire);
-                                    if k >= n_filter_bands || !filter_ready(k) {
+                                    // The horizontal pass for band k-1 reaches into
+                                    // the first rows of band k. Do not start k's
+                                    // vertical pass until that predecessor has
+                                    // completed, otherwise both workers write the
+                                    // same boundary pixels concurrently.
+                                    if k >= n_filter_bands
+                                        || deblock_progress.load(Acquire) < k
+                                        || !filter_ready(k)
+                                    {
                                         break;
                                     }
                                     if deblock_cols_claim
@@ -3328,6 +3367,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                         filter_sb64(
                                             bd_local,
                                             crate::decode::loopfilter::FilterSb64Ctx {
+                                                exec,
                                                 seq_hdr,
                                                 frame_hdr,
                                                 sh: &sh,
@@ -3643,6 +3683,7 @@ fn submit_frame_inner(
 
     fc.seq_hdr = seq_hdr.clone();
     fc.frame_hdr = frame_hdr.clone();
+    fc.exec = c.exec.clone();
     fc.in_cdf = in_cdf;
 
     let use_rfm = is_inter_or_switch || allow_intrabc;
@@ -4087,4 +4128,20 @@ fn get_snglref_ctx(
     }
 
     ((row != 0) as usize) + ((col != 0) as usize) + 2 * ((newmv != 0) as usize)
+}
+
+#[cfg(test)]
+mod parallel_filter_schedule_tests {
+    use super::parallel_tiles_complete;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn filter_phase_waits_for_every_tile_row() {
+        let progress = [AtomicUsize::new(3), AtomicUsize::new(1)];
+        let totals = [3, 2];
+        assert!(!parallel_tiles_complete(&progress, &totals));
+
+        progress[1].store(2, std::sync::atomic::Ordering::Release);
+        assert!(parallel_tiles_complete(&progress, &totals));
+    }
 }

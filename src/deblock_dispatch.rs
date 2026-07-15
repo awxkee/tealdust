@@ -1328,7 +1328,7 @@ static SETUP_THR_COLS_SIMPLE_8BPC: OnceLock<Option<DeblockSetupSimple8bpcFn>> = 
 static SETUP_THR_ROWS_SIMPLE_8BPC: OnceLock<Option<DeblockSetupSimple8bpcFn>> = OnceLock::new();
 
 #[inline]
-fn resolve_deblock_apply_8bpc() -> DeblockApply8bpcFn {
+pub(crate) fn resolve_deblock_apply_8bpc() -> DeblockApply8bpcFn {
     *DEBLOCK_APPLY_8BPC.get_or_init(|| {
         let mut _f = deblock_apply_8bpc_scalar as DeblockApply8bpcFn;
         #[cfg(target_arch = "aarch64")]
@@ -1355,7 +1355,7 @@ fn resolve_deblock_apply_8bpc() -> DeblockApply8bpcFn {
 }
 
 #[inline]
-fn resolve_deblock_apply_hbd() -> DeblockApplyHbdFn {
+pub(crate) fn resolve_deblock_apply_hbd() -> DeblockApplyHbdFn {
     *DEBLOCK_APPLY_HBD.get_or_init(|| {
         let mut _f = deblock_apply_hbd_scalar as DeblockApplyHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -1382,7 +1382,7 @@ fn resolve_deblock_apply_hbd() -> DeblockApplyHbdFn {
 }
 
 #[inline]
-fn resolve_deblock_h_sb64y_8bpc() -> Option<DeblockSb64Fn> {
+pub(crate) fn resolve_deblock_h_sb64y_8bpc() -> Option<DeblockSb64Fn> {
     *DEBLOCK_H_SB64Y_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSb64Fn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1402,7 +1402,7 @@ fn resolve_deblock_h_sb64y_8bpc() -> Option<DeblockSb64Fn> {
 }
 
 #[inline]
-fn resolve_deblock_v_sb64y_8bpc() -> Option<DeblockSb64Fn> {
+pub(crate) fn resolve_deblock_v_sb64y_8bpc() -> Option<DeblockSb64Fn> {
     *DEBLOCK_V_SB64Y_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSb64Fn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1422,7 +1422,7 @@ fn resolve_deblock_v_sb64y_8bpc() -> Option<DeblockSb64Fn> {
 }
 
 #[inline]
-fn resolve_deblock_h_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
+pub(crate) fn resolve_deblock_h_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
     *DEBLOCK_H_SB64UV_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSb64Fn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1442,7 +1442,7 @@ fn resolve_deblock_h_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
 }
 
 #[inline]
-fn resolve_deblock_v_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
+pub(crate) fn resolve_deblock_v_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
     *DEBLOCK_V_SB64UV_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSb64Fn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1462,7 +1462,7 @@ fn resolve_deblock_v_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
 }
 
 #[inline]
-fn resolve_deblock_h_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
+pub(crate) fn resolve_deblock_h_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
     *DEBLOCK_H_SB64Y_HBD.get_or_init(|| {
         let mut _f: Option<DeblockSb64HbdFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1482,7 +1482,7 @@ fn resolve_deblock_h_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
 }
 
 #[inline]
-fn resolve_deblock_v_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
+pub(crate) fn resolve_deblock_v_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
     *DEBLOCK_V_SB64Y_HBD.get_or_init(|| {
         let mut _f: Option<DeblockSb64HbdFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1502,7 +1502,7 @@ fn resolve_deblock_v_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
 }
 
 #[inline]
-fn resolve_deblock_h_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
+pub(crate) fn resolve_deblock_h_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
     *DEBLOCK_H_SB64UV_HBD.get_or_init(|| {
         let mut _f: Option<DeblockSb64HbdFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1522,7 +1522,7 @@ fn resolve_deblock_h_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
 }
 
 #[inline]
-fn resolve_deblock_v_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
+pub(crate) fn resolve_deblock_v_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
     *DEBLOCK_V_SB64UV_HBD.get_or_init(|| {
         let mut _f: Option<DeblockSb64HbdFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1541,80 +1541,8 @@ fn resolve_deblock_v_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
     })
 }
 
-macro_rules! define_try_deblock_sb64_8bpc {
-    ($name:ident, $resolver:ident) => {
-        #[allow(clippy::too_many_arguments)]
-        #[inline]
-        pub(crate) fn $name(
-            dst: &mut [u8],
-            dst_off: usize,
-            stride: usize,
-            vmask: &[u16],
-            ll_mask: &[u16],
-            q_thr: &[u8],
-            side_thr: &[u8],
-            edge: bool,
-        ) -> bool {
-            let Some(f) = $resolver() else {
-                return false;
-            };
-            // SAFETY: the resolver returns target-feature entry points only after
-            // the corresponding runtime feature probe succeeds. Otherwise the
-            // caller continues into the existing scalar/generic path.
-            unsafe { f(dst, dst_off, stride, vmask, ll_mask, q_thr, side_thr, edge) };
-            true
-        }
-    };
-}
-
-define_try_deblock_sb64_8bpc!(try_deblock_h_sb64y_8bpc, resolve_deblock_h_sb64y_8bpc);
-define_try_deblock_sb64_8bpc!(try_deblock_v_sb64y_8bpc, resolve_deblock_v_sb64y_8bpc);
-define_try_deblock_sb64_8bpc!(try_deblock_h_sb64uv_8bpc, resolve_deblock_h_sb64uv_8bpc);
-define_try_deblock_sb64_8bpc!(try_deblock_v_sb64uv_8bpc, resolve_deblock_v_sb64uv_8bpc);
-
-macro_rules! define_try_deblock_sb64_hbd {
-    ($name:ident, $resolve:ident) => {
-        #[allow(clippy::too_many_arguments)]
-        #[inline]
-        pub(crate) fn $name(
-            dst: &mut [u16],
-            dst_off: usize,
-            stride: usize,
-            vmask: &[u16],
-            ll_mask: &[u16],
-            q_thr: &[u8],
-            side_thr: &[u8],
-            edge: bool,
-            bitdepth_max: i32,
-        ) -> bool {
-            let Some(f) = $resolve() else {
-                return false;
-            };
-            unsafe {
-                f(
-                    dst,
-                    dst_off,
-                    stride,
-                    vmask,
-                    ll_mask,
-                    q_thr,
-                    side_thr,
-                    edge,
-                    bitdepth_max,
-                )
-            };
-            true
-        }
-    };
-}
-
-define_try_deblock_sb64_hbd!(try_deblock_h_sb64y_hbd, resolve_deblock_h_sb64y_hbd);
-define_try_deblock_sb64_hbd!(try_deblock_v_sb64y_hbd, resolve_deblock_v_sb64y_hbd);
-define_try_deblock_sb64_hbd!(try_deblock_h_sb64uv_hbd, resolve_deblock_h_sb64uv_hbd);
-define_try_deblock_sb64_hbd!(try_deblock_v_sb64uv_hbd, resolve_deblock_v_sb64uv_hbd);
-
 #[inline]
-fn resolve_setup_thr_cols_seg_8bpc() -> Option<DeblockSetupColsSeg8bpcFn> {
+pub(crate) fn resolve_setup_thr_cols_seg_8bpc() -> Option<DeblockSetupColsSeg8bpcFn> {
     *SETUP_THR_COLS_SEG_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSetupColsSeg8bpcFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1632,7 +1560,7 @@ fn resolve_setup_thr_cols_seg_8bpc() -> Option<DeblockSetupColsSeg8bpcFn> {
 }
 
 #[inline]
-fn resolve_setup_thr_rows_seg_8bpc() -> Option<DeblockSetupRowsSeg8bpcFn> {
+pub(crate) fn resolve_setup_thr_rows_seg_8bpc() -> Option<DeblockSetupRowsSeg8bpcFn> {
     *SETUP_THR_ROWS_SEG_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSetupRowsSeg8bpcFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1650,7 +1578,7 @@ fn resolve_setup_thr_rows_seg_8bpc() -> Option<DeblockSetupRowsSeg8bpcFn> {
 }
 
 #[inline]
-fn resolve_setup_thr_cols_dq_8bpc() -> Option<DeblockSetupColsDq8bpcFn> {
+pub(crate) fn resolve_setup_thr_cols_dq_8bpc() -> Option<DeblockSetupColsDq8bpcFn> {
     *SETUP_THR_COLS_DQ_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSetupColsDq8bpcFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1668,7 +1596,7 @@ fn resolve_setup_thr_cols_dq_8bpc() -> Option<DeblockSetupColsDq8bpcFn> {
 }
 
 #[inline]
-fn resolve_setup_thr_rows_dq_8bpc() -> Option<DeblockSetupRowsDq8bpcFn> {
+pub(crate) fn resolve_setup_thr_rows_dq_8bpc() -> Option<DeblockSetupRowsDq8bpcFn> {
     *SETUP_THR_ROWS_DQ_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSetupRowsDq8bpcFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1686,7 +1614,7 @@ fn resolve_setup_thr_rows_dq_8bpc() -> Option<DeblockSetupRowsDq8bpcFn> {
 }
 
 #[inline]
-fn resolve_setup_thr_cols_simple_8bpc() -> Option<DeblockSetupSimple8bpcFn> {
+pub(crate) fn resolve_setup_thr_cols_simple_8bpc() -> Option<DeblockSetupSimple8bpcFn> {
     *SETUP_THR_COLS_SIMPLE_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSetupSimple8bpcFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1704,7 +1632,7 @@ fn resolve_setup_thr_cols_simple_8bpc() -> Option<DeblockSetupSimple8bpcFn> {
 }
 
 #[inline]
-fn resolve_setup_thr_rows_simple_8bpc() -> Option<DeblockSetupSimple8bpcFn> {
+pub(crate) fn resolve_setup_thr_rows_simple_8bpc() -> Option<DeblockSetupSimple8bpcFn> {
     *SETUP_THR_ROWS_SIMPLE_8BPC.get_or_init(|| {
         let mut _f: Option<DeblockSetupSimple8bpcFn> = None;
         #[cfg(target_arch = "aarch64")]
@@ -1719,262 +1647,6 @@ fn resolve_setup_thr_rows_simple_8bpc() -> Option<DeblockSetupSimple8bpcFn> {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn try_setup_thr_cols_seg_8bpc(
-    q_thr_dst: &mut [u8; 256],
-    side_thr_dst: &mut [u8; 256],
-    segmap: &[u8],
-    seg_off: isize,
-    seg_stride: isize,
-    mask: &[[[u16; 4]; 5]; 64],
-    bx4_base: usize,
-    thr_lut: &[[u32; 16]; 2],
-    left_q_thr: &mut [u8; 16],
-    left_side_thr: &mut [u8; 16],
-    y64: i32,
-    ss_ver: i32,
-    w4: i32,
-    h4: i32,
-) -> bool {
-    let Some(f) = resolve_setup_thr_cols_seg_8bpc() else {
-        return false;
-    };
-    unsafe {
-        f(
-            q_thr_dst,
-            side_thr_dst,
-            segmap,
-            seg_off,
-            seg_stride,
-            mask,
-            bx4_base,
-            thr_lut,
-            left_q_thr,
-            left_side_thr,
-            y64,
-            ss_ver,
-            w4,
-            h4,
-        )
-    };
-    true
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn try_setup_thr_rows_seg_8bpc(
-    q_thr_dst: &mut [u8; 256],
-    side_thr_dst: &mut [u8; 256],
-    segmap: &[u8],
-    seg_off: isize,
-    seg_stride: isize,
-    mask: &[[[u16; 4]; 5]; 64],
-    starty4: usize,
-    thr_lut: &[[u32; 16]; 2],
-    above_thr_lut: Option<&[[u32; 16]; 2]>,
-    above_seg: Option<(&[u8], isize)>,
-    sb64x: i32,
-    ss_hor: i32,
-    w4: i32,
-    h4: i32,
-) -> bool {
-    let Some(f) = resolve_setup_thr_rows_seg_8bpc() else {
-        return false;
-    };
-    unsafe {
-        f(
-            q_thr_dst,
-            side_thr_dst,
-            segmap,
-            seg_off,
-            seg_stride,
-            mask,
-            starty4,
-            thr_lut,
-            above_thr_lut,
-            above_seg,
-            sb64x,
-            ss_hor,
-            w4,
-            h4,
-        )
-    };
-    true
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn try_setup_thr_cols_dq_8bpc(
-    q_thr_dst: &mut [u8; 256],
-    side_thr_dst: &mut [u8; 256],
-    mask: &[[[u16; 4]; 5]; 64],
-    bx4_base: usize,
-    thr_lut: &[[u32; 16]; 2],
-    left_q_thr: &mut [u8; 16],
-    left_side_thr: &mut [u8; 16],
-    y64: i32,
-    ss_ver: i32,
-    w4: i32,
-    h4: i32,
-) -> bool {
-    let Some(f) = resolve_setup_thr_cols_dq_8bpc() else {
-        return false;
-    };
-    unsafe {
-        f(
-            q_thr_dst,
-            side_thr_dst,
-            mask,
-            bx4_base,
-            thr_lut,
-            left_q_thr,
-            left_side_thr,
-            y64,
-            ss_ver,
-            w4,
-            h4,
-        )
-    };
-    true
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn try_setup_thr_rows_dq_8bpc(
-    q_thr_dst: &mut [u8; 256],
-    side_thr_dst: &mut [u8; 256],
-    mask: &[[[u16; 4]; 5]; 64],
-    starty4: usize,
-    thr_lut: &[[u32; 16]; 2],
-    above_thr_lut: Option<&[[u32; 16]; 2]>,
-    above_seg: Option<(&[u8], isize)>,
-    sb64x: i32,
-    ss_hor: i32,
-    w4: i32,
-    h4: i32,
-) -> bool {
-    let Some(f) = resolve_setup_thr_rows_dq_8bpc() else {
-        return false;
-    };
-    unsafe {
-        f(
-            q_thr_dst,
-            side_thr_dst,
-            mask,
-            starty4,
-            thr_lut,
-            above_thr_lut,
-            above_seg,
-            sb64x,
-            ss_hor,
-            w4,
-            h4,
-        )
-    };
-    true
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn try_setup_thr_cols_simple_8bpc(
-    q_thr_dst: &mut [u8; 256],
-    side_thr_dst: &mut [u8; 256],
-    mask: &[[[u16; 4]; 5]; 64],
-    bx4_base: usize,
-    thr_lut: &[[u32; 16]; 2],
-    y64: i32,
-    ss_ver: i32,
-    w4: i32,
-    h4: i32,
-) -> bool {
-    let Some(f) = resolve_setup_thr_cols_simple_8bpc() else {
-        return false;
-    };
-    unsafe {
-        f(
-            q_thr_dst,
-            side_thr_dst,
-            mask,
-            bx4_base,
-            thr_lut,
-            y64,
-            ss_ver,
-            w4,
-            h4,
-        )
-    };
-    true
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn try_setup_thr_rows_simple_8bpc(
-    q_thr_dst: &mut [u8; 256],
-    side_thr_dst: &mut [u8; 256],
-    mask: &[[[u16; 4]; 5]; 64],
-    starty4: usize,
-    thr_lut: &[[u32; 16]; 2],
-    sb64x: i32,
-    ss_hor: i32,
-    w4: i32,
-    h4: i32,
-) -> bool {
-    let Some(f) = resolve_setup_thr_rows_simple_8bpc() else {
-        return false;
-    };
-    unsafe {
-        f(
-            q_thr_dst,
-            side_thr_dst,
-            mask,
-            starty4,
-            thr_lut,
-            sb64x,
-            ss_hor,
-            w4,
-            h4,
-        )
-    };
-    true
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn deblock_apply_8bpc(
-    dst: &mut [u8],
-    off: isize,
-    stride_line: isize,
-    stride_tap: isize,
-    width_neg: i32,
-    width_pos: i32,
-    q_thr_clamp: i32,
-    neg_lossless: bool,
-    pos_lossless: bool,
-) {
-    // x86 horizontal filtering is no longer forced to scalar here: the SSE/AVX
-    // apply kernels now use register gathers/scatters for the four rows instead
-    // of the old temporary-stack path.  A full dav2d-style SB64 transpose kernel
-    // would still be better, but this keeps arithmetic SIMD-enabled for both
-    // orientations.
-
-    // SAFETY: `resolve_deblock_apply` only returns the SSE/NEON kernel when the
-    // corresponding feature was detected; the scalar default is always sound.
-    unsafe {
-        resolve_deblock_apply_8bpc()(
-            dst,
-            off,
-            stride_line,
-            stride_tap,
-            width_neg,
-            width_pos,
-            q_thr_clamp,
-            neg_lossless,
-            pos_lossless,
-        )
-    };
 }
 
 #[allow(clippy::too_many_arguments)]

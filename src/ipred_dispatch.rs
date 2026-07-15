@@ -30,14 +30,6 @@ use std::sync::OnceLock;
 
 use crate::pixel::BitDepth;
 
-macro_rules! call_ipred {
-    ($f:expr, $($arg:expr),+ $(,)?) => {{
-        // SAFETY: intra-pred resolvers only install target-feature kernels
-        // after the corresponding runtime CPU feature check succeeds.
-        unsafe { ($f)($($arg),+) }
-    }};
-}
-
 pub(crate) type IntraPred8Fn = unsafe fn(
     dst: &mut [u8],
     stride: usize,
@@ -235,7 +227,7 @@ static IPRED_SMOOTH_V_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
 static IPRED_SMOOTH_H_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_ipred_v() -> IntraPred8Fn {
+pub(crate) fn resolve_ipred_v() -> IntraPred8Fn {
     *IPRED_V_8BPC.get_or_init(|| {
         let mut _f: IntraPred8Fn = ipred_v_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -260,7 +252,7 @@ fn resolve_ipred_v() -> IntraPred8Fn {
 }
 
 #[inline]
-fn resolve_ipred_h() -> IntraPred8Fn {
+pub(crate) fn resolve_ipred_h() -> IntraPred8Fn {
     *IPRED_H_8BPC.get_or_init(|| {
         let mut _f: IntraPred8Fn = ipred_h_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -285,7 +277,7 @@ fn resolve_ipred_h() -> IntraPred8Fn {
 }
 
 #[inline]
-fn resolve_ipred_smooth() -> SmoothPred8Fn {
+pub(crate) fn resolve_ipred_smooth() -> SmoothPred8Fn {
     *IPRED_SMOOTH_8BPC.get_or_init(|| {
         let mut _f: SmoothPred8Fn = ipred_smooth_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -310,7 +302,7 @@ fn resolve_ipred_smooth() -> SmoothPred8Fn {
 }
 
 #[inline]
-fn resolve_ipred_smooth_v() -> SmoothPred8Fn {
+pub(crate) fn resolve_ipred_smooth_v() -> SmoothPred8Fn {
     *IPRED_SMOOTH_V_8BPC.get_or_init(|| {
         let mut _f: SmoothPred8Fn = ipred_smooth_v_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -335,7 +327,7 @@ fn resolve_ipred_smooth_v() -> SmoothPred8Fn {
 }
 
 #[inline]
-fn resolve_ipred_smooth_h() -> SmoothPred8Fn {
+pub(crate) fn resolve_ipred_smooth_h() -> SmoothPred8Fn {
     *IPRED_SMOOTH_H_8BPC.get_or_init(|| {
         let mut _f: SmoothPred8Fn = ipred_smooth_h_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -357,58 +349,6 @@ fn resolve_ipred_smooth_h() -> SmoothPred8Fn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_v(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-    angle: i32,
-) {
-    call_ipred!(resolve_ipred_v(), dst, stride, tl, o, width, height, angle);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_h(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-    angle: i32,
-) {
-    call_ipred!(resolve_ipred_h(), dst, stride, tl, o, width, height, angle);
-}
-
-pub(crate) fn ipred_smooth(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, w: usize, h: usize) {
-    call_ipred!(resolve_ipred_smooth(), dst, stride, tl, o, w, h);
-}
-
-pub(crate) fn ipred_smooth_v(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-) {
-    call_ipred!(resolve_ipred_smooth_v(), dst, stride, tl, o, w, h);
-}
-
-pub(crate) fn ipred_smooth_h(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-) {
-    call_ipred!(resolve_ipred_smooth_h(), dst, stride, tl, o, w, h);
 }
 
 pub(crate) type DcPred128Fn = unsafe fn(dst: &mut [u8], stride: usize, width: usize, height: usize);
@@ -463,7 +403,7 @@ static IPRED_DC_LEFT_8BPC: OnceLock<IntraPred8Fn> = OnceLock::new();
 static IPRED_DC_128_8BPC: OnceLock<DcPred128Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_ipred_dc() -> IntraPred8Fn {
+pub(crate) fn resolve_ipred_dc() -> IntraPred8Fn {
     *IPRED_DC_8BPC.get_or_init(|| {
         let mut _f: IntraPred8Fn = ipred_dc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -488,7 +428,7 @@ fn resolve_ipred_dc() -> IntraPred8Fn {
 }
 
 #[inline]
-fn resolve_ipred_dc_top() -> IntraPred8Fn {
+pub(crate) fn resolve_ipred_dc_top() -> IntraPred8Fn {
     *IPRED_DC_TOP_8BPC.get_or_init(|| {
         let mut _f: IntraPred8Fn = ipred_dc_top_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -513,7 +453,7 @@ fn resolve_ipred_dc_top() -> IntraPred8Fn {
 }
 
 #[inline]
-fn resolve_ipred_dc_left() -> IntraPred8Fn {
+pub(crate) fn resolve_ipred_dc_left() -> IntraPred8Fn {
     *IPRED_DC_LEFT_8BPC.get_or_init(|| {
         let mut _f: IntraPred8Fn = ipred_dc_left_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -538,7 +478,7 @@ fn resolve_ipred_dc_left() -> IntraPred8Fn {
 }
 
 #[inline]
-fn resolve_ipred_dc_128() -> DcPred128Fn {
+pub(crate) fn resolve_ipred_dc_128() -> DcPred128Fn {
     *IPRED_DC_128_8BPC.get_or_init(|| {
         let mut _f: DcPred128Fn = ipred_dc_128_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -562,67 +502,6 @@ fn resolve_ipred_dc_128() -> DcPred128Fn {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_dc(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-    angle: i32,
-) {
-    call_ipred!(resolve_ipred_dc(), dst, stride, tl, o, width, height, angle);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_dc_top(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-    angle: i32,
-) {
-    call_ipred!(
-        resolve_ipred_dc_top(),
-        dst,
-        stride,
-        tl,
-        o,
-        width,
-        height,
-        angle
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_dc_left(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-    angle: i32,
-) {
-    call_ipred!(
-        resolve_ipred_dc_left(),
-        dst,
-        stride,
-        tl,
-        o,
-        width,
-        height,
-        angle
-    );
-}
-
-pub(crate) fn ipred_dc_128(dst: &mut [u8], stride: usize, width: usize, height: usize) {
-    call_ipred!(resolve_ipred_dc_128(), dst, stride, width, height);
-}
-
 #[inline]
 pub(crate) fn ipred_paeth_scalar(
     dst: &mut [u8],
@@ -638,7 +517,7 @@ pub(crate) fn ipred_paeth_scalar(
 static IPRED_PAETH_8BPC: OnceLock<SmoothPred8Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_ipred_paeth() -> SmoothPred8Fn {
+pub(crate) fn resolve_ipred_paeth() -> SmoothPred8Fn {
     *IPRED_PAETH_8BPC.get_or_init(|| {
         let mut _f: SmoothPred8Fn = ipred_paeth_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -660,10 +539,6 @@ fn resolve_ipred_paeth() -> SmoothPred8Fn {
         }
         _f
     })
-}
-
-pub(crate) fn ipred_paeth(dst: &mut [u8], stride: usize, tl: &[u8], o: usize, w: usize, h: usize) {
-    call_ipred!(resolve_ipred_paeth(), dst, stride, tl, o, w, h);
 }
 
 pub(crate) type Z1Pred8Fn = unsafe fn(
@@ -710,7 +585,7 @@ pub(crate) fn ipred_z1_scalar(
 static IPRED_Z1_8BPC: OnceLock<Z1Pred8Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_ipred_z1() -> Z1Pred8Fn {
+pub(crate) fn resolve_ipred_z1() -> Z1Pred8Fn {
     *IPRED_Z1_8BPC.get_or_init(|| {
         let mut _f: Z1Pred8Fn = ipred_z1_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -732,34 +607,6 @@ fn resolve_ipred_z1() -> Z1Pred8Fn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z1(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-) {
-    call_ipred!(
-        resolve_ipred_z1(),
-        dst,
-        stride,
-        tl,
-        o,
-        w,
-        h,
-        angle,
-        max_width,
-        max_height,
-        ibp_weights,
-    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -793,7 +640,7 @@ pub(crate) fn ipred_z3_scalar(
 static IPRED_Z3_8BPC: OnceLock<Z1Pred8Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_ipred_z3() -> Z1Pred8Fn {
+pub(crate) fn resolve_ipred_z3() -> Z1Pred8Fn {
     *IPRED_Z3_8BPC.get_or_init(|| {
         let mut _f: Z1Pred8Fn = ipred_z3_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -815,34 +662,6 @@ fn resolve_ipred_z3() -> Z1Pred8Fn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z3(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-) {
-    call_ipred!(
-        resolve_ipred_z3(),
-        dst,
-        stride,
-        tl,
-        o,
-        w,
-        h,
-        angle,
-        max_width,
-        max_height,
-        ibp_weights,
-    );
 }
 
 pub(crate) type Z2Pred8Fn = unsafe fn(
@@ -876,7 +695,7 @@ pub(crate) fn ipred_z2_scalar(
 static IPRED_Z2_8BPC: OnceLock<Z2Pred8Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_ipred_z2() -> Z2Pred8Fn {
+pub(crate) fn resolve_ipred_z2() -> Z2Pred8Fn {
     *IPRED_Z2_8BPC.get_or_init(|| {
         let mut _f: Z2Pred8Fn = ipred_z2_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -898,32 +717,6 @@ fn resolve_ipred_z2() -> Z2Pred8Fn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn ipred_z2(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_width: i32,
-    max_height: i32,
-) {
-    call_ipred!(
-        resolve_ipred_z2(),
-        dst,
-        stride,
-        tl,
-        o,
-        w,
-        h,
-        angle,
-        max_width,
-        max_height
-    );
 }
 
 pub(crate) type DipPred8Fn = unsafe fn(
@@ -952,7 +745,7 @@ pub(crate) fn ipred_dip_8bpc_scalar(
 static IPRED_DIP_8BPC: OnceLock<DipPred8Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_ipred_dip_8bpc() -> DipPred8Fn {
+pub(crate) fn resolve_ipred_dip_8bpc() -> DipPred8Fn {
     *IPRED_DIP_8BPC.get_or_init(|| {
         let mut _f: DipPred8Fn = ipred_dip_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -967,27 +760,6 @@ fn resolve_ipred_dip_8bpc() -> DipPred8Fn {
         }
         _f
     })
-}
-
-pub(crate) fn ipred_dip_8bpc(
-    dst: &mut [u8],
-    stride: usize,
-    tl: &[u8],
-    o: usize,
-    width: usize,
-    height: usize,
-    mode: i32,
-) {
-    call_ipred!(
-        resolve_ipred_dip_8bpc(),
-        dst,
-        stride,
-        tl,
-        o,
-        width,
-        height,
-        mode
-    );
 }
 
 pub(crate) type PalPred8Fn =
@@ -1008,7 +780,7 @@ pub(crate) fn pal_pred_8bpc_scalar(
 static PAL_PRED_8BPC: OnceLock<PalPred8Fn> = OnceLock::new();
 
 #[inline]
-fn resolve_pal_pred_8bpc() -> PalPred8Fn {
+pub(crate) fn resolve_pal_pred_8bpc() -> PalPred8Fn {
     *PAL_PRED_8BPC.get_or_init(|| {
         let mut _f: PalPred8Fn = pal_pred_8bpc_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1023,17 +795,6 @@ fn resolve_pal_pred_8bpc() -> PalPred8Fn {
         }
         _f
     })
-}
-
-pub(crate) fn pal_pred_8bpc(
-    dst: &mut [u8],
-    stride: usize,
-    pal: &[u8],
-    idx: &[u8],
-    w: usize,
-    h: usize,
-) {
-    call_ipred!(resolve_pal_pred_8bpc(), dst, stride, pal, idx, w, h);
 }
 
 pub(crate) type PalPredHbdFn =
@@ -1054,7 +815,7 @@ pub(crate) fn pal_pred_hbd_scalar(
 static PAL_PRED_HBD: OnceLock<PalPredHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_pal_pred_hbd() -> PalPredHbdFn {
+pub(crate) fn resolve_pal_pred_hbd() -> PalPredHbdFn {
     *PAL_PRED_HBD.get_or_init(|| {
         let mut _f: PalPredHbdFn = pal_pred_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1070,18 +831,6 @@ fn resolve_pal_pred_hbd() -> PalPredHbdFn {
         _f
     })
 }
-
-pub(crate) fn pal_pred_hbd(
-    dst: &mut [u16],
-    stride: usize,
-    pal: &[u16],
-    idx: &[u8],
-    w: usize,
-    h: usize,
-) {
-    call_ipred!(resolve_pal_pred_hbd(), dst, stride, pal, idx, w, h);
-}
-
 pub(crate) type IntraPredHbdFn = unsafe fn(
     dst: &mut [u16],
     stride: usize,
@@ -1511,7 +1260,7 @@ macro_rules! resolve_hbd_ipred {
 }
 
 #[inline]
-fn resolve_ipred_v_hbd() -> IntraPredHbdFn {
+pub(crate) fn resolve_ipred_v_hbd() -> IntraPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_V_HBD,
         ipred_v_hbd_scalar,
@@ -1523,7 +1272,7 @@ fn resolve_ipred_v_hbd() -> IntraPredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_h_hbd() -> IntraPredHbdFn {
+pub(crate) fn resolve_ipred_h_hbd() -> IntraPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_H_HBD,
         ipred_h_hbd_scalar,
@@ -1535,7 +1284,7 @@ fn resolve_ipred_h_hbd() -> IntraPredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_dc_hbd() -> IntraPredHbdFn {
+pub(crate) fn resolve_ipred_dc_hbd() -> IntraPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_DC_HBD,
         ipred_dc_hbd_scalar,
@@ -1547,7 +1296,7 @@ fn resolve_ipred_dc_hbd() -> IntraPredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_dc_top_hbd() -> IntraPredHbdFn {
+pub(crate) fn resolve_ipred_dc_top_hbd() -> IntraPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_DC_TOP_HBD,
         ipred_dc_top_hbd_scalar,
@@ -1559,7 +1308,7 @@ fn resolve_ipred_dc_top_hbd() -> IntraPredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_dc_left_hbd() -> IntraPredHbdFn {
+pub(crate) fn resolve_ipred_dc_left_hbd() -> IntraPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_DC_LEFT_HBD,
         ipred_dc_left_hbd_scalar,
@@ -1571,7 +1320,7 @@ fn resolve_ipred_dc_left_hbd() -> IntraPredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_dc_128_hbd() -> DcPred128HbdFn {
+pub(crate) fn resolve_ipred_dc_128_hbd() -> DcPred128HbdFn {
     resolve_hbd_ipred!(
         IPRED_DC_128_HBD,
         ipred_dc_128_hbd_scalar,
@@ -1583,7 +1332,7 @@ fn resolve_ipred_dc_128_hbd() -> DcPred128HbdFn {
 }
 
 #[inline]
-fn resolve_ipred_paeth_hbd() -> SmoothPredHbdFn {
+pub(crate) fn resolve_ipred_paeth_hbd() -> SmoothPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_PAETH_HBD,
         ipred_paeth_hbd_scalar,
@@ -1595,7 +1344,7 @@ fn resolve_ipred_paeth_hbd() -> SmoothPredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_smooth_hbd() -> SmoothPredHbdFn {
+pub(crate) fn resolve_ipred_smooth_hbd() -> SmoothPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_SMOOTH_HBD,
         ipred_smooth_hbd_scalar,
@@ -1607,7 +1356,7 @@ fn resolve_ipred_smooth_hbd() -> SmoothPredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_smooth_v_hbd() -> SmoothPredHbdFn {
+pub(crate) fn resolve_ipred_smooth_v_hbd() -> SmoothPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_SMOOTH_V_HBD,
         ipred_smooth_v_hbd_scalar,
@@ -1619,7 +1368,7 @@ fn resolve_ipred_smooth_v_hbd() -> SmoothPredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_smooth_h_hbd() -> SmoothPredHbdFn {
+pub(crate) fn resolve_ipred_smooth_h_hbd() -> SmoothPredHbdFn {
     resolve_hbd_ipred!(
         IPRED_SMOOTH_H_HBD,
         ipred_smooth_h_hbd_scalar,
@@ -1631,7 +1380,7 @@ fn resolve_ipred_smooth_h_hbd() -> SmoothPredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_z1_hbd() -> Z1PredHbdFn {
+pub(crate) fn resolve_ipred_z1_hbd() -> Z1PredHbdFn {
     resolve_hbd_ipred!(
         IPRED_Z1_HBD,
         ipred_z1_hbd_scalar,
@@ -1643,7 +1392,7 @@ fn resolve_ipred_z1_hbd() -> Z1PredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_z2_hbd() -> Z2PredHbdFn {
+pub(crate) fn resolve_ipred_z2_hbd() -> Z2PredHbdFn {
     resolve_hbd_ipred!(
         IPRED_Z2_HBD,
         ipred_z2_hbd_scalar,
@@ -1655,7 +1404,7 @@ fn resolve_ipred_z2_hbd() -> Z2PredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_z3_hbd() -> Z1PredHbdFn {
+pub(crate) fn resolve_ipred_z3_hbd() -> Z1PredHbdFn {
     resolve_hbd_ipred!(
         IPRED_Z3_HBD,
         ipred_z3_hbd_scalar,
@@ -1667,7 +1416,7 @@ fn resolve_ipred_z3_hbd() -> Z1PredHbdFn {
 }
 
 #[inline]
-fn resolve_ipred_dip_hbd() -> DipPredHbdFn {
+pub(crate) fn resolve_ipred_dip_hbd() -> DipPredHbdFn {
     *IPRED_DIP_HBD.get_or_init(|| {
         let mut _f: DipPredHbdFn = ipred_dip_hbd_scalar;
         #[cfg(target_arch = "aarch64")]
@@ -1682,42 +1431,4 @@ fn resolve_ipred_dip_hbd() -> DipPredHbdFn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn dispatch_ipred_hbd(
-    m: u8,
-    _bitdepth: u8,
-    bitdepth_max: u16,
-    dst: &mut [u16],
-    dst_off: usize,
-    stride: usize,
-    edge: &[u16],
-    edge_o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_w: i32,
-    max_h: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-) {
-    use crate::levels::*;
-    let d = &mut dst[dst_off..];
-    match m {
-        0 /* DcPred */ => call_ipred!(resolve_ipred_dc_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        _ if m == DC_128_PRED => call_ipred!(resolve_ipred_dc_128_hbd(), d, stride, w, h, bitdepth_max),
-        _ if m == TOP_DC_PRED => call_ipred!(resolve_ipred_dc_top_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        _ if m == LEFT_DC_PRED => call_ipred!(resolve_ipred_dc_left_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        2 /* HorPred */ => call_ipred!(resolve_ipred_h_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        1 /* VertPred */ => call_ipred!(resolve_ipred_v_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        12 /* PaethPred */ => call_ipred!(resolve_ipred_paeth_hbd(), d, stride, edge, edge_o, w, h, bitdepth_max),
-        9 /* SmoothPred */ => call_ipred!(resolve_ipred_smooth_hbd(), d, stride, edge, edge_o, w, h, bitdepth_max),
-        10 /* SmoothVPred */ => call_ipred!(resolve_ipred_smooth_v_hbd(), d, stride, edge, edge_o, w, h, bitdepth_max),
-        11 /* SmoothHPred */ => call_ipred!(resolve_ipred_smooth_h_hbd(), d, stride, edge, edge_o, w, h, bitdepth_max),
-        _ if m == Z1_PRED => call_ipred!(resolve_ipred_z1_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights, bitdepth_max),
-        _ if m == Z2_PRED => call_ipred!(resolve_ipred_z2_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, bitdepth_max),
-        _ if m == Z3_PRED => call_ipred!(resolve_ipred_z3_hbd(), d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights, bitdepth_max),
-        _ if m == DIP_PRED => call_ipred!(resolve_ipred_dip_hbd(), d, stride, edge, edge_o, w, h, angle, bitdepth_max),
-        _ => call_ipred!(resolve_ipred_dc_128_hbd(), d, stride, w, h, bitdepth_max),
-    }
 }

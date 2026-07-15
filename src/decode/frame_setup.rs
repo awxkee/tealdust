@@ -36,11 +36,106 @@ use crate::lf_mask::{Av2Filter, Av2Restoration};
 use crate::msac::MsacContextScalar;
 
 #[inline]
-fn try_resize_with_default<T: Default>(v: &mut Vec<T>, len: usize) -> Result<(), ()> {
+fn try_resize_tile_states(v: &mut Vec<crate::internal::TileState>, len: usize) -> Result<(), ()> {
+    if len < v.len() {
+        v.truncate(len);
+        return Ok(());
+    }
     if len > v.len() {
         v.try_reserve_exact(len - v.len()).map_err(|_| ())?;
+        v.resize_with(len, Default::default);
     }
-    v.resize_with(len, Default::default);
+    Ok(())
+}
+
+#[inline]
+fn reset_block_context_value(keyframe: bool, is_tip_frame: bool) -> BlockContext {
+    BlockContext {
+        fsc: [0; 64],
+        mode: if !is_tip_frame && !keyframe {
+            [13; 64]
+        } else {
+            [0; 64]
+        },
+        midx: if !is_tip_frame { [0xff; 64] } else { [0; 64] },
+        mrl: [0; 64],
+        multi_mrl: [0; 64],
+        dip: [0; 64],
+        lcoef: if !is_tip_frame { [0x40; 64] } else { [0; 64] },
+        ccoef: if !is_tip_frame {
+            [[0x40; 64]; 2]
+        } else {
+            [[0; 64]; 2]
+        },
+        seg_pred: [0; 64],
+        skip_txfm: [0; 64],
+        skip_mode: [0; 64],
+        intra: if !is_tip_frame && keyframe {
+            [1; 64]
+        } else {
+            [0; 64]
+        },
+        intrabc: [0; 64],
+        morph_pred: [0; 64],
+        comp_type: [0; 64],
+        reference: if !is_tip_frame && !keyframe {
+            [[-1; 64]; 2]
+        } else {
+            [[0; 64]; 2]
+        },
+        motion_mode: [0; 64],
+        amvd: [0; 64],
+        mvprec: [0; 64],
+        filter: if !is_tip_frame {
+            [N_SWITCHABLE_FILTERS as u8; 64]
+        } else {
+            [0; 64]
+        },
+        tx_lpf_y: [3; 64],
+        tx_lpf_uv: [2; 64],
+        partition: [[0; 64]; 2],
+        uvmode: [0; 64],
+        pal_sz: [0; 64],
+    }
+}
+
+#[inline]
+fn try_resize_block_contexts(
+    v: &mut Vec<BlockContext>,
+    len: usize,
+    keyframe: bool,
+    is_tip_frame: bool,
+    reset_existing: bool,
+) -> Result<(), ()> {
+    if len < v.len() {
+        v.truncate(len);
+    }
+
+    let old_len = v.len();
+    if len > old_len {
+        v.try_reserve_exact(len - old_len).map_err(|_| ())?;
+        let ptr = v.as_mut_ptr();
+        unsafe {
+            if reset_existing {
+                for i in old_len..len {
+                    ptr.add(i)
+                        .write(reset_block_context_value(keyframe, is_tip_frame));
+                }
+            } else {
+                for i in old_len..len {
+                    ptr.add(i).write(BlockContext::default());
+                }
+            }
+            v.set_len(len);
+        }
+    }
+
+    if reset_existing {
+        for ctx in v.iter_mut().take(old_len.min(len)) {
+            reset_context(ctx, keyframe, is_tip_frame);
+        }
+    }
+
     Ok(())
 }
 
@@ -139,11 +234,15 @@ pub(crate) fn decode_frame_init(
     if new_n_ts != *n_ts {
         *n_ts = new_n_ts;
     }
-    try_resize_with_default(ts, new_n_ts as usize)?;
+    try_resize_tile_states(ts, new_n_ts as usize)?;
+
+    let keyframe = frame_hdr.is_key_or_intra();
+    let is_tip = frame_hdr.tip.frame_mode == 2;
+    let reset_a_contexts = n_tc > 1;
 
     let new_a_sz = sb256w * frame_hdr.tiling.t.rows as i32;
-    if new_a_sz != *a_sz {
-        try_resize_with_default(a, new_a_sz as usize)?;
+    if new_a_sz != *a_sz || reset_a_contexts {
+        try_resize_block_contexts(a, new_a_sz as usize, keyframe, is_tip, reset_a_contexts)?;
         *a_sz = new_a_sz;
     }
 
@@ -204,14 +303,6 @@ pub(crate) fn decode_frame_init(
 
     if frame_hdr.quant.qm.enabled == 0 {
         *qm = Default::default();
-    }
-
-    if n_tc > 1 {
-        let keyframe = frame_hdr.is_key_or_intra();
-        let is_tip = frame_hdr.tip.frame_mode == 2;
-        for ctx in a.iter_mut().take(new_a_sz as usize) {
-            reset_context(ctx, keyframe, is_tip);
-        }
     }
 
     Ok(())

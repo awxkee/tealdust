@@ -182,7 +182,9 @@ impl Decoder {
             });
         }
 
+        let exec = crate::exec_context::ExecContext::new();
         let ctx = DecoderContext {
+            exec: exec.clone(),
             seq_hdr: None,
             frame_hdr: None,
             tile: Vec::new(),
@@ -208,7 +210,10 @@ impl Decoder {
                 None
             },
             pic_allocator: std::sync::Arc::new(crate::picture::PoolPicAllocator::new()),
-            fc: crate::internal::FrameContext::default(),
+            fc: crate::internal::FrameContext {
+                exec,
+                ..crate::internal::FrameContext::default()
+            },
         };
 
         Ok(Self {
@@ -465,7 +470,10 @@ impl Decoder {
         // `FrameContext` is intentionally reusable during normal decode, but a
         // public flush/error reset should not retain attacker-sized allocation
         // capacities. Drop it back to the zero-allocation default.
-        self.ctx.fc = crate::internal::FrameContext::default();
+        self.ctx.fc = crate::internal::FrameContext {
+            exec: self.ctx.exec.clone(),
+            ..crate::internal::FrameContext::default()
+        };
         self.ctx.pic_allocator.clear_pool();
         crate::decode::clear_thread_local_decode_scratch();
 

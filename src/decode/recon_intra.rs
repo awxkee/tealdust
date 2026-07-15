@@ -127,27 +127,31 @@ where
         if BD::BPC == 8 {
             let dst8 = BD::Pixel::slice_as_ne_bytes_mut(&mut recon.dst_y);
             let pal8 = BD::Pixel::slice_as_ne_bytes(&pal);
-            crate::ipred_dispatch::pal_pred_8bpc(
-                &mut dst8[dst_off..],
-                stride,
-                pal8,
-                &recon.scratch.pal_idx_y[..],
-                bw,
-                bh,
-            );
+            unsafe {
+                (recon.frame.exec.pal_pred_8bpc)(
+                    &mut dst8[dst_off..],
+                    stride,
+                    pal8,
+                    &recon.scratch.pal_idx_y[..],
+                    bw,
+                    bh,
+                );
+            }
         } else {
             let dst16 = BD::Pixel::try_as_u16_slice_mut(&mut recon.dst_y)
                 .expect("HBD palette prediction requires u16 storage");
             let pal16 = BD::Pixel::try_as_u16_slice(&pal)
                 .expect("HBD palette prediction requires a u16 palette");
-            crate::ipred_dispatch::pal_pred_hbd(
-                &mut dst16[dst_off..],
-                stride,
-                pal16,
-                &recon.scratch.pal_idx_y[..],
-                bw,
-                bh,
-            );
+            unsafe {
+                (recon.frame.exec.pal_pred_hbd)(
+                    &mut dst16[dst_off..],
+                    stride,
+                    pal16,
+                    &recon.scratch.pal_idx_y[..],
+                    bw,
+                    bh,
+                );
+            }
         }
     }
 
@@ -1087,6 +1091,7 @@ where
                     let max_w = 4 * fi.bw - 4 * (cbx + x);
                     let max_h = 4 * fi.bh - 4 * (cby + y);
                     dispatch_ipred(
+                        recon.frame.exec,
                         bd,
                         m,
                         dst_plane,
@@ -1113,7 +1118,8 @@ where
             };
             if cctx_type != 0 {
                 let sz = imin(ctw as i32, 32) as usize * imin(cth as i32, 32) as usize;
-                crate::itx::cctx_bd(
+                crate::itx::cctx_bd_ctx(
+                    recon.frame.exec,
                     bd,
                     &mut cf_u[i * 16..],
                     &mut cf_v[i * 16..],
@@ -1146,7 +1152,8 @@ where
                     }
                     let dst_plane: &mut [BD::Pixel] =
                         if pl == 0 { recon.dst_u } else { recon.dst_v };
-                    crate::itx::inv_txfm_add(
+                    crate::itx::inv_txfm_add_ctx(
+                        recon.frame.exec,
                         bd,
                         dst_plane,
                         dst_off,
@@ -1269,6 +1276,7 @@ fn cfl_predict_8bpc<BD: BitDepth>(
         let (u_buf, v_buf) = (&mut *recon.dst_u, &mut *recon.dst_v);
 
         cfl_pred_raw(
+            recon.frame.exec,
             bd,
             dst_y,
             u_buf,
@@ -1372,6 +1380,7 @@ fn cfl_predict_8bpc<BD: BitDepth>(
         None
     };
     cfl_gen_y_420(
+        recon.frame.exec,
         &mut luma,
         luma_top_stride,
         ysrc,
@@ -1393,6 +1402,7 @@ fn cfl_predict_8bpc<BD: BitDepth>(
     let mut imat = [[0u16; CFL_MHCCP_MAX_EDGE_SAMPLES]; 2];
     if has_top || has_left {
         cfl_gen_mat(
+            recon.frame.exec,
             bd,
             &mut mat,
             &mut imat,
@@ -1412,6 +1422,7 @@ fn cfl_predict_8bpc<BD: BitDepth>(
         let chroma: &mut [BD::Pixel] = if pl == 0 { recon.dst_u } else { recon.dst_v };
         if has_top || has_left {
             cfl_calc_alphas(
+                recon.frame.exec,
                 bd,
                 &mut alpha,
                 chroma,
@@ -1436,6 +1447,7 @@ fn cfl_predict_8bpc<BD: BitDepth>(
         // the `chroma` pointer to the block), so slice the destination plane at
         // the block offset rather than the plane origin.
         cfl_mhccp_pred(
+            recon.frame.exec,
             bd,
             &mut chroma[chroma_off..],
             cstride,
@@ -1791,6 +1803,7 @@ where
         let max_w = 4 * fi.bw - 4 * bx;
         let max_h = 4 * fi.bh - 4 * by;
         dispatch_ipred(
+            recon.frame.exec,
             bd,
             m,
             recon.dst_y,
@@ -1860,7 +1873,8 @@ where
             txtp += txtp & crate::tables::TX_DDT_MASK[tx] as u32;
         }
 
-        crate::itx::inv_txfm_add(
+        crate::itx::inv_txfm_add_ctx(
+            recon.frame.exec,
             bd,
             recon.dst_y,
             dst_off,
@@ -1904,6 +1918,7 @@ where
 /// Dispatch the resolved intra predictor `m` into `dst` (mirrors the C
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_ipred<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     m: u8,
     dst: &mut [BD::Pixel],
@@ -1921,42 +1936,43 @@ pub(crate) fn dispatch_ipred<BD: BitDepth>(
     if BD::BPC == 8 {
         let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
         let edge8: &[u8] = BD::Pixel::slice_as_ne_bytes(edge);
-        dispatch_ipred_8bpc(
-            m,
-            dst8,
-            dst_off,
-            stride,
-            edge8,
-            edge_o,
-            w,
-            h,
-            angle,
-            max_w,
-            max_h,
-            ibp_weights,
-        );
+        unsafe {
+            exec.call_ipred_8bpc(
+                m,
+                &mut dst8[dst_off..],
+                stride,
+                edge8,
+                edge_o,
+                w,
+                h,
+                angle,
+                max_w,
+                max_h,
+                ibp_weights,
+            );
+        }
         return;
     }
     if let (Some(dst16), Some(edge16)) = (
         BD::Pixel::try_as_u16_slice_mut(dst),
         BD::Pixel::try_as_u16_slice(edge),
     ) {
-        crate::ipred_dispatch::dispatch_ipred_hbd(
-            m,
-            bd.bitdepth(),
-            bd.bitdepth_max() as u16,
-            dst16,
-            dst_off,
-            stride,
-            edge16,
-            edge_o,
-            w,
-            h,
-            angle,
-            max_w,
-            max_h,
-            ibp_weights,
-        );
+        unsafe {
+            exec.call_ipred_hbd(
+                m,
+                bd.bitdepth_max() as u16,
+                &mut dst16[dst_off..],
+                stride,
+                edge16,
+                edge_o,
+                w,
+                h,
+                angle,
+                max_w,
+                max_h,
+                ibp_weights,
+            );
+        }
         return;
     }
 
@@ -1974,55 +1990,11 @@ pub(crate) fn dispatch_ipred<BD: BitDepth>(
         9 /* SmoothPred */ => ipred::ipred_smooth(bd, d, stride, edge, edge_o, w, h),
         10 /* SmoothVPred */ => ipred::ipred_smooth_v(bd, d, stride, edge, edge_o, w, h),
         11 /* SmoothHPred */ => ipred::ipred_smooth_h(bd, d, stride, edge, edge_o, w, h),
-        _ if m == Z1_PRED => {
-            ipred::ipred_z1(bd, d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
-        }
+        _ if m == Z1_PRED => ipred::ipred_z1(bd, d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights),
         _ if m == Z2_PRED => ipred::ipred_z2(bd, d, stride, edge, edge_o, w, h, angle, max_w, max_h),
-        _ if m == Z3_PRED => {
-            ipred::ipred_z3(bd, d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
-        }
+        _ if m == Z3_PRED => ipred::ipred_z3(bd, d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights),
         _ if m == DIP_PRED => ipred::ipred_dip(bd, d, stride, edge, edge_o, w, h, angle),
         _ => ipred::ipred_dc_128(bd, d, stride, w, h),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn dispatch_ipred_8bpc(
-    m: u8,
-    dst: &mut [u8],
-    dst_off: usize,
-    stride: usize,
-    edge: &[u8],
-    edge_o: usize,
-    w: usize,
-    h: usize,
-    angle: i32,
-    max_w: i32,
-    max_h: i32,
-    ibp_weights: &[[[u8; 16]; 16]; 7],
-) {
-    use crate::levels::*;
-    let d = &mut dst[dst_off..];
-    match m {
-        0 /* DcPred */ => crate::ipred_dispatch::ipred_dc(d, stride, edge, edge_o, w, h, angle),
-        _ if m == DC_128_PRED => crate::ipred_dispatch::ipred_dc_128(d, stride, w, h),
-        _ if m == TOP_DC_PRED => crate::ipred_dispatch::ipred_dc_top(d, stride, edge, edge_o, w, h, angle),
-        _ if m == LEFT_DC_PRED => crate::ipred_dispatch::ipred_dc_left(d, stride, edge, edge_o, w, h, angle),
-        2 /* HorPred */ => crate::ipred_dispatch::ipred_h(d, stride, edge, edge_o, w, h, angle),
-        1 /* VertPred */ => crate::ipred_dispatch::ipred_v(d, stride, edge, edge_o, w, h, angle),
-        12 /* PaethPred */ => crate::ipred_dispatch::ipred_paeth(d, stride, edge, edge_o, w, h),
-        9 /* SmoothPred */ => crate::ipred_dispatch::ipred_smooth(d, stride, edge, edge_o, w, h),
-        10 /* SmoothVPred */ => crate::ipred_dispatch::ipred_smooth_v(d, stride, edge, edge_o, w, h),
-        11 /* SmoothHPred */ => crate::ipred_dispatch::ipred_smooth_h(d, stride, edge, edge_o, w, h),
-        _ if m == Z1_PRED => {
-            crate::ipred_dispatch::ipred_z1(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
-        }
-        _ if m == Z2_PRED => crate::ipred_dispatch::ipred_z2(d, stride, edge, edge_o, w, h, angle, max_w, max_h),
-        _ if m == Z3_PRED => {
-            crate::ipred_dispatch::ipred_z3(d, stride, edge, edge_o, w, h, angle, max_w, max_h, ibp_weights)
-        }
-        _ if m == DIP_PRED => crate::ipred_dispatch::ipred_dip_8bpc(d, stride, edge, edge_o, w, h, angle),
-        _ => crate::ipred_dispatch::ipred_dc_128(d, stride, w, h),
     }
 }
 
@@ -2030,6 +2002,7 @@ fn dispatch_ipred_8bpc(
 /// generic HBD kernel.
 #[inline]
 pub(crate) fn mc_avg<BD: crate::pixel::BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -2040,15 +2013,16 @@ pub(crate) fn mc_avg<BD: crate::pixel::BitDepth>(
 ) {
     if BD::BPC == 8 {
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
-        crate::mc_dispatch::avg_8bpc(d8, dst_stride, tmp1, tmp2, w, h);
+        crate::mc::avg_8bpc(exec, d8, dst_stride, tmp1, tmp2, w, h);
     } else {
-        crate::mc::avg(bd, dst, dst_stride, tmp1, tmp2, w, h);
+        crate::mc::avg(exec, bd, dst, dst_stride, tmp1, tmp2, w, h);
     }
 }
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn mc_w_avg<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -2060,15 +2034,16 @@ pub(crate) fn mc_w_avg<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
-        crate::mc_dispatch::w_avg_8bpc(d8, dst_stride, tmp1, tmp2, w, h, weight);
+        crate::mc::w_avg_8bpc(exec, d8, dst_stride, tmp1, tmp2, w, h, weight);
     } else {
-        crate::mc::w_avg(bd, dst, dst_stride, tmp1, tmp2, w, h, weight);
+        crate::mc::w_avg(exec, bd, dst, dst_stride, tmp1, tmp2, w, h, weight);
     }
 }
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn mc_mask<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -2080,15 +2055,16 @@ pub(crate) fn mc_mask<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
-        crate::mc_dispatch::mask_8bpc(d8, dst_stride, tmp1, tmp2, w, h, m);
+        crate::mc::mask_8bpc(exec, d8, dst_stride, tmp1, tmp2, w, h, m);
     } else {
-        crate::mc::mask_fn(bd, dst, dst_stride, tmp1, tmp2, w, h, m);
+        crate::mc::mask_fn(exec, bd, dst, dst_stride, tmp1, tmp2, w, h, m);
     }
 }
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn mc_w_mask<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -2102,9 +2078,10 @@ pub(crate) fn mc_w_mask<BD: BitDepth>(
     ss_hor: bool,
     ss_ver: bool,
 ) {
+    let _ = exec;
     if BD::BPC == 8 {
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
-        crate::mc_dispatch::w_mask_8bpc(
+        crate::mc::w_mask_8bpc(
             d8,
             dst_stride,
             tmp1,

@@ -47,6 +47,7 @@ use crate::tables::{BLOCK_DIMENSIONS, TXFM_DIMENSIONS};
 #[allow(clippy::too_many_arguments)]
 fn prep_opfl_prefetch_rect_8bpc<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     p: &mut [BD::Pixel],
     p_stride: usize,
     ref_pic: &crate::picture::Picture,
@@ -109,7 +110,7 @@ fn prep_opfl_prefetch_rect_8bpc<BD: BitDepth>(
     if BD::BPC == 8 {
         let p8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(p);
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-        crate::mc_dispatch::put_bilin_8bpc_with_scratch(
+        exec.put_bilin_8bpc_with_scratch(
             p8,
             p_stride,
             &src8[src_off..],
@@ -227,6 +228,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                 for n in 0..2 {
                     prep_opfl_prefetch_rect_8bpc(
                         bd,
+                        recon.frame.exec,
                         &mut p[n],
                         p_stride,
                         refp[n],
@@ -297,6 +299,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                                 let off = ((y + byi) * 4) as usize * yw + ((x + bxi) * 4) as usize;
                                 mc_opfl_8bpc(
                                     bd,
+                                    recon.frame.exec,
                                     &mut tmp[i],
                                     off,
                                     yw,
@@ -383,6 +386,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                         let off = (y * 4) as usize * yw + (x * 4) as usize;
                         mc_prep_bounds_8bpc(
                             bd,
+                            recon.frame.exec,
                             &mut tmp[i],
                             yw,
                             refp[i],
@@ -433,6 +437,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
             for n in 0..2 {
                 prep_opfl_prefetch_rect_8bpc(
                     bd,
+                    recon.frame.exec,
                     &mut p[n],
                     p_stride,
                     refp[n],
@@ -498,6 +503,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                         let off = ((y + byi) * 4) as usize * yw + (bxi * 4) as usize;
                         mc_opfl_8bpc(
                             bd,
+                            recon.frame.exec,
                             &mut tmp[i],
                             off,
                             yw,
@@ -919,6 +925,7 @@ where
                         let cx = cmv[i].x();
                         prep_opfl_prefetch_8bpc(
                             bd,
+                            recon.frame.exec,
                             &mut p[i],
                             p_stride,
                             refp[i],
@@ -995,6 +1002,7 @@ where
                         let off = (y * 4) as usize * yw + (x * 4) as usize;
                         mc_opfl_8bpc(
                             bd,
+                            recon.frame.exec,
                             &mut tmp[i],
                             off,
                             yw,
@@ -1064,6 +1072,7 @@ where
                         let off = (y * 4) as usize * yw + (x * 4) as usize;
                         inter_mc_plane_prep_at_8bpc(
                             bd,
+                            recon.frame.exec,
                             &mut tmp[i],
                             off,
                             yw,
@@ -1159,6 +1168,7 @@ where
         let (tmp0, tmp1) = tmp.split_at(1);
         if have_bacp {
             mc_mask(
+                recon.frame.exec,
                 bd,
                 &mut recon.dst_y[dst_off..],
                 y_stride,
@@ -1170,6 +1180,7 @@ where
             );
         } else {
             mc_avg(
+                recon.frame.exec,
                 bd,
                 &mut recon.dst_y[dst_off..],
                 y_stride,
@@ -1276,9 +1287,28 @@ where
             };
             let (tmp0, tmp1) = tmp.split_at(1);
             if use_bacp {
-                mc_mask(bd, dst, uv_stride, &tmp0[0], &tmp1[0], cw, ch, &seg_mask);
+                mc_mask(
+                    recon.frame.exec,
+                    bd,
+                    dst,
+                    uv_stride,
+                    &tmp0[0],
+                    &tmp1[0],
+                    cw,
+                    ch,
+                    &seg_mask,
+                );
             } else {
-                mc_avg(bd, dst, uv_stride, &tmp0[0], &tmp1[0], cw, ch);
+                mc_avg(
+                    recon.frame.exec,
+                    bd,
+                    dst,
+                    uv_stride,
+                    &tmp0[0],
+                    &tmp1[0],
+                    cw,
+                    ch,
+                );
             }
             recon.scratch.put_compound_tmp(tmp);
         }
@@ -1420,6 +1450,7 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
                         let mvx = rmv2[0][i].x();
                         mc_opfl_8bpc(
                             bd,
+                            recon.frame.exec,
                             &mut tmp[i],
                             off,
                             stride,
@@ -1475,6 +1506,7 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
 #[allow(clippy::too_many_arguments)]
 fn prep_opfl_prefetch_8bpc<BD: crate::pixel::BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     p: &mut [BD::Pixel],
     p_stride: usize,
     ref_pic: &crate::picture::Picture,
@@ -1537,7 +1569,7 @@ fn prep_opfl_prefetch_8bpc<BD: crate::pixel::BitDepth>(
     if BD::BPC == 8 {
         let p8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(p);
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
-        crate::mc_dispatch::put_bilin_8bpc_with_scratch(
+        exec.put_bilin_8bpc_with_scratch(
             p8,
             p_stride,
             &src8[src_off..],
@@ -1626,6 +1658,7 @@ fn update_temporal_grid_sub<BD: crate::pixel::BitDepth>(
 #[allow(clippy::too_many_arguments)]
 fn inter_mc_plane_prep_at_8bpc<BD: crate::pixel::BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     tmp: &mut [i16],
     off: usize,
     tmp_stride: usize,
@@ -1646,6 +1679,7 @@ fn inter_mc_plane_prep_at_8bpc<BD: crate::pixel::BitDepth>(
 ) {
     mc_prep_bounds_8bpc(
         bd,
+        exec,
         &mut tmp[off..],
         tmp_stride,
         ref_pic,
@@ -1682,6 +1716,7 @@ fn apply_sign_i8(x: i32, s: i32) -> i8 {
 #[allow(clippy::too_many_arguments)]
 fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     tmp: &mut [i16],
     tmp_stride: usize,
     ref_pic: &crate::picture::Picture,
@@ -1761,7 +1796,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8.
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_dispatch::prep_bilin_8bpc_with_scratch(
+            exec.prep_bilin_8bpc_with_scratch(
                 tmp,
                 tmp_stride,
                 &src8[src_off..],
@@ -1773,7 +1808,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
                 inter_scratch,
             );
         } else {
-            crate::mc_dispatch::prep_8tap_8bpc_with_scratch(
+            exec.prep_8tap_8bpc_with_scratch(
                 tmp,
                 tmp_stride,
                 src8,
@@ -1822,6 +1857,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
 #[allow(clippy::too_many_arguments)]
 fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst16: &mut [i16],
     dst_off: usize,
     dst_stride: usize,
@@ -1892,7 +1928,7 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
         // SAFETY: BPC==8 => BD::Pixel == u8.
         let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
         if is_bilin {
-            crate::mc_dispatch::prep_bilin_8bpc_with_scratch(
+            exec.prep_bilin_8bpc_with_scratch(
                 &mut dst16[dst_off..],
                 dst_stride,
                 &src8[src_off..],
@@ -1904,7 +1940,7 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
                 inter_scratch,
             );
         } else {
-            crate::mc_dispatch::prep_8tap_8bpc_with_scratch(
+            exec.prep_8tap_8bpc_with_scratch(
                 &mut dst16[dst_off..],
                 dst_stride,
                 src8,
@@ -2106,6 +2142,7 @@ where
             if wmp.affine != 0 && imin(bw4 * 4, bh4 * 4) >= 8 {
                 warp_affine_plane_8bpc(
                     bd,
+                    recon.frame.exec,
                     &mut recon.dst_y[dst_off..],
                     y_stride,
                     &refp,
@@ -2122,6 +2159,7 @@ where
             } else {
                 ext_warp_plane_8bpc(
                     bd,
+                    recon.frame.exec,
                     &mut recon.dst_y[dst_off..],
                     y_stride,
                     &refp,
@@ -2140,6 +2178,7 @@ where
         } else {
             inter_mc_plane_8bpc(
                 bd,
+                recon.frame.exec,
                 &mut recon.dst_y[dst_off..],
                 y_stride,
                 &refp,
@@ -2302,6 +2341,7 @@ where
                         };
                         inter_mc_plane_8bpc(
                             bd,
+                            recon.frame.exec,
                             dst,
                             uv_stride,
                             &s_refp,
@@ -2341,12 +2381,25 @@ where
             if warp_block {
                 if c_affine {
                     warp_affine_plane_8bpc(
-                        bd, dst, uv_stride, &refp, pl, cbx, cby, cb_dim, &c_wmp, ss_hor, ss_ver,
-                        fi.bw, fi.bh,
+                        bd,
+                        recon.frame.exec,
+                        dst,
+                        uv_stride,
+                        &refp,
+                        pl,
+                        cbx,
+                        cby,
+                        cb_dim,
+                        &c_wmp,
+                        ss_hor,
+                        ss_ver,
+                        fi.bw,
+                        fi.bh,
                     );
                 } else {
                     ext_warp_plane_8bpc(
                         bd,
+                        recon.frame.exec,
                         dst,
                         uv_stride,
                         &refp,
@@ -2365,6 +2418,7 @@ where
             } else {
                 inter_mc_plane_8bpc(
                     bd,
+                    recon.frame.exec,
                     dst,
                     uv_stride,
                     &refp,

@@ -4,7 +4,7 @@ exclude = []
 
 [package]
 name = "tealdust"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "AV2 decoder"
 readme = "README.md"

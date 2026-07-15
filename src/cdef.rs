@@ -157,15 +157,16 @@ fn cast_left_u16<P: Pixel>(left: &[[P; 2]]) -> &[[u16; 2]] {
 
 pub(crate) fn cdef_find_dir_bd<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     img: &[BD::Pixel],
     stride: usize,
     var: &mut u32,
 ) -> i32 {
     if let Some(img8) = <BD::Pixel as Pixel>::try_as_u8_slice(img) {
-        return crate::cdef_dispatch::cdef_find_dir_8bpc(img8, stride, var);
+        return unsafe { (exec.cdef_dir_8bpc)(img8, stride, var) };
     }
     if let Some(imgh) = <BD::Pixel as Pixel>::try_as_u16_slice(img) {
-        return crate::cdef_dispatch::cdef_find_dir_hbd(imgh, stride, bd.bitdepth_min_8(), var);
+        return unsafe { (exec.cdef_dir_hbd)(imgh, stride, bd.bitdepth_min_8(), var) };
     }
 
     unreachable!("unsupported CDEF pixel storage")
@@ -189,6 +190,7 @@ pub(crate) const BACKUP_2X8_UV: u8 = 1 << 1;
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cdef_filter_block<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
     dst_off: usize,
@@ -218,22 +220,24 @@ pub(crate) fn cdef_filter_block<BD: BitDepth>(
             <BD::Pixel as Pixel>::try_as_u8_slice(top),
             <BD::Pixel as Pixel>::try_as_u8_slice(bottom),
         ) {
-            crate::cdef_dispatch::cdef_padding_8bpc(
-                &mut tmp_buf,
-                tmp_stride,
-                src8,
-                dst_stride,
-                dst_off,
-                cast_left_u8(left),
-                top8,
-                top_off,
-                bottom8,
-                bottom_off,
-                bottom_stride,
-                w,
-                h,
-                edges,
-            );
+            unsafe {
+                (exec.cdef_padding_8bpc)(
+                    &mut tmp_buf,
+                    tmp_stride,
+                    src8,
+                    dst_stride,
+                    dst_off,
+                    cast_left_u8(left),
+                    top8,
+                    top_off,
+                    bottom8,
+                    bottom_off,
+                    bottom_stride,
+                    w,
+                    h,
+                    edges,
+                );
+            }
             let d8 = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst)
                 .expect("8-bit CDEF storage changed between padding and filter");
             let pri_tap = if pri_strength != 0 {
@@ -251,22 +255,52 @@ pub(crate) fn cdef_filter_block<BD: BitDepth>(
             } else {
                 0
             };
-            crate::cdef_dispatch::cdef_filter_block_8bpc(
-                d8,
-                dst_stride,
-                dst_off,
-                &tmp_buf,
-                tmp_stride,
-                o,
-                pri_strength,
-                sec_strength,
-                pri_shift,
-                sec_shift,
-                pri_tap,
-                dir,
-                w,
-                h,
-            );
+            if pri_strength != 0 || sec_strength != 0 {
+                let shape = match (w, h) {
+                    (8, 8) => Some(0),
+                    (4, 8) => Some(1),
+                    (4, 4) => Some(2),
+                    (8, 4) => Some(3),
+                    _ => None,
+                };
+                if let Some(shape) = shape {
+                    unsafe {
+                        (exec.cdef_filter_shapes[shape])(
+                            d8,
+                            dst_stride,
+                            dst_off,
+                            &tmp_buf,
+                            tmp_stride,
+                            o,
+                            pri_strength,
+                            sec_strength,
+                            pri_shift,
+                            sec_shift,
+                            pri_tap,
+                            dir,
+                        )
+                    };
+                } else {
+                    unsafe {
+                        (exec.cdef_filter)(
+                            d8,
+                            dst_stride,
+                            dst_off,
+                            &tmp_buf,
+                            tmp_stride,
+                            o,
+                            pri_strength,
+                            sec_strength,
+                            pri_shift,
+                            sec_shift,
+                            pri_tap,
+                            dir,
+                            w,
+                            h,
+                        )
+                    };
+                }
+            }
             return;
         }
     }
@@ -277,22 +311,24 @@ pub(crate) fn cdef_filter_block<BD: BitDepth>(
             <BD::Pixel as Pixel>::try_as_u16_slice(top),
             <BD::Pixel as Pixel>::try_as_u16_slice(bottom),
         ) {
-            crate::cdef_dispatch::cdef_padding_hbd(
-                &mut tmp_buf,
-                tmp_stride,
-                src16,
-                dst_stride,
-                dst_off,
-                cast_left_u16(left),
-                top16,
-                top_off,
-                bottom16,
-                bottom_off,
-                bottom_stride,
-                w,
-                h,
-                edges,
-            );
+            unsafe {
+                (exec.cdef_padding_hbd)(
+                    &mut tmp_buf,
+                    tmp_stride,
+                    src16,
+                    dst_stride,
+                    dst_off,
+                    cast_left_u16(left),
+                    top16,
+                    top_off,
+                    bottom16,
+                    bottom_off,
+                    bottom_stride,
+                    w,
+                    h,
+                    edges,
+                );
+            }
             let d16 = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst)
                 .expect("HBD CDEF storage changed between padding and filter");
             let pri_tap = if pri_strength != 0 {
@@ -310,22 +346,52 @@ pub(crate) fn cdef_filter_block<BD: BitDepth>(
             } else {
                 0
             };
-            crate::cdef_dispatch::cdef_filter_block_hbd(
-                d16,
-                dst_stride,
-                dst_off,
-                &tmp_buf,
-                tmp_stride,
-                o,
-                pri_strength,
-                sec_strength,
-                pri_shift,
-                sec_shift,
-                pri_tap,
-                dir,
-                w,
-                h,
-            );
+            if pri_strength != 0 || sec_strength != 0 {
+                let shape = match (w, h) {
+                    (8, 8) => Some(0),
+                    (4, 8) => Some(1),
+                    (4, 4) => Some(2),
+                    (8, 4) => Some(3),
+                    _ => None,
+                };
+                if let Some(shape) = shape {
+                    unsafe {
+                        (exec.cdef_filter_hbd_shapes[shape])(
+                            d16,
+                            dst_stride,
+                            dst_off,
+                            &tmp_buf,
+                            tmp_stride,
+                            o,
+                            pri_strength,
+                            sec_strength,
+                            pri_shift,
+                            sec_shift,
+                            pri_tap,
+                            dir,
+                        )
+                    };
+                } else {
+                    unsafe {
+                        (exec.cdef_filter_hbd)(
+                            d16,
+                            dst_stride,
+                            dst_off,
+                            &tmp_buf,
+                            tmp_stride,
+                            o,
+                            pri_strength,
+                            sec_strength,
+                            pri_shift,
+                            sec_shift,
+                            pri_tap,
+                            dir,
+                            w,
+                            h,
+                        )
+                    };
+                }
+            }
             return;
         }
     }
@@ -689,17 +755,19 @@ fn cdef_backup2x8<P: Pixel>(
 /// `have_tt == 0` path). `cdef_line` is the toggled top-row backup whose `tf`
 /// bank holds the previous band's bottom 2 rows; `*toggle` flips per 8-row band.
 pub(crate) fn cdef_brow_8bpc(
+    exec: &crate::exec_context::ExecContext,
     planes: CdefPlaneSetMut<'_, u8>,
     p: &CdefBrowParams,
     strides: [isize; 2],
     scratch: CdefBrowScratch<'_, u8>,
     range: CdefBrowRange,
 ) {
-    cdef_brow(BitDepth8, planes, p, strides, scratch, range);
+    cdef_brow(BitDepth8, exec, planes, p, strides, scratch, range);
 }
 
 pub(crate) fn cdef_brow<BD: BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     planes: CdefPlaneSetMut<'_, BD::Pixel>,
     p: &CdefBrowParams,
     strides: [isize; 2],
@@ -1032,7 +1100,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
 
                         let mut variance = 0u32;
                         let dir = if need_dir {
-                            cdef_find_dir_bd(bd, &y[b_y..], y_ls, &mut variance) as usize
+                            cdef_find_dir_bd(bd, exec, &y[b_y..], y_ls, &mut variance) as usize
                         } else {
                             0
                         };
@@ -1048,6 +1116,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                     saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, edges);
                                 cdef_filter_block(
                                     bd,
+                                    exec,
                                     y,
                                     y_ls,
                                     b_y,
@@ -1071,6 +1140,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                 saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, edges);
                             cdef_filter_block(
                                 bd,
+                                exec,
                                 y,
                                 y_ls,
                                 b_y,
@@ -1105,6 +1175,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                 saved_bottom_ref(cdef_top, ru, 2, top_col_uv, uv_ls, edges);
                             cdef_filter_block(
                                 bd,
+                                exec,
                                 u,
                                 uv_ls,
                                 b_uv,
@@ -1124,6 +1195,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                             );
                             cdef_filter_block(
                                 bd,
+                                exec,
                                 v,
                                 uv_ls,
                                 b_uv,

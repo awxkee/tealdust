@@ -159,6 +159,7 @@ fn copy_strided_samples_i32<P: Copy + Into<i32>>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     plane: &mut [BD::Pixel],
     stride: usize,
@@ -329,7 +330,16 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
 
     let dst_off = dpy as usize * stride + dpx as usize;
     if dst_off < plane.len() {
-        crate::mc::morph(bd, &mut plane[dst_off..], stride, alpha, beta, ref_w, ref_h);
+        crate::mc::morph(
+            exec,
+            bd,
+            &mut plane[dst_off..],
+            stride,
+            alpha,
+            beta,
+            ref_w,
+            ref_h,
+        );
     }
 }
 

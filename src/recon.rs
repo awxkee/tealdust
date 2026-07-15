@@ -2240,6 +2240,7 @@ pub(crate) fn decode_coefs_sse2<C: Coeff, const UPDATE_CDF: bool>(
 #[inline]
 fn intrabc_put_bilin<BD: crate::pixel::BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
     src: &[BD::Pixel],
@@ -2257,7 +2258,7 @@ fn intrabc_put_bilin<BD: crate::pixel::BitDepth>(
             <BD::Pixel as Pixel>::try_as_u8_slice(src),
         ) {
             let mut scratch = Vec::new();
-            crate::mc_dispatch::put_bilin_8bpc_with_scratch(
+            exec.put_bilin_8bpc_with_scratch(
                 dst8,
                 dst_stride,
                 src8,
@@ -2276,7 +2277,7 @@ fn intrabc_put_bilin<BD: crate::pixel::BitDepth>(
             <BD::Pixel as Pixel>::try_as_u16_slice(src),
         ) {
             let mut scratch = Vec::new();
-            crate::mc_dispatch::put_bilin_hbd_with_scratch(
+            exec.put_bilin_hbd_with_scratch(
                 dst16,
                 dst_stride,
                 src16,
@@ -2350,6 +2351,7 @@ fn intrabc_gather_src<P: crate::pixel::Pixel>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn intrabc_pred<BD: crate::pixel::BitDepth>(
     bd: BD,
+    exec: &crate::exec_context::ExecContext,
     plane: &mut [BD::Pixel],
     stride: usize,
     bw4: i32,
@@ -2408,6 +2410,7 @@ pub(crate) fn intrabc_pred<BD: crate::pixel::BitDepth>(
 
     intrabc_put_bilin(
         bd,
+        exec,
         &mut plane[dst_off..],
         stride,
         &srcbuf,
@@ -2510,7 +2513,7 @@ mod packed_level_ctx_tests {
 
     #[test]
     fn packed_ctx_matches_reference() {
-        let mut s: u64 = 0xc0ffee_15_600d;
+        let mut s: u64 = 0xc0ff_ee15_600d;
         let mut next = move || {
             s ^= s << 13;
             s ^= s >> 7;

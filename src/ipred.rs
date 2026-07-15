@@ -1702,6 +1702,7 @@ fn cfl_filter<P: Pixel>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cfl_gen_y_420<P: Pixel>(
+    exec: &crate::exec_context::ExecContext,
     dst: &mut [P],
     dst_top_stride: usize,
     src: &[P],
@@ -1914,32 +1915,36 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
             P::try_as_u8_slice(src),
             P::try_as_u8_slice(tb),
         ) {
-            crate::cfl_dispatch::cfl_gen_y_row_8bpc(crate::cfl_dispatch::CflGenYRow8 {
-                dst: &mut dst8[dst_p..dst_p + tw],
-                src: src8,
-                src_off: sp,
-                top: top8,
-                top_off: tp,
-                bottom_offset: b as usize,
-                n_left,
-                filter_type,
-            });
+            unsafe {
+                (exec.cfl_gen_y_row_8bpc)(crate::cfl_dispatch::CflGenYRow8 {
+                    dst: &mut dst8[dst_p..dst_p + tw],
+                    src: src8,
+                    src_off: sp,
+                    top: top8,
+                    top_off: tp,
+                    bottom_offset: b as usize,
+                    n_left,
+                    filter_type,
+                });
+            }
             generated_main_row = true;
         } else if let (Some(dst16), Some(src16), Some(top16)) = (
             P::try_as_u16_slice_mut(dst),
             P::try_as_u16_slice(src),
             P::try_as_u16_slice(tb),
         ) {
-            crate::cfl_dispatch::cfl_gen_y_row_hbd(crate::cfl_dispatch::CflGenYRowHbd {
-                dst: &mut dst16[dst_p..dst_p + tw],
-                src: src16,
-                src_off: sp,
-                top: top16,
-                top_off: tp,
-                bottom_offset: b as usize,
-                n_left,
-                filter_type,
-            });
+            unsafe {
+                (exec.cfl_gen_y_row_hbd)(crate::cfl_dispatch::CflGenYRowHbd {
+                    dst: &mut dst16[dst_p..dst_p + tw],
+                    src: src16,
+                    src_off: sp,
+                    top: top16,
+                    top_off: tp,
+                    bottom_offset: b as usize,
+                    n_left,
+                    filter_type,
+                });
+            }
             generated_main_row = true;
         }
 
@@ -2012,6 +2017,7 @@ fn sqrnd<BD: BitDepth>(bd: BD, v: i32) -> i32 {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cfl_gen_mat<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     mat: &mut [[i32; 3]; 3],
     imat: &mut [[u16; CFL_MHCCP_MAX_EDGE_SAMPLES]; 2],
@@ -2067,32 +2073,36 @@ pub(crate) fn cfl_gen_mat<BD: BitDepth>(
             let v0_off = y_off + start;
             let v1_off = y_off + dir_t as usize * y_top_stride + start + dir_l as usize;
             if let Some(y8) = <BD::Pixel as Pixel>::try_as_u8_slice(y) {
-                crate::cfl_dispatch::cfl_gen_mat_8bpc(crate::cfl_dispatch::CflGenMat8 {
-                    sums: &mut sums,
-                    imat0: &mut *imat0,
-                    imat1: &mut *imat1,
-                    imat_off: n,
-                    y: y8,
-                    v0_off,
-                    v0_stride: 1,
-                    v1_off,
-                    v1_stride: 1,
-                    len,
-                });
+                unsafe {
+                    (exec.cfl_gen_mat_8bpc)(crate::cfl_dispatch::CflGenMat8 {
+                        sums: &mut sums,
+                        imat0: &mut *imat0,
+                        imat1: &mut *imat1,
+                        imat_off: n,
+                        y: y8,
+                        v0_off,
+                        v0_stride: 1,
+                        v1_off,
+                        v1_stride: 1,
+                        len,
+                    });
+                }
             } else if let Some(y16) = <BD::Pixel as Pixel>::try_as_u16_slice(y) {
-                crate::cfl_dispatch::cfl_gen_mat_hbd(crate::cfl_dispatch::CflGenMatHbd {
-                    sums: &mut sums,
-                    imat0: &mut *imat0,
-                    imat1: &mut *imat1,
-                    imat_off: n,
-                    y: y16,
-                    v0_off,
-                    v0_stride: 1,
-                    v1_off,
-                    v1_stride: 1,
-                    len,
-                    bitdepth: bd_bits,
-                });
+                unsafe {
+                    (exec.cfl_gen_mat_hbd)(crate::cfl_dispatch::CflGenMatHbd {
+                        sums: &mut sums,
+                        imat0: &mut *imat0,
+                        imat1: &mut *imat1,
+                        imat_off: n,
+                        y: y16,
+                        v0_off,
+                        v0_stride: 1,
+                        v1_off,
+                        v1_stride: 1,
+                        len,
+                        bitdepth: bd_bits,
+                    });
+                }
             } else {
                 for (rel_i, i) in (start..end).enumerate() {
                     let v0: i32 = y[y_off + i].into();
@@ -2117,32 +2127,36 @@ pub(crate) fn cfl_gen_mat<BD: BitDepth>(
             let v0_off = left_off + begin * n_left;
             let v1_off = left_off + (begin + dir_t as usize) * n_left + dir_l as usize;
             if let Some(y8) = <BD::Pixel as Pixel>::try_as_u8_slice(y) {
-                crate::cfl_dispatch::cfl_gen_mat_8bpc(crate::cfl_dispatch::CflGenMat8 {
-                    sums: &mut sums,
-                    imat0: &mut *imat0,
-                    imat1: &mut *imat1,
-                    imat_off: n,
-                    y: y8,
-                    v0_off,
-                    v0_stride: n_left,
-                    v1_off,
-                    v1_stride: n_left,
-                    len,
-                });
+                unsafe {
+                    (exec.cfl_gen_mat_8bpc)(crate::cfl_dispatch::CflGenMat8 {
+                        sums: &mut sums,
+                        imat0: &mut *imat0,
+                        imat1: &mut *imat1,
+                        imat_off: n,
+                        y: y8,
+                        v0_off,
+                        v0_stride: n_left,
+                        v1_off,
+                        v1_stride: n_left,
+                        len,
+                    });
+                }
             } else if let Some(y16) = <BD::Pixel as Pixel>::try_as_u16_slice(y) {
-                crate::cfl_dispatch::cfl_gen_mat_hbd(crate::cfl_dispatch::CflGenMatHbd {
-                    sums: &mut sums,
-                    imat0: &mut *imat0,
-                    imat1: &mut *imat1,
-                    imat_off: n,
-                    y: y16,
-                    v0_off,
-                    v0_stride: n_left,
-                    v1_off,
-                    v1_stride: n_left,
-                    len,
-                    bitdepth: bd_bits,
-                });
+                unsafe {
+                    (exec.cfl_gen_mat_hbd)(crate::cfl_dispatch::CflGenMatHbd {
+                        sums: &mut sums,
+                        imat0: &mut *imat0,
+                        imat1: &mut *imat1,
+                        imat_off: n,
+                        y: y16,
+                        v0_off,
+                        v0_stride: n_left,
+                        v1_off,
+                        v1_stride: n_left,
+                        len,
+                        bitdepth: bd_bits,
+                    });
+                }
             } else {
                 for (rel_i, i) in (begin..end).enumerate() {
                     let v0: i32 = y[left_off + i * n_left].into();
@@ -2194,6 +2208,7 @@ pub(crate) fn cfl_gen_mat<BD: BitDepth>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cfl_calc_alphas<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     alpha: &mut [i32; 3],
     c: &[BD::Pixel],
@@ -2223,29 +2238,33 @@ pub(crate) fn cfl_calc_alphas<BD: BitDepth>(
         let len = end.saturating_sub(start);
         if len != 0 {
             if let Some(top8) = <BD::Pixel as Pixel>::try_as_u8_slice(top) {
-                crate::cfl_dispatch::cfl_alpha_accum_8bpc(crate::cfl_dispatch::CflAlphaAccum8 {
-                    alpha,
-                    samples: top8,
-                    sample_off: top_off + start,
-                    sample_stride: 1,
-                    imat0: &imat[0],
-                    imat1: &imat[1],
-                    imat_off: n,
-                    len,
-                    a2sh,
-                });
+                unsafe {
+                    (exec.cfl_alpha_accum_8bpc)(crate::cfl_dispatch::CflAlphaAccum8 {
+                        alpha,
+                        samples: top8,
+                        sample_off: top_off + start,
+                        sample_stride: 1,
+                        imat0: &imat[0],
+                        imat1: &imat[1],
+                        imat_off: n,
+                        len,
+                        a2sh,
+                    });
+                }
             } else if let Some(top16) = <BD::Pixel as Pixel>::try_as_u16_slice(top) {
-                crate::cfl_dispatch::cfl_alpha_accum_hbd(crate::cfl_dispatch::CflAlphaAccumHbd {
-                    alpha,
-                    samples: top16,
-                    sample_off: top_off + start,
-                    sample_stride: 1,
-                    imat0: &imat[0],
-                    imat1: &imat[1],
-                    imat_off: n,
-                    len,
-                    a2sh,
-                });
+                unsafe {
+                    (exec.cfl_alpha_accum_hbd)(crate::cfl_dispatch::CflAlphaAccumHbd {
+                        alpha,
+                        samples: top16,
+                        sample_off: top_off + start,
+                        sample_stride: 1,
+                        imat0: &imat[0],
+                        imat1: &imat[1],
+                        imat_off: n,
+                        len,
+                        a2sh,
+                    });
+                }
             } else {
                 for i in start..end {
                     let v: i32 = top[top_off + i].into();
@@ -2263,29 +2282,33 @@ pub(crate) fn cfl_calc_alphas<BD: BitDepth>(
         let len = end.saturating_sub(start);
         if len != 0 {
             if let Some(c8) = <BD::Pixel as Pixel>::try_as_u8_slice(c) {
-                crate::cfl_dispatch::cfl_alpha_accum_8bpc(crate::cfl_dispatch::CflAlphaAccum8 {
-                    alpha,
-                    samples: c8,
-                    sample_off: c_off + start * stride - 1,
-                    sample_stride: stride,
-                    imat0: &imat[0],
-                    imat1: &imat[1],
-                    imat_off: n,
-                    len,
-                    a2sh,
-                });
+                unsafe {
+                    (exec.cfl_alpha_accum_8bpc)(crate::cfl_dispatch::CflAlphaAccum8 {
+                        alpha,
+                        samples: c8,
+                        sample_off: c_off + start * stride - 1,
+                        sample_stride: stride,
+                        imat0: &imat[0],
+                        imat1: &imat[1],
+                        imat_off: n,
+                        len,
+                        a2sh,
+                    });
+                }
             } else if let Some(c16) = <BD::Pixel as Pixel>::try_as_u16_slice(c) {
-                crate::cfl_dispatch::cfl_alpha_accum_hbd(crate::cfl_dispatch::CflAlphaAccumHbd {
-                    alpha,
-                    samples: c16,
-                    sample_off: c_off + start * stride - 1,
-                    sample_stride: stride,
-                    imat0: &imat[0],
-                    imat1: &imat[1],
-                    imat_off: n,
-                    len,
-                    a2sh,
-                });
+                unsafe {
+                    (exec.cfl_alpha_accum_hbd)(crate::cfl_dispatch::CflAlphaAccumHbd {
+                        alpha,
+                        samples: c16,
+                        sample_off: c_off + start * stride - 1,
+                        sample_stride: stride,
+                        imat0: &imat[0],
+                        imat1: &imat[1],
+                        imat_off: n,
+                        len,
+                        a2sh,
+                    });
+                }
             } else {
                 for i in start..end {
                     let v: i32 = c[c_off + i * stride - 1].into();
@@ -2338,6 +2361,7 @@ pub(crate) fn cfl_calc_alphas<BD: BitDepth>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cfl_mhccp_pred<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -2354,18 +2378,20 @@ pub(crate) fn cfl_mhccp_pred<BD: BitDepth>(
         BD::Pixel::try_as_u8_slice(src),
         BD::Pixel::try_as_u8_slice_mut(dst),
     ) {
-        crate::cfl_dispatch::cfl_mhccp_pred_8bpc(crate::cfl_dispatch::CflMhccpPred8 {
-            dst: dst_u8,
-            dst_stride,
-            src: src_u8,
-            src_off,
-            src_top_stride,
-            w,
-            h,
-            alpha: *alpha,
-            edge_flags,
-            dir,
-        });
+        unsafe {
+            (exec.cfl_mhccp_pred_8bpc)(crate::cfl_dispatch::CflMhccpPred8 {
+                dst: dst_u8,
+                dst_stride,
+                src: src_u8,
+                src_off,
+                src_top_stride,
+                w,
+                h,
+                alpha: *alpha,
+                edge_flags,
+                dir,
+            });
+        }
         return;
     }
 
@@ -2373,20 +2399,22 @@ pub(crate) fn cfl_mhccp_pred<BD: BitDepth>(
         BD::Pixel::try_as_u16_slice(src),
         BD::Pixel::try_as_u16_slice_mut(dst),
     ) {
-        crate::cfl_dispatch::cfl_mhccp_pred_hbd(crate::cfl_dispatch::CflMhccpPredHbd {
-            dst: dst_u16,
-            dst_stride,
-            src: src_u16,
-            src_off,
-            src_top_stride,
-            w,
-            h,
-            alpha: *alpha,
-            edge_flags,
-            dir,
-            bitdepth: bd.bitdepth() as i32,
-            bitdepth_max: bd.bitdepth_max(),
-        });
+        unsafe {
+            (exec.cfl_mhccp_pred_hbd)(crate::cfl_dispatch::CflMhccpPredHbd {
+                dst: dst_u16,
+                dst_stride,
+                src: src_u16,
+                src_off,
+                src_top_stride,
+                w,
+                h,
+                alpha: *alpha,
+                edge_flags,
+                dir,
+                bitdepth: bd.bitdepth() as i32,
+                bitdepth_max: bd.bitdepth_max(),
+            });
+        }
         return;
     }
 
@@ -2491,6 +2519,7 @@ fn cfl_i64_to_i32_saturating(v: i64) -> i32 {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cfl_pred_raw<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     y_plane: &[BD::Pixel],
     u_plane: &mut [BD::Pixel],
@@ -2924,36 +2953,47 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
 
         match (ss_hor, ss_ver) {
             (0, 0) => {
-                crate::cfl_dispatch::cfl_apply_444_8bpc(crate::cfl_dispatch::CflApply8 {
-                    y: y_u8,
-                    u: u_u8,
-                    v: v_u8,
-                    layout: cfl_layout,
-                    area: cfl_area,
-                    params: cfl_params,
-                });
+                unsafe {
+                    (exec.cfl_apply_444_8bpc)(crate::cfl_dispatch::CflApply8 {
+                        y: y_u8,
+                        u: u_u8,
+                        v: v_u8,
+                        layout: cfl_layout,
+                        area: cfl_area,
+                        params: cfl_params,
+                    });
+                }
                 return Ok(());
             }
             (1, 0) => {
-                crate::cfl_dispatch::cfl_apply_422_8bpc(crate::cfl_dispatch::CflApply8 {
-                    y: y_u8,
-                    u: u_u8,
-                    v: v_u8,
-                    layout: cfl_layout,
-                    area: cfl_area,
-                    params: cfl_params,
-                });
+                unsafe {
+                    (exec.cfl_apply_422_8bpc)(crate::cfl_dispatch::CflApply8 {
+                        y: y_u8,
+                        u: u_u8,
+                        v: v_u8,
+                        layout: cfl_layout,
+                        area: cfl_area,
+                        params: cfl_params,
+                    });
+                }
                 return Ok(());
             }
             (1, 1) => {
-                crate::cfl_dispatch::cfl_apply_420_8bpc(crate::cfl_dispatch::CflApply8 {
-                    y: y_u8,
-                    u: u_u8,
-                    v: v_u8,
-                    layout: cfl_layout,
-                    area: cfl_area,
-                    params: cfl_params,
-                });
+                let f = if flt != 0 {
+                    exec.cfl_apply_420_8bpc_filtered
+                } else {
+                    exec.cfl_apply_420_8bpc
+                };
+                unsafe {
+                    f(crate::cfl_dispatch::CflApply8 {
+                        y: y_u8,
+                        u: u_u8,
+                        v: v_u8,
+                        layout: cfl_layout,
+                        area: cfl_area,
+                        params: cfl_params,
+                    });
+                }
                 return Ok(());
             }
             _ => {}
@@ -2985,39 +3025,50 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
 
         match (ss_hor, ss_ver) {
             (0, 0) => {
-                crate::cfl_dispatch::cfl_apply_444_hbd(crate::cfl_dispatch::CflApplyHbd {
-                    y: y_u16,
-                    u: u_u16,
-                    v: v_u16,
-                    layout: cfl_layout,
-                    area: cfl_area,
-                    params: cfl_params,
-                    bitdepth_max,
-                });
+                unsafe {
+                    (exec.cfl_apply_444_hbd)(crate::cfl_dispatch::CflApplyHbd {
+                        y: y_u16,
+                        u: u_u16,
+                        v: v_u16,
+                        layout: cfl_layout,
+                        area: cfl_area,
+                        params: cfl_params,
+                        bitdepth_max,
+                    });
+                }
                 return Ok(());
             }
             (1, 0) => {
-                crate::cfl_dispatch::cfl_apply_422_hbd(crate::cfl_dispatch::CflApplyHbd {
-                    y: y_u16,
-                    u: u_u16,
-                    v: v_u16,
-                    layout: cfl_layout,
-                    area: cfl_area,
-                    params: cfl_params,
-                    bitdepth_max,
-                });
+                unsafe {
+                    (exec.cfl_apply_422_hbd)(crate::cfl_dispatch::CflApplyHbd {
+                        y: y_u16,
+                        u: u_u16,
+                        v: v_u16,
+                        layout: cfl_layout,
+                        area: cfl_area,
+                        params: cfl_params,
+                        bitdepth_max,
+                    });
+                }
                 return Ok(());
             }
             (1, 1) => {
-                crate::cfl_dispatch::cfl_apply_420_hbd(crate::cfl_dispatch::CflApplyHbd {
-                    y: y_u16,
-                    u: u_u16,
-                    v: v_u16,
-                    layout: cfl_layout,
-                    area: cfl_area,
-                    params: cfl_params,
-                    bitdepth_max,
-                });
+                let f = if flt != 0 {
+                    exec.cfl_apply_420_hbd_filtered
+                } else {
+                    exec.cfl_apply_420_hbd
+                };
+                unsafe {
+                    f(crate::cfl_dispatch::CflApplyHbd {
+                        y: y_u16,
+                        u: u_u16,
+                        v: v_u16,
+                        layout: cfl_layout,
+                        area: cfl_area,
+                        params: cfl_params,
+                        bitdepth_max,
+                    });
+                }
                 return Ok(());
             }
             _ => {}

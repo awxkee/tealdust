@@ -28,10 +28,30 @@
  */
 
 use crate::intops::imin;
-use crate::itx_1d::{TX1D_FNS, TX1D_FNS_X8, residual_add, residual_add_strided};
+use crate::itx_1d::{TX1D_FNS, TX1D_FNS_X8, residual_add_ctx, residual_add_strided_ctx};
 use crate::itx_2d::{ITX_TMP_PIXELS, ITX_TMP_STRIDE};
 
 // Test-only switch.
+
+#[allow(clippy::too_many_arguments)]
+#[allow(unused)]
+pub(crate) fn inv_txfm_add<BD: BitDepth>(
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    dst_off: usize,
+    stride: usize,
+    coeff: &mut [BD::Coef],
+    txtp: u32,
+    eob: i32,
+    tx: usize,
+    tmp_buf: &mut [i32; ITX_TMP_PIXELS],
+) {
+    let exec = crate::exec_context::ExecContext::new();
+    inv_txfm_add_ctx(
+        &exec, bd, dst, dst_off, stride, coeff, txtp, eob, tx, tmp_buf,
+    );
+}
+
 #[cfg(test)]
 pub(crate) static FORCE_GENERIC_ITX: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -167,6 +187,7 @@ impl Txfm2d<'_> {
 
 #[inline(always)]
 fn add_tmp_to_dst<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_off: usize,
@@ -248,7 +269,8 @@ fn add_tmp_to_dst<BD: BitDepth>(
             }
         }
     } else if dpcm_flag == 0 {
-        residual_add_strided(
+        residual_add_strided_ctx(
+            exec,
             bd,
             &mut dst[dst_off..],
             stride,
@@ -261,7 +283,8 @@ fn add_tmp_to_dst<BD: BitDepth>(
         );
     } else {
         let compact = tmp.compact::<ITX_TMP_PIXELS>(w, h);
-        residual_add(
+        residual_add_ctx(
+            exec,
             bd,
             &mut dst[dst_off..],
             stride,
@@ -278,6 +301,7 @@ fn add_tmp_to_dst<BD: BitDepth>(
 /// Inverse transform of `coeff` followed by clipped add into `dst`
 /// intermediate range and the final pixel clip both scale with `bd`.
 fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_off: usize,
@@ -297,8 +321,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
     if tx_type_low8(txtp) == WHT_WHT {
         assert!(tx == 0);
         let dpcm_flag = (txtp >> TX_TYPE_EXT_SHIFT) as u8;
-        crate::itx_wht_dispatch::inv_wht_wht_4x4_dispatch(
-            bd, dst, dst_off, stride, coeff, dpcm_flag,
+        crate::itx_wht_dispatch::inv_wht_wht_4x4_dispatch_ctx(
+            exec, bd, dst, dst_off, stride, coeff, dpcm_flag,
         );
         return;
     }
@@ -327,7 +351,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
             }
             let d = &mut dst[row..];
             let n = w.min(d.len());
-            crate::filter::dc_add_row(bd, d, dc, n);
+            crate::filter::dc_add_row_ctx(exec, bd, d, dc, n);
         }
         return;
     }
@@ -763,7 +787,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if handled {
                         let rnd1 = (1 << shift1) >> 1;
                         add_tmp_to_dst(
-                            bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
+                            exec, bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
                         );
                     }
                     handled
@@ -855,7 +879,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if handled {
                         let rnd1 = (1 << shift1) >> 1;
                         add_tmp_to_dst(
-                            bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
+                            exec, bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
                         );
                     }
                     handled
@@ -1170,7 +1194,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if handled {
                         let rnd1 = (1 << shift1) >> 1;
                         add_tmp_to_dst(
-                            bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
+                            exec, bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
                         );
                     }
                     handled
@@ -1473,7 +1497,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if handled {
                         let rnd1 = (1 << shift1) >> 1;
                         add_tmp_to_dst(
-                            bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
+                            exec, bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
                         );
                     }
                     handled
@@ -1553,7 +1577,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if handled {
                         let rnd1 = (1 << shift1) >> 1;
                         add_tmp_to_dst(
-                            bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
+                            exec, bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
                         );
                     }
                     handled
@@ -1623,7 +1647,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if handled {
                         let rnd1 = (1 << shift1) >> 1;
                         add_tmp_to_dst(
-                            bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
+                            exec, bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
                         );
                     }
                     handled
@@ -1753,7 +1777,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if handled {
                         let rnd1 = (1 << shift1) >> 1;
                         add_tmp_to_dst(
-                            bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
+                            exec, bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
                         );
                     }
                     handled
@@ -1871,7 +1895,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                     if handled {
                         let rnd1 = (1 << shift1) >> 1;
                         add_tmp_to_dst(
-                            bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
+                            exec, bd, dst, dst_off, stride, tmp, w, h, sw, sh, rnd1, shift1, 0,
                         );
                     }
                     handled
@@ -1936,7 +1960,15 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
 
         let rnd0 = (1 << shift0) >> 1;
         for y in 0..sh {
-            crate::filter::row_clip(tmp.row_mut(y), sw, rnd0, shift0, row_clip_min, row_clip_max);
+            crate::filter::row_clip_ctx(
+                exec,
+                tmp.row_mut(y),
+                sw,
+                rnd0,
+                shift0,
+                row_clip_min,
+                row_clip_max,
+            );
         }
 
         let second_1d_fn_x8 = TX1D_FNS_X8[t_dim.lh as usize][second_kind];
@@ -1955,6 +1987,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
         let rnd1 = (1 << shift1) >> 1;
 
         add_tmp_to_dst(
+            exec,
             bd,
             dst,
             dst_off,
@@ -1971,7 +2004,8 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
     });
 }
 
-pub(crate) fn inv_txfm_add<BD: BitDepth>(
+pub(crate) fn inv_txfm_add_ctx<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_off: usize,
@@ -1982,16 +2016,25 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
     tx: usize,
     tmp_buf: &mut [i32; ITX_TMP_PIXELS],
 ) {
-    inv_txfm_add_typed(bd, dst, dst_off, stride, coeff, txtp, eob, tx, tmp_buf);
+    inv_txfm_add_typed(
+        exec, bd, dst, dst_off, stride, coeff, txtp, eob, tx, tmp_buf,
+    );
 }
 
-fn cctx_bd_i32<BD: BitDepth>(bd: BD, u: &mut [i32], v: &mut [i32], angle: &[i16; 3], sz: usize) {
-    use crate::itx_1d::cctx;
-    cctx(u, v, angle, sz, bd.bitdepth() as i32);
+fn cctx_bd_i32_ctx<BD: BitDepth>(
+    exec: &crate::exec_context::ExecContext,
+    bd: BD,
+    u: &mut [i32],
+    v: &mut [i32],
+    angle: &[i16; 3],
+    sz: usize,
+) {
+    crate::itx_1d::cctx_ctx(exec, u, v, angle, sz, bd.bitdepth() as i32);
 }
 
 /// Cross-component transform clip at the coded bit depth (`cctx_c`).
-pub fn cctx_bd<BD: BitDepth, C: Coeff>(
+pub fn cctx_bd_ctx<BD: BitDepth, C: Coeff>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     u: &mut [C],
     v: &mut [C],
@@ -1999,7 +2042,7 @@ pub fn cctx_bd<BD: BitDepth, C: Coeff>(
     sz: usize,
 ) {
     if let (Some(u32), Some(v32)) = (C::try_as_i32_slice_mut(u), C::try_as_i32_slice_mut(v)) {
-        cctx_bd_i32(bd, u32, v32, angle, sz);
+        cctx_bd_i32_ctx(exec, bd, u32, v32, angle, sz);
         return;
     }
 
@@ -2012,7 +2055,7 @@ pub fn cctx_bd<BD: BitDepth, C: Coeff>(
     debug_assert!(angle[2] == -angle[0]);
 
     if let (Some(u16), Some(v16)) = (C::try_as_i16_slice_mut(u), C::try_as_i16_slice_mut(v)) {
-        crate::rowops_dispatch::cctx_row_i16(u16, v16, sina, cosa, n, min, max);
+        unsafe { (exec.cctx_i16)(u16, v16, sina, cosa, n, min, max) };
         return;
     }
 

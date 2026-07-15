@@ -27,11 +27,21 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+use crate::exec_context::ExecContext;
 use crate::pixel::{BitDepth, Pixel};
+
+macro_rules! call_rowops {
+    ($f:expr, $($arg:expr),+ $(,)?) => {{
+        // SAFETY: rowops dispatch installs target-feature implementations only
+        // after the matching runtime feature check; scalar entries are always valid.
+        unsafe { ($f)($($arg),+) }
+    }};
+}
 
 /// `avg` row: `dst[x] = clip((tmp1[x] + tmp2[x] + rnd) >> sh)` for `x in 0..n`.
 #[inline]
-pub(crate) fn avg_row<BD: BitDepth>(
+pub(crate) fn avg_row_ctx<BD: BitDepth>(
+    exec: &ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     tmp1: &[i16],
@@ -42,12 +52,12 @@ pub(crate) fn avg_row<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            crate::rowops_dispatch::avg_row_8bpc(d8, tmp1, tmp2, n, rnd, sh);
+            call_rowops!(exec.avg, d8, tmp1, tmp2, n, rnd, sh);
             return;
         }
     } else if BD::BPC == 16 {
         if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-            crate::rowops_dispatch::avg_row_hbd(d16, tmp1, tmp2, n, rnd, sh, bd.bitdepth_max());
+            call_rowops!(exec.avg_hbd, d16, tmp1, tmp2, n, rnd, sh, bd.bitdepth_max());
             return;
         }
     }
@@ -67,7 +77,8 @@ pub(crate) fn avg_row<BD: BitDepth>(
 /// `w_avg` row: `dst[x] = clip((tmp1[x]*weight + tmp2[x]*(16-weight) + rnd) >> sh)`.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn w_avg_row<BD: BitDepth>(
+pub(crate) fn w_avg_row_ctx<BD: BitDepth>(
+    exec: &ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     tmp1: &[i16],
@@ -79,12 +90,13 @@ pub(crate) fn w_avg_row<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            crate::rowops_dispatch::w_avg_row_8bpc(d8, tmp1, tmp2, n, weight, rnd, sh);
+            call_rowops!(exec.w_avg, d8, tmp1, tmp2, n, weight, rnd, sh);
             return;
         }
     } else if BD::BPC == 16 {
         if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-            crate::rowops_dispatch::w_avg_row_hbd(
+            call_rowops!(
+                exec.w_avg_hbd,
                 d16,
                 tmp1,
                 tmp2,
@@ -92,7 +104,7 @@ pub(crate) fn w_avg_row<BD: BitDepth>(
                 weight,
                 rnd,
                 sh,
-                bd.bitdepth_max(),
+                bd.bitdepth_max()
             );
             return;
         }
@@ -113,7 +125,8 @@ pub(crate) fn w_avg_row<BD: BitDepth>(
 /// `mask` row: `dst[x] = clip((tmp1[x]*m + tmp2[x]*(64-m) + rnd) >> sh)`, `m = mask[x]`.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn mask_row<BD: BitDepth>(
+pub(crate) fn mask_row_ctx<BD: BitDepth>(
+    exec: &ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     tmp1: &[i16],
@@ -125,12 +138,13 @@ pub(crate) fn mask_row<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            crate::rowops_dispatch::mask_row_8bpc(d8, tmp1, tmp2, mask, n, rnd, sh);
+            call_rowops!(exec.mask, d8, tmp1, tmp2, mask, n, rnd, sh);
             return;
         }
     } else if BD::BPC == 16 {
         if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-            crate::rowops_dispatch::mask_row_hbd(
+            call_rowops!(
+                exec.mask_hbd,
                 d16,
                 tmp1,
                 tmp2,
@@ -138,7 +152,7 @@ pub(crate) fn mask_row<BD: BitDepth>(
                 n,
                 rnd,
                 sh,
-                bd.bitdepth_max(),
+                bd.bitdepth_max()
             );
             return;
         }
@@ -161,13 +175,19 @@ pub(crate) fn mask_row<BD: BitDepth>(
 
 /// `blend` row: `dst[x] = (dst[x]*(64-m) + tmp[x]*m + 32) >> 6` (truncate, no clamp).
 #[inline]
-pub(crate) fn blend_row<P: Pixel>(dst: &mut [P], tmp: &[P], mask: &[u8], n: usize) {
+pub(crate) fn blend_row_ctx<P: Pixel>(
+    exec: &ExecContext,
+    dst: &mut [P],
+    tmp: &[P],
+    mask: &[u8],
+    n: usize,
+) {
     if let (Some(t8), Some(d8)) = (P::try_as_u8_slice(tmp), P::try_as_u8_slice_mut(dst)) {
-        crate::rowops_dispatch::blend_row_8bpc(d8, t8, mask, n);
+        call_rowops!(exec.blend, d8, t8, mask, n);
         return;
     }
     if let (Some(t16), Some(d16)) = (P::try_as_u16_slice(tmp), P::try_as_u16_slice_mut(dst)) {
-        crate::rowops_dispatch::blend_row_hbd(d16, t16, mask, n);
+        call_rowops!(exec.blend_hbd, d16, t16, mask, n);
         return;
     }
     let (dc, dr) = dst[..n].as_chunks_mut::<8>();
@@ -190,7 +210,8 @@ pub(crate) fn blend_row<P: Pixel>(dst: &mut [P], tmp: &[P], mask: &[u8], n: usiz
 }
 
 /// `morph` row: `dst[x] = clip((alpha*dst[x] + beta) >> 8)`.
-pub(crate) fn morph_row<BD: BitDepth>(
+pub(crate) fn morph_row_ctx<BD: BitDepth>(
+    exec: &ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     alpha: i32,
@@ -199,12 +220,12 @@ pub(crate) fn morph_row<BD: BitDepth>(
 ) {
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            crate::rowops_dispatch::morph_row_8bpc(d8, alpha, beta, n);
+            call_rowops!(exec.morph, d8, alpha, beta, n);
             return;
         }
     } else if BD::BPC == 16 {
         if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-            crate::rowops_dispatch::morph_row_hbd(d16, alpha, beta, n, bd.bitdepth_max());
+            call_rowops!(exec.morph_hbd, d16, alpha, beta, n, bd.bitdepth_max());
             return;
         }
     }
@@ -223,15 +244,21 @@ pub(crate) fn morph_row<BD: BitDepth>(
 
 /// itx DC-only row: `dst[x] = clip(dst[x] + dc)` for `x in 0..n`.
 #[inline]
-pub(crate) fn dc_add_row<BD: BitDepth>(bd: BD, dst: &mut [BD::Pixel], dc: i32, n: usize) {
+pub(crate) fn dc_add_row_ctx<BD: BitDepth>(
+    exec: &ExecContext,
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    dc: i32,
+    n: usize,
+) {
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            crate::rowops_dispatch::dc_add_row_8bpc(d8, dc, n);
+            call_rowops!(exec.dc_add, d8, dc, n);
             return;
         }
     } else if BD::BPC == 16 {
         if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-            crate::rowops_dispatch::dc_add_row_hbd(d16, dc, n, bd.bitdepth_max());
+            call_rowops!(exec.dc_add_hbd, d16, dc, n, bd.bitdepth_max());
             return;
         }
     }
@@ -251,13 +278,22 @@ pub(crate) fn dc_add_row<BD: BitDepth>(bd: BD, dst: &mut [BD::Pixel], dc: i32, n
 
 /// itx row-clip pass: `tmp[i] = clip((tmp[i] + rnd) >> shift, min, max)` in place.
 #[inline]
-pub(crate) fn row_clip(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min: i32, max: i32) {
-    crate::rowops_dispatch::row_clip(tmp, n, rnd, shift, min, max);
+pub(crate) fn row_clip_ctx(
+    exec: &ExecContext,
+    tmp: &mut [i32],
+    n: usize,
+    rnd: i32,
+    shift: i32,
+    min: i32,
+    max: i32,
+) {
+    call_rowops!(exec.row_clip, tmp, n, rnd, shift, min, max);
 }
 
 /// itx plain residual-add row: `dst[x] = clip(dst[x] + ((c[x]+rnd)>>shift))`.
 #[inline]
-pub(crate) fn residual_add_row<BD: BitDepth>(
+pub(crate) fn residual_add_row_ctx<BD: BitDepth>(
+    exec: &ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     c: &[i32],
@@ -269,12 +305,20 @@ pub(crate) fn residual_add_row<BD: BitDepth>(
     // BPC==8 ⇒ Pixel == u8, so the reinterpret is a no-op `Some`.
     if BD::BPC == 8 {
         if let Some(d8) = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst) {
-            crate::rowops_dispatch::residual_add_row_8bpc(d8, c, n, rnd, shift);
+            call_rowops!(exec.residual_add, d8, c, n, rnd, shift);
             return;
         }
     } else if BD::BPC == 16 {
         if let Some(d16) = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst) {
-            crate::rowops_dispatch::residual_add_row_hbd(d16, c, n, rnd, shift, bd.bitdepth_max());
+            call_rowops!(
+                exec.residual_add_hbd,
+                d16,
+                c,
+                n,
+                rnd,
+                shift,
+                bd.bitdepth_max()
+            );
             return;
         }
     }
@@ -298,7 +342,8 @@ pub(crate) fn residual_add_row<BD: BitDepth>(
 /// `v'[i] = iclip((u*sina + v*cosa + 128 - (b<0)) >> 8, min, max)`.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn cctx_row(
+pub(crate) fn cctx_row_ctx(
+    exec: &ExecContext,
     u: &mut [i32],
     v: &mut [i32],
     sina: i32,
@@ -307,7 +352,7 @@ pub(crate) fn cctx_row(
     min: i32,
     max: i32,
 ) {
-    crate::rowops_dispatch::cctx_row(u, v, sina, cosa, sz, min, max);
+    call_rowops!(exec.cctx, u, v, sina, cosa, sz, min, max);
 }
 
 /// One symmetric FIR tap: `a` is read from `row_p` at `+dx`, `b` from `row_m`
@@ -319,8 +364,8 @@ pub(crate) struct WienerTap<'a> {
     pub coef: i32,
 }
 
-type NsWienerFirFn = unsafe fn(&mut [u8], &[u8], usize, &[WienerTap<'_>], usize);
-type PcWienerFirFn = unsafe fn(&mut [u8], &[u8], i32, usize, &[WienerTap<'_>], usize);
+pub(crate) type NsWienerFirFn = unsafe fn(&mut [u8], &[u8], usize, &[WienerTap<'_>], usize);
+pub(crate) type PcWienerFirFn = unsafe fn(&mut [u8], &[u8], i32, usize, &[WienerTap<'_>], usize);
 
 static NS_WIENER_FIR: std::sync::OnceLock<NsWienerFirFn> = std::sync::OnceLock::new();
 static PC_WIENER_FIR: std::sync::OnceLock<PcWienerFirFn> = std::sync::OnceLock::new();
@@ -403,7 +448,7 @@ pub(crate) struct UvLumaTap<'a> {
     pub(crate) coef: i32,
 }
 
-type NsWienerUvFirFn = unsafe fn(
+pub(crate) type NsWienerUvFirFn = unsafe fn(
     &mut [u8],
     &[u8],
     usize,
@@ -508,8 +553,10 @@ pub(crate) struct WienerTapHbd<'a> {
     pub coef: i32,
 }
 
-type NsWienerFirHbdFn = unsafe fn(&mut [u16], &[u16], usize, &[WienerTapHbd<'_>], usize, i32);
-type PcWienerFirHbdFn = unsafe fn(&mut [u16], &[u16], i32, usize, &[WienerTapHbd<'_>], usize, i32);
+pub(crate) type NsWienerFirHbdFn =
+    unsafe fn(&mut [u16], &[u16], usize, &[WienerTapHbd<'_>], usize, i32);
+pub(crate) type PcWienerFirHbdFn =
+    unsafe fn(&mut [u16], &[u16], i32, usize, &[WienerTapHbd<'_>], usize, i32);
 
 static NS_WIENER_FIR_HBD: std::sync::OnceLock<NsWienerFirHbdFn> = std::sync::OnceLock::new();
 static PC_WIENER_FIR_HBD: std::sync::OnceLock<PcWienerFirHbdFn> = std::sync::OnceLock::new();
@@ -611,7 +658,7 @@ pub(crate) struct UvLumaTapHbd<'a> {
     pub(crate) coef: i32,
 }
 
-type NsWienerUvFirHbdFn = unsafe fn(
+pub(crate) type NsWienerUvFirHbdFn = unsafe fn(
     &mut [u16],
     &[u16],
     usize,
@@ -684,26 +731,34 @@ pub(crate) fn ns_wiener_uv_fir_run_hbd_scalar(
 
 /// GDF residual add over a run of `n` consecutive pixels.
 #[inline]
-pub(crate) fn gdf_add_run(dst: &mut [u8], err: &[i8], scale: i32, n: usize) {
-    crate::rowops_dispatch::gdf_add_run_8bpc(dst, err, scale, n);
+pub(crate) fn gdf_add_run_ctx(
+    exec: &ExecContext,
+    dst: &mut [u8],
+    err: &[i8],
+    scale: i32,
+    n: usize,
+) {
+    call_rowops!(exec.gdf_add, dst, err, scale, n);
 }
 
 /// High-bit-depth GDF residual add over a run of `n` consecutive pixels.
 #[inline]
-pub(crate) fn gdf_add_run_hbd(
+pub(crate) fn gdf_add_run_hbd_ctx(
+    exec: &ExecContext,
     dst: &mut [u16],
     err: &[i8],
     scale: i32,
     n: usize,
     bitdepth_max: i32,
 ) {
-    crate::rowops_dispatch::gdf_add_run_hbd(dst, err, scale, n, bitdepth_max);
+    call_rowops!(exec.gdf_add_hbd, dst, err, scale, n, bitdepth_max);
 }
 
 /// GDF gradient: accumulate per-column gradient into 8 lanes, then pair-reduce.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn gdf_gradient_group(
+pub(crate) fn gdf_gradient_group_ctx(
+    exec: &ExecContext,
     dst: &mut [[u16; 4]],
     d: usize,
     base_cell: usize,
@@ -715,7 +770,8 @@ pub(crate) fn gdf_gradient_group(
     dx: i32,
     shift: u32,
 ) {
-    crate::rowops_dispatch::gdf_gradient_group(
+    call_rowops!(
+        exec.gdf_grad,
         dst,
         d,
         base_cell,
@@ -732,7 +788,8 @@ pub(crate) fn gdf_gradient_group(
 /// High-bit-depth GDF gradient: accumulate per-column gradient into 8 lanes, then pair-reduce.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn gdf_gradient_group_hbd(
+pub(crate) fn gdf_gradient_group_hbd_ctx(
+    exec: &ExecContext,
     dst: &mut [[u16; 4]],
     d: usize,
     base_cell: usize,
@@ -744,7 +801,8 @@ pub(crate) fn gdf_gradient_group_hbd(
     dx: i32,
     shift: u32,
 ) {
-    crate::rowops_dispatch::gdf_gradient_group_hbd(
+    call_rowops!(
+        exec.gdf_grad_hbd,
         dst,
         d,
         base_cell,
@@ -761,7 +819,8 @@ pub(crate) fn gdf_gradient_group_hbd(
 /// GDF prep inner 2-pixel pair.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn gdf_prep_pair_8bpc(
+pub(crate) fn gdf_prep_pair_8bpc_ctx(
+    exec: &ExecContext,
     rows: [&[u8]; 13],
     col: usize,
     cls: usize,
@@ -772,7 +831,8 @@ pub(crate) fn gdf_prep_pair_8bpc(
     scale: i32,
     ref_dst_idx: usize,
 ) -> [i8; 2] {
-    crate::rowops_dispatch::gdf_prep_pair_8bpc(
+    call_rowops!(
+        exec.gdf_prep_pair_8bpc,
         rows,
         col,
         cls,
@@ -815,7 +875,8 @@ pub(crate) fn gdf_prep_pixel_8bpc(
 /// High-bit-depth GDF prep inner 2-pixel pair.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-pub(crate) fn gdf_prep_pair_hbd(
+pub(crate) fn gdf_prep_pair_hbd_ctx(
+    exec: &ExecContext,
     rows: [&[u16]; 13],
     col: usize,
     cls: usize,
@@ -828,7 +889,8 @@ pub(crate) fn gdf_prep_pair_hbd(
     up_scale: i32,
     ref_dst_idx: usize,
 ) -> [i8; 2] {
-    crate::rowops_dispatch::gdf_prep_pair_hbd(
+    call_rowops!(
+        exec.gdf_prep_pair_hbd,
         rows,
         col,
         cls,
@@ -841,6 +903,12 @@ pub(crate) fn gdf_prep_pair_hbd(
         up_scale,
         ref_dst_idx,
     )
+}
+
+#[inline]
+pub(crate) fn row_clip(tmp: &mut [i32], n: usize, rnd: i32, shift: i32, min: i32, max: i32) {
+    let exec = ExecContext::new();
+    row_clip_ctx(&exec, tmp, n, rnd, shift, min, max);
 }
 
 #[cfg(test)]

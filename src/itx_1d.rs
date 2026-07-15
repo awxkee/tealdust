@@ -1376,14 +1376,21 @@ pub(crate) fn inv_wht4_1d(c: &mut [i32], stride: usize) {
     c[3 * stride] = t2 + t1;
 }
 
-pub(crate) fn cctx(u: &mut [i32], v: &mut [i32], angle: &[i16; 3], sz: usize, bitdepth: i32) {
+pub(crate) fn cctx_ctx(
+    exec: &crate::exec_context::ExecContext,
+    u: &mut [i32],
+    v: &mut [i32],
+    angle: &[i16; 3],
+    sz: usize,
+    bitdepth: i32,
+) {
     debug_assert!(sz.is_power_of_two() && (16..=1024).contains(&sz));
     let min = -(1 << (bitdepth + 7));
     let max = (1 << (bitdepth + 7)) - 1;
     let sina = angle[0] as i32;
     let cosa = angle[1] as i32;
     debug_assert!(angle[2] == -angle[0]);
-    crate::filter::cctx_row(u, v, sina, cosa, sz, min, max);
+    crate::filter::cctx_row_ctx(exec, u, v, sina, cosa, sz, min, max);
 }
 
 pub(crate) fn inv_wht_wht_4x4(coeff: &[i32; 16], tmp: &mut [i32; 16]) {
@@ -1442,7 +1449,8 @@ pub static TX1D_FNS: [[Option<Itx1dFn>; N_TX_1D_TYPES - 1]; N_TX_SIZES] = {
     t
 };
 
-pub(crate) fn residual_add_strided<BD: crate::pixel::BitDepth>(
+pub(crate) fn residual_add_strided_ctx<BD: crate::pixel::BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     dst_stride: usize,
@@ -1462,12 +1470,13 @@ pub(crate) fn residual_add_strided<BD: crate::pixel::BitDepth>(
         let d = &mut dst[drow..];
         let cr = &c[crow..];
         let n = w.min(d.len()).min(cr.len());
-        crate::filter::residual_add_row(bd, d, cr, n, rnd, shift);
+        crate::filter::residual_add_row_ctx(exec, bd, d, cr, n, rnd, shift);
     }
 }
 
 /// type `BD::Pixel`; the reconstructed value is clipped into `[0, bitdepth_max]`.
-pub(crate) fn residual_add<BD: crate::pixel::BitDepth>(
+pub(crate) fn residual_add_ctx<BD: crate::pixel::BitDepth>(
+    exec: &crate::exec_context::ExecContext,
     bd: BD,
     dst: &mut [BD::Pixel],
     stride: usize,
@@ -1512,8 +1521,24 @@ pub(crate) fn residual_add<BD: crate::pixel::BitDepth>(
                 let d = &mut dst[row..];
                 let cr = &c[cw.min(c.len())..];
                 let n = w.min(d.len()).min(cr.len());
-                crate::filter::residual_add_row(bd, d, cr, n, rnd, shift);
+                crate::filter::residual_add_row_ctx(exec, bd, d, cr, n, rnd, shift);
             }
         }
     }
+}
+
+#[inline]
+pub(crate) fn residual_add<BD: crate::pixel::BitDepth>(
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    stride: usize,
+    c: &[i32],
+    w: usize,
+    h: usize,
+    rnd: i32,
+    shift: i32,
+    dpcm_flag: u8,
+) {
+    let exec = crate::exec_context::ExecContext::new();
+    residual_add_ctx(&exec, bd, dst, stride, c, w, h, rnd, shift, dpcm_flag);
 }

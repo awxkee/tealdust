@@ -94,68 +94,6 @@ fn inter_tmp(scratch: &mut Vec<i16>, len: usize) -> &mut [i16] {
     &mut scratch[..len]
 }
 
-pub(crate) type PrepHbdFn = unsafe fn(&mut [i16], usize, &[u16], usize, usize, usize, u8);
-
-pub(crate) fn prep_hbd_scalar(
-    tmp: &mut [i16],
-    tmp_stride: usize,
-    src: &[u16],
-    src_stride: usize,
-    w: usize,
-    h: usize,
-    bitdepth: u8,
-) {
-    crate::mc::prep_scalar(
-        <crate::pixel::BitDepth16 as crate::pixel::BitDepth>::new(bitdepth),
-        tmp,
-        tmp_stride,
-        src,
-        src_stride,
-        w,
-        h,
-    );
-}
-
-static PREP_HBD: OnceLock<PrepHbdFn> = OnceLock::new();
-
-#[inline]
-fn resolve_prep_hbd() -> PrepHbdFn {
-    *PREP_HBD.get_or_init(|| {
-        let mut _f = prep_hbd_scalar as PrepHbdFn;
-        #[cfg(target_arch = "aarch64")]
-        {
-            _f = crate::neon::prep_hbd_neon as PrepHbdFn;
-        }
-        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
-        {
-            if std::is_x86_feature_detected!("sse4.1") {
-                _f = crate::sse::prep_hbd_sse41 as PrepHbdFn;
-            }
-        }
-        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
-        {
-            if std::is_x86_feature_detected!("avx2") {
-                _f = crate::avx::prep_hbd_avx2 as PrepHbdFn;
-            }
-        }
-        _f
-    })
-}
-
-#[inline]
-pub(crate) fn prep_hbd(
-    tmp: &mut [i16],
-    tmp_stride: usize,
-    src: &[u16],
-    src_stride: usize,
-    w: usize,
-    h: usize,
-    bitdepth: u8,
-) {
-    // SAFETY: resolver only installs kernels when the required CPU feature is present.
-    unsafe { resolve_prep_hbd()(tmp, tmp_stride, src, src_stride, w, h, bitdepth) }
-}
-
 pub(crate) type PutBilinHbdFn =
     unsafe fn(&mut [u16], usize, &[u16], usize, usize, usize, i32, i32, u8, &mut [i16]);
 
@@ -188,7 +126,7 @@ pub(crate) fn put_bilin_hbd_scalar(
 static PUT_BILIN_HBD: OnceLock<PutBilinHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_put_bilin_hbd() -> PutBilinHbdFn {
+pub(crate) fn resolve_put_bilin_hbd() -> PutBilinHbdFn {
     *PUT_BILIN_HBD.get_or_init(|| {
         let mut _f = put_bilin_hbd_scalar as PutBilinHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -293,7 +231,7 @@ pub(crate) fn prep_bilin_hbd_scalar(
 static PREP_BILIN_HBD: OnceLock<PrepBilinHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_prep_bilin_hbd() -> PrepBilinHbdFn {
+pub(crate) fn resolve_prep_bilin_hbd() -> PrepBilinHbdFn {
     *PREP_BILIN_HBD.get_or_init(|| {
         let mut _f = prep_bilin_hbd_scalar as PrepBilinHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -402,7 +340,7 @@ pub(crate) fn put_8tap_hbd_scalar(
 static PUT_8TAP_HBD: OnceLock<Put8tapHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_put_8tap_hbd() -> Put8tapHbdFn {
+pub(crate) fn resolve_put_8tap_hbd() -> Put8tapHbdFn {
     *PUT_8TAP_HBD.get_or_init(|| {
         let mut _f = put_8tap_hbd_scalar as Put8tapHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -528,7 +466,7 @@ pub(crate) fn prep_8tap_hbd_scalar(
 static PREP_8TAP_HBD: OnceLock<Prep8tapHbdFn> = OnceLock::new();
 
 #[inline]
-fn resolve_prep_8tap_hbd() -> Prep8tapHbdFn {
+pub(crate) fn resolve_prep_8tap_hbd() -> Prep8tapHbdFn {
     *PREP_8TAP_HBD.get_or_init(|| {
         let mut _f = prep_8tap_hbd_scalar as Prep8tapHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -657,7 +595,7 @@ static PUT_BILIN_8BPC: OnceLock<PutBilin8bpcFn> = OnceLock::new();
 static PREP_BILIN_8BPC: OnceLock<PrepBilin8bpcFn> = OnceLock::new();
 
 #[inline]
-fn resolve_put_bilin_8bpc() -> PutBilin8bpcFn {
+pub(crate) fn resolve_put_bilin_8bpc() -> PutBilin8bpcFn {
     *PUT_BILIN_8BPC.get_or_init(|| {
         let mut _f = put_bilin_8bpc_scalar_dispatch as PutBilin8bpcFn;
         #[cfg(target_arch = "aarch64")]
@@ -681,7 +619,7 @@ fn resolve_put_bilin_8bpc() -> PutBilin8bpcFn {
 }
 
 #[inline]
-fn resolve_prep_bilin_8bpc() -> PrepBilin8bpcFn {
+pub(crate) fn resolve_prep_bilin_8bpc() -> PrepBilin8bpcFn {
     *PREP_BILIN_8BPC.get_or_init(|| {
         let mut _f = prep_bilin_8bpc_scalar_dispatch as PrepBilin8bpcFn;
         #[cfg(target_arch = "aarch64")]
@@ -769,7 +707,7 @@ static PUT_8TAP_8BPC: OnceLock<Put8tap8bpcFn> = OnceLock::new();
 static PREP_8TAP_8BPC: OnceLock<Prep8tap8bpcFn> = OnceLock::new();
 
 #[inline]
-fn resolve_put_8tap_8bpc() -> Put8tap8bpcFn {
+pub(crate) fn resolve_put_8tap_8bpc() -> Put8tap8bpcFn {
     *PUT_8TAP_8BPC.get_or_init(|| {
         let mut _f = put_8tap_8bpc_scalar_dispatch as Put8tap8bpcFn;
         #[cfg(target_arch = "aarch64")]
@@ -793,7 +731,7 @@ fn resolve_put_8tap_8bpc() -> Put8tap8bpcFn {
 }
 
 #[inline]
-fn resolve_prep_8tap_8bpc() -> Prep8tap8bpcFn {
+pub(crate) fn resolve_prep_8tap_8bpc() -> Prep8tap8bpcFn {
     *PREP_8TAP_8BPC.get_or_init(|| {
         let mut _f = prep_8tap_8bpc_scalar_dispatch as Prep8tap8bpcFn;
         #[cfg(target_arch = "aarch64")]
@@ -816,187 +754,12 @@ fn resolve_prep_8tap_8bpc() -> Prep8tap8bpcFn {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn put_8tap_8bpc_with_scratch(
-    dst: &mut [u8],
-    dst_stride: usize,
-    src: &[u8],
-    src_off: usize,
-    src_stride: usize,
-    w: usize,
-    h: usize,
-    mx: i32,
-    my: i32,
-    filter_type: i32,
-    scratch: &mut Vec<i16>,
-) {
-    let mid = inter_tmp(scratch, inter_8tap_8bpc_tmp_len(w, h, mx, my, filter_type));
-    unsafe {
-        resolve_put_8tap_8bpc()(
-            dst,
-            dst_stride,
-            src,
-            src_off,
-            src_stride,
-            w,
-            h,
-            mx,
-            my,
-            filter_type,
-            mid,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn prep_8tap_8bpc_with_scratch(
-    tmp: &mut [i16],
-    tmp_stride: usize,
-    src: &[u8],
-    src_off: usize,
-    src_stride: usize,
-    w: usize,
-    h: usize,
-    mx: i32,
-    my: i32,
-    filter_type: i32,
-    scratch: &mut Vec<i16>,
-) {
-    let mid = inter_tmp(scratch, inter_8tap_8bpc_tmp_len(w, h, mx, my, filter_type));
-    unsafe {
-        resolve_prep_8tap_8bpc()(
-            tmp,
-            tmp_stride,
-            src,
-            src_off,
-            src_stride,
-            w,
-            h,
-            mx,
-            my,
-            filter_type,
-            mid,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn put_bilin_8bpc_with_scratch(
-    dst: &mut [u8],
-    dst_stride: usize,
-    src: &[u8],
-    src_stride: usize,
-    w: usize,
-    h: usize,
-    mx: i32,
-    my: i32,
-    scratch: &mut Vec<i16>,
-) {
-    let mid = inter_tmp(scratch, inter_bilin_8bpc_tmp_len(w, h, mx, my));
-    unsafe { resolve_put_bilin_8bpc()(dst, dst_stride, src, src_stride, w, h, mx, my, mid) }
-}
-
-#[allow(clippy::too_many_arguments)]
-#[inline]
-pub(crate) fn prep_bilin_8bpc_with_scratch(
-    tmp: &mut [i16],
-    tmp_stride: usize,
-    src: &[u8],
-    src_stride: usize,
-    w: usize,
-    h: usize,
-    mx: i32,
-    my: i32,
-    scratch: &mut Vec<i16>,
-) {
-    let mid = inter_tmp(scratch, inter_bilin_8bpc_tmp_len(w, h, mx, my));
-    unsafe { resolve_prep_bilin_8bpc()(tmp, tmp_stride, src, src_stride, w, h, mx, my, mid) }
-}
-
-pub(crate) fn avg_8bpc(
-    dst: &mut [u8],
-    dst_stride: usize,
-    tmp1: &[i16],
-    tmp2: &[i16],
-    w: usize,
-    h: usize,
-) {
-    crate::mc::avg_8bpc(dst, dst_stride, tmp1, tmp2, w, h);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn w_avg_8bpc(
-    dst: &mut [u8],
-    dst_stride: usize,
-    tmp1: &[i16],
-    tmp2: &[i16],
-    w: usize,
-    h: usize,
-    weight: i32,
-) {
-    crate::mc::w_avg_8bpc(dst, dst_stride, tmp1, tmp2, w, h, weight);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn mask_8bpc(
-    dst: &mut [u8],
-    dst_stride: usize,
-    tmp1: &[i16],
-    tmp2: &[i16],
-    w: usize,
-    h: usize,
-    m: &[u8],
-) {
-    crate::mc::mask_8bpc(dst, dst_stride, tmp1, tmp2, w, h, m);
-}
-
-pub(crate) fn blend_8bpc(
-    dst: &mut [u8],
-    dst_stride: usize,
-    tmp: &[u8],
-    w: usize,
-    h: usize,
-    m: &[u8],
-) {
-    crate::mc::blend_8bpc(dst, dst_stride, tmp, w, h, m);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn w_mask_8bpc(
-    dst: &mut [u8],
-    dst_stride: usize,
-    tmp1: &[i16],
-    tmp2: &[i16],
-    w: usize,
-    h: usize,
-    m: &mut [u8],
-    mask_stride: usize,
-    sign: i32,
-    ss_hor: bool,
-    ss_ver: bool,
-) {
-    crate::mc::w_mask_8bpc(
-        dst,
-        dst_stride,
-        tmp1,
-        tmp2,
-        w,
-        h,
-        m,
-        mask_stride,
-        sign,
-        ss_hor,
-        ss_ver,
-    );
-}
-
-type Warp8Fn = unsafe fn(&mut [u8], usize, &[u8], usize, usize, &[i16; 4], i32, i32);
-type Warp8tFn = unsafe fn(&mut [i16], usize, &[u8], usize, usize, &[i16; 4], i32, i32);
-type WarpHbdFn = unsafe fn(&mut [u16], usize, &[u16], usize, usize, &[i16; 4], i32, i32, u8);
-type WarpHbdTfn = unsafe fn(&mut [i16], usize, &[u16], usize, usize, &[i16; 4], i32, i32, u8);
+pub(crate) type Warp8Fn = unsafe fn(&mut [u8], usize, &[u8], usize, usize, &[i16; 4], i32, i32);
+pub(crate) type Warp8tFn = unsafe fn(&mut [i16], usize, &[u8], usize, usize, &[i16; 4], i32, i32);
+pub(crate) type WarpHbdFn =
+    unsafe fn(&mut [u16], usize, &[u16], usize, usize, &[i16; 4], i32, i32, u8);
+pub(crate) type WarpHbdTfn =
+    unsafe fn(&mut [i16], usize, &[u16], usize, usize, &[i16; 4], i32, i32, u8);
 
 #[allow(clippy::too_many_arguments)]
 fn warp_affine_8x8_8bpc_scalar(
@@ -1082,7 +845,7 @@ static WARP_HBD: OnceLock<WarpHbdFn> = OnceLock::new();
 static WARP_T_HBD: OnceLock<WarpHbdTfn> = OnceLock::new();
 
 #[inline]
-fn resolve_warp_8bpc() -> Warp8Fn {
+pub(crate) fn resolve_warp_8bpc() -> Warp8Fn {
     *WARP_8BPC.get_or_init(|| {
         let mut _f = warp_affine_8x8_8bpc_scalar as Warp8Fn;
         #[cfg(target_arch = "aarch64")]
@@ -1100,7 +863,7 @@ fn resolve_warp_8bpc() -> Warp8Fn {
 }
 
 #[inline]
-fn resolve_warp_t_8bpc() -> Warp8tFn {
+pub(crate) fn resolve_warp_t_8bpc() -> Warp8tFn {
     *WARP_T_8BPC.get_or_init(|| {
         let mut _f = warp_affine_8x8t_8bpc_scalar as Warp8tFn;
         #[cfg(target_arch = "aarch64")]
@@ -1118,7 +881,7 @@ fn resolve_warp_t_8bpc() -> Warp8tFn {
 }
 
 #[inline]
-fn resolve_warp_hbd() -> WarpHbdFn {
+pub(crate) fn resolve_warp_hbd() -> WarpHbdFn {
     *WARP_HBD.get_or_init(|| {
         let mut _f = warp_affine_8x8_hbd_scalar as WarpHbdFn;
         #[cfg(target_arch = "aarch64")]
@@ -1136,7 +899,7 @@ fn resolve_warp_hbd() -> WarpHbdFn {
 }
 
 #[inline]
-fn resolve_warp_t_hbd() -> WarpHbdTfn {
+pub(crate) fn resolve_warp_t_hbd() -> WarpHbdTfn {
     *WARP_T_HBD.get_or_init(|| {
         let mut _f = warp_affine_8x8t_hbd_scalar as WarpHbdTfn;
         #[cfg(target_arch = "aarch64")]
@@ -1151,74 +914,4 @@ fn resolve_warp_t_hbd() -> WarpHbdTfn {
         }
         _f
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn warp_affine_8x8_8bpc(
-    dst: &mut [u8],
-    dst_stride: usize,
-    src: &[u8],
-    src_stride: usize,
-    src_off: usize,
-    abcd: &[i16; 4],
-    mx: i32,
-    my: i32,
-) {
-    // SAFETY: the resolver only installs kernels when the required CPU feature is present.
-    unsafe { resolve_warp_8bpc()(dst, dst_stride, src, src_stride, src_off, abcd, mx, my) }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn warp_affine_8x8t_8bpc(
-    tmp: &mut [i16],
-    tmp_stride: usize,
-    src: &[u8],
-    src_stride: usize,
-    src_off: usize,
-    abcd: &[i16; 4],
-    mx: i32,
-    my: i32,
-) {
-    // SAFETY: the resolver only installs kernels when the required CPU feature is present.
-    unsafe { resolve_warp_t_8bpc()(tmp, tmp_stride, src, src_stride, src_off, abcd, mx, my) }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn warp_affine_8x8_hbd(
-    dst: &mut [u16],
-    dst_stride: usize,
-    src: &[u16],
-    src_stride: usize,
-    src_off: usize,
-    abcd: &[i16; 4],
-    mx: i32,
-    my: i32,
-    bitdepth: u8,
-) {
-    // SAFETY: the resolver only installs kernels when the required CPU feature is present.
-    unsafe {
-        resolve_warp_hbd()(
-            dst, dst_stride, src, src_stride, src_off, abcd, mx, my, bitdepth,
-        )
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn warp_affine_8x8t_hbd(
-    tmp: &mut [i16],
-    tmp_stride: usize,
-    src: &[u16],
-    src_stride: usize,
-    src_off: usize,
-    abcd: &[i16; 4],
-    mx: i32,
-    my: i32,
-    bitdepth: u8,
-) {
-    // SAFETY: the resolver only installs kernels when the required CPU feature is present.
-    unsafe {
-        resolve_warp_t_hbd()(
-            tmp, tmp_stride, src, src_stride, src_off, abcd, mx, my, bitdepth,
-        )
-    }
 }
