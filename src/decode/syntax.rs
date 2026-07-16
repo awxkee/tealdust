@@ -611,6 +611,15 @@ pub(crate) fn read_amvd<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
     Mv::from_xy(y, x)
 }
 
+#[inline]
+fn read_pal_direction(sz: &[i32; 4], read_bit: impl FnOnce() -> u32) -> u32 {
+    if imax(sz[2], sz[3]) < 64 {
+        read_bit()
+    } else {
+        0
+    }
+}
+
 pub(crate) fn read_pal_indices<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
     msac: &mut M,
     cdf_m: &mut CdfModeContext,
@@ -619,7 +628,7 @@ pub(crate) fn read_pal_indices<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
     pal_sz: i32,
     sz: &[i32; 4],
 ) -> i32 {
-    let dir = (imax(sz[2], sz[3]) < 64) as u32 & msac.decode_bool_bypass();
+    let dir = read_pal_direction(sz, || msac.decode_bool_bypass());
     let strides: [isize; 2] = if dir != 0 {
         [1, sz[2] as isize]
     } else {
@@ -1374,4 +1383,24 @@ pub(crate) fn extend_warpmv(
     } else {
         warp_type(&wmp.matrix)
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_pal_direction;
+
+    #[test]
+    fn palette_direction_is_not_read_for_64px_blocks() {
+        let sz = [64, 64, 64, 64];
+        assert_eq!(read_pal_direction(&sz, || panic!("direction bit read")), 0);
+
+        let sz = [64, 32, 64, 32];
+        assert_eq!(read_pal_direction(&sz, || panic!("direction bit read")), 0);
+    }
+
+    #[test]
+    fn palette_direction_is_read_for_smaller_blocks() {
+        let sz = [32, 32, 32, 32];
+        assert_eq!(read_pal_direction(&sz, || 1), 1);
+    }
 }
