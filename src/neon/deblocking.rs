@@ -66,7 +66,7 @@ fn load4_u8_i32(dst: &[u8], base: isize, stride_line: isize) -> int32x4_t {
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: int32x4_t) {
     unsafe {
         let p = dst.as_mut_ptr();
@@ -88,7 +88,7 @@ fn store4_clip_u8(dst: &mut [u8], base: isize, stride_line: isize, v: int32x4_t)
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn load4_u8_i16_oriented<const CONTIG: bool>(
     dst: &[u8],
     base: isize,
@@ -119,7 +119,7 @@ fn load4_u8_i16_oriented<const CONTIG: bool>(
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn store4_clip_u8_i16_oriented<const CONTIG: bool>(
     dst: &mut [u8],
     base: isize,
@@ -142,7 +142,7 @@ fn store4_clip_u8_i16_oriented<const CONTIG: bool>(
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_delta_i16(
     d0: int16x8_t,
     dm1: int16x8_t,
@@ -158,14 +158,14 @@ fn deblock_delta_i16(
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_diff_i16(delta: int16x8_t, width: i32, tap: i32) -> int16x8_t {
     let coeff = (crate::deblock::W_MULT[(width - 1) as usize] as i32 * tap * 16) as i16;
     vqrdmulhq_s16(delta, vdupq_n_s16(coeff))
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_extract_i16(v: int16x8_t, lane: i32) -> i16 {
     match lane {
         0 => vgetq_lane_s16::<0>(v),
@@ -176,13 +176,13 @@ fn deblock_extract_i16(v: int16x8_t, lane: i32) -> i16 {
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn load_i16x8(a: [i16; 8]) -> int16x8_t {
     unsafe { vld1q_s16(a.as_ptr()) }
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_8bpc_neon_h_sym4_rows(
     dst: &mut [u8],
     off: isize,
@@ -217,7 +217,7 @@ fn deblock_apply_8bpc_neon_h_sym4_rows(
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_8bpc_neon_h_sym8_rows(
     dst: &mut [u8],
     off: isize,
@@ -262,7 +262,7 @@ fn deblock_apply_8bpc_neon_h_sym8_rows(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_8bpc_neon_const_oriented<const WN: i32, const WP: i32, const CONTIG: bool>(
     dst: &mut [u8],
     off: isize,
@@ -322,7 +322,7 @@ fn deblock_apply_8bpc_neon_const_oriented<const WN: i32, const WP: i32, const CO
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn transpose16x16_u8_neon(r: &mut [uint8x16_t; 16]) {
     // Native NEON transpose spelling.  vtrn de-interleaves even/odd elements at
     // each stage, so the raw outputs are produced in bit-reversed column order:
@@ -432,25 +432,25 @@ fn transpose16x16_u8_neon(r: &mut [uint8x16_t; 16]) {
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn cvtepu8_lo_i16(v: uint8x16_t) -> int16x8_t {
     vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(v)))
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn cvtepu8_hi_i16(v: uint8x16_t) -> int16x8_t {
     vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(v)))
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn pack_u8_from_i16x2(lo: int16x8_t, hi: int16x8_t) -> uint8x16_t {
     vcombine_u8(vqmovun_s16(lo), vqmovun_s16(hi))
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn repeated_qclamp4_w8(q_thr: &[u8], qi: usize) -> (int16x8_t, int16x8_t) {
     let m = crate::deblock::Q_THRESH_MULTS[7] as i16;
     let q0 = (q_thr[qi] as i16) * m;
@@ -464,7 +464,7 @@ fn repeated_qclamp4_w8(q_thr: &[u8], qi: usize) -> (int16x8_t, int16x8_t) {
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn repeated_apply_mask4(ll: u16, qi: usize) -> (int16x8_t, int16x8_t) {
     let m0 = if (ll & (1u16 << qi)) == 0 { -1i16 } else { 0 };
     let m1 = if (ll & (1u16 << (qi + 1))) == 0 {
@@ -489,7 +489,7 @@ fn repeated_apply_mask4(ll: u16, qi: usize) -> (int16x8_t, int16x8_t) {
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn and_s16(a: int16x8_t, b: int16x8_t) -> int16x8_t {
     vreinterpretq_s16_u16(vandq_u16(
         vreinterpretq_u16_s16(a),
@@ -499,7 +499,7 @@ fn and_s16(a: int16x8_t, b: int16x8_t) -> int16x8_t {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_8bpc_neon_h_w8x4_transpose(
     dst: &mut [u8],
     off: isize,
@@ -576,7 +576,7 @@ fn deblock_apply_8bpc_neon_h_w8x4_transpose(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_8bpc_neon_const<const WN: i32, const WP: i32>(
     dst: &mut [u8],
     off: isize,
@@ -626,7 +626,7 @@ macro_rules! dispatch_8bpc_pair_neon {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_8bpc_neon_specialized(
     dst: &mut [u8],
     off: isize,
@@ -881,7 +881,7 @@ fn deblock_apply_8bpc_neon_specialized(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_apply_8bpc_neon(
     dst: &mut [u8],
     off: isize,
@@ -978,7 +978,7 @@ fn load4_u16_i32(dst: &[u16], base: isize, stride_line: isize) -> int32x4_t {
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: int32x4_t) {
     unsafe {
         let p = dst.as_mut_ptr();
@@ -995,7 +995,7 @@ fn store4_clip_u16(dst: &mut [u16], base: isize, stride_line: isize, v: int32x4_
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn load4_u16_i32_oriented<const CONTIG: bool>(
     dst: &[u16],
     base: isize,
@@ -1022,7 +1022,7 @@ fn load4_u16_i32_oriented<const CONTIG: bool>(
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn store4_clip_u16_oriented<const CONTIG: bool>(
     dst: &mut [u16],
     base: isize,
@@ -1044,7 +1044,7 @@ fn store4_clip_u16_oriented<const CONTIG: bool>(
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_delta_i32(
     d0: int32x4_t,
     dm1: int32x4_t,
@@ -1060,7 +1060,7 @@ fn deblock_delta_i32(
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_diff_i32(delta: int32x4_t, width: i32, tap: i32) -> int32x4_t {
     let rnd = vdupq_n_s32(1 << 10);
     let w = vdupq_n_s32(crate::deblock::W_MULT[(width - 1) as usize] as i32 * tap);
@@ -1069,7 +1069,7 @@ fn deblock_diff_i32(delta: int32x4_t, width: i32, tap: i32) -> int32x4_t {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_hbd_neon_const_oriented<
     const WN: i32,
     const WP: i32,
@@ -1126,7 +1126,7 @@ fn deblock_apply_hbd_neon_const_oriented<
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_hbd_neon_const_sides<const WN: i32, const WP: i32, const CONTIG: bool>(
     dst: &mut [u16],
     off: isize,
@@ -1168,7 +1168,7 @@ fn deblock_apply_hbd_neon_const_sides<const WN: i32, const WP: i32, const CONTIG
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_hbd_neon_const<const WN: i32, const WP: i32>(
     dst: &mut [u16],
     off: isize,
@@ -1222,7 +1222,7 @@ macro_rules! dispatch_hbd_pair_neon {
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_hbd_neon_specialized(
     dst: &mut [u16],
     off: isize,
@@ -1495,7 +1495,7 @@ fn deblock_apply_hbd_neon_specialized(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_apply_hbd_neon(
     dst: &mut [u16],
     off: isize,
@@ -1570,20 +1570,20 @@ pub(crate) fn deblock_apply_hbd_neon(
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn select_i32(mask: bool, yes: i32, no: i32) -> i32 {
     let m = -(mask as i32);
     (yes & m) | (no & !m)
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn filter_avg_abs2_from_lanes(v: int16x4_t) -> u32 {
     ((vget_lane_s16::<0>(v) as u32 + vget_lane_s16::<1>(v) as u32) + 1) >> 1
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn filter_second_deriv_8bpc_neon(
     buf: &[u8],
     s: isize,
@@ -1608,7 +1608,7 @@ fn filter_second_deriv_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn filter_end_deriv_8bpc_neon(
     buf: &[u8],
     s0: isize,
@@ -1644,7 +1644,7 @@ fn filter_end_deriv_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn filter_choice_8bpc_neon_const<const MAX_WIDTH_NEG: i32, const MAX_WIDTH_POS: i32>(
     buf: &[u8],
     s: isize,
@@ -1831,7 +1831,7 @@ fn filter_choice_8bpc_neon_const<const MAX_WIDTH_NEG: i32, const MAX_WIDTH_POS: 
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_apply_8bpc_neon_width_constmax<const MAX_WIDTH_NEG: i32, const CONTIG: bool>(
     dst: &mut [u8],
     off: isize,
@@ -2076,7 +2076,7 @@ fn deblock_apply_8bpc_neon_width_constmax<const MAX_WIDTH_NEG: i32, const CONTIG
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_8bpc_neon_const_max<
     const MAX_WIDTH_NEG: i32,
     const MAX_WIDTH_POS: i32,
@@ -2141,7 +2141,7 @@ fn deblock_8bpc_neon_const_max<
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn try_deblock_h_sb64_w8_run4_transpose(
     dst: &mut [u8],
     dst_off: usize,
@@ -2199,14 +2199,14 @@ fn try_deblock_h_sb64_w8_run4_transpose(
 }
 
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_mask_class_bits(mask: u16, higher: u16, both_lossless: u16) -> u32 {
     (mask & !higher & !both_lossless) as u32
 }
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_sb64_8bpc_neon_mask<
     const MAX_WIDTH_NEG: i32,
     const MAX_WIDTH_POS: i32,
@@ -2265,7 +2265,7 @@ fn deblock_sb64_8bpc_neon_mask<
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_h_sb64y_8bpc_neon(
     dst: &mut [u8],
     dst_off: usize,
@@ -2312,7 +2312,7 @@ pub(crate) fn deblock_h_sb64y_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_v_sb64y_8bpc_neon(
     dst: &mut [u8],
     dst_off: usize,
@@ -2359,7 +2359,7 @@ pub(crate) fn deblock_v_sb64y_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_h_sb64uv_8bpc_neon(
     dst: &mut [u8],
     dst_off: usize,
@@ -2406,7 +2406,7 @@ pub(crate) fn deblock_h_sb64uv_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_v_sb64uv_8bpc_neon(
     dst: &mut [u8],
     dst_off: usize,
@@ -2453,7 +2453,7 @@ pub(crate) fn deblock_v_sb64uv_8bpc_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 fn deblock_sb64_hbd_neon_mask<
     const MAX_WIDTH_NEG: i32,
     const MAX_WIDTH_POS: i32,
@@ -2507,7 +2507,7 @@ fn deblock_sb64_hbd_neon_mask<
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_h_sb64y_hbd_neon(
     dst: &mut [u16],
     dst_off: usize,
@@ -2590,7 +2590,7 @@ pub(crate) fn deblock_h_sb64y_hbd_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_v_sb64y_hbd_neon(
     dst: &mut [u16],
     dst_off: usize,
@@ -2673,7 +2673,7 @@ pub(crate) fn deblock_v_sb64y_hbd_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_h_sb64uv_hbd_neon(
     dst: &mut [u16],
     dst_off: usize,
@@ -2756,7 +2756,7 @@ pub(crate) fn deblock_h_sb64uv_hbd_neon(
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
-#[target_feature(enable = "rdm")]
+#[target_feature(enable = "neon")]
 pub(crate) fn deblock_v_sb64uv_hbd_neon(
     dst: &mut [u16],
     dst_off: usize,

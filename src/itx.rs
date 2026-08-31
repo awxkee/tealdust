@@ -386,37 +386,7 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
             <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst),
         ) {
             unsafe {
-                if std::arch::is_aarch64_feature_detected!("rdm") {
-                    if tx == txsz::TX_16X16 {
-                        crate::neon::idct_dequant_16x16_i16_neon_rdm_fused_8bpc(
-                            coeff16,
-                            dst8,
-                            dst_off,
-                            stride,
-                            eob,
-                            tx,
-                            is_rect2,
-                            shift0,
-                            row_clip_min,
-                            row_clip_max,
-                            shift1,
-                        );
-                    } else {
-                        crate::neon::idct_dequant_32x32_i16_neon_rdm_fused_8bpc(
-                            coeff16,
-                            dst8,
-                            dst_off,
-                            stride,
-                            eob,
-                            tx,
-                            is_rect2,
-                            shift0,
-                            row_clip_min,
-                            row_clip_max,
-                            shift1,
-                        );
-                    }
-                } else if tx == txsz::TX_16X16 {
+                if tx == txsz::TX_16X16 {
                     crate::neon::idct_dequant_16x16_i16_neon_fused_8bpc(
                         coeff16,
                         dst8,
@@ -463,43 +433,23 @@ fn inv_txfm_add_typed<BD: BitDepth, C: Coeff>(
                 <BD::Pixel as crate::pixel::Pixel>::try_as_u8_slice_mut(dst),
             ) {
                 let handled = unsafe {
-                    if std::arch::is_aarch64_feature_detected!("rdm") {
-                        crate::neon::itx_dequant_i16_neon_rdm_fused_8bpc(
-                            coeff16,
-                            dst8,
-                            dst_off,
-                            stride,
-                            w,
-                            h,
-                            eob,
-                            tx,
-                            is_rect2,
-                            shift0,
-                            row_clip_min,
-                            row_clip_max,
-                            shift1,
-                            first_kind,
-                            second_kind,
-                        )
-                    } else {
-                        crate::neon::itx_dequant_i16_neon_fused_8bpc(
-                            coeff16,
-                            dst8,
-                            dst_off,
-                            stride,
-                            w,
-                            h,
-                            eob,
-                            tx,
-                            is_rect2,
-                            shift0,
-                            row_clip_min,
-                            row_clip_max,
-                            shift1,
-                            first_kind,
-                            second_kind,
-                        )
-                    }
+                    crate::neon::itx_dequant_i16_neon_fused_8bpc(
+                        coeff16,
+                        dst8,
+                        dst_off,
+                        stride,
+                        w,
+                        h,
+                        eob,
+                        tx,
+                        is_rect2,
+                        shift0,
+                        row_clip_min,
+                        row_clip_max,
+                        shift1,
+                        first_kind,
+                        second_kind,
+                    )
                 };
                 if handled {
                     return;

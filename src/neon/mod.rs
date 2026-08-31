@@ -60,9 +60,8 @@ pub(crate) use cdef_hd::{
     cdef_padding_hbd_neon,
 };
 pub(crate) use cfl::{
-    cfl_alpha_accum_8bpc_neon, cfl_apply_420_8bpc_neon, cfl_apply_420_8bpc_neon_rdm,
-    cfl_apply_422_8bpc_neon, cfl_apply_422_8bpc_neon_rdm, cfl_apply_444_8bpc_neon,
-    cfl_apply_444_8bpc_neon_rdm, cfl_gen_mat_8bpc_neon, cfl_gen_y_row_8bpc_neon,
+    cfl_alpha_accum_8bpc_neon, cfl_apply_420_8bpc_neon, cfl_apply_422_8bpc_neon,
+    cfl_apply_444_8bpc_neon, cfl_gen_mat_8bpc_neon, cfl_gen_y_row_8bpc_neon,
     cfl_mhccp_pred_8bpc_neon,
 };
 pub(crate) use cfl_hd::{

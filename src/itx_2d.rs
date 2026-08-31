@@ -2089,11 +2089,7 @@ pub(crate) fn idct_dequant_32x32(_hbd: bool) -> IdctDequantFn<1024> {
         let mut _f: IdctDequantFn<1024> = idct_dequant_32x32_scalar;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_32x32_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_32x32_neon;
-            }
+            _f = crate::neon::idct_dequant_32x32_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2226,11 +2222,7 @@ pub(crate) fn idct_dequant_4x8(_hbd: bool) -> IdctDequantFn<32> {
         let mut _f: IdctDequantFn<32> = idct_dequant_rect_scalar_core::<32, 4, 8, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_4x8_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_4x8_neon;
-            }
+            _f = crate::neon::idct_dequant_4x8_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2254,11 +2246,7 @@ pub(crate) fn idct_dequant_8x4(_hbd: bool) -> IdctDequantFn<32> {
         let mut _f: IdctDequantFn<32> = idct_dequant_rect_scalar_core::<32, 8, 4, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_8x4_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_8x4_neon;
-            }
+            _f = crate::neon::idct_dequant_8x4_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2282,11 +2270,7 @@ pub(crate) fn idct_dequant_8x16(_hbd: bool) -> IdctDequantFn<128> {
         let mut _f: IdctDequantFn<128> = idct_dequant_rect_scalar_core::<128, 8, 16, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_8x16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_8x16_neon;
-            }
+            _f = crate::neon::idct_dequant_8x16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2310,11 +2294,7 @@ pub(crate) fn idct_dequant_16x8(_hbd: bool) -> IdctDequantFn<128> {
         let mut _f: IdctDequantFn<128> = idct_dequant_rect_scalar_core::<128, 16, 8, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_16x8_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_16x8_neon;
-            }
+            _f = crate::neon::idct_dequant_16x8_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2338,11 +2318,7 @@ pub(crate) fn idct_dequant_16x32(_hbd: bool) -> IdctDequantFn<512> {
         let mut _f: IdctDequantFn<512> = idct_dequant_rect_scalar_core::<512, 16, 32, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_16x32_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_16x32_neon;
-            }
+            _f = crate::neon::idct_dequant_16x32_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2366,11 +2342,7 @@ pub(crate) fn idct_dequant_32x16(_hbd: bool) -> IdctDequantFn<512> {
         let mut _f: IdctDequantFn<512> = idct_dequant_rect_scalar_core::<512, 32, 16, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_32x16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_32x16_neon;
-            }
+            _f = crate::neon::idct_dequant_32x16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2394,11 +2366,7 @@ pub(crate) fn idct_dequant_4x16(_hbd: bool) -> IdctDequantFn<64> {
         let mut _f: IdctDequantFn<64> = idct_dequant_rect_scalar_core::<64, 4, 16, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_4x16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_4x16_neon;
-            }
+            _f = crate::neon::idct_dequant_4x16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2422,11 +2390,7 @@ pub(crate) fn idct_dequant_16x4(_hbd: bool) -> IdctDequantFn<64> {
         let mut _f: IdctDequantFn<64> = idct_dequant_rect_scalar_core::<64, 16, 4, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_16x4_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_16x4_neon;
-            }
+            _f = crate::neon::idct_dequant_16x4_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2450,11 +2414,7 @@ pub(crate) fn idct_dequant_8x32(_hbd: bool) -> IdctDequantFn<256> {
         let mut _f: IdctDequantFn<256> = idct_dequant_rect_scalar_core::<256, 8, 32, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_8x32_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_8x32_neon;
-            }
+            _f = crate::neon::idct_dequant_8x32_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2478,11 +2438,7 @@ pub(crate) fn idct_dequant_32x8(_hbd: bool) -> IdctDequantFn<256> {
         let mut _f: IdctDequantFn<256> = idct_dequant_rect_scalar_core::<256, 32, 8, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_32x8_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_32x8_neon;
-            }
+            _f = crate::neon::idct_dequant_32x8_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2506,11 +2462,7 @@ pub(crate) fn idct_dequant_4x32(_hbd: bool) -> IdctDequantFn<128> {
         let mut _f: IdctDequantFn<128> = idct_dequant_rect_scalar_core::<128, 4, 32, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_4x32_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_4x32_neon;
-            }
+            _f = crate::neon::idct_dequant_4x32_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2534,11 +2486,7 @@ pub(crate) fn idct_dequant_32x4(_hbd: bool) -> IdctDequantFn<128> {
         let mut _f: IdctDequantFn<128> = idct_dequant_rect_scalar_core::<128, 32, 4, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_32x4_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_32x4_neon;
-            }
+            _f = crate::neon::idct_dequant_32x4_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2569,11 +2517,7 @@ pub(crate) fn iadst_dequant_4x8(_hbd: bool) -> IadstDequantFn<32> {
         let mut _f: IadstDequantFn<32> = itx_dequant_rect_scalar_core::<32, 4, 8, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_4x8_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_4x8_neon;
-            }
+            _f = crate::neon::iadst_dequant_4x8_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2597,11 +2541,7 @@ pub(crate) fn iadst_dequant_8x4(_hbd: bool) -> IadstDequantFn<32> {
         let mut _f: IadstDequantFn<32> = itx_dequant_rect_scalar_core::<32, 8, 4, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_8x4_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_8x4_neon;
-            }
+            _f = crate::neon::iadst_dequant_8x4_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2625,11 +2565,7 @@ pub(crate) fn iadst_dequant_8x16(_hbd: bool) -> IadstDequantFn<128> {
         let mut _f: IadstDequantFn<128> = itx_dequant_rect_scalar_core::<128, 8, 16, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_8x16_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_8x16_neon;
-            }
+            _f = crate::neon::iadst_dequant_8x16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2653,11 +2589,7 @@ pub(crate) fn iadst_dequant_16x8(_hbd: bool) -> IadstDequantFn<128> {
         let mut _f: IadstDequantFn<128> = itx_dequant_rect_scalar_core::<128, 16, 8, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_16x8_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_16x8_neon;
-            }
+            _f = crate::neon::iadst_dequant_16x8_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2681,11 +2613,7 @@ pub(crate) fn iadst_dequant_4x16(_hbd: bool) -> IadstDequantFn<64> {
         let mut _f: IadstDequantFn<64> = itx_dequant_rect_scalar_core::<64, 4, 16, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_4x16_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_4x16_neon;
-            }
+            _f = crate::neon::iadst_dequant_4x16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2709,11 +2637,7 @@ pub(crate) fn iadst_dequant_16x4(_hbd: bool) -> IadstDequantFn<64> {
         let mut _f: IadstDequantFn<64> = itx_dequant_rect_scalar_core::<64, 16, 4, i32>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_16x4_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_16x4_neon;
-            }
+            _f = crate::neon::iadst_dequant_16x4_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2839,11 +2763,7 @@ pub(crate) fn idct_dequant_32x32_i16() -> IdctDequantI16Fn<1024> {
         let mut _f: IdctDequantI16Fn<1024> = idct_dequant_scalar_core::<1024, 32, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_32x32_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_32x32_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_32x32_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2963,11 +2883,7 @@ pub(crate) fn idct_dequant_4x8_i16() -> IdctDequantI16Fn<32> {
         let mut _f: IdctDequantI16Fn<32> = idct_dequant_rect_scalar_core::<32, 4, 8, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_4x8_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_4x8_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_4x8_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -2991,11 +2907,7 @@ pub(crate) fn idct_dequant_8x4_i16() -> IdctDequantI16Fn<32> {
         let mut _f: IdctDequantI16Fn<32> = idct_dequant_rect_scalar_core::<32, 8, 4, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_8x4_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_8x4_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_8x4_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3019,11 +2931,7 @@ pub(crate) fn idct_dequant_8x16_i16() -> IdctDequantI16Fn<128> {
         let mut _f: IdctDequantI16Fn<128> = idct_dequant_rect_scalar_core::<128, 8, 16, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_8x16_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_8x16_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_8x16_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3047,11 +2955,7 @@ pub(crate) fn idct_dequant_16x8_i16() -> IdctDequantI16Fn<128> {
         let mut _f: IdctDequantI16Fn<128> = idct_dequant_rect_scalar_core::<128, 16, 8, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_16x8_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_16x8_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_16x8_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3075,11 +2979,7 @@ pub(crate) fn idct_dequant_16x32_i16() -> IdctDequantI16Fn<512> {
         let mut _f: IdctDequantI16Fn<512> = idct_dequant_rect_scalar_core::<512, 16, 32, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_16x32_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_16x32_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_16x32_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3103,11 +3003,7 @@ pub(crate) fn idct_dequant_32x16_i16() -> IdctDequantI16Fn<512> {
         let mut _f: IdctDequantI16Fn<512> = idct_dequant_rect_scalar_core::<512, 32, 16, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_32x16_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_32x16_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_32x16_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3131,11 +3027,7 @@ pub(crate) fn idct_dequant_4x16_i16() -> IdctDequantI16Fn<64> {
         let mut _f: IdctDequantI16Fn<64> = idct_dequant_rect_scalar_core::<64, 4, 16, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_4x16_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_4x16_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_4x16_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3159,11 +3051,7 @@ pub(crate) fn idct_dequant_16x4_i16() -> IdctDequantI16Fn<64> {
         let mut _f: IdctDequantI16Fn<64> = idct_dequant_rect_scalar_core::<64, 16, 4, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_16x4_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_16x4_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_16x4_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3187,11 +3075,7 @@ pub(crate) fn idct_dequant_8x32_i16() -> IdctDequantI16Fn<256> {
         let mut _f: IdctDequantI16Fn<256> = idct_dequant_rect_scalar_core::<256, 8, 32, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_8x32_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_8x32_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_8x32_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3215,11 +3099,7 @@ pub(crate) fn idct_dequant_32x8_i16() -> IdctDequantI16Fn<256> {
         let mut _f: IdctDequantI16Fn<256> = idct_dequant_rect_scalar_core::<256, 32, 8, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_32x8_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_32x8_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_32x8_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3243,11 +3123,7 @@ pub(crate) fn idct_dequant_4x32_i16() -> IdctDequantI16Fn<128> {
         let mut _f: IdctDequantI16Fn<128> = idct_dequant_rect_scalar_core::<128, 4, 32, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_4x32_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_4x32_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_4x32_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3271,11 +3147,7 @@ pub(crate) fn idct_dequant_32x4_i16() -> IdctDequantI16Fn<128> {
         let mut _f: IdctDequantI16Fn<128> = idct_dequant_rect_scalar_core::<128, 32, 4, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::idct_dequant_32x4_i16_neon_rdm;
-            } else {
-                _f = crate::neon::idct_dequant_32x4_i16_neon;
-            }
+            _f = crate::neon::idct_dequant_32x4_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3299,11 +3171,7 @@ pub(crate) fn iadst_dequant_4x8_i16() -> IadstDequantI16Fn<32> {
         let mut _f: IadstDequantI16Fn<32> = itx_dequant_rect_scalar_core::<32, 4, 8, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_4x8_i16_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_4x8_i16_neon;
-            }
+            _f = crate::neon::iadst_dequant_4x8_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3327,11 +3195,7 @@ pub(crate) fn iadst_dequant_8x4_i16() -> IadstDequantI16Fn<32> {
         let mut _f: IadstDequantI16Fn<32> = itx_dequant_rect_scalar_core::<32, 8, 4, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_8x4_i16_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_8x4_i16_neon;
-            }
+            _f = crate::neon::iadst_dequant_8x4_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3355,11 +3219,7 @@ pub(crate) fn iadst_dequant_8x16_i16() -> IadstDequantI16Fn<128> {
         let mut _f: IadstDequantI16Fn<128> = itx_dequant_rect_scalar_core::<128, 8, 16, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_8x16_i16_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_8x16_i16_neon;
-            }
+            _f = crate::neon::iadst_dequant_8x16_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3383,11 +3243,7 @@ pub(crate) fn iadst_dequant_16x8_i16() -> IadstDequantI16Fn<128> {
         let mut _f: IadstDequantI16Fn<128> = itx_dequant_rect_scalar_core::<128, 16, 8, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_16x8_i16_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_16x8_i16_neon;
-            }
+            _f = crate::neon::iadst_dequant_16x8_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3411,11 +3267,7 @@ pub(crate) fn iadst_dequant_4x16_i16() -> IadstDequantI16Fn<64> {
         let mut _f: IadstDequantI16Fn<64> = itx_dequant_rect_scalar_core::<64, 4, 16, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_4x16_i16_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_4x16_i16_neon;
-            }
+            _f = crate::neon::iadst_dequant_4x16_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -3439,11 +3291,7 @@ pub(crate) fn iadst_dequant_16x4_i16() -> IadstDequantI16Fn<64> {
         let mut _f: IadstDequantI16Fn<64> = itx_dequant_rect_scalar_core::<64, 16, 4, i16>;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::iadst_dequant_16x4_i16_neon_rdm;
-            } else {
-                _f = crate::neon::iadst_dequant_16x4_i16_neon;
-            }
+            _f = crate::neon::iadst_dequant_16x4_i16_neon;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {

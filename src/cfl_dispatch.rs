@@ -33,9 +33,6 @@ use crate::levels::CflMhDir;
 const CFL_FLT_TYPE_VSTRIP: u32 = 1;
 const CFL_FLT_TYPE_GAUSS: u32 = 2;
 
-#[cfg(target_arch = "aarch64")]
-const ENABLE_NEON_CFL_RDM_8BPC: bool = true;
-
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn x86_cfl_has_avx512() -> bool {
@@ -1563,9 +1560,6 @@ pub(crate) fn resolve_cfl_apply_420() -> CflApplyFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_apply_420_8bpc_neon;
-            if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::cfl_apply_420_8bpc_neon_rdm;
-            }
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -1597,9 +1591,6 @@ pub(crate) fn resolve_cfl_apply_420_filtered() -> CflApplyFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_apply_420_8bpc_neon;
-            if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::cfl_apply_420_8bpc_neon_rdm;
-            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1618,9 +1609,6 @@ pub(crate) fn resolve_cfl_apply_422() -> CflApplyFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_apply_422_8bpc_neon;
-            if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::cfl_apply_422_8bpc_neon_rdm;
-            }
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -1649,9 +1637,6 @@ pub(crate) fn resolve_cfl_apply_444() -> CflApplyFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_apply_444_8bpc_neon;
-            if ENABLE_NEON_CFL_RDM_8BPC && std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::cfl_apply_444_8bpc_neon_rdm;
-            }
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {

@@ -178,47 +178,7 @@ fn ac8_422_gauss_i16(src: uint8x16_t, dc0v: int16x8_t) -> int16x8_t {
     ac8_444_i16(even_u8x8(src), dc0v)
 }
 
-/// Apply alpha to 8 i16 AC lanes.
-///
-/// Only this function widens to i32, because `alpha * ac` may need i32.
-/// Everything before this stays i16.
-#[inline]
-#[target_feature(enable = "neon")]
-fn apply8_i16_ac_wide(
-    ac: int16x8_t,
-    _alpha: i16,
-    alpha_v: int16x4_t,
-    _dc: i32,
-    dc_v: int32x4_t,
-    round_v: int32x4_t,
-    zero_v: int32x4_t,
-) -> uint8x8_t {
-    let ac_lo = vget_low_s16(ac);
-    let ac_hi = vget_high_s16(ac);
-
-    // i16 * i16 -> i32. This is the only widening part.
-    let diff_lo = vmull_s16(ac_lo, alpha_v);
-    let diff_hi = vmull_s16(ac_hi, alpha_v);
-
-    let mag_lo = vshrq_n_s32::<11>(vaddq_s32(vabsq_s32(diff_lo), round_v));
-    let mag_hi = vshrq_n_s32::<11>(vaddq_s32(vabsq_s32(diff_hi), round_v));
-
-    let signed_lo = vbslq_s32(vcltq_s32(diff_lo, zero_v), vnegq_s32(mag_lo), mag_lo);
-    let signed_hi = vbslq_s32(vcltq_s32(diff_hi, zero_v), vnegq_s32(mag_hi), mag_hi);
-
-    let val_lo = vaddq_s32(dc_v, signed_lo);
-    let val_hi = vaddq_s32(dc_v, signed_hi);
-
-    vqmovn_u16(vcombine_u16(vqmovun_s32(val_lo), vqmovun_s32(val_hi)))
-}
-
-macro_rules! cfl8_apply_wide {
-    ($ac:expr, $alpha:expr, $alpha_v:expr, $dc:expr, $dc_v:expr, $round_v:expr, $zero_v:expr) => {
-        apply8_i16_ac_wide($ac, $alpha, $alpha_v, $dc, $dc_v, $round_v, $zero_v)
-    };
-}
-
-macro_rules! cfl8_apply_rdm {
+macro_rules! cfl8_apply {
     ($ac:expr, $alpha:expr, $_alpha_v:expr, $dc:expr, $_dc_v:expr, $_round_v:expr, $_zero_v:expr) => {{
         let zero = vdupq_n_s16(0);
         let alpha8 = vdupq_n_s16($alpha);
@@ -1187,37 +1147,21 @@ fn cfl_apply_444_8bpc_impl(args: CflApply8<'_>) {
     };
 }
 
-define_cfl8_neon_impl!(cfl8_neon_base, cfl8_apply_wide, #[target_feature(enable = "neon")]);
-define_cfl8_neon_impl!(cfl8_neon_rdm, cfl8_apply_rdm,#[target_feature(enable = "rdm")]);
+define_cfl8_neon_impl!(cfl8_neon, cfl8_apply, #[target_feature(enable = "neon")]);
 
 #[target_feature(enable = "neon")]
 pub(crate) fn cfl_apply_420_8bpc_neon(args: CflApply8<'_>) {
-    cfl8_neon_base::cfl_apply_420_8bpc(args)
-}
-
-#[target_feature(enable = "rdm")]
-pub(crate) fn cfl_apply_420_8bpc_neon_rdm(args: CflApply8<'_>) {
-    cfl8_neon_rdm::cfl_apply_420_8bpc(args)
+    cfl8_neon::cfl_apply_420_8bpc(args)
 }
 
 #[target_feature(enable = "neon")]
 pub(crate) fn cfl_apply_422_8bpc_neon(args: CflApply8<'_>) {
-    cfl8_neon_base::cfl_apply_422_8bpc(args)
-}
-
-#[target_feature(enable = "rdm")]
-pub(crate) fn cfl_apply_422_8bpc_neon_rdm(args: CflApply8<'_>) {
-    cfl8_neon_rdm::cfl_apply_422_8bpc(args)
+    cfl8_neon::cfl_apply_422_8bpc(args)
 }
 
 #[target_feature(enable = "neon")]
 pub(crate) fn cfl_apply_444_8bpc_neon(args: CflApply8<'_>) {
-    cfl8_neon_base::cfl_apply_444_8bpc(args)
-}
-
-#[target_feature(enable = "rdm")]
-pub(crate) fn cfl_apply_444_8bpc_neon_rdm(args: CflApply8<'_>) {
-    cfl8_neon_rdm::cfl_apply_444_8bpc(args)
+    cfl8_neon::cfl_apply_444_8bpc(args)
 }
 
 #[inline]
