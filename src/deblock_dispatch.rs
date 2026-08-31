@@ -1333,9 +1333,7 @@ pub(crate) fn resolve_deblock_apply_8bpc() -> DeblockApply8bpcFn {
         let mut _f = deblock_apply_8bpc_scalar as DeblockApply8bpcFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::deblock_apply_8bpc_neon as DeblockApply8bpcFn;
-            }
+            _f = crate::neon::deblock_apply_8bpc_neon as DeblockApply8bpcFn;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -1360,9 +1358,7 @@ pub(crate) fn resolve_deblock_apply_hbd() -> DeblockApplyHbdFn {
         let mut _f = deblock_apply_hbd_scalar as DeblockApplyHbdFn;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = crate::neon::deblock_apply_hbd_neon as DeblockApplyHbdFn;
-            }
+            _f = crate::neon::deblock_apply_hbd_neon as DeblockApplyHbdFn;
         }
         #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
         {
@@ -1387,9 +1383,7 @@ pub(crate) fn resolve_deblock_h_sb64y_8bpc() -> Option<DeblockSb64Fn> {
         let mut _f: Option<DeblockSb64Fn> = None;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = Some(crate::neon::deblock_h_sb64y_8bpc_neon as DeblockSb64Fn);
-            }
+            _f = Some(crate::neon::deblock_h_sb64y_8bpc_neon as DeblockSb64Fn);
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1407,9 +1401,7 @@ pub(crate) fn resolve_deblock_v_sb64y_8bpc() -> Option<DeblockSb64Fn> {
         let mut _f: Option<DeblockSb64Fn> = None;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = Some(crate::neon::deblock_v_sb64y_8bpc_neon as DeblockSb64Fn);
-            }
+            _f = Some(crate::neon::deblock_v_sb64y_8bpc_neon as DeblockSb64Fn);
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1427,9 +1419,7 @@ pub(crate) fn resolve_deblock_h_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
         let mut _f: Option<DeblockSb64Fn> = None;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = Some(crate::neon::deblock_h_sb64uv_8bpc_neon as DeblockSb64Fn);
-            }
+            _f = Some(crate::neon::deblock_h_sb64uv_8bpc_neon as DeblockSb64Fn);
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1447,9 +1437,7 @@ pub(crate) fn resolve_deblock_v_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
         let mut _f: Option<DeblockSb64Fn> = None;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = Some(crate::neon::deblock_v_sb64uv_8bpc_neon as DeblockSb64Fn);
-            }
+            _f = Some(crate::neon::deblock_v_sb64uv_8bpc_neon as DeblockSb64Fn);
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1467,9 +1455,7 @@ pub(crate) fn resolve_deblock_h_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
         let mut _f: Option<DeblockSb64HbdFn> = None;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = Some(crate::neon::deblock_h_sb64y_hbd_neon as DeblockSb64HbdFn);
-            }
+            _f = Some(crate::neon::deblock_h_sb64y_hbd_neon as DeblockSb64HbdFn);
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1487,9 +1473,7 @@ pub(crate) fn resolve_deblock_v_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
         let mut _f: Option<DeblockSb64HbdFn> = None;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = Some(crate::neon::deblock_v_sb64y_hbd_neon as DeblockSb64HbdFn);
-            }
+            _f = Some(crate::neon::deblock_v_sb64y_hbd_neon as DeblockSb64HbdFn);
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1507,9 +1491,7 @@ pub(crate) fn resolve_deblock_h_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
         let mut _f: Option<DeblockSb64HbdFn> = None;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = Some(crate::neon::deblock_h_sb64uv_hbd_neon as DeblockSb64HbdFn);
-            }
+            _f = Some(crate::neon::deblock_h_sb64uv_hbd_neon as DeblockSb64HbdFn);
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1527,9 +1509,7 @@ pub(crate) fn resolve_deblock_v_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
         let mut _f: Option<DeblockSb64HbdFn> = None;
         #[cfg(target_arch = "aarch64")]
         {
-            if std::arch::is_aarch64_feature_detected!("rdm") {
-                _f = Some(crate::neon::deblock_v_sb64uv_hbd_neon as DeblockSb64HbdFn);
-            }
+            _f = Some(crate::neon::deblock_v_sb64uv_hbd_neon as DeblockSb64HbdFn);
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {

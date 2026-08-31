@@ -32,11 +32,13 @@ use libfuzzer_sys::fuzz_target;
 use tealdust::{AvifError, Data, Decoder, Settings};
 
 fuzz_target!(|data: &[u8]| {
-    let mut settings = Settings::default();
-    settings.n_threads = std::thread::available_parallelism()
-        .map(|n| n.get() as u32)
-        .unwrap_or(1);
-    settings.run_decode = true;
+    let settings = Settings {
+        n_threads: std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1),
+        run_decode: true,
+        ..Settings::default()
+    };
 
     if let Ok(mut decoder) = Decoder::open(&settings).map_err(AvifError::DecodeError) {
         _ = decoder
