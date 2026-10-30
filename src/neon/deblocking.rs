@@ -2868,6 +2868,19 @@ fn setup_apply_subpu_u8x16_neon(v: uint8x16_t, bits: u16) -> uint8x16_t {
     unsafe { vbslq_u8(setup_mask_bits_u8x16_neon(bits), vshrq_n_u8::<3>(v), v) }
 }
 
+/// Sub-PU shift for a (q_thr, side_thr) pair; q_thr is zeroed wherever the
+/// shifted side_thr is 0, which disables filtering on that edge.
+#[inline]
+fn setup_subpu_pair_u8x16_neon(
+    q: uint8x16_t,
+    s: uint8x16_t,
+    bits: u16,
+) -> (uint8x16_t, uint8x16_t) {
+    let s = setup_apply_subpu_u8x16_neon(s, bits);
+    let q = setup_apply_subpu_u8x16_neon(q, bits);
+    unsafe { (vbicq_u8(q, vceqzq_u8(s)), s) }
+}
+
 #[inline]
 fn setup_edge_u8x16_neon(cur: uint8x16_t, prev: uint8x16_t) -> uint8x16_t {
     unsafe {
@@ -2919,8 +2932,9 @@ pub(crate) fn setup_thr_rows_simple_8bpc_neon(
         let sv = vdupq_n_u8(thr_lut[1][0] as u8);
         for y in 0..h {
             let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
-            setup_store_u8x16_neon(q_thr_dst, y * 16, setup_apply_subpu_u8x16_neon(qv, bits));
-            setup_store_u8x16_neon(side_thr_dst, y * 16, setup_apply_subpu_u8x16_neon(sv, bits));
+            let (qo, so) = setup_subpu_pair_u8x16_neon(qv, sv, bits);
+            setup_store_u8x16_neon(q_thr_dst, y * 16, qo);
+            setup_store_u8x16_neon(side_thr_dst, y * 16, so);
         }
     }
 }
@@ -2950,8 +2964,9 @@ pub(crate) fn setup_thr_cols_simple_8bpc_neon(
         let sv = vdupq_n_u8(thr_lut[1][0] as u8);
         for x in 0..w {
             let bits = (mask[bx4_base + x][4][mask_idx] >> mask_shift) as u16;
-            setup_store_u8x16_neon(q_thr_dst, x * 16, setup_apply_subpu_u8x16_neon(qv, bits));
-            setup_store_u8x16_neon(side_thr_dst, x * 16, setup_apply_subpu_u8x16_neon(sv, bits));
+            let (qo, so) = setup_subpu_pair_u8x16_neon(qv, sv, bits);
+            setup_store_u8x16_neon(q_thr_dst, x * 16, qo);
+            setup_store_u8x16_neon(side_thr_dst, x * 16, so);
         }
     }
 }
@@ -3001,20 +3016,18 @@ pub(crate) fn setup_thr_rows_dq_8bpc_neon(
             (vdupq_n_u8(0), vdupq_n_u8(0))
         };
         let bits0 = (mask[starty4][4][mask_idx] >> mask_shift) as u16;
-        setup_store_u8x16_neon(
-            q_thr_dst,
-            0,
-            setup_apply_subpu_u8x16_neon(setup_edge_u8x16_neon(qv, above_q), bits0),
+        let (qo, so) = setup_subpu_pair_u8x16_neon(
+            setup_edge_u8x16_neon(qv, above_q),
+            setup_edge_u8x16_neon(sv, above_s),
+            bits0,
         );
-        setup_store_u8x16_neon(
-            side_thr_dst,
-            0,
-            setup_apply_subpu_u8x16_neon(setup_edge_u8x16_neon(sv, above_s), bits0),
-        );
+        setup_store_u8x16_neon(q_thr_dst, 0, qo);
+        setup_store_u8x16_neon(side_thr_dst, 0, so);
         for y in 1..h {
             let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
-            setup_store_u8x16_neon(q_thr_dst, y * 16, setup_apply_subpu_u8x16_neon(qv, bits));
-            setup_store_u8x16_neon(side_thr_dst, y * 16, setup_apply_subpu_u8x16_neon(sv, bits));
+            let (qo, so) = setup_subpu_pair_u8x16_neon(qv, sv, bits);
+            setup_store_u8x16_neon(q_thr_dst, y * 16, qo);
+            setup_store_u8x16_neon(side_thr_dst, y * 16, so);
         }
     }
 }
@@ -3062,12 +3075,9 @@ pub(crate) fn setup_thr_cols_dq_8bpc_neon(
             } else {
                 sv
             };
-            setup_store_u8x16_neon(q_thr_dst, x * 16, setup_apply_subpu_u8x16_neon(qbase, bits));
-            setup_store_u8x16_neon(
-                side_thr_dst,
-                x * 16,
-                setup_apply_subpu_u8x16_neon(sbase, bits),
-            );
+            let (qo, so) = setup_subpu_pair_u8x16_neon(qbase, sbase, bits);
+            setup_store_u8x16_neon(q_thr_dst, x * 16, qo);
+            setup_store_u8x16_neon(side_thr_dst, x * 16, so);
         }
     }
     left_q_thr[..h].fill(thr_lut[0][0] as u8);
@@ -3127,16 +3137,13 @@ pub(crate) fn setup_thr_rows_seg_8bpc_neon(
             let cur_q = vqtbl1q_u8(qlut, segv);
             let cur_s = vqtbl1q_u8(slut, segv);
             let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
-            setup_store_u8x16_neon(
-                q_thr_dst,
-                y * 16,
-                setup_apply_subpu_u8x16_neon(setup_edge_u8x16_neon(cur_q, prev_q), bits),
+            let (qo, so) = setup_subpu_pair_u8x16_neon(
+                setup_edge_u8x16_neon(cur_q, prev_q),
+                setup_edge_u8x16_neon(cur_s, prev_s),
+                bits,
             );
-            setup_store_u8x16_neon(
-                side_thr_dst,
-                y * 16,
-                setup_apply_subpu_u8x16_neon(setup_edge_u8x16_neon(cur_s, prev_s), bits),
-            );
+            setup_store_u8x16_neon(q_thr_dst, y * 16, qo);
+            setup_store_u8x16_neon(side_thr_dst, y * 16, so);
             prev_q = cur_q;
             prev_s = cur_s;
         }
@@ -3192,14 +3199,13 @@ pub(crate) fn setup_thr_cols_seg_8bpc_neon(
             for x in 0..w {
                 bits |= ((mask[bx4_base + x][4][mask_idx] >> shift) & 1) << x;
             }
-            let q_arr = setup_store_tmp_u8x16_neon(setup_apply_subpu_u8x16_neon(
+            let (qo, so) = setup_subpu_pair_u8x16_neon(
                 setup_edge_u8x16_neon(cur_q, prev_q),
-                bits,
-            ));
-            let s_arr = setup_store_tmp_u8x16_neon(setup_apply_subpu_u8x16_neon(
                 setup_edge_u8x16_neon(cur_s, prev_s),
                 bits,
-            ));
+            );
+            let q_arr = setup_store_tmp_u8x16_neon(qo);
+            let s_arr = setup_store_tmp_u8x16_neon(so);
             for x in 0..w {
                 q_thr_dst[x * 16 + y] = q_arr[x];
                 side_thr_dst[x * 16 + y] = s_arr[x];

@@ -2959,6 +2959,19 @@ fn setup_apply_subpu_u8x16_avx2(v: __m128i, bits: u16) -> __m128i {
     _mm_blendv_epi8(v, setup_shr3_u8x16_avx2(v), m)
 }
 
+/// Sub-PU shift for a (q_thr, side_thr) pair; q_thr is zeroed wherever the
+/// shifted side_thr is 0, which disables filtering on that edge.
+#[inline]
+#[target_feature(enable = "avx2")]
+fn setup_subpu_pair_u8x16_avx2(q: __m128i, s: __m128i, bits: u16) -> (__m128i, __m128i) {
+    let s = setup_apply_subpu_u8x16_avx2(s, bits);
+    let q = setup_apply_subpu_u8x16_avx2(q, bits);
+    (
+        _mm_andnot_si128(_mm_cmpeq_epi8(s, _mm_setzero_si128()), q),
+        s,
+    )
+}
+
 #[inline]
 #[target_feature(enable = "avx2")]
 fn setup_edge_u8x16_avx2(cur: __m128i, prev: __m128i) -> __m128i {
@@ -3017,8 +3030,9 @@ pub(crate) fn setup_thr_rows_simple_8bpc_avx2(
     let sv = _mm_set1_epi8(thr_lut[1][0] as u8 as i8);
     for y in 0..h {
         let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
-        setup_store_u8x16_avx2(q_thr_dst, y * 16, setup_apply_subpu_u8x16_avx2(qv, bits));
-        setup_store_u8x16_avx2(side_thr_dst, y * 16, setup_apply_subpu_u8x16_avx2(sv, bits));
+        let (qo, so) = setup_subpu_pair_u8x16_avx2(qv, sv, bits);
+        setup_store_u8x16_avx2(q_thr_dst, y * 16, qo);
+        setup_store_u8x16_avx2(side_thr_dst, y * 16, so);
     }
 }
 
@@ -3047,8 +3061,9 @@ pub(crate) fn setup_thr_cols_simple_8bpc_avx2(
     let sv = _mm_set1_epi8(thr_lut[1][0] as u8 as i8);
     for x in 0..w {
         let bits = (mask[bx4_base + x][4][mask_idx] >> mask_shift) as u16;
-        setup_store_u8x16_avx2(q_thr_dst, x * 16, setup_apply_subpu_u8x16_avx2(qv, bits));
-        setup_store_u8x16_avx2(side_thr_dst, x * 16, setup_apply_subpu_u8x16_avx2(sv, bits));
+        let (qo, so) = setup_subpu_pair_u8x16_avx2(qv, sv, bits);
+        setup_store_u8x16_avx2(q_thr_dst, x * 16, qo);
+        setup_store_u8x16_avx2(side_thr_dst, x * 16, so);
     }
 }
 
@@ -3100,20 +3115,18 @@ pub(crate) fn setup_thr_rows_dq_8bpc_avx2(
         (_mm_setzero_si128(), _mm_setzero_si128())
     };
     let bits0 = (mask[starty4][4][mask_idx] >> mask_shift) as u16;
-    setup_store_u8x16_avx2(
-        q_thr_dst,
-        0,
-        setup_apply_subpu_u8x16_avx2(setup_edge_u8x16_avx2(qv, above_q), bits0),
+    let (qo, so) = setup_subpu_pair_u8x16_avx2(
+        setup_edge_u8x16_avx2(qv, above_q),
+        setup_edge_u8x16_avx2(sv, above_s),
+        bits0,
     );
-    setup_store_u8x16_avx2(
-        side_thr_dst,
-        0,
-        setup_apply_subpu_u8x16_avx2(setup_edge_u8x16_avx2(sv, above_s), bits0),
-    );
+    setup_store_u8x16_avx2(q_thr_dst, 0, qo);
+    setup_store_u8x16_avx2(side_thr_dst, 0, so);
     for y in 1..h {
         let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
-        setup_store_u8x16_avx2(q_thr_dst, y * 16, setup_apply_subpu_u8x16_avx2(qv, bits));
-        setup_store_u8x16_avx2(side_thr_dst, y * 16, setup_apply_subpu_u8x16_avx2(sv, bits));
+        let (qo, so) = setup_subpu_pair_u8x16_avx2(qv, sv, bits);
+        setup_store_u8x16_avx2(q_thr_dst, y * 16, qo);
+        setup_store_u8x16_avx2(side_thr_dst, y * 16, so);
     }
 }
 
@@ -3160,12 +3173,9 @@ pub(crate) fn setup_thr_cols_dq_8bpc_avx2(
         } else {
             sv
         };
-        setup_store_u8x16_avx2(q_thr_dst, x * 16, setup_apply_subpu_u8x16_avx2(qbase, bits));
-        setup_store_u8x16_avx2(
-            side_thr_dst,
-            x * 16,
-            setup_apply_subpu_u8x16_avx2(sbase, bits),
-        );
+        let (qo, so) = setup_subpu_pair_u8x16_avx2(qbase, sbase, bits);
+        setup_store_u8x16_avx2(q_thr_dst, x * 16, qo);
+        setup_store_u8x16_avx2(side_thr_dst, x * 16, so);
     }
     left_q_thr[..h].fill(thr_lut[0][0] as u8);
     left_side_thr[..h].fill(thr_lut[1][0] as u8);
@@ -3224,16 +3234,13 @@ pub(crate) fn setup_thr_rows_seg_8bpc_avx2(
         let cur_q = _mm_shuffle_epi8(qlut, segv);
         let cur_s = _mm_shuffle_epi8(slut, segv);
         let bits = (mask[starty4 + y][4][mask_idx] >> mask_shift) as u16;
-        setup_store_u8x16_avx2(
-            q_thr_dst,
-            y * 16,
-            setup_apply_subpu_u8x16_avx2(setup_edge_u8x16_avx2(cur_q, prev_q), bits),
+        let (qo, so) = setup_subpu_pair_u8x16_avx2(
+            setup_edge_u8x16_avx2(cur_q, prev_q),
+            setup_edge_u8x16_avx2(cur_s, prev_s),
+            bits,
         );
-        setup_store_u8x16_avx2(
-            side_thr_dst,
-            y * 16,
-            setup_apply_subpu_u8x16_avx2(setup_edge_u8x16_avx2(cur_s, prev_s), bits),
-        );
+        setup_store_u8x16_avx2(q_thr_dst, y * 16, qo);
+        setup_store_u8x16_avx2(side_thr_dst, y * 16, so);
         prev_q = cur_q;
         prev_s = cur_s;
     }
@@ -3288,14 +3295,13 @@ pub(crate) fn setup_thr_cols_seg_8bpc_avx2(
         for x in 0..w {
             bits |= ((mask[bx4_base + x][4][mask_idx] >> shift) & 1) << x;
         }
-        let q_arr = setup_store_tmp_u8x16_avx2(setup_apply_subpu_u8x16_avx2(
+        let (qo, so) = setup_subpu_pair_u8x16_avx2(
             setup_edge_u8x16_avx2(cur_q, prev_q),
-            bits,
-        ));
-        let s_arr = setup_store_tmp_u8x16_avx2(setup_apply_subpu_u8x16_avx2(
             setup_edge_u8x16_avx2(cur_s, prev_s),
             bits,
-        ));
+        );
+        let q_arr = setup_store_tmp_u8x16_avx2(qo);
+        let s_arr = setup_store_tmp_u8x16_avx2(so);
         for x in 0..w {
             q_thr_dst[x * 16 + y] = q_arr[x];
             side_thr_dst[x * 16 + y] = s_arr[x];

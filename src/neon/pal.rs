@@ -32,7 +32,7 @@ use std::arch::aarch64::*;
 #[inline]
 #[target_feature(enable = "neon")]
 fn load_idx2(idx: &[u8]) -> uint8x16_t {
-    unsafe { vreinterpretq_u8_u16(vld1q_lane_u16::<2>(idx.as_ptr().cast(), vdupq_n_u16(0))) }
+    unsafe { vreinterpretq_u8_u16(vld1q_lane_u16::<0>(idx.as_ptr().cast(), vdupq_n_u16(0))) }
 }
 
 #[inline]
@@ -154,7 +154,7 @@ pub(crate) fn pal_pred_8bpc_neon(
     let idx_stride = w >> 1;
 
     for (dst_row, idx_row) in dst
-        .chunks_exact_mut(stride)
+        .chunks_mut(stride)
         .zip(idx.chunks_exact(idx_stride))
         .take(h)
     {
@@ -196,7 +196,7 @@ pub(crate) fn pal_pred_hbd_neon(
     let idx_stride = w >> 1;
 
     for (dst_row, idx_row) in dst
-        .chunks_exact_mut(stride)
+        .chunks_mut(stride)
         .zip(idx.chunks_exact(idx_stride))
         .take(h)
     {

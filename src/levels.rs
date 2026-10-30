@@ -183,6 +183,8 @@ pub(crate) const ANGLE_HAS_LEFT_FLAG: i32 = 1 << 16;
 pub(crate) const ANGLE_HAS_TOP_FLAG: i32 = 1 << 17;
 pub(crate) const ANGLE_DIP_FLAG: i32 = 1 << 18;
 pub(crate) const ANGLE_IS_LUMA: i32 = 1 << 19;
+/// Sequence-level IBP enable; gates the z1/z3 top-left corner filter.
+pub(crate) const ANGLE_SEQHDR_IBP_FLAG: i32 = 1 << 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

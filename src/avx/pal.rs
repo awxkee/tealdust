@@ -155,7 +155,7 @@ pub(crate) fn pal_pred_8bpc_avx2(
     let idx_stride = w >> 1;
 
     for (dst_row, idx_row) in dst
-        .chunks_exact_mut(stride)
+        .chunks_mut(stride)
         .zip(idx.chunks_exact(idx_stride))
         .take(h)
     {
@@ -197,7 +197,7 @@ pub(crate) fn pal_pred_hbd_avx2(
     let idx_stride = w >> 1;
 
     for (dst_row, idx_row) in dst
-        .chunks_exact_mut(stride)
+        .chunks_mut(stride)
         .zip(idx.chunks_exact(idx_stride))
         .take(h)
     {

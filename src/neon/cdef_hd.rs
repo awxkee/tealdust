@@ -306,8 +306,15 @@ fn cdef_min_i16q(a: int16x8_t, b: int16x8_t) -> int16x8_t {
 #[target_feature(enable = "neon")]
 fn cnst_i16(diff: int16x4_t, threshold: int16x4_t, nsh: int16x4_t) -> int16x4_t {
     let zero = vdup_n_s16(0);
+    // See `cnst_i16q`: shift |diff| as unsigned so a wrapped 0x8000 stays large.
     let adiff = vabs_s16(diff);
-    let t = vmax_s16(zero, vsub_s16(threshold, vshl_s16(adiff, nsh)));
+    let t = vmax_s16(
+        zero,
+        vsub_s16(
+            threshold,
+            vreinterpret_s16_u16(vshl_u16(vreinterpret_u16_s16(adiff), nsh)),
+        ),
+    );
     let m = vreinterpret_s16_u16(vmin_u16(
         vreinterpret_u16_s16(adiff),
         vreinterpret_u16_s16(t),
@@ -361,8 +368,16 @@ fn madd_tap_i16q(sum: int16x8_t, v: int16x8_t, tap: i32) -> int16x8_t {
 #[target_feature(enable = "neon")]
 fn constrain_i16q(diff: int16x8_t, threshold: int16x8_t, nsh: int16x8_t) -> int16x8_t {
     let zero = vdupq_n_s16(0);
+    // |i16::MIN| (padding sentinel minus a 0 pixel) wraps to 0x8000; shifting it
+    // as unsigned keeps it large so the tap is zeroed, as in the scalar path.
     let adiff = vabsq_s16(diff);
-    let t = vmaxq_s16(zero, vsubq_s16(threshold, vshlq_s16(adiff, nsh)));
+    let t = vmaxq_s16(
+        zero,
+        vsubq_s16(
+            threshold,
+            vreinterpretq_s16_u16(vshlq_u16(vreinterpretq_u16_s16(adiff), nsh)),
+        ),
+    );
     let m = vreinterpretq_s16_u16(vminq_u16(
         vreinterpretq_u16_s16(adiff),
         vreinterpretq_u16_s16(t),

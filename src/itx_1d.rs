@@ -1489,7 +1489,7 @@ pub(crate) fn residual_add_ctx<BD: crate::pixel::BitDepth>(
 ) {
     match dpcm_flag {
         1 => {
-            for (c, dst) in c.chunks_exact(w).zip(dst.chunks_exact_mut(stride)).take(h) {
+            for (c, dst) in c.chunks_exact(w).zip(dst.chunks_mut(stride)).take(h) {
                 let mut acc = 0i32;
                 for (dst, &c) in dst[..w].iter_mut().zip(c.iter()) {
                     acc += (c + rnd) >> shift;

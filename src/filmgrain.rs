@@ -904,8 +904,9 @@ pub(crate) fn fgy_32x32xn_8bpc(
     let mut seed = [0u32; 2];
     for i in 0..rows {
         seed[i] = in_seed;
-        seed[i] ^= ((((row_num - i as i32) * 37 + 178) & 0xFF) as u32) << 8;
-        seed[i] ^= (((row_num - i as i32) * 173 + 105) & 0xFF) as u32;
+        let rel_row_num = (row_num - i as i32) << data.block_size;
+        seed[i] ^= (((rel_row_num * 37 + 178) & 0xFF) as u32) << 8;
+        seed[i] ^= ((rel_row_num * 173 + 105) & 0xFF) as u32;
     }
 
     let mut offsets = [[[0i32; 2]; 2]; 2];
@@ -1097,8 +1098,9 @@ pub(crate) fn fguv_32x32xn_8bpc(
     let mut seed = [0u32; 2];
     for i in 0..rows {
         seed[i] = in_seed;
-        seed[i] ^= ((((row_num - i as i32) * 37 + 178) & 0xFF) as u32) << 8;
-        seed[i] ^= (((row_num - i as i32) * 173 + 105) & 0xFF) as u32;
+        let rel_row_num = (row_num - i as i32) << data.block_size;
+        seed[i] ^= (((rel_row_num * 37 + 178) & 0xFF) as u32) << 8;
+        seed[i] ^= ((rel_row_num * 173 + 105) & 0xFF) as u32;
     }
 
     let mut offsets = [[[0i32; 2]; 2]; 2];
@@ -1444,8 +1446,9 @@ pub(crate) fn fgy_32x32xn_hbd(
     let mut seed = [0u32; 2];
     for i in 0..rows {
         seed[i] = in_seed;
-        seed[i] ^= ((((row_num - i as i32) * 37 + 178) & 0xFF) as u32) << 8;
-        seed[i] ^= (((row_num - i as i32) * 173 + 105) & 0xFF) as u32;
+        let rel_row_num = (row_num - i as i32) << data.block_size;
+        seed[i] ^= (((rel_row_num * 37 + 178) & 0xFF) as u32) << 8;
+        seed[i] ^= ((rel_row_num * 173 + 105) & 0xFF) as u32;
     }
 
     let mut offsets = [[[0i32; 2]; 2]; 2];
@@ -1643,8 +1646,9 @@ pub(crate) fn fguv_32x32xn_hbd(
     let mut seed = [0u32; 2];
     for i in 0..rows {
         seed[i] = in_seed;
-        seed[i] ^= ((((row_num - i as i32) * 37 + 178) & 0xFF) as u32) << 8;
-        seed[i] ^= (((row_num - i as i32) * 173 + 105) & 0xFF) as u32;
+        let rel_row_num = (row_num - i as i32) << data.block_size;
+        seed[i] ^= (((rel_row_num * 37 + 178) & 0xFF) as u32) << 8;
+        seed[i] ^= ((rel_row_num * 173 + 105) & 0xFF) as u32;
     }
 
     let mut offsets = [[[0i32; 2]; 2]; 2];

@@ -1120,3 +1120,146 @@ pub(crate) fn resolve_cdef_filter_hbd_shapes() -> &'static [CdefFilterHbdShapeFn
         _f
     })
 }
+
+#[cfg(test)]
+mod simd_matches_scalar_tests {
+    use super::*;
+    use crate::intops::{imax, ulog2};
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn r(&mut self, n: u32) -> i32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            ((self.0 >> 16) as u32 % n) as i32
+        }
+    }
+
+    /// Random strengths with the shifts/taps `cdef.rs` derives from them.
+    fn strengths(rng: &mut Rng, bdm8: i32) -> (i32, i32, i32, i32, i32, usize) {
+        let pri = if rng.r(4) == 0 {
+            0
+        } else {
+            (1 + rng.r(15)) << bdm8
+        };
+        let sec = [0, 1, 2, 4][rng.r(4) as usize] << bdm8;
+        let pri = if pri == 0 && sec == 0 { 1 << bdm8 } else { pri };
+        let damping = 3 + rng.r(4) + bdm8;
+        let pri_tap = if pri != 0 { 4 - ((pri >> bdm8) & 1) } else { 0 };
+        let pri_shift = if pri != 0 {
+            imax(0, damping - ulog2(pri as u32))
+        } else {
+            0
+        };
+        let sec_shift = if sec != 0 {
+            damping - ulog2(sec as u32)
+        } else {
+            0
+        };
+        (pri, sec, pri_shift, sec_shift, pri_tap, rng.r(8) as usize)
+    }
+
+    /// Padded CDEF input: block pixels in range, border taps sometimes the
+    /// `i16::MIN` sentinel. Dark pixels are common so that `0 - i16::MIN`, whose
+    /// 16-bit magnitude wraps, is exercised.
+    fn tmp_block(rng: &mut Rng, ts: usize, w: usize, h: usize, max: u32) -> Vec<i16> {
+        (0..ts * 12)
+            .map(|i| {
+                let inner = (2..2 + w).contains(&(i % ts)) && (2..2 + h).contains(&(i / ts));
+                if !inner && rng.r(10) == 0 {
+                    i16::MIN
+                } else if rng.r(4) == 0 {
+                    0
+                } else {
+                    rng.r(max) as i16
+                }
+            })
+            .collect()
+    }
+
+    const SHAPES: [(usize, usize); 4] = [(8, 8), (4, 8), (4, 4), (8, 4)];
+
+    #[test]
+    fn find_dir_matches_scalar() {
+        let mut rng = Rng(0x1234_5678_9abc);
+        for _ in 0..20000 {
+            let img: Vec<u8> = (0..64).map(|_| rng.r(256) as u8).collect();
+            let (mut v0, mut v1) = (0, 0);
+            let d0 = cdef_find_dir_8bpc_scalar(&img, 8, &mut v0);
+            let d1 = unsafe { resolve_cdef_dir_8bpc()(&img, 8, &mut v1) };
+            assert_eq!((d0, v0), (d1, v1));
+            for bdm8 in [2, 4] {
+                let img: Vec<u16> = (0..64).map(|_| rng.r(1 << (8 + bdm8)) as u16).collect();
+                let (mut v0, mut v1) = (0, 0);
+                let d0 = cdef_find_dir_hbd_scalar(&img, 8, bdm8, &mut v0);
+                let d1 = unsafe { resolve_cdef_dir_hbd()(&img, 8, bdm8, &mut v1) };
+                assert_eq!((d0, v0), (d1, v1), "bdm8={bdm8}");
+            }
+        }
+    }
+
+    #[test]
+    fn filter_8bpc_matches_scalar() {
+        let mut rng = Rng(0xdead_beef_1234);
+        let ts = 16;
+        let o = 2 * ts + 2;
+        for _ in 0..20000 {
+            let si = rng.r(4) as usize;
+            let (w, h) = SHAPES[si];
+            let tmp = tmp_block(&mut rng, ts, w, h, 256);
+            let (pri, sec, ps, ss, pt, dir) = strengths(&mut rng, 0);
+            let mut d0 = vec![7u8; 16 * 8];
+            let mut d1 = d0.clone();
+            let mut d2 = d0.clone();
+            cdef_filter_block_8bpc_scalar(
+                &mut d0, 16, 0, &tmp, ts, o, pri, sec, ps, ss, pt, dir, w, h,
+            );
+            unsafe {
+                resolve_cdef_filter_shapes()[si](
+                    &mut d1, 16, 0, &tmp, ts, o, pri, sec, ps, ss, pt, dir,
+                );
+                resolve_cdef_filter()(&mut d2, 16, 0, &tmp, ts, o, pri, sec, ps, ss, pt, dir, w, h);
+            }
+            assert_eq!(d0, d1, "shape {w}x{h} pri={pri} sec={sec} dir={dir}");
+            assert_eq!(d0, d2, "generic {w}x{h} pri={pri} sec={sec} dir={dir}");
+        }
+    }
+
+    #[test]
+    fn filter_hbd_matches_scalar() {
+        let mut rng = Rng(0x00fe_edf0_0d77);
+        let ts = 16;
+        let o = 2 * ts + 2;
+        for _ in 0..20000 {
+            let bdm8 = [2, 4][rng.r(2) as usize];
+            let si = rng.r(4) as usize;
+            let (w, h) = SHAPES[si];
+            let tmp = tmp_block(&mut rng, ts, w, h, 1 << (8 + bdm8));
+            let (pri, sec, ps, ss, pt, dir) = strengths(&mut rng, bdm8);
+            let mut d0 = vec![7u16; 16 * 8];
+            let mut d1 = d0.clone();
+            let mut d2 = d0.clone();
+            cdef_filter_block_hbd_scalar(
+                &mut d0, 16, 0, &tmp, ts, o, pri, sec, ps, ss, pt, dir, w, h,
+            );
+            unsafe {
+                resolve_cdef_filter_hbd_shapes()[si](
+                    &mut d1, 16, 0, &tmp, ts, o, pri, sec, ps, ss, pt, dir,
+                );
+                resolve_cdef_filter_hbd()(
+                    &mut d2, 16, 0, &tmp, ts, o, pri, sec, ps, ss, pt, dir, w, h,
+                );
+            }
+            assert_eq!(
+                d0, d1,
+                "shape {w}x{h} bdm8={bdm8} pri={pri} sec={sec} dir={dir}"
+            );
+            assert_eq!(
+                d0, d2,
+                "generic {w}x{h} bdm8={bdm8} pri={pri} sec={sec} dir={dir}"
+            );
+        }
+    }
+}

@@ -1048,6 +1048,11 @@ where
                         } else {
                             0
                         }
+                        | if recon.frame.seq_ibp {
+                            crate::levels::ANGLE_SEQHDR_IBP_FLAG
+                        } else {
+                            0
+                        }
                         | if recon.frame.seq_intra_edge_filter {
                             crate::levels::ANGLE_USE_EDGE_FILTER_FLAG
                         } else {
@@ -1734,6 +1739,11 @@ where
             }
             | if apply_ibp {
                 crate::levels::ANGLE_IBP_FLAG
+            } else {
+                0
+            }
+            | if recon.frame.seq_ibp {
+                crate::levels::ANGLE_SEQHDR_IBP_FLAG
             } else {
                 0
             }

@@ -3879,3 +3879,137 @@ pub(crate) fn splat_comp_warpmv(
         bh4 -= 2;
     }
 }
+
+#[cfg(test)]
+mod splat_simd_matches_scalar_tests {
+    use super::*;
+
+    fn key(b: &Block) -> (u8, i8, u8, u8, i32, i32) {
+        let mv = b.mv[0].xy();
+        (b.bs, b.mf, b.ox4, b.oy4, mv.y, mv.x)
+    }
+
+    fn t_key(t: &TemporalBlock) -> (u32, i16) {
+        (t.mv.packed(), t.reference.pair())
+    }
+
+    /// `s_dst` starts at the block's x offset inside a 128-wide row buffer, so
+    /// at the bottom of the buffer the last row pair is a partial chunk.
+    #[test]
+    fn splat_into_last_rows_matches_scalar() {
+        const ROWS: usize = 32;
+        let t_stride = 64isize;
+        for bw4 in [1i32, 2, 4, 8, 16, 32] {
+            for bh4 in [1i32, 2, 4, 8, 16, 32] {
+                for x0 in [0usize, 2, 30, 128 - bw4 as usize] {
+                    let y0 = ROWS - bh4 as usize;
+                    let off = y0 * 128 + x0;
+                    let mut src = Block {
+                        bs: 7,
+                        mf: 2,
+                        ..Default::default()
+                    };
+                    src.mv[0] = Mv {
+                        c: MvXY { y: -24, x: 40 },
+                    };
+                    let t_src = TemporalBlock {
+                        mv: TemporalBlockMv::from_packed(0x0102_0304),
+                        reference: RefPair::from_pair(5),
+                    };
+                    let blank = Block {
+                        bs: 0xff,
+                        ..Default::default()
+                    };
+
+                    let mut s0 = vec![blank; ROWS * 128];
+                    let mut s1 = s0.clone();
+                    let mut t0 = vec![TemporalBlock::default(); 64 * ROWS];
+                    let mut t1 = t0.clone();
+                    let (mut b0, mut b1) = (src, src);
+                    splat_mv_scalar(
+                        &mut s0[off..],
+                        &mut b0,
+                        Some(&mut t0[..]),
+                        t_stride,
+                        &t_src,
+                        bw4,
+                        bh4,
+                    );
+                    splat_mv(
+                        &mut s1[off..],
+                        &mut b1,
+                        Some(&mut t1[..]),
+                        t_stride,
+                        &t_src,
+                        bw4,
+                        bh4,
+                    );
+                    for i in 0..s0.len() {
+                        assert_eq!(
+                            key(&s0[i]),
+                            key(&s1[i]),
+                            "splat_mv {bw4}x{bh4} x0={x0} at {i}"
+                        );
+                    }
+                    for i in 0..t0.len() {
+                        assert_eq!(
+                            t_key(&t0[i]),
+                            t_key(&t1[i]),
+                            "splat_mv tmv {bw4}x{bh4} x0={x0} at {i}"
+                        );
+                    }
+                    assert_eq!((b0.ox4, b0.oy4), (b1.ox4, b1.oy4));
+
+                    if bw4 < 2 || bh4 < 2 {
+                        continue;
+                    }
+                    let mat = WarpedMotionParams::default();
+                    let mut s0 = vec![blank; ROWS * 128];
+                    let mut s1 = s0.clone();
+                    let mut t0 = vec![TemporalBlock::default(); 64 * ROWS];
+                    let mut t1 = t0.clone();
+                    let (mut b0, mut b1) = (src, src);
+                    let (mut ts0, mut ts1) = (t_src, t_src);
+                    splat_warpmv_scalar(
+                        &mut s0[off..],
+                        &mut b0,
+                        Some(&mut t0[..]),
+                        t_stride,
+                        &mut ts0,
+                        1 << 16,
+                        -(1 << 15),
+                        &mat,
+                        bw4,
+                        bh4,
+                    );
+                    splat_warpmv(
+                        &mut s1[off..],
+                        &mut b1,
+                        Some(&mut t1[..]),
+                        t_stride,
+                        &mut ts1,
+                        1 << 16,
+                        -(1 << 15),
+                        &mat,
+                        bw4,
+                        bh4,
+                    );
+                    for i in 0..s0.len() {
+                        assert_eq!(
+                            key(&s0[i]),
+                            key(&s1[i]),
+                            "splat_warpmv {bw4}x{bh4} x0={x0} at {i}"
+                        );
+                    }
+                    for i in 0..t0.len() {
+                        assert_eq!(
+                            t_key(&t0[i]),
+                            t_key(&t1[i]),
+                            "splat_warpmv tmv {bw4}x{bh4} x0={x0} at {i}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

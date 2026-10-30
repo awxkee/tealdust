@@ -1432,3 +1432,41 @@ pub(crate) fn resolve_ipred_dip_hbd() -> DipPredHbdFn {
         _f
     })
 }
+
+#[cfg(test)]
+mod pal_pred_simd_matches_scalar_tests {
+    use super::*;
+
+    #[test]
+    fn pal_pred_matches_scalar() {
+        let mut st = 0x9e37_79b9_7f4a_7c15u64;
+        let mut r = || {
+            st ^= st << 13;
+            st ^= st >> 7;
+            st ^= st << 17;
+            (st >> 11) as u32
+        };
+        let stride = 80;
+        for _ in 0..200 {
+            for w in [4usize, 8, 16, 32, 64] {
+                for h in [4usize, 8, 16, 32, 64] {
+                    let pal8: Vec<u8> = (0..8).map(|_| r() as u8).collect();
+                    let pal16: Vec<u16> = (0..8).map(|_| (r() & 1023) as u16).collect();
+                    let idx: Vec<u8> = (0..w * h / 2)
+                        .map(|_| ((r() & 7) | ((r() & 7) << 4)) as u8)
+                        .collect();
+                    let mut d0 = vec![0u8; stride * h];
+                    let mut d1 = d0.clone();
+                    pal_pred_8bpc_scalar(&mut d0, stride, &pal8, &idx, w, h);
+                    unsafe { resolve_pal_pred_8bpc()(&mut d1, stride, &pal8, &idx, w, h) };
+                    assert_eq!(d0, d1, "8bpc {w}x{h}");
+                    let mut e0 = vec![0u16; stride * h];
+                    let mut e1 = e0.clone();
+                    pal_pred_hbd_scalar(&mut e0, stride, &pal16, &idx, w, h);
+                    unsafe { resolve_pal_pred_hbd()(&mut e1, stride, &pal16, &idx, w, h) };
+                    assert_eq!(e0, e1, "hbd {w}x{h}");
+                }
+            }
+        }
+    }
+}

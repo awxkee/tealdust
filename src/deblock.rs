@@ -766,6 +766,15 @@ pub(crate) struct DeblockCtx<'a> {
     pub(crate) layout: PixelLayout,
 }
 
+/// Sub-PU shift for a (q_thr, side_thr) pair; a zero side_thr disables
+/// filtering, so q_thr is zeroed with it (dav2d `apply_sub_pu`).
+#[inline(always)]
+fn apply_sub_pu(q_thr: u32, side_thr: u32, subpu: u32) -> (u8, u8) {
+    let q = q_thr >> subpu;
+    let side = side_thr >> subpu;
+    ((if side != 0 { q } else { 0 }) as u8, side as u8)
+}
+
 #[inline]
 fn edge_thr(cur: i32, prev: i32) -> i32 {
     if cur != 0 && prev != 0 {
@@ -974,13 +983,13 @@ fn setup_thr_cols(
             let cur_q_thr = q_lut[seg_id] as i32;
             let cur_side_thr = side_lut[seg_id] as i32;
 
-            let subpu = 3 * (((mask_col[4][mask_idx] >> (mask_shift + y4 as u32)) & 1) as i32);
+            let subpu = 3 * ((mask_col[4][mask_idx] >> (mask_shift + y4 as u32)) & 1) as u32;
 
-            let eq = edge_thr(cur_q_thr, prev_q_thr) >> subpu;
-            let es = edge_thr(cur_side_thr, prev_side_thr) >> subpu;
-
-            *q_dst = eq as u8;
-            *side_dst = es as u8;
+            (*q_dst, *side_dst) = apply_sub_pu(
+                edge_thr(cur_q_thr, prev_q_thr) as u32,
+                edge_thr(cur_side_thr, prev_side_thr) as u32,
+                subpu,
+            );
 
             prev_q_thr = cur_q_thr;
             prev_side_thr = cur_side_thr;
@@ -1041,8 +1050,7 @@ fn setup_thr_cols_simple(
         let side_out = side_thr_dst[y4..].iter_mut().step_by(16).take(w);
         for ((mask_col, q_dst), side_dst) in mask_cols.iter().zip(q_out).zip(side_out) {
             let subpu = 3 * (((mask_col[4][mask_idx] >> shift) & 1) as u32);
-            *q_dst = (q >> subpu) as u8;
-            *side_dst = (side >> subpu) as u8;
+            (*q_dst, *side_dst) = apply_sub_pu(q, side, subpu);
         }
     }
 }
@@ -1104,8 +1112,11 @@ fn setup_thr_cols_dq(
         let q_out = q_thr_dst[y4..].iter_mut().step_by(16).take(w);
         let side_out = side_thr_dst[y4..].iter_mut().step_by(16).take(w);
         let first_subpu = 3 * (((mask_cols[0][4][mask_idx] >> shift) & 1) as u32);
-        let first_q = (edge_thr(q as i32, i32::from(left_q_thr[y4])) >> first_subpu) as u8;
-        let first_side = (edge_thr(side as i32, i32::from(left_side_thr[y4])) >> first_subpu) as u8;
+        let (first_q, first_side) = apply_sub_pu(
+            edge_thr(q as i32, i32::from(left_q_thr[y4])) as u32,
+            edge_thr(side as i32, i32::from(left_side_thr[y4])) as u32,
+            first_subpu,
+        );
 
         for (x4, ((mask_col, q_dst), side_dst)) in
             mask_cols.iter().zip(q_out).zip(side_out).enumerate()
@@ -1115,8 +1126,7 @@ fn setup_thr_cols_dq(
                 *side_dst = first_side;
             } else {
                 let subpu = 3 * (((mask_col[4][mask_idx] >> shift) & 1) as u32);
-                *q_dst = (q >> subpu) as u8;
-                *side_dst = (side >> subpu) as u8;
+                (*q_dst, *side_dst) = apply_sub_pu(q, side, subpu);
             }
         }
 
@@ -1181,8 +1191,7 @@ fn setup_thr_rows_simple(
         let side_row = &mut side_row[..w];
         for (x4, (q_dst, side_dst)) in q_row.iter_mut().zip(side_row.iter_mut()).enumerate() {
             let subpu = 3 * (((mask_row[4][mask_idx] >> (mask_shift + x4 as u32)) & 1) as u32);
-            *q_dst = (q >> subpu) as u8;
-            *side_dst = (side >> subpu) as u8;
+            (*q_dst, *side_dst) = apply_sub_pu(q, side, subpu);
         }
     }
 }
@@ -1270,13 +1279,15 @@ fn setup_thr_rows_dq(
         let side_row = &mut side_row[..w];
         for (x4, (q_dst, side_dst)) in q_row.iter_mut().zip(side_row.iter_mut()).enumerate() {
             let subpu = 3 * (((mask_row[4][mask_idx] >> (mask_shift + x4 as u32)) & 1) as u32);
-            if y4 == 0 {
-                *q_dst = (edge_thr(q as i32, i32::from(above_q[x4])) >> subpu) as u8;
-                *side_dst = (edge_thr(side as i32, i32::from(above_side[x4])) >> subpu) as u8;
+            (*q_dst, *side_dst) = if y4 == 0 {
+                apply_sub_pu(
+                    edge_thr(q as i32, i32::from(above_q[x4])) as u32,
+                    edge_thr(side as i32, i32::from(above_side[x4])) as u32,
+                    subpu,
+                )
             } else {
-                *q_dst = (q >> subpu) as u8;
-                *side_dst = (side >> subpu) as u8;
-            }
+                apply_sub_pu(q, side, subpu)
+            };
         }
     }
 }
@@ -1409,13 +1420,13 @@ fn setup_thr_rows(
             let cur_q_thr = q_lut[seg_id] as i32;
             let cur_side_thr = side_lut[seg_id] as i32;
 
-            let subpu = 3 * (((mask_row[4][mask_idx] >> (mask_shift + x4 as u32)) & 1) as i32);
+            let subpu = 3 * ((mask_row[4][mask_idx] >> (mask_shift + x4 as u32)) & 1) as u32;
 
-            let eq = edge_thr(cur_q_thr, *q_prev) >> subpu;
-            let es = edge_thr(cur_side_thr, *side_prev) >> subpu;
-
-            *q_dst = eq as u8;
-            *side_dst = es as u8;
+            (*q_dst, *side_dst) = apply_sub_pu(
+                edge_thr(cur_q_thr, *q_prev) as u32,
+                edge_thr(cur_side_thr, *side_prev) as u32,
+                subpu,
+            );
 
             *q_prev = cur_q_thr;
             *side_prev = cur_side_thr;
