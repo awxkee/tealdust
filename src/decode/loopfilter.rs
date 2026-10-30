@@ -643,7 +643,13 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
     }
 
     let cdef_stage_on = stages & (STAGE_CDEF | STAGE_CDEF_SAVE | STAGE_CDEF_FILTER) != 0;
-    if cdef_stage_on && seq_hdr.cdef && inloop & (INLOOPFILTER_CDEF | INLOOPFILTER_CCSO) != 0 {
+    // CCSO runs inside the CDEF stage, so a stream with cdef=0 must still enter
+    // it when any CCSO plane is enabled.
+    let ccso_any = frame_hdr.ccso.p.iter().any(|p| p.enabled != 0);
+    if cdef_stage_on
+        && (seq_hdr.cdef || ccso_any)
+        && inloop & (INLOOPFILTER_CDEF | INLOOPFILTER_CCSO) != 0
+    {
         // Spec order (deblock-all then CDEF-all): the pre-CDEF border SAVE and the
         // FILTER both read the fully deblocked plane. SAVE is a cheap single-owner
         // pass; FILTER is data-parallel across rows. STAGE_CDEF does both (serial).
@@ -885,6 +891,8 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                 cur_stride: [fp.y_stride, fp.uv_stride],
                 unit_size: frame_hdr.restoration.unit_size,
                 restore_planes: sh.restore_planes,
+                col_start_sb: &frame_hdr.tiling.t.col_start_sb[..=frame_hdr.tiling.t.cols as usize],
+                sbsz: 4 * sb_step,
             };
             let mut dst: [&mut [u8]; 3] = [dst_y, dst_u, dst_v];
             crate::looprestoration::lr_sbrow_8bpc(&ctx, &mut dst, root_sby);
@@ -1047,7 +1055,13 @@ fn filter_sb64_hbd(
     }
 
     let cdef_stage_on = stages & (STAGE_CDEF | STAGE_CDEF_SAVE | STAGE_CDEF_FILTER) != 0;
-    if cdef_stage_on && seq_hdr.cdef && inloop & (INLOOPFILTER_CDEF | INLOOPFILTER_CCSO) != 0 {
+    // CCSO runs inside the CDEF stage, so a stream with cdef=0 must still enter
+    // it when any CCSO plane is enabled.
+    let ccso_any = frame_hdr.ccso.p.iter().any(|p| p.enabled != 0);
+    if cdef_stage_on
+        && (seq_hdr.cdef || ccso_any)
+        && inloop & (INLOOPFILTER_CDEF | INLOOPFILTER_CCSO) != 0
+    {
         // Spec order (deblock-all then CDEF-all): the pre-CDEF border SAVE and the
         // FILTER both read the fully deblocked plane. SAVE is a cheap single-owner
         // pass; FILTER is data-parallel across rows. STAGE_CDEF does both (serial).
@@ -1270,6 +1284,8 @@ fn filter_sb64_hbd(
                 cur_stride: [y_stride, uv_stride],
                 unit_size: frame_hdr.restoration.unit_size,
                 restore_planes: sh.restore_planes,
+                col_start_sb: &frame_hdr.tiling.t.col_start_sb[..=frame_hdr.tiling.t.cols as usize],
+                sbsz: 4 * sb_step,
                 bitdepth_min_8: bd.bitdepth_min_8(),
                 bitdepth_max: bd.bitdepth_max(),
             };

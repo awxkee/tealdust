@@ -1236,7 +1236,7 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
             &mut l_buffers[0],
             o,
             luma,
-            luma_off - 4 * lstride,
+            luma_off - (2 << ss_ver) * lstride,
             lstride,
             luma_w,
             edges,
@@ -1249,7 +1249,7 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
             &mut l_buffers[1],
             o,
             luma,
-            luma_off - 2 * lstride,
+            luma_off - (1 << ss_ver) * lstride,
             lstride,
             luma_w,
             edges,
@@ -1926,6 +1926,10 @@ pub(crate) struct LrContext<'a> {
     pub(crate) cur_stride: [isize; 2],
     pub(crate) unit_size: [u8; 2],
     pub(crate) restore_planes: i32,
+    /// Tile column starts in SB units, including the trailing end entry.
+    pub(crate) col_start_sb: &'a [u16],
+    /// Luma SB size in pixels.
+    pub(crate) sbsz: i32,
 }
 
 fn lr_stripe_8bpc(
@@ -2035,7 +2039,7 @@ fn lr_stripe_8bpc(
             + x as isize) as usize;
     let mut llpf_off =
         (have_tt as isize * (sby as isize * (4 << ctx.sb128 as i32) - 4) * lstride_u as isize
-            + (x * 2) as isize) as usize;
+            + (x << ss_hor) as isize) as usize;
 
     while y + stripe_h <= row_h {
         edges ^= ((-(((sby + 1) != ctx.sbh) as i32 | (y + stripe_h != row_h) as i32)) as u8
@@ -2382,11 +2386,20 @@ fn lr_sbrow(
     let mut bit = 0usize;
     let mut x = 0i32;
     let mut cur_p_off = p_off;
+    let mut tile_col = 0usize;
 
     while x + 64 < w {
         let next_x = x + 64;
         let mut next_iter_lru_start_x = next_x & !(unit_size - 1);
-        if next_iter_lru_start_x != 0 && w - next_iter_lru_start_x < half_unit_size {
+        // A short trailing unit merges into the previous one, but never across
+        // the start of a tile column.
+        while tile_col + 2 < ctx.col_start_sb.len()
+            && next_iter_lru_start_x >= (ctx.col_start_sb[tile_col + 1] as i32 * ctx.sbsz) >> ss_hor
+        {
+            tile_col += 1;
+        }
+        let tile_col_start_x = (ctx.col_start_sb[tile_col] as i32 * ctx.sbsz) >> ss_hor;
+        if next_iter_lru_start_x > tile_col_start_x && w - next_iter_lru_start_x < half_unit_size {
             next_iter_lru_start_x -= unit_size;
         }
         let next_u_idx = unit_idx_base + ((next_iter_lru_start_x >> (shift_hor - 2)) & 3);
@@ -3506,7 +3519,7 @@ pub(crate) fn ns_wiener_single_uv_hbd(
             &mut l_buffers[0],
             o,
             luma,
-            luma_off - 4 * lstride,
+            luma_off - (2 << ss_ver) * lstride,
             lstride,
             luma_w,
             edges,
@@ -3519,7 +3532,7 @@ pub(crate) fn ns_wiener_single_uv_hbd(
             &mut l_buffers[1],
             o,
             luma,
-            luma_off - 2 * lstride,
+            luma_off - (1 << ss_ver) * lstride,
             lstride,
             luma_w,
             edges,
@@ -3767,6 +3780,10 @@ pub(crate) struct LrContextHbd<'a> {
     pub(crate) restore_planes: i32,
     pub(crate) bitdepth_min_8: i32,
     pub(crate) bitdepth_max: i32,
+    /// Tile column starts in SB units, including the trailing end entry.
+    pub(crate) col_start_sb: &'a [u16],
+    /// Luma SB size in pixels.
+    pub(crate) sbsz: i32,
 }
 fn lr_stripe_hbd(
     ctx: &LrContextHbd,
@@ -3875,7 +3892,7 @@ fn lr_stripe_hbd(
             + x as isize) as usize;
     let mut llpf_off =
         (have_tt as isize * (sby as isize * (4 << ctx.sb128 as i32) - 4) * lstride_u as isize
-            + (x * 2) as isize) as usize;
+            + (x << ss_hor) as isize) as usize;
 
     while y + stripe_h <= row_h {
         edges ^= ((-(((sby + 1) != ctx.sbh) as i32 | (y + stripe_h != row_h) as i32)) as u8
@@ -4229,11 +4246,20 @@ fn lr_sbrow_hbd_inner(
     let mut bit = 0usize;
     let mut x = 0i32;
     let mut cur_p_off = p_off;
+    let mut tile_col = 0usize;
 
     while x + 64 < w {
         let next_x = x + 64;
         let mut next_iter_lru_start_x = next_x & !(unit_size - 1);
-        if next_iter_lru_start_x != 0 && w - next_iter_lru_start_x < half_unit_size {
+        // A short trailing unit merges into the previous one, but never across
+        // the start of a tile column.
+        while tile_col + 2 < ctx.col_start_sb.len()
+            && next_iter_lru_start_x >= (ctx.col_start_sb[tile_col + 1] as i32 * ctx.sbsz) >> ss_hor
+        {
+            tile_col += 1;
+        }
+        let tile_col_start_x = (ctx.col_start_sb[tile_col] as i32 * ctx.sbsz) >> ss_hor;
+        if next_iter_lru_start_x > tile_col_start_x && w - next_iter_lru_start_x < half_unit_size {
             next_iter_lru_start_x -= unit_size;
         }
         let next_u_idx = unit_idx_base + ((next_iter_lru_start_x >> (shift_hor - 2)) & 3);

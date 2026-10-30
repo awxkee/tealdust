@@ -132,21 +132,32 @@ fn parse_tile_info(
 
     if thdr.uniform {
         let seq_sbsz_log2 = 6 + seq_sb128 as i32;
+        // width/height in full SBs (rounded down, +7 for luma 8px units)
         let fsbw = imax(1, (w + 7) >> seq_sbsz_log2);
         let fsbh = imax(1, (h + 7) >> seq_sbsz_log2);
+        // width/height in extended SBs (rounded up)
+        let ssbw = 1 + ((w - 1) >> seq_sbsz_log2);
+        let ssbh = 1 + ((h - 1) >> seq_sbsz_log2);
 
         thdr.log2_cols = thdr.min_log2_cols;
         while thdr.log2_cols < thdr.max_log2_cols && gb.get_bit() != 0 {
             thdr.log2_cols += 1;
         }
-        let tile_w = imax(1, fsbw >> thdr.log2_cols);
+        let tile_w = fsbw >> thdr.log2_cols;
         let mut extra = imax(0, fsbw - (tile_w << thdr.log2_cols));
+        if tile_w == 0 {
+            extra += ssbw - fsbw;
+        }
         thdr.cols = 0;
+        let max_cols = 1i32 << thdr.log2_cols;
         let mut sbx = 0;
         // log2_cols is capped at max_log2_cols so this is already bounded for
         // valid streams; the explicit MAX_TILE_COLS guard protects against any
         // residual overflow of col_start_sb on malformed input.
-        while sbx < fsbw && (thdr.cols as usize) < crate::headers::MAX_TILE_COLS {
+        while sbx < ssbw
+            && (thdr.cols as i32) < max_cols
+            && (thdr.cols as usize) < crate::headers::MAX_TILE_COLS
+        {
             thdr.col_start_sb[thdr.cols as usize] = (sbx * sbmul) as u16;
             let add = tile_w + if extra > 0 { 1 } else { 0 };
             sbx += add;
@@ -162,11 +173,18 @@ fn parse_tile_info(
         while thdr.log2_rows < thdr.max_log2_rows && gb.get_bit() != 0 {
             thdr.log2_rows += 1;
         }
-        let tile_h = imax(1, fsbh >> thdr.log2_rows);
+        let tile_h = fsbh >> thdr.log2_rows;
         let mut extra = imax(0, fsbh - (tile_h << thdr.log2_rows));
+        if tile_h == 0 {
+            extra += ssbh - fsbh;
+        }
         thdr.rows = 0;
+        let max_rows = 1i32 << thdr.log2_rows;
         let mut sby = 0;
-        while sby < fsbh && (thdr.rows as usize) < crate::headers::MAX_TILE_ROWS {
+        while sby < ssbh
+            && (thdr.rows as i32) < max_rows
+            && (thdr.rows as usize) < crate::headers::MAX_TILE_ROWS
+        {
             thdr.row_start_sb[thdr.rows as usize] = (sby * sbmul) as u16;
             let add = tile_h + if extra > 0 { 1 } else { 0 };
             sby += add;
@@ -254,10 +272,12 @@ pub fn parse_tile_info_frmhdr(
             let seq_sbh = (seqhdr.max_height + seq_sbsz_min1) >> seq_sbsz_log2;
             reuse_allowed = seq_sbw == sbw && seq_sbh == sbh;
         } else {
-            let tile_w = (sbw + seqhdr.tiling.t.cols as i32 - 1) >> seqhdr.tiling.t.log2_cols;
-            let tile_h = (sbh + seqhdr.tiling.t.rows as i32 - 1) >> seqhdr.tiling.t.log2_rows;
-            reuse_allowed = tile_w * (seqhdr.tiling.t.cols as i32 - 1) < sbw
-                && tile_h * (seqhdr.tiling.t.rows as i32 - 1) < sbh;
+            let log2_cols = seqhdr.tiling.t.log2_cols as i32;
+            let log2_rows = seqhdr.tiling.t.log2_rows as i32;
+            let (cols, rows) = (1i32 << log2_cols, 1i32 << log2_rows);
+            let tile_w = (sbw + cols - 1) >> log2_cols;
+            let tile_h = (sbh + rows - 1) >> log2_rows;
+            reuse_allowed = tile_w * (cols - 1) < sbw && tile_h * (rows - 1) < sbh;
         }
     }
 
@@ -350,8 +370,9 @@ pub fn parse_film_grain_data(gb: &mut GetBits, layout: PixelLayout) -> Result<Fi
         }
         let num_pl_pos = num_pos + (pl != 0 && fgd.num_points[0] != 0) as i32;
         let coef_bits = 5 + gb.get_bits(2) as i32;
+        let half = 1 << (coef_bits - 1);
         for i in 0..num_pl_pos as usize {
-            fgd.ar_coeffs[pl][i] = (gb.get_bits(coef_bits) as i32 - 128) as i8;
+            fgd.ar_coeffs[pl][i] = (gb.get_bits(coef_bits) as i32 - half) as i8;
         }
     }
     fgd.ar_coeff_shift = gb.get_bits(2) as u64 + 6;
@@ -551,6 +572,10 @@ pub fn parse_seq_hdr(gb: &mut GetBits, strict: bool) -> Result<SequenceHeader> {
     hdr.cfl = gb.get_bit() != 0;
     if hdr.layout != PixelLayout::I400 {
         hdr.cfl_ds_filter_index = gb.get_bits(2) as u8;
+        // index 3 is reserved; AVM treats it as 0
+        if hdr.cfl_ds_filter_index == 3 {
+            hdr.cfl_ds_filter_index = 0;
+        }
     }
     hdr.mhccp = gb.get_bit() != 0;
     hdr.ibp = gb.get_bit() != 0;
@@ -1136,9 +1161,12 @@ pub fn parse_frame_hdr(
             }
             hdr.allow_local_intrabc = (hdr.allow_global_intrabc == 0 || gb.get_bit() != 0) as u8;
         }
+        // Coded as a reference-uniform value over [MIN, MAX], relative to the
+        // sequence default and offset by MIN (1), like AVM.
         if hdr.allow_intrabc != 0 {
             hdr.max_bvp_drl_bits = if seqhdr.allow_max_bvp_drl_bits {
-                gb.get_ref_uniform(3, seqhdr.def_max_bvp_drl_bits as u32) as u8 + 1
+                gb.get_ref_uniform(3, (seqhdr.def_max_bvp_drl_bits as u32).saturating_sub(1)) as u8
+                    + 1
             } else {
                 seqhdr.def_max_bvp_drl_bits
             };
@@ -1146,7 +1174,7 @@ pub fn parse_frame_hdr(
 
         if hdr.is_inter_or_switch() {
             hdr.max_drl_bits = if seqhdr.allow_frame_max_drl_bits {
-                gb.get_ref_uniform(3, seqhdr.def_max_drl_bits as u32) as u8 + 1
+                gb.get_ref_uniform(5, (seqhdr.def_max_drl_bits as u32).saturating_sub(1)) as u8 + 1
             } else {
                 seqhdr.def_max_drl_bits
             };

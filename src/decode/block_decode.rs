@@ -776,7 +776,9 @@ fn update_block_filter_masks<BD: BitDepth>(
         let bx_idx = ((bx4 & 0x30) >> 4) as usize;
         let mut nmi = by4 >> 1;
         let mut y = 0;
-        while y < bh4u {
+        // "by4 & 1" handles unaligned blocks: a block at by4=1 with bh4=2 must
+        // set noskip_mask for both the by8=0 and the by8=1 rows.
+        while y < bh4u + (by4 & 1) as i32 {
             let nm = &mut m.noskip_mask[nmi];
             nm[bx_idx] |= mask as u16;
             if bw4u >= 32 {
@@ -1926,7 +1928,7 @@ where
     let skip_txfm = has_luma && b.skip_txfm != 0;
 
     if has_luma {
-        let gdf_sz_log2 = if fi.gdf_is_key { 1 } else { imax(1, fi.sb128) };
+        let gdf_sz_log2 = fi.gdf_sz_log2;
         let gdf_bs = 16 << gdf_sz_log2;
         if (bx | by) & (gdf_bs - 1) == 0 {
             let idx = (((by & 48) >> 2) + ((bx & 48) >> 4)) as usize;

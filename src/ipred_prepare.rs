@@ -147,7 +147,8 @@ pub(crate) fn prepare_intra_edges<BD: crate::pixel::BitDepth>(
                 && have_top
                 && mrl_idx == 0
                 && enable_edge_filter
-                && tw4 + th4 >= 6;
+                && tw4 + th4 >= 6
+                && ((intra_flags & ANGLE_SEQHDR_IBP_FLAG) != 0 || mode == Z2_PRED);
         }
         0 => {
             mode = if apply_dip {

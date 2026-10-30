@@ -145,24 +145,24 @@ impl PlaneStorage {
 
 #[inline]
 fn plane_vec_with_len<T: Copy + Default>(len: usize) -> Option<Vec<T>> {
-    let mut v = Vec::new();
-    v.try_reserve_exact(len).ok()?;
-
-    #[cfg(debug_assertions)]
-    {
-        v.resize_with(len, T::default);
+    if len == 0 {
+        return Some(Vec::new());
     }
-
-    #[cfg(not(debug_assertions))]
-    {
-        // SAFETY: `T` is used here only as `u8`/`u16` plane storage. Both have no
-        // drop glue and every bit pattern is a valid value. The decoder already
-        // relies on exactly this no-clear contract for pooled/recycled planes:
-        // reconstruction must write samples before any read observes them.
-        unsafe { v.set_len(len) };
+    // Fresh planes must be initialized: an invalid IntraBC vector can still read
+    // samples that reconstruction has not written yet, and leaving them
+    // uninitialized makes output depend on whatever the allocator hands back.
+    // `alloc_zeroed` is calloc-backed, so large planes come from zero pages
+    // without an explicit memset. Recycled pool planes hold the previous
+    // frame's samples, which are initialized already.
+    let layout = std::alloc::Layout::array::<T>(len).ok()?;
+    // SAFETY: `layout` has non-zero size since `len > 0` and `T` is `u8`/`u16`.
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) }.cast::<T>();
+    if ptr.is_null() {
+        return None;
     }
-
-    Some(v)
+    // SAFETY: `ptr` was allocated by the global allocator with the layout of
+    // `[T; len]`, and all-zero is a valid `u8`/`u16` for every element.
+    Some(unsafe { Vec::from_raw_parts(ptr, len, len) })
 }
 
 impl std::fmt::Debug for PlaneStorage {

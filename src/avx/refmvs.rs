@@ -75,17 +75,12 @@ pub(crate) fn splat_mv_avx2(
     let t_stride = t_stride as usize;
 
     s_src.oy4 = 0;
-    for (yp, row_pair) in s_dst
-        .as_chunks_mut::<256>()
-        .0
-        .iter_mut()
-        .take(h.div_ceil(2))
-        .enumerate()
-    {
+    for (yp, row_pair) in s_dst.chunks_mut(256).take(h.div_ceil(2)).enumerate() {
         let y = yp * 2;
         let oy = y as u8;
-        let (top_row, bottom_part) = row_pair.split_at_mut(128);
-        let bottom_row = &mut bottom_part[..128];
+        // `s_dst` starts at the block's x offset, so the final row pair can be
+        // a partial chunk; it still holds both rows for every column < w.
+        let (top_row, bottom_row) = row_pair.split_at_mut(row_pair.len().min(128));
 
         for (xp, top_pair) in top_row[..w].chunks_mut(2).enumerate() {
             let x = xp * 2;
@@ -142,16 +137,11 @@ pub(crate) fn splat_warpmv_avx2(
     let t_stride = t_stride as usize;
 
     s_src.oy4 = 0;
-    for (yp, row_pair) in s_dst
-        .as_chunks_mut::<256>()
-        .0
-        .iter_mut()
-        .take(h_pairs)
-        .enumerate()
-    {
+    for (yp, row_pair) in s_dst.chunks_mut(256).take(h_pairs).enumerate() {
         let oy = (yp * 2) as u8;
-        let (top_row, bottom_part) = row_pair.split_at_mut(128);
-        let bottom_row = &mut bottom_part[..128];
+        // `s_dst` starts at the block's x offset, so the final row pair can be
+        // a partial chunk; it still holds both rows for every column < w.
+        let (top_row, bottom_row) = row_pair.split_at_mut(row_pair.len().min(128));
         let mut mvxi = mvx;
         let mut mvyi = mvy;
 

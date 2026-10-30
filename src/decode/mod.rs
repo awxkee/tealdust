@@ -337,7 +337,8 @@ pub struct SbFrameInfo {
     pub seg_delta_q: [i16; crate::headers::MAX_SEGMENTS],
     // GDF / CDEF-index / CCSO (read at SB / 64x64 boundaries, before delta-q)
     pub gdf_enabled: crate::headers::AdaptiveBoolean,
-    pub gdf_is_key: bool,
+    /// log2 of the GDF unit size in 64px units.
+    pub gdf_sz_log2: i32,
     pub cur_w: i32,
     pub cur_h: i32,
     pub cdef_enabled: bool,
@@ -421,6 +422,30 @@ pub struct SbFrameInfoArgs<'a> {
     pub tile_row_end: i32,
     pub furthest_future_refidx: i8,
     pub tip: RefPair,
+}
+
+/// GDF unit size (log2, in 64px units): the SB size when
+/// `gdf_unit_matches_sbsz`, otherwise at least 128px, dropping back to 64px
+/// when a tile boundary falls on an odd 64px SB so units never cross tiles.
+pub(crate) fn gdf_unit_log2_from_headers(
+    seq_hdr: &crate::headers::SequenceHeader,
+    frame_hdr: &FrameHeader,
+) -> i32 {
+    let sb128 = frame_hdr.sb128 as i32;
+    let log2 = imax((!seq_hdr.gdf_unit_matches_sbsz) as i32, sb128);
+    if !seq_hdr.gdf_unit_matches_sbsz && sb128 == 0 {
+        let tiles = &frame_hdr.tiling.t;
+        let odd_col = tiles.col_start_sb[1..tiles.cols as usize]
+            .iter()
+            .any(|&s| s & 1 != 0);
+        let odd_row = tiles.row_start_sb[1..tiles.rows as usize]
+            .iter()
+            .any(|&s| s & 1 != 0);
+        if odd_col || odd_row {
+            return 0;
+        }
+    }
+    log2
 }
 
 pub(crate) fn ccso_unit_log2_from_headers(
@@ -535,7 +560,7 @@ impl SbFrameInfo {
             q_vdc_delta: frame_hdr.quant.vdc_delta as i32,
             seg_delta_q: frame_hdr.segmentation.d.delta_q,
             gdf_enabled: frame_hdr.gdf.enabled,
-            gdf_is_key: frame_hdr.frame_type == crate::headers::FrameType::Key,
+            gdf_sz_log2: gdf_unit_log2_from_headers(seq_hdr, frame_hdr),
             cur_w: frame_hdr.width,
             cur_h: frame_hdr.height,
             cdef_enabled: frame_hdr.cdef.enabled != 0,
