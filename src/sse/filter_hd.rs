@@ -393,3 +393,52 @@ pub(crate) fn morph_row_hbd_sse41(
         *d = ((alpha * (*d as i32) + beta) >> 8).clamp(0, bitdepth_max) as u16;
     }
 }
+
+/// GDF error add: `dst += sign(e * scale) * ((|e * scale| + rnd) >> shift)`,
+/// clipped to `[0, bitdepth_max]`. Done in i32 so any `scale` matches scalar.
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn gdf_add_run_hbd_sse41(
+    dst: &mut [u16],
+    err: &[i8],
+    scale: i32,
+    n: usize,
+    bitdepth_max: i32,
+) {
+    let bitdepth = if bitdepth_max <= 0xff {
+        8
+    } else if bitdepth_max <= 0x3ff {
+        10
+    } else {
+        12
+    };
+    let shift = 12 - bitdepth;
+    let rnd = if shift == 0 { 0 } else { 1 << (shift - 1) };
+    let (sc, rnd_v, sh) = (
+        _mm_set1_epi32(scale),
+        _mm_set1_epi32(rnd),
+        _mm_cvtsi32_si128(shift),
+    );
+    let max_v = _mm_set1_epi32(bitdepth_max);
+    let adj = |e: __m128i| {
+        let diff = _mm_mullo_epi32(_mm_cvtepi8_epi32(e), sc);
+        _mm_sign_epi32(
+            _mm_sra_epi32(_mm_add_epi32(_mm_abs_epi32(diff), rnd_v), sh),
+            diff,
+        )
+    };
+
+    let (d8, r8) = dst[..n].as_chunks_mut::<8>();
+    let (e8, er) = err[..n].as_chunks::<8>();
+    for (d, e) in d8.iter_mut().zip(e8) {
+        let e = unsafe { _mm_loadl_epi64(e.as_ptr().cast()) };
+        let (d0, d1) = load_u16x8_i32x2(&*d);
+        let (a0, a1) = (adj(e), adj(_mm_srli_si128::<4>(e)));
+        store_i32x8_u16_clip(d, _mm_add_epi32(d0, a0), _mm_add_epi32(d1, a1), max_v);
+    }
+    for (d, &e) in r8.iter_mut().zip(er) {
+        let diff = e as i32 * scale;
+        let mag = (diff.abs() + rnd) >> shift;
+        let adj = if diff < 0 { -mag } else { mag };
+        *d = (*d as i32 + adj).clamp(0, bitdepth_max) as u16;
+    }
+}

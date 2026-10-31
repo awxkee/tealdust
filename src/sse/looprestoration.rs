@@ -342,3 +342,61 @@ mod uv_fir_sse_tests {
         }
     }
 }
+
+/// Eight samples of a PC-Wiener row as `i16` lanes.
+trait PcwLoad: Copy {
+    fn load8(row: &[Self], x: usize) -> __m128i;
+}
+
+impl PcwLoad for u8 {
+    #[inline(always)]
+    fn load8(row: &[u8], x: usize) -> __m128i {
+        let v = &row[x..x + 8];
+        unsafe { _mm_cvtepu8_epi16(_mm_loadl_epi64(v.as_ptr().cast())) }
+    }
+}
+
+impl PcwLoad for u16 {
+    #[inline(always)]
+    fn load8(row: &[u16], x: usize) -> __m128i {
+        let v = &row[x..x + 8];
+        unsafe { _mm_loadu_si128(v.as_ptr().cast()) }
+    }
+}
+
+/// PC-Wiener |Laplacian| feature sums over the 6x6 window at
+/// `(row_center - 1, x0)`: six of the eight lanes are used per row.
+#[inline]
+#[target_feature(enable = "sse4.1")]
+fn pcw_features_sse41<P: PcwLoad>(rows: &[&[P]], row_center: usize, x0: usize) -> [i32; 3] {
+    let mask = _mm_setr_epi16(-1, -1, -1, -1, -1, -1, 0, 0);
+    let ones = _mm_set1_epi16(1);
+    let mut acc = [_mm_setzero_si128(); 3];
+    for y in row_center - 1..row_center + 5 {
+        let (up, mid, down) = (rows[y - 1], rows[y], rows[y + 1]);
+        let m2 = _mm_slli_epi16::<1>(P::load8(mid, x0));
+        let lap = [
+            _mm_add_epi16(P::load8(up, x0), P::load8(down, x0)),
+            _mm_add_epi16(P::load8(up, x0 + 1), P::load8(down, x0 - 1)),
+            _mm_add_epi16(P::load8(up, x0 - 1), P::load8(down, x0 + 1)),
+        ];
+        for (a, l) in acc.iter_mut().zip(lap) {
+            let v = _mm_and_si128(_mm_abs_epi16(_mm_sub_epi16(l, m2)), mask);
+            *a = _mm_add_epi32(*a, _mm_madd_epi16(v, ones));
+        }
+    }
+    acc.map(|a| {
+        let s = _mm_add_epi32(a, _mm_shuffle_epi32::<0b01_00_11_10>(a));
+        _mm_cvtsi128_si32(_mm_add_epi32(s, _mm_shuffle_epi32::<0b10_11_00_01>(s)))
+    })
+}
+
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn pcw_features_8bpc_sse41(rows: &[&[u8]], row_center: usize, x0: usize) -> [i32; 3] {
+    pcw_features_sse41(rows, row_center, x0)
+}
+
+#[target_feature(enable = "sse4.1")]
+pub(crate) fn pcw_features_hbd_sse41(rows: &[&[u16]], row_center: usize, x0: usize) -> [i32; 3] {
+    pcw_features_sse41(rows, row_center, x0)
+}

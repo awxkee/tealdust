@@ -947,6 +947,12 @@ pub(crate) fn resolve_cdef_padding_8bpc() -> CdefPadding8Fn {
         {
             _f = crate::neon::cdef_padding_8bpc_neon as CdefPadding8Fn;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cdef_padding_8bpc_sse41 as CdefPadding8Fn;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -966,6 +972,12 @@ pub(crate) fn resolve_cdef_padding_hbd() -> CdefPaddingHbdFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cdef_padding_hbd_neon as CdefPaddingHbdFn;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cdef_padding_hbd_sse41 as CdefPaddingHbdFn;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {

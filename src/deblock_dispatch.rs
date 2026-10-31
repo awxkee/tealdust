@@ -1385,6 +1385,12 @@ pub(crate) fn resolve_deblock_h_sb64y_8bpc() -> Option<DeblockSb64Fn> {
         {
             _f = Some(crate::neon::deblock_h_sb64y_8bpc_neon as DeblockSb64Fn);
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::deblock_h_sb64y_8bpc_sse41 as DeblockSb64Fn);
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1402,6 +1408,12 @@ pub(crate) fn resolve_deblock_v_sb64y_8bpc() -> Option<DeblockSb64Fn> {
         #[cfg(target_arch = "aarch64")]
         {
             _f = Some(crate::neon::deblock_v_sb64y_8bpc_neon as DeblockSb64Fn);
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::deblock_v_sb64y_8bpc_sse41 as DeblockSb64Fn);
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1421,6 +1433,12 @@ pub(crate) fn resolve_deblock_h_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
         {
             _f = Some(crate::neon::deblock_h_sb64uv_8bpc_neon as DeblockSb64Fn);
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::deblock_h_sb64uv_8bpc_sse41 as DeblockSb64Fn);
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1438,6 +1456,12 @@ pub(crate) fn resolve_deblock_v_sb64uv_8bpc() -> Option<DeblockSb64Fn> {
         #[cfg(target_arch = "aarch64")]
         {
             _f = Some(crate::neon::deblock_v_sb64uv_8bpc_neon as DeblockSb64Fn);
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::deblock_v_sb64uv_8bpc_sse41 as DeblockSb64Fn);
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1457,6 +1481,12 @@ pub(crate) fn resolve_deblock_h_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
         {
             _f = Some(crate::neon::deblock_h_sb64y_hbd_neon as DeblockSb64HbdFn);
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::deblock_h_sb64y_hbd_sse41 as DeblockSb64HbdFn);
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1474,6 +1504,12 @@ pub(crate) fn resolve_deblock_v_sb64y_hbd() -> Option<DeblockSb64HbdFn> {
         #[cfg(target_arch = "aarch64")]
         {
             _f = Some(crate::neon::deblock_v_sb64y_hbd_neon as DeblockSb64HbdFn);
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::deblock_v_sb64y_hbd_sse41 as DeblockSb64HbdFn);
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1493,6 +1529,12 @@ pub(crate) fn resolve_deblock_h_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
         {
             _f = Some(crate::neon::deblock_h_sb64uv_hbd_neon as DeblockSb64HbdFn);
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::deblock_h_sb64uv_hbd_sse41 as DeblockSb64HbdFn);
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1510,6 +1552,12 @@ pub(crate) fn resolve_deblock_v_sb64uv_hbd() -> Option<DeblockSb64HbdFn> {
         #[cfg(target_arch = "aarch64")]
         {
             _f = Some(crate::neon::deblock_v_sb64uv_hbd_neon as DeblockSb64HbdFn);
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::deblock_v_sb64uv_hbd_sse41 as DeblockSb64HbdFn);
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1529,6 +1577,12 @@ pub(crate) fn resolve_setup_thr_cols_seg_8bpc() -> Option<DeblockSetupColsSeg8bp
         {
             _f = Some(crate::neon::setup_thr_cols_seg_8bpc_neon as DeblockSetupColsSeg8bpcFn);
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::setup_thr_cols_seg_8bpc_sse41 as DeblockSetupColsSeg8bpcFn);
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1546,6 +1600,12 @@ pub(crate) fn resolve_setup_thr_rows_seg_8bpc() -> Option<DeblockSetupRowsSeg8bp
         #[cfg(target_arch = "aarch64")]
         {
             _f = Some(crate::neon::setup_thr_rows_seg_8bpc_neon as DeblockSetupRowsSeg8bpcFn);
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::setup_thr_rows_seg_8bpc_sse41 as DeblockSetupRowsSeg8bpcFn);
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1565,6 +1625,12 @@ pub(crate) fn resolve_setup_thr_cols_dq_8bpc() -> Option<DeblockSetupColsDq8bpcF
         {
             _f = Some(crate::neon::setup_thr_cols_dq_8bpc_neon as DeblockSetupColsDq8bpcFn);
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::setup_thr_cols_dq_8bpc_sse41 as DeblockSetupColsDq8bpcFn);
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1582,6 +1648,12 @@ pub(crate) fn resolve_setup_thr_rows_dq_8bpc() -> Option<DeblockSetupRowsDq8bpcF
         #[cfg(target_arch = "aarch64")]
         {
             _f = Some(crate::neon::setup_thr_rows_dq_8bpc_neon as DeblockSetupRowsDq8bpcFn);
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::setup_thr_rows_dq_8bpc_sse41 as DeblockSetupRowsDq8bpcFn);
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1601,6 +1673,12 @@ pub(crate) fn resolve_setup_thr_cols_simple_8bpc() -> Option<DeblockSetupSimple8
         {
             _f = Some(crate::neon::setup_thr_cols_simple_8bpc_neon as DeblockSetupSimple8bpcFn);
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::setup_thr_cols_simple_8bpc_sse41 as DeblockSetupSimple8bpcFn);
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1618,6 +1696,12 @@ pub(crate) fn resolve_setup_thr_rows_simple_8bpc() -> Option<DeblockSetupSimple8
         #[cfg(target_arch = "aarch64")]
         {
             _f = Some(crate::neon::setup_thr_rows_simple_8bpc_neon as DeblockSetupSimple8bpcFn);
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = Some(crate::sse::setup_thr_rows_simple_8bpc_sse41 as DeblockSetupSimple8bpcFn);
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {

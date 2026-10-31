@@ -808,6 +808,12 @@ pub(crate) fn resolve_gdf_add_hbd() -> GdfAddHbdFn {
         {
             _f = crate::neon::gdf_add_run_hbd_neon as GdfAddHbdFn;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::gdf_add_run_hbd_sse41 as GdfAddHbdFn;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -953,6 +959,12 @@ pub(crate) fn resolve_gdf_grad_hbd() -> GdfGradHbdFn {
         {
             _f = crate::neon::gdf_gradient_group_hbd_neon as GdfGradHbdFn;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::gdf_gradient_group_hbd_sse41 as GdfGradHbdFn;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1058,6 +1070,12 @@ pub(crate) fn resolve_gdf_prep_pair_8bpc() -> GdfPrepPair8bpcFn {
         {
             _f = crate::neon::gdf_prep_pair_8bpc_neon as GdfPrepPair8bpcFn;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::gdf_prep_pair_8bpc_sse41 as GdfPrepPair8bpcFn;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1135,6 +1153,12 @@ pub(crate) fn resolve_gdf_prep_pair_hbd() -> GdfPrepPairHbdFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::gdf_prep_pair_hbd_neon as GdfPrepPairHbdFn;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::gdf_prep_pair_hbd_sse41 as GdfPrepPairHbdFn;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1290,6 +1314,10 @@ pub(crate) fn resolve_gdf_prep_row_8bpc() -> GdfPrepRow8bpcFn {
     }
     #[cfg(not(target_arch = "aarch64"))]
     {
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        if std::is_x86_feature_detected!("sse4.1") {
+            return crate::sse::gdf_prep_row_8bpc_sse41 as GdfPrepRow8bpcFn;
+        }
         gdf_prep_row_8bpc_scalar as GdfPrepRow8bpcFn
     }
 }
@@ -1302,6 +1330,10 @@ pub(crate) fn resolve_gdf_prep_row_hbd() -> GdfPrepRowHbdFn {
     }
     #[cfg(not(target_arch = "aarch64"))]
     {
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        if std::is_x86_feature_detected!("sse4.1") {
+            return crate::sse::gdf_prep_row_hbd_sse41 as GdfPrepRowHbdFn;
+        }
         gdf_prep_row_hbd_scalar as GdfPrepRowHbdFn
     }
 }

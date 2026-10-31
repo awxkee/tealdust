@@ -96,6 +96,7 @@ pub(crate) use ipred_hd::*;
 pub(crate) use itx::*;
 pub(crate) use looprestoration::{
     ns_wiener_fir_run_neon, ns_wiener_uv_fir_run_neon, pc_wiener_fir_run_neon,
+    pcw_features_8bpc_neon, pcw_features_hbd_neon,
 };
 pub(crate) use looprestoration_hd::{
     ns_wiener_fir_run_hbd_neon, ns_wiener_uv_fir_run_hbd_neon, pc_wiener_fir_run_hbd_neon,
