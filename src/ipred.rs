@@ -1738,8 +1738,12 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
     // is `input<<3` while cfl_filter here returns luma-scale, so no scaling).
     // The dst layout is identical to the 4:2:0 case (it is at chroma resolution =
     // luma resolution here); only the source sampling differs.
-    if ss_hor == 0 && ss_ver == 0 {
-        let ss = n_left;
+    //
+    // I422 with filter 2 is the same point sampling at every other column (AVM
+    // mhccp_implicit_fetch_neighbor_luma: `input[i] << 3`, no l/r/top taps).
+    if ss_ver == 0 && (ss_hor == 0 || filter_type == 2) {
+        let cs = 1usize << ss_hor;
+        let ss = n_left * cs;
         let mut dst_p = 0usize;
         let mut dst_lp = dst_left_base;
         if has_t {
@@ -1752,9 +1756,11 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
             };
             let top_buf: &[P] = if has_tsb { tsb } else { src };
             for _y in 0..n_top {
-                dst[dst_lp..(n_left + dst_lp)].copy_from_slice(&top_buf[top_sp..(n_left + top_sp)]);
+                for x in 0..n_left {
+                    dst[dst_lp + x] = top_buf[top_sp + x * cs];
+                }
                 for x in n_left..refw {
-                    dst[dst_p + x - n_left] = top_buf[top_sp + x];
+                    dst[dst_p + x - n_left] = top_buf[top_sp + x * cs];
                 }
                 if !has_tsb {
                     top_sp += src_stride;
@@ -1765,9 +1771,11 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
         }
         let mut sp = src_off - ss;
         for _y in 0..th {
-            dst[dst_lp..(n_left + dst_lp)].copy_from_slice(&src[sp..(n_left + sp)]);
+            for x in 0..n_left {
+                dst[dst_lp + x] = src[sp + x * cs];
+            }
             for x in n_left..n_left + tw {
-                dst[dst_p + x - n_left] = src[sp + x];
+                dst[dst_p + x - n_left] = src[sp + x * cs];
             }
             sp += src_stride;
             dst_lp += n_left;
@@ -1775,7 +1783,9 @@ pub(crate) fn cfl_gen_y_420<P: Pixel>(
         }
         let n_bl = refh.saturating_sub(th);
         for _y in 0..n_bl {
-            dst[dst_lp..(n_left + dst_lp)].copy_from_slice(&src[sp..(n_left + sp)]);
+            for x in 0..n_left {
+                dst[dst_lp + x] = src[sp + x * cs];
+            }
             sp += src_stride;
             dst_lp += n_left;
         }

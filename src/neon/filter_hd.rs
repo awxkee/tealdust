@@ -44,12 +44,12 @@ const GDF_PREP_COORDS: [[i8; 2]; 18] = [
     [1, 0],
     [1, -1],
     [1, -2],
+    [0, 6],
+    [0, 5],
+    [0, 4],
     [0, 3],
     [0, 2],
     [0, 1],
-    [0, -1],
-    [0, -2],
-    [0, -3],
 ];
 
 #[inline(always)]
@@ -723,4 +723,218 @@ pub(crate) fn gdf_prep_pair_hbd_neon(
             ),
         ),
     ]
+}
+
+/// Rows of a GDF prep window, loaded 8 pixels at a time as `i16` with the
+/// per-bitdepth normalization shift applied (`<< 2` at 8 bpc, `>> down_shift`
+/// at high bitdepth), so `(a - m)` matches each scalar path exactly.
+trait GdfPrepPx: Copy {
+    unsafe fn load8_s16(row: &[Self], col: usize, sh: int16x8_t) -> int16x8_t;
+}
+
+impl GdfPrepPx for u8 {
+    #[inline(always)]
+    unsafe fn load8_s16(row: &[u8], col: usize, sh: int16x8_t) -> int16x8_t {
+        let v = &row[col..col + 8];
+        unsafe { vshlq_s16(vreinterpretq_s16_u16(vmovl_u8(vld1_u8(v.as_ptr()))), sh) }
+    }
+}
+
+impl GdfPrepPx for u16 {
+    #[inline(always)]
+    unsafe fn load8_s16(row: &[u16], col: usize, sh: int16x8_t) -> int16x8_t {
+        let v = &row[col..col + 8];
+        unsafe { vreinterpretq_s16_u16(vshlq_u16(vld1q_u16(v.as_ptr()), sh)) }
+    }
+}
+
+/// Per-lane pick from a 4-entry (one per filter class) 16-bit table row.
+#[inline(always)]
+unsafe fn gdf_class_lookup<T>(table: &[T], tidx: uint8x16_t) -> int16x8_t {
+    debug_assert!(table.len() >= 4 && core::mem::size_of::<T>() == 2);
+    unsafe {
+        let t = vld1_u8(table.as_ptr().cast());
+        vreinterpretq_s16_u8(vqtbl1q_u8(vcombine_u8(t, t), tidx))
+    }
+}
+
+/// `clamp(apply_sign(v * scale), -scale, scale - 1) + scale` per lane.
+#[inline(always)]
+unsafe fn gdf_sub_idx(v: int32x4_t, scale: i32) -> int32x4_t {
+    unsafe {
+        let v = vmulq_n_s32(v, scale);
+        let r = vshrq_n_s32::<15>(vaddq_s32(vabsq_s32(v), vdupq_n_s32(1 << 14)));
+        let r = vbslq_s32(vcltzq_s32(v), vnegq_s32(r), r);
+        let r = vminq_s32(vmaxq_s32(r, vdupq_n_s32(-scale)), vdupq_n_s32(scale - 1));
+        vaddq_s32(r, vdupq_n_s32(scale))
+    }
+}
+
+/// GDF prep for 8 consecutive pixels (4 filter-class pairs) starting at
+/// `col`; writes the 8 error values to `dst`.
+#[inline(always)]
+unsafe fn gdf_prep_8px<P: GdfPrepPx>(
+    rows: [&[P]; 13],
+    col: usize,
+    cls: [usize; 4],
+    shared: [[i32; 3]; 4],
+    p: &crate::rowops_dispatch::GdfPrepRow,
+    sh: int16x8_t,
+    dst: &mut [i8],
+) {
+    unsafe {
+        // u16 lane i reads table entry cls[i / 2]: bytes 2c and 2c + 1.
+        let mut tb = [0u8; 16];
+        for (i, pair) in tb.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+            let c = 2 * cls[i >> 1] as u8;
+            *pair = [c, c + 1];
+        }
+        let tidx = vld1q_u8(tb.as_ptr());
+
+        let mut acc = [[vdupq_n_s32(0); 2]; 3];
+        for (idx, acc) in acc.iter_mut().enumerate() {
+            let lo = [
+                shared[0][idx],
+                shared[0][idx],
+                shared[1][idx],
+                shared[1][idx],
+            ];
+            let hi = [
+                shared[2][idx],
+                shared[2][idx],
+                shared[3][idx],
+                shared[3][idx],
+            ];
+            *acc = [vld1q_s32(lo.as_ptr()), vld1q_s32(hi.as_ptr())];
+        }
+
+        let m = P::load8_s16(rows[6], col, sh);
+        let v_lo = vdupq_n_s16(-512);
+        let v_hi = vdupq_n_s16(511);
+        for (k, &[dy, dx]) in GDF_PREP_COORDS.iter().enumerate() {
+            let alpha = gdf_class_lookup(&GDF_ALPHA[p.alpha_base + k * 4..], tidx);
+            let neg_alpha = vnegq_s16(alpha);
+            let a = P::load8_s16(
+                rows[(6 - dy) as usize],
+                (col as isize - dx as isize) as usize,
+                sh,
+            );
+            let b = P::load8_s16(
+                rows[(6 + dy) as usize],
+                (col as isize + dx as isize) as usize,
+                sh,
+            );
+            let above = vminq_s16(vmaxq_s16(vsubq_s16(a, m), neg_alpha), alpha);
+            let below = vminq_s16(vmaxq_s16(vsubq_s16(b, m), neg_alpha), alpha);
+            let v = vminq_s16(vmaxq_s16(vaddq_s16(above, below), v_lo), v_hi);
+            for (idx, acc) in acc.iter_mut().enumerate() {
+                let wv = gdf_class_lookup(&GDF_WEIGHT[p.weight_base + idx * 88 + k * 4..], tidx);
+                acc[0] = vmlal_s16(acc[0], vget_low_s16(v), vget_low_s16(wv));
+                acc[1] = vmlal_high_s16(acc[1], v, wv);
+            }
+        }
+
+        let scale2 = vdupq_n_s32(2 * p.scale);
+        let mut full = [0i32; 8];
+        for half in 0..2 {
+            let s0 = gdf_sub_idx(acc[0][half], p.scale);
+            let s1 = gdf_sub_idx(acc[1][half], p.scale);
+            let s2 = gdf_sub_idx(acc[2][half], p.scale);
+            let f = vaddq_s32(vmulq_s32(vaddq_s32(vmulq_s32(s0, scale2), s1), scale2), s2);
+            vst1q_s32(full[half * 4..].as_mut_ptr(), f);
+        }
+        for (d, &f) in dst[..8].iter_mut().zip(full.iter()) {
+            *d = gdf_prep_lookup_error(p.ref_dst_idx, p.error_lut_base, f as usize);
+        }
+    }
+}
+
+/// GDF prep row: 8 pixels per step, the `< 8` tail through the pair kernels.
+#[target_feature(enable = "neon")]
+pub(crate) fn gdf_prep_row_8bpc_neon(
+    rows: [&[u8]; 13],
+    o: usize,
+    w: usize,
+    grad: [&[[u16; 4]]; 2],
+    dst: &mut [i8],
+    p: &crate::rowops_dispatch::GdfPrepRow,
+) {
+    use crate::rowops_dispatch::gdf_prep_class;
+    let sh = vdupq_n_s16(2);
+    let full = w & !7;
+    let mut x1 = 0usize;
+    while x1 < full {
+        let hx = x1 >> 1;
+        let c = [0, 1, 2, 3].map(|j| gdf_prep_class(grad, hx + j, p));
+        unsafe {
+            gdf_prep_8px(
+                rows,
+                o + x1,
+                c.map(|c| c.0),
+                c.map(|c| c.1),
+                p,
+                sh,
+                &mut dst[x1..],
+            );
+        }
+        x1 += 8;
+    }
+    if x1 < w {
+        crate::rowops_dispatch::gdf_prep_row_8bpc_scalar(
+            rows.map(|r| &r[x1..]),
+            o,
+            w - x1,
+            [&grad[0][x1 >> 1..], &grad[1][x1 >> 1..]],
+            &mut dst[x1..],
+            p,
+        );
+    }
+}
+
+/// High-bit-depth GDF prep row; see [`gdf_prep_row_8bpc_neon`].
+#[allow(clippy::too_many_arguments)]
+#[target_feature(enable = "neon")]
+pub(crate) fn gdf_prep_row_hbd_neon(
+    rows: [&[u16]; 13],
+    o: usize,
+    w: usize,
+    grad: [&[[u16; 4]]; 2],
+    dst: &mut [i8],
+    p: &crate::rowops_dispatch::GdfPrepRow,
+    down_shift: u32,
+    up_scale: i32,
+) {
+    use crate::rowops_dispatch::gdf_prep_class;
+    // High bitdepth never up-scales; the pre-shift is then exactly `>> down_shift`.
+    let sh = vdupq_n_s16(-(down_shift as i16));
+    let full = if up_scale == 1 { w & !7 } else { 0 };
+    let mut x1 = 0usize;
+    while x1 < full {
+        let hx = x1 >> 1;
+        let c = [0, 1, 2, 3].map(|j| gdf_prep_class(grad, hx + j, p));
+        unsafe {
+            gdf_prep_8px(
+                rows,
+                o + x1,
+                c.map(|c| c.0),
+                c.map(|c| c.1),
+                p,
+                sh,
+                &mut dst[x1..],
+            );
+        }
+        x1 += 8;
+    }
+    if x1 < w {
+        crate::rowops_dispatch::gdf_prep_row_hbd_scalar(
+            rows.map(|r| &r[x1..]),
+            o,
+            w - x1,
+            [&grad[0][x1 >> 1..], &grad[1][x1 >> 1..]],
+            &mut dst[x1..],
+            p,
+            down_shift,
+            up_scale,
+        );
+    }
 }

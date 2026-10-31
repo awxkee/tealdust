@@ -125,18 +125,6 @@ fn scatter_stx8_i16(cf: &mut [i16], sums: &[i16; 48], scan_out: &[u8; 64], mappi
 }
 
 #[inline]
-#[target_feature(enable = "avx512f,avx512bw,avx512vl")]
-fn zero_stx4_scan_tail_i16_avx512(sums: __m512i, scan_out: &[u8; 16]) -> __m512i {
-    let idx = _mm512_zextsi256_si512(unsafe {
-        _mm256_cvtepu8_epi16(_mm_loadu_si128(scan_out.as_ptr().cast()))
-    });
-    let ge4 = _mm512_cmpgt_epi16_mask(idx, _mm512_set1_epi16(3));
-    let lt8 = _mm512_cmpgt_epi16_mask(_mm512_set1_epi16(8), idx);
-    let mask = ge4 & lt8;
-    _mm512_mask_mov_epi16(sums, mask, _mm512_setzero_si512())
-}
-
-#[inline]
 #[target_feature(enable = "avx512f")]
 fn zero_stx8_i16_avx512(cf: &mut [i16]) {
     let zero = _mm512_setzero_si512();
@@ -150,10 +138,11 @@ pub(crate) fn stxfm4_8bpc_avx512(cf: &mut [i16], kernel: &[i8], eob: usize, scan
     debug_assert!(eob < 8);
     debug_assert!(kernel.len() >= 8 * 16);
 
-    let sums_v = zero_stx4_scan_tail_i16_avx512(stx16_sums_vnni(kernel, cf, eob, 16, 0), scan_out);
+    let sums_v = stx16_sums_vnni(kernel, cf, eob, 16, 0);
     let mut sums = [0i16; 16];
     store_low_i16x16(&mut sums, sums_v);
 
+    cf[4..8].fill(0);
     scatter_stx4_i16(cf, &sums, scan_out);
 }
 
@@ -275,16 +264,6 @@ fn scatter_stx8_i32(
 }
 
 #[inline]
-#[target_feature(enable = "avx512f,avx512bw")]
-fn zero_stx4_scan_tail_i32_avx512(sums: __m512i, scan_out: &[u8; 16]) -> __m512i {
-    let idx = load_u8x16_i32(scan_out);
-    let ge4 = _mm512_cmpgt_epi32_mask(idx, _mm512_set1_epi32(3));
-    let lt8 = _mm512_cmpgt_epi32_mask(_mm512_set1_epi32(8), idx);
-    let mask = ge4 & lt8;
-    _mm512_mask_mov_epi32(sums, mask, _mm512_setzero_si512())
-}
-
-#[inline]
 #[target_feature(enable = "avx512f")]
 fn zero_stx8_i32_avx512(cf: &mut [i32]) {
     let zero = _mm512_setzero_si512();
@@ -307,10 +286,8 @@ pub(crate) fn stxfm4_hbd_avx512(
     debug_assert!(eob < 8);
     debug_assert!(kernel.len() >= 8 * 16);
 
-    let sums = zero_stx4_scan_tail_i32_avx512(
-        stx16_sums_hbd(kernel, cf, eob, bitdepth_max, 16, 0),
-        scan_out,
-    );
+    let sums = stx16_sums_hbd(kernel, cf, eob, bitdepth_max, 16, 0);
+    cf[4..8].fill(0);
     scatter_stx4_i32(cf, sums, scan_out);
 }
 

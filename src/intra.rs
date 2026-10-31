@@ -430,6 +430,8 @@ pub(crate) fn intra_top_right_units(
     // `is_coded` window is region-local (indexed by `bx & 63` / `by & 63`, reset
     // per SB-row). Compute both: SB-local to decide whether the top-right unit is
     // still inside the current SB, region-local to actually probe the bitmap.
+    // Chroma marks the window at `(luma & 63) >> ss`, i.e. `base & (63 >> ss)`
+    // in plane units.
     let tr_mask_row_sb = (base_y & (sb_h - 1)) - 1;
     let tr_mask_col_sb = (base_x & (sb_w - 1)) + plane_bw_unit;
     if tr_mask_row_sb < 0 {
@@ -438,9 +440,11 @@ pub(crate) fn intra_top_right_units(
     if tr_mask_col_sb >= sb_w {
         return 0;
     }
-    let row = ((base_y & 63) - 1) as usize;
-    let col0 = (base_x & 63) + plane_bw_unit;
-    if (base_y & 63) - 1 < 0 || col0 >= 64 {
+    let region_y = base_y & (63 >> ss_y);
+    let region_x = base_x & (63 >> ss_x);
+    let row = (region_y - 1) as usize;
+    let col0 = region_x + plane_bw_unit;
+    if region_y - 1 < 0 || col0 >= 64 {
         return 0;
     }
     if (is_coded[coded_plane][row] & (1u64 << (col0 as u32))) == 0 {
@@ -537,7 +541,8 @@ pub(crate) fn intra_bottom_left_units(
     let sb_w = shrunken_unit(sb_step, ss_x);
     let sb_h = shrunken_unit(sb_step, ss_y);
     // SB-local coordinates gate availability (AVM `& (sb_mi_size - 1)`); the
-    // region-local coordinates (`& 63`) actually index the `is_coded` window.
+    // region-local coordinates (`& (63 >> ss)`, as chroma marks the window at
+    // `(luma & 63) >> ss`) actually index the `is_coded` window.
     let bl_mask_row_sb = (base_y & (sb_h - 1)) + plane_bh_unit;
     let bl_mask_col_sb = (base_x & (sb_w - 1)) - 1;
     if bl_mask_col_sb < 0 {
@@ -547,8 +552,8 @@ pub(crate) fn intra_bottom_left_units(
     if bl_mask_row_sb >= sb_h {
         return 0;
     }
-    let row0 = (base_y & 63) + plane_bh_unit;
-    let col = (base_x & 63) - 1;
+    let row0 = (base_y & (63 >> ss_y)) + plane_bh_unit;
+    let col = (base_x & (63 >> ss_x)) - 1;
     if col < 0 || row0 >= 64 {
         return 0;
     }

@@ -750,6 +750,7 @@ pub(crate) struct DeblockCtx<'a> {
     pub(crate) exec: &'a crate::exec_context::ExecContext,
     pub(crate) frame_hdr: &'a FrameHeader,
     pub(crate) mask: &'a [Av2Filter],
+    pub(crate) seams: crate::lf_mask::TileSeams<'a>,
     pub(crate) mask_row: usize,
     pub(crate) sb256w: i32,
     pub(crate) cur_segmap: &'a [u8],
@@ -1434,44 +1435,6 @@ fn setup_thr_rows(
     }
 }
 
-/// Must run before the rows pass reads `filter_y[1]`. Operates on the mutable
-/// mask, so it is driven from `filter_sbrow` (which holds `&mut lf.mask`).
-pub(crate) fn deblock_crop_bottom_edge(
-    mask: &mut [Av2Filter],
-    mask_row: usize,
-    sb256w: i32,
-    bw: i32,
-    bh: i32,
-    sb128: i32,
-    sby: i32,
-) {
-    let y64_start = sby << sb128;
-    let y64_end = imin((sby + 1) << sb128, (bh + 15) >> 4);
-    for y64 in y64_start..y64_end {
-        if (y64 + 1) * 16 + 4 <= bh {
-            continue;
-        }
-        let starty4 = ((y64 * 16) & 0x30) as usize;
-        let h4 = imin(bh - y64 * 16, 16);
-        let luma_crop_y4 = starty4 as i32 + h4 - 2;
-        if luma_crop_y4 < 0 {
-            continue;
-        }
-        for x256 in 0..sb256w as usize {
-            if mask_row + x256 >= mask.len() {
-                break;
-            }
-            let w = imin(64, bw - (x256 as i32) * 64);
-            let yv = &mut mask[mask_row + x256].filter_y[1][luma_crop_y4 as usize];
-            for i in 0..((w + 15) >> 4) as usize {
-                let m = yv[3][i];
-                yv[3][i] = 0;
-                yv[2][i] |= m;
-            }
-        }
-    }
-}
-
 fn init_lut_y(ctx: &DeblockCtx, dir: usize, qidx: i32) -> [[u32; 16]; 2] {
     let mut lut = [[0u32; 16]; 2];
     init_deblock_thr_lut_y(
@@ -1495,6 +1458,54 @@ fn init_lut_uv(ctx: &DeblockCtx, qidx: i32) -> [[[u32; 16]; 2]; 2] {
         &mut lut,
     );
     lut
+}
+
+/// Index of the tile column (> 0) that starts at 64-px column `x64`. AVM
+/// shortens the negative-side filter at such vertical tile edges
+/// (`vert_tile_edge` in `set_lpf_parameters`), like at horizontal superblock
+/// edges.
+fn tile_col_seam(ctx: &DeblockCtx, x64: i32) -> Option<usize> {
+    let t = &ctx.frame_hdr.tiling.t;
+    let sb_shift = ctx.frame_hdr.sb128 as i32;
+    (1..t.cols as usize).find(|&c| (t.col_start_sb[c] as i32) << sb_shift == x64)
+}
+
+/// Index of the tile row (> 0) that starts at 64-px row `y64`.
+fn tile_row_seam(ctx: &DeblockCtx, y64: i32) -> Option<usize> {
+    let t = &ctx.frame_hdr.tiling.t;
+    let sb_shift = ctx.frame_hdr.sb128 as i32;
+    (1..t.rows as usize).find(|&r| (t.row_start_sb[r] as i32) << sb_shift == y64)
+}
+
+/// Moves every edge in `m` above filter-length level `cap` down to `cap`.
+fn cap_levels(m: &mut [u16], cap: usize) {
+    let hi = m[cap + 1..].iter().fold(0, |acc, &v| acc | v);
+    m[cap + 1..].fill(0);
+    m[cap] |= hi;
+}
+
+/// AVM `set_lpf_parameters` keeps the filter inside the (8-aligned) frame:
+/// an edge at plane coordinate `pos4` (4px units) less than 16 luma / 8 chroma
+/// pixels before the frame end `end4` uses at most the 16x16 / 8x8 filter.
+#[inline(always)]
+fn near_frame_end(pos4: i32, end4: i32, chroma: bool) -> bool {
+    end4 * 4 < pos4 * 4 + if chroma { 8 } else { 16 }
+}
+
+/// Lowers each edge in `m` (one bitmask per filter-length level, bit `i` =
+/// position `i`) to at most `nb[i]`, the TX category on the neighbouring
+/// tile's side of a tile seam.
+fn clamp_seam_levels(m: &mut [u16], nb: &[u8]) {
+    for (i, &cap) in nb.iter().enumerate() {
+        let bit = 1u16 << i;
+        let cap = cap as usize;
+        if cap + 1 < m.len() && m[cap + 1..].iter().any(|&v| v & bit != 0) {
+            for v in &mut m[cap + 1..] {
+                *v &= !bit;
+            }
+            m[cap] |= bit;
+        }
+    }
 }
 
 /// Port of `deblock_sbrow64_cols` (single-tile). `p_*` are whole planes; the
@@ -1541,6 +1552,7 @@ fn deblock64_cols<BD: BitDepth>(
         let mut side_thr = [0u8; 256];
         let n64 = (ctx.bw + 15) >> 4;
         for x64 in 0..n64 {
+            let col_seam = tile_col_seam(ctx, x64);
             let have_left = x64 > 0;
             let col = lflvl_row + (x64 >> 2) as usize;
             if col >= ctx.mask.len() {
@@ -1645,15 +1657,22 @@ fn deblock64_cols<BD: BitDepth>(
                 if (m0 | m1 | m2 | m3) == 0 {
                     continue;
                 }
-                let vmask = [m0, m1, m2, m3];
+                let mut vmask = [m0, m1, m2, m3];
+                if let (0, Some(c)) = (x, col_seam) {
+                    let base = (c - 1) * 2 * ctx.seams.h4 + y64 as usize * 16;
+                    clamp_seam_levels(&mut vmask, &ctx.seams.right[base..base + 16]);
+                }
+                if near_frame_end(x64 * 16 + x as i32, ctx.bw, false) {
+                    cap_levels(&mut vmask, 2);
+                }
                 let llm = if any_lossless {
                     [ll_mask[x], ll_mask[x + 1]]
                 } else {
                     [0, 0]
                 };
-                // first column of an x64 that begins a new tile; for single-tile
-                // frames it is always false. Passing `x == 0` here would wrongly
-                // clamp max_width_neg at every superblock-column's left edge.
+                // `edge`: first column of an x64 that begins a new tile. Passing
+                // plain `x == 0` would wrongly clamp max_width_neg at every
+                // superblock-column's left edge.
                 deblock_h_sb64y_bd(
                     bd,
                     ctx.exec,
@@ -1664,7 +1683,7 @@ fn deblock64_cols<BD: BitDepth>(
                     &llm,
                     &q_thr[x * 16..],
                     &side_thr[x * 16..],
-                    false,
+                    x == 0 && col_seam.is_some(),
                 );
             }
         }
@@ -1699,6 +1718,7 @@ fn deblock64_cols<BD: BitDepth>(
     let apply_u = ctx.frame_hdr.deblock.level_u != 0;
     let apply_v = ctx.frame_hdr.deblock.level_v != 0;
     for x64 in 0..n64 {
+        let col_seam = tile_col_seam(ctx, x64);
         let have_left = x64 > 0;
         let col = lflvl_row + (x64 >> 2) as usize;
         if col >= ctx.mask.len() {
@@ -1810,13 +1830,24 @@ fn deblock64_cols<BD: BitDepth>(
             if (m0 | m1 | m2) == 0 {
                 continue;
             }
-            let vmask = [m0, m1, m2];
+            let mut vmask = [m0, m1, m2];
+            if let (0, Some(c)) = (x, col_seam) {
+                let n = 16 >> ctx.ss_ver;
+                let base = ((c - 1) * 2 + 1) * ctx.seams.h4 + y64 as usize * n;
+                clamp_seam_levels(&mut vmask, &ctx.seams.right[base..base + n]);
+            }
+            if near_frame_end(
+                ((x64 * 16) >> ctx.ss_hor) + x as i32,
+                ctx.bw >> ctx.ss_hor,
+                true,
+            ) {
+                cap_levels(&mut vmask, 1);
+            }
             let llm = if any_lossless {
                 [ll_mask[x], ll_mask[x + 1]]
             } else {
                 [0, 0]
             };
-            // Single-tile: tile_edge is always false (see luma above).
             if apply_u {
                 deblock_h_sb64uv_bd(
                     bd,
@@ -1828,7 +1859,7 @@ fn deblock64_cols<BD: BitDepth>(
                     &llm,
                     &q_thr[0][x * 16..],
                     &side_thr[0][x * 16..],
-                    false,
+                    x == 0 && col_seam.is_some(),
                 );
             }
             if apply_v {
@@ -1842,7 +1873,7 @@ fn deblock64_cols<BD: BitDepth>(
                     &llm,
                     &q_thr[1][x * 16..],
                     &side_thr[1][x * 16..],
-                    false,
+                    x == 0 && col_seam.is_some(),
                 );
             }
         }
@@ -1870,6 +1901,7 @@ fn deblock64_rows<BD: BitDepth>(
     let a_y64idx = (((y64 + 3) & 3) << 2) as usize;
     let seg_enabled = !ctx.cur_segmap.is_empty();
     let any_lossless = ctx.frame_hdr.any_lossless != 0;
+    let row_seam = tile_row_seam(ctx, y64);
 
     // above SB256 row for cross-SB-row context (single tile: prev mask row).
     let a_row: Option<usize> = if have_top {
@@ -2017,7 +2049,14 @@ fn deblock64_rows<BD: BitDepth>(
                 if (m0 | m1 | m2 | m3) == 0 {
                     continue;
                 }
-                let vmask = [m0, m1, m2, m3];
+                let mut vmask = [m0, m1, m2, m3];
+                if let (0, Some(r)) = (y, row_seam) {
+                    let base = (r - 1) * 2 * ctx.seams.w4 + x64 as usize * 16;
+                    clamp_seam_levels(&mut vmask, &ctx.seams.bottom[base..base + 16]);
+                }
+                if near_frame_end(y64 * 16 + y as i32, ctx.bh, false) {
+                    cap_levels(&mut vmask, 2);
+                }
                 let llm = if any_lossless {
                     [ll_mask[y], ll_mask[y + 1]]
                 } else {
@@ -2194,7 +2233,19 @@ fn deblock64_rows<BD: BitDepth>(
             if (m0 | m1 | m2) == 0 {
                 continue;
             }
-            let vmask = [m0, m1, m2];
+            let mut vmask = [m0, m1, m2];
+            if let (0, Some(r)) = (y, row_seam) {
+                let n = 16 >> ctx.ss_hor;
+                let base = ((r - 1) * 2 + 1) * ctx.seams.w4 + x64 as usize * n;
+                clamp_seam_levels(&mut vmask, &ctx.seams.bottom[base..base + n]);
+            }
+            if near_frame_end(
+                ((y64 * 16) >> ctx.ss_ver) + y as i32,
+                ctx.bh >> ctx.ss_ver,
+                true,
+            ) {
+                cap_levels(&mut vmask, 1);
+            }
             let llm = if any_lossless {
                 [ll_mask[y], ll_mask[y + 1]]
             } else {

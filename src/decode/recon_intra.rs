@@ -79,6 +79,7 @@ where
         },
         bx,
         by,
+        (bx, by),
         b.bs as usize,
         phase,
     )
@@ -93,6 +94,7 @@ pub(crate) fn recon_b_intra_luma_geom_phase<
     rb: &mut ReconBCtx<'_, '_, '_, BD, UPDATE_CDF, M>,
     bx: i32,
     by: i32,
+    blk_origin: (i32, i32),
     geom_bs: usize,
     phase: TxPhase,
 ) -> Result<(), ()>
@@ -112,9 +114,9 @@ where
 
     let tp = &crate::tables::TX_PART_TBL[bs];
 
-    // pb.col_start / pb.row_start are this block's origin (used by is_hv5).
-    let pb_col_start = bx;
-    let pb_row_start = by;
+    // pb.col_start / pb.row_start are the coding block's origin (used by
+    // is_hv5 and the intra edge availability), not the 64x64 sub-block's.
+    let (pb_col_start, pb_row_start) = blk_origin;
 
     if phase != TxPhase::ReadOnly && b.is_intra != 0 && b.intrabc == 0 && b.intra_data().pal_sz != 0
     {
@@ -822,7 +824,21 @@ where
                 let mut x = 0;
                 while x < cw4ss {
                     let i = (y * cbw4ss as i32 + x) as usize;
-                    let mut txtp: u16 = 0;
+                    // IntraBC is an inter block for chroma transform selection
+                    // (AVM `av2_get_tx_type`): chroma inherits the co-located luma
+                    // type, per TU when chroma and luma share the block size,
+                    // otherwise the coding block's origin type.
+                    let mut txtp: u16 = if is_intrabc && !is_intra {
+                        if b.bs == b.cbs {
+                            let lbx = cbx + (x << ss_hor);
+                            let lby = cby + (y << ss_ver);
+                            recon.scratch.txtp_map[(lby & 15) as usize * 16 + (lbx & 15) as usize]
+                        } else {
+                            recon.scratch.ibc_uv_txtp_seed
+                        }
+                    } else {
+                        0
+                    };
                     let mut res_ctx: u8 = 0;
                     // TU coefficient region is txw*txh*16 coefs (= ctw*cth), placed at
                     let cf_slot = &mut cf[i * 16..];
@@ -830,7 +846,7 @@ where
                     cf_slot[..tu_n].fill(<BD::Coef as crate::pixel::Coeff>::ZERO);
 
                     let dq_tbl = recon.dq_active[seg_id][1 + pl];
-                    let qm_ref: Option<&[u8]> = recon.frame.qm[uvtx][1 + pl].as_deref();
+                    let qm_ref: Option<&[u8]> = recon.frame.qm[uvtx][1 + pl];
 
                     let acoef = &a.ccoef[pl][(cbx4 + x as usize)..];
                     let lcoef = &l.ccoef[pl][(cby4 + y as usize)..];
@@ -1328,7 +1344,12 @@ fn cfl_predict_8bpc<BD: BitDepth>(
                 imin((0x10000u64 | !bits).trailing_zeros() as i32, w)
             }
         };
-        refw += n_tr * 4;
+        // AVM only extends the reference to the top-right when the luma-scaled
+        // TX width is > 4 (`have_top_right && width > 4`), i.e. never for 4-wide
+        // chroma TXs in 4:4:4.
+        if (ctw << ss_hor) > 4 {
+            refw += n_tr * 4;
+        }
     }
     let mut subleft = 0;
     if has_left {
@@ -1354,7 +1375,11 @@ fn cfl_predict_8bpc<BD: BitDepth>(
             }
             nb
         };
-        refh += n_bl * 4;
+        // Same `height > 4` gate for the bottom-left (4-tall chroma TXs in
+        // 4:2:2 / 4:4:4).
+        if (cth << ss_ver) > 4 {
+            refh += n_bl * 4;
+        }
         refw += 2;
         subleft = (dir != CflMhDir::Left) as i32;
     }
@@ -1566,7 +1591,7 @@ where
     } else {
         let dq_seg = b.seg_id as usize;
         let dq_tbl = recon.dq_active[dq_seg][0]; // plane 0 (luma)
-        let qm_ref: Option<&[u8]> = recon.frame.qm[tx][0].as_deref();
+        let qm_ref: Option<&[u8]> = recon.frame.qm[tx][0];
 
         let params = crate::recon::DecodeCoefParams {
             tx,
@@ -1615,6 +1640,18 @@ where
         let stx = (txtp >> 8) as i32;
         (eob, stx, (txtp & 0xff) as u32)
     };
+
+    // IntraBC chroma inherits the luma transform type (it is an inter block
+    // for chroma tx selection), so record it per covered 4x4 like the inter
+    // luma path does.
+    if is_intrabc && phase != TxPhase::ReconOnly {
+        let (by15, bx15) = ((by & 15) as usize, (bx & 15) as usize);
+        for yy in by15..(by15 + th4 as usize).min(16) {
+            for xx in bx15..(bx15 + tw4 as usize).min(16) {
+                recon.scratch.txtp_map[yy * 16 + xx] = (txtp & 0xff) as u16;
+            }
+        }
+    }
 
     let aw = imin(tw4, fi.bw - bx).max(0) as usize;
     let lh = imin(th4, fi.bh - by).max(0) as usize;
@@ -2146,6 +2183,9 @@ pub(crate) struct SbCtx<'a, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>> {
     pub(crate) part_w_idx: &'a mut usize,
     pub(crate) part_r: &'a [u8],
     pub(crate) part_r_idx: &'a mut usize,
+    /// Chroma loop-restoration read to run between the SDP luma and chroma
+    /// trees of a 64x64 superblock root (entropy pass only).
+    pub(crate) sdp_lr: Option<crate::decode::SdpLrRead<'a>>,
 }
 
 pub fn decode_sb<BD: BitDepth, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
@@ -2184,6 +2224,19 @@ where
     {
         let mut dir = 0i32;
         decode_sb(ctx, recon, pass, lbs, BlockSize::Invalid, &mut dir)?;
+        if pass & crate::internal::Pass::Entropy as u8 != 0
+            && let Some(lr) = ctx.sdp_lr.take()
+        {
+            crate::decode::read_sb_restoration(
+                &mut *ctx.msac,
+                &mut *ctx.cdf_m,
+                lr.lr_mask,
+                lr.bank,
+                lr.frame_hdr,
+                &lr.geom,
+                1..3,
+            );
+        }
         return decode_sb(ctx, recon, pass, BlockSize::Invalid, cbs, &mut dir);
     }
 

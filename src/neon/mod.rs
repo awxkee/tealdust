@@ -87,8 +87,9 @@ pub(crate) use filter::{
 };
 pub(crate) use filter_hd::{
     avg_row_hbd_neon, blend_row_hbd_neon, dc_add_row_hbd_neon, gdf_add_run_hbd_neon,
-    gdf_gradient_group_hbd_neon, gdf_prep_pair_hbd_neon, mask_row_hbd_neon, morph_row_hbd_neon,
-    residual_add_row_hbd_neon, w_avg_row_hbd_neon,
+    gdf_gradient_group_hbd_neon, gdf_prep_pair_hbd_neon, gdf_prep_row_8bpc_neon,
+    gdf_prep_row_hbd_neon, mask_row_hbd_neon, morph_row_hbd_neon, residual_add_row_hbd_neon,
+    w_avg_row_hbd_neon,
 };
 pub(crate) use ipred::*;
 pub(crate) use ipred_hd::*;

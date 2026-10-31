@@ -92,6 +92,7 @@ pub(crate) mod mtpool;
 pub(crate) mod obu;
 pub(crate) mod pal;
 pub(crate) mod pixel;
+pub(crate) mod qm_tables;
 pub(crate) mod quantizer;
 pub(crate) mod recon;
 pub(crate) mod refmvs;

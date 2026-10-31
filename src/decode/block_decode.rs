@@ -720,7 +720,7 @@ fn update_block_filter_masks<BD: BitDepth>(
                 let row = &mut m.lossless_mask_uv[ccby4 + y];
                 for k in 0..4 {
                     if parts[k] != 0 {
-                        row[k] |= parts[k];
+                        crate::lf_mask::mask_or(&mut row[k], parts[k]);
                     }
                 }
             }
@@ -1683,6 +1683,7 @@ where
                 by,
                 cbx,
                 cby,
+                (bx, by),
                 lbs,
                 cbs,
                 has_luma,
@@ -3806,6 +3807,7 @@ where
             by,
             cbx,
             cby,
+            (bx, by),
             lbs,
             cbs,
             has_luma,

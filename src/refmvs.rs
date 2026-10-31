@@ -341,6 +341,22 @@ pub(crate) struct Block {
     pub(crate) m: [i32; 6],
 }
 
+/// A default (all-zero) `[Block; 8192]` allocated directly on the heap. The
+/// array is 512 KiB, so `Box::new([Block::default(); N])` would build it on the
+/// stack and memmove it into place for every worker scratch.
+pub(crate) fn zeroed_block_rows() -> Box<[Block; 64 * 128]> {
+    let layout = std::alloc::Layout::new::<[Block; 64 * 128]>();
+    // SAFETY: `Block` holds only integers, so all-zero bytes equal
+    // `Block::default()`; `layout` is non-zero-sized.
+    unsafe {
+        let ptr = std::alloc::alloc_zeroed(layout).cast::<[Block; 64 * 128]>();
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        Box::from_raw(ptr)
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct MfmvRef {
     pub(crate) reference: u8,
@@ -3891,6 +3907,16 @@ mod splat_simd_matches_scalar_tests {
 
     fn t_key(t: &TemporalBlock) -> (u32, i16) {
         (t.mv.packed(), t.reference.pair())
+    }
+
+    #[test]
+    fn zeroed_block_rows_are_default() {
+        let d = Block::default();
+        let r = zeroed_block_rows();
+        assert!(
+            r.iter()
+                .all(|b| key(b) == key(&d) && b.reference.pair() == d.reference.pair())
+        );
     }
 
     /// `s_dst` starts at the block's x offset inside a 128-wide row buffer, so
