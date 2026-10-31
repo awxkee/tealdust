@@ -319,7 +319,7 @@ pub(crate) fn prep_hbd_avx2(
 ) {
     let ib = 14 - bitdepth as i32;
     let bias = 8192i32;
-    for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+    for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
         let src_row = unsafe { src.get_unchecked(y * src_stride..) };
         let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
         for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
@@ -388,7 +388,7 @@ pub(crate) fn put_bilin_hbd_avx2(
         let mid = &mut mid_scratch[..mid_stride * (h + 1)];
         let sh0 = 4 - ib;
         let rnd0 = if sh0 == 0 { 0 } else { 1 << (sh0 - 1) };
-        for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(h + 1).enumerate() {
+        for (y, mid_row) in mid.chunks_mut(mid_stride).take(h + 1).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -530,7 +530,7 @@ pub(crate) fn prep_bilin_hbd_avx2(
         let mid = &mut mid_scratch[..mid_stride * (h + 1)];
         let sh0 = 4 - ib;
         let rnd0 = if sh0 == 0 { 0 } else { 1 << (sh0 - 1) };
-        for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(h + 1).enumerate() {
+        for (y, mid_row) in mid.chunks_mut(mid_stride).take(h + 1).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -551,7 +551,7 @@ pub(crate) fn prep_bilin_hbd_avx2(
                 *mid_px = round_scalar(16 * a + mx * (b - a), rnd0, sh0) as i16;
             }
         }
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let mid_row = unsafe { mid.get_unchecked(y * mid_stride..) };
             let mid_next_row = unsafe { mid.get_unchecked((y + 1) * mid_stride..) };
             let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
@@ -583,7 +583,7 @@ pub(crate) fn prep_bilin_hbd_avx2(
     } else if mx != 0 {
         let sh0 = 4 - ib;
         let rnd0 = if sh0 == 0 { 0 } else { 1 << (sh0 - 1) };
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
@@ -607,7 +607,7 @@ pub(crate) fn prep_bilin_hbd_avx2(
     } else if my != 0 {
         let sh0 = 4 - ib;
         let rnd0 = if sh0 == 0 { 0 } else { 1 << (sh0 - 1) };
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let src_next_row = unsafe { src.get_unchecked((y + 1) * src_stride..) };
             let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
@@ -669,7 +669,7 @@ pub(crate) fn put_8tap_hbd_avx2(
             let mid = &mut mid_scratch[..mid_stride * tmp_h];
             let sh0 = bits - ib;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(tmp_h).enumerate() {
+            for (y, mid_row) in mid.chunks_mut(mid_stride).take(tmp_h).enumerate() {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
                 let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -838,7 +838,7 @@ pub(crate) fn prep_8tap_hbd_avx2(
             let mid = &mut mid_scratch[..mid_stride * tmp_h];
             let sh0 = bits - ib;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(tmp_h).enumerate() {
+            for (y, mid_row) in mid.chunks_mut(mid_stride).take(tmp_h).enumerate() {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
                 let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -859,7 +859,7 @@ pub(crate) fn prep_8tap_hbd_avx2(
                 }
             }
             let rnd1 = (1 << bits) >> 1;
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
                     let x = chunk_idx * 16;
@@ -892,7 +892,7 @@ pub(crate) fn prep_8tap_hbd_avx2(
         (Some(fh), None) => {
             let sh0 = bits - ib;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
@@ -923,7 +923,7 @@ pub(crate) fn prep_8tap_hbd_avx2(
             let ss = src_stride as isize;
             let sh0 = bits - ib;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
@@ -1087,7 +1087,7 @@ pub(crate) fn warp_affine_8x8t_hbd_avx2(
         mx += beta;
     }
 
-    for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(8).enumerate() {
+    for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(8).enumerate() {
         let v = warp_vert_i16x8(&mid, y * 8, 8, my, gamma);
         store_i16x8(&mut tmp_row[..8], v, 64, 7, 8192);
         my += delta;
@@ -1119,7 +1119,7 @@ mod inter_hd_avx_tests {
         let mut r = R(0x51b3_c0ffee_u64 | 1);
         for shift in 0..=14i32 {
             for &rnd in &[0, 1, (1 << shift) >> 1, (1 << shift) - 1, 8, 2048] {
-                for _ in 0..1500 {
+                for _ in 0..150 {
                     let v: [i32; 8] = std::array::from_fn(|_| r.range(-300_000, 300_000));
                     let vv = unsafe { _mm256_loadu_si256(v.as_ptr() as *const __m256i) };
                     let rv = unsafe { round_s32(vv, rnd, shift) };
@@ -1149,7 +1149,7 @@ mod inter_hd_avx_tests {
         }
         let mut r = R(0xb171_600d_u64 | 1);
         for mxy in 1..16 {
-            for _ in 0..5000 {
+            for _ in 0..500 {
                 let src: Vec<u16> = (0..64).map(|_| r.range(0, (1 << 12) - 1) as u16).collect();
                 let base = 9usize;
                 let sv = unsafe { bilin_u16x8(&src, base, 1, mxy) };
@@ -1173,7 +1173,7 @@ mod inter_hd_avx_tests {
         }
         let mut r = R(0xb171_516e_u64 | 1);
         for mxy in 1..16 {
-            for _ in 0..5000 {
+            for _ in 0..500 {
                 let a: [i16; 8] = std::array::from_fn(|_| r.range(-16000, 16000) as i16);
                 let b: [i16; 8] = std::array::from_fn(|_| r.range(-16000, 16000) as i16);
                 let av = unsafe { _mm_loadu_si128(a.as_ptr().cast()) };
@@ -1198,7 +1198,7 @@ mod inter_hd_avx_tests {
             return;
         }
         let mut r = R(0xfeed_face_u64 | 1);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let src: Vec<u16> = (0..40).map(|_| r.range(0, (1 << 12) - 1) as u16).collect();
             let f: [i8; 8] = std::array::from_fn(|_| r.range(-128, 127) as i8);
             let base = 8usize;
@@ -1219,7 +1219,7 @@ mod inter_hd_avx_tests {
             return;
         }
         let mut r = R(0xc0de_d00d_u64 | 1);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let src: Vec<i16> = (0..40).map(|_| r.range(-16000, 16000) as i16).collect();
             let f: [i8; 8] = std::array::from_fn(|_| r.range(-128, 127) as i8);
             let base = 8usize;

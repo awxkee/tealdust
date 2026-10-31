@@ -929,8 +929,13 @@ where
             chroma_tx_cf.extend_from_slice(cf_u);
             chroma_tx_cf.extend_from_slice(cf_v);
         }
-        let chroma_txtp = recon.scratch.chroma_txtp;
-        let chroma_eob = recon.scratch.chroma_eob;
+        let meta_off = recon.scratch.chroma_tx_txtp.len() as u32;
+        let (txtp_src, eob_src) = (
+            &recon.scratch.chroma_txtp[..n_tu],
+            &recon.scratch.chroma_eob[..n_tu],
+        );
+        recon.scratch.chroma_tx_txtp.extend_from_slice(txtp_src);
+        recon.scratch.chroma_tx_eob.extend_from_slice(eob_src);
         recon.scratch.chroma_tx.push(ChromaTxRecord {
             cbx: cbx as i16,
             cby: cby as i16,
@@ -940,8 +945,7 @@ where
             cf_off: cf_off as u32,
             cf_len: need as u32,
             u_has_cf,
-            txtp: chroma_txtp,
-            eob: chroma_eob,
+            meta_off,
         });
         recon.scratch.put_chroma_cf::<BD::Coef>(cf_uv);
         return Ok(());
@@ -970,8 +974,10 @@ where
         let chroma_tx_cf = recon.scratch.chroma_tx_cf::<BD::Coef>();
         cf_u.copy_from_slice(&chroma_tx_cf[cf_off..cf_off + cf_len]);
         cf_v.copy_from_slice(&chroma_tx_cf[cf_off + cf_len..cf_off + cf_need]);
-        recon.scratch.chroma_txtp = rec.txtp;
-        recon.scratch.chroma_eob = rec.eob;
+        let mo = rec.meta_off as usize;
+        let scratch = &mut recon.scratch;
+        scratch.chroma_txtp[..n_tu].copy_from_slice(&scratch.chroma_tx_txtp[mo..mo + n_tu]);
+        scratch.chroma_eob[..n_tu].copy_from_slice(&scratch.chroma_tx_eob[mo..mo + n_tu]);
         u_has_cf = rec.u_has_cf;
     }
     let _ = u_has_cf;
@@ -2178,6 +2184,9 @@ pub(crate) struct SbCtx<'a, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>> {
     pub(crate) l: &'a mut BlockContext,
     pub(crate) msac: &'a mut M,
     pub(crate) cdf_m: &'a mut CdfModeContext,
+    /// Inter MV residuals (AVM `nmvc`).
+    pub(crate) cdf_mv: &'a mut CdfMvContext,
+    /// IntraBC block-vector residuals (AVM `ndvc`).
     pub(crate) cdf_dmv: &'a mut CdfMvContext,
     pub(crate) part_w: &'a mut Vec<u8>,
     pub(crate) part_w_idx: &'a mut usize,

@@ -928,8 +928,9 @@ struct ChromaTxRecord {
     cf_off: u32,
     cf_len: u32,
     u_has_cf: i32,
-    txtp: [[u16; 2]; 256],
-    eob: [[i16; 2]; 256],
+    /// Offset of this block's `n_tu` transform types / EOBs in
+    /// `chroma_tx_txtp` / `chroma_tx_eob`.
+    meta_off: u32,
 }
 
 impl Default for ChromaTxRecord {
@@ -943,8 +944,7 @@ impl Default for ChromaTxRecord {
             cf_off: 0,
             cf_len: 0,
             u_has_cf: 0,
-            txtp: [[0u16; 2]; 256],
-            eob: [[-1i16; 2]; 256],
+            meta_off: 0,
         }
     }
 }
@@ -962,6 +962,9 @@ struct BlockRecord {
     cbs: i8,
 }
 
+/// Chroma 4px transform units of the largest chroma block (256x256 in 4:4:4).
+pub(crate) const MAX_CHROMA_TU: usize = 64 * 64;
+
 /// A complete replay payload for one root superblock.
 #[derive(Clone, Default)]
 pub(crate) struct SbReplayStore {
@@ -973,6 +976,8 @@ pub(crate) struct SbReplayStore {
     chroma_tx: Vec<ChromaTxRecord>,
     chroma_tx_cf8: Vec<i16>,
     chroma_tx_cf32: Vec<i32>,
+    chroma_tx_txtp: Vec<[u16; 2]>,
+    chroma_tx_eob: Vec<[i16; 2]>,
 }
 
 impl SbReplayStore {
@@ -986,6 +991,8 @@ impl SbReplayStore {
         self.chroma_tx.clear();
         self.chroma_tx_cf8.clear();
         self.chroma_tx_cf32.clear();
+        self.chroma_tx_txtp.clear();
+        self.chroma_tx_eob.clear();
     }
 
     /// Move the just-parsed replay payload out of the worker-local scratch.
@@ -1000,6 +1007,8 @@ impl SbReplayStore {
         C::replay_luma_cf_mut(self).append(C::scratch_luma_cf_mut(scratch));
         self.chroma_tx.append(&mut scratch.chroma_tx);
         C::replay_chroma_cf_mut(self).append(C::scratch_chroma_tx_cf_mut(scratch));
+        self.chroma_tx_txtp.append(&mut scratch.chroma_tx_txtp);
+        self.chroma_tx_eob.append(&mut scratch.chroma_tx_eob);
 
         scratch.block_rpos = 0;
         scratch.luma_tx_rpos = 0;
@@ -1024,6 +1033,12 @@ impl SbReplayStore {
         scratch.chroma_tx.extend_from_slice(&self.chroma_tx);
         C::scratch_chroma_tx_cf_mut(scratch).clear();
         C::scratch_chroma_tx_cf_mut(scratch).extend_from_slice(C::replay_chroma_cf(self));
+        scratch.chroma_tx_txtp.clear();
+        scratch
+            .chroma_tx_txtp
+            .extend_from_slice(&self.chroma_tx_txtp);
+        scratch.chroma_tx_eob.clear();
+        scratch.chroma_tx_eob.extend_from_slice(&self.chroma_tx_eob);
 
         scratch.reset_replay_cursors();
     }
@@ -1043,8 +1058,10 @@ pub struct ReconScratch {
     /// recon phase (with the last), mirroring the `cbs_stage` mechanism in
     pub chroma_cf8: Vec<i16>,
     pub chroma_cf32: Vec<i32>,
-    pub chroma_txtp: [[u16; 2]; 256],
-    pub chroma_eob: [[i16; 2]; 256],
+    /// Per-TU chroma transform types / EOBs of the current chroma block, in
+    /// 4px units (a 256x256 4:4:4 block has `MAX_CHROMA_TU` of them).
+    pub chroma_txtp: Box<[[u16; 2]; MAX_CHROMA_TU]>,
+    pub chroma_eob: Box<[[i16; 2]; MAX_CHROMA_TU]>,
     /// IntraBC chroma: co-located luma transform type of the coding block's
     /// origin, used to seed chroma TUs when chroma covers several luma blocks.
     pub ibc_uv_txtp_seed: u16,
@@ -1053,6 +1070,8 @@ pub struct ReconScratch {
     chroma_tx: Vec<ChromaTxRecord>,
     chroma_tx_cf8: Vec<i16>,
     chroma_tx_cf32: Vec<i32>,
+    pub(crate) chroma_tx_txtp: Vec<[u16; 2]>,
+    pub(crate) chroma_tx_eob: Vec<[i16; 2]>,
     chroma_tx_rpos: usize,
     /// Parsed block replay stream.
     block_rec: Vec<BlockRecord>,
@@ -1114,13 +1133,15 @@ impl Default for ReconScratch {
             luma_fsc_map: [0u8; 256],
             chroma_cf8: Vec::new(),
             chroma_cf32: Vec::new(),
-            chroma_txtp: [[0u16; 2]; 256],
-            chroma_eob: [[-1i16; 2]; 256],
+            chroma_txtp: Box::new([[0u16; 2]; MAX_CHROMA_TU]),
+            chroma_eob: Box::new([[-1i16; 2]; MAX_CHROMA_TU]),
             ibc_uv_txtp_seed: 0,
             chroma_u_has_cf: 0,
             chroma_tx: Vec::new(),
             chroma_tx_cf8: Vec::new(),
             chroma_tx_cf32: Vec::new(),
+            chroma_tx_txtp: Vec::new(),
+            chroma_tx_eob: Vec::new(),
             chroma_tx_rpos: 0,
             block_rec: Vec::new(),
             block_rpos: 0,
@@ -1217,12 +1238,14 @@ impl ReconScratch {
         self.is_coded = [[0u64; 64]; 2];
         self.luma_intra_dir_mode_map = [0u8; 256];
         self.luma_fsc_map = [0u8; 256];
-        self.chroma_txtp = [[0u16; 2]; 256];
-        self.chroma_eob = [[-1i16; 2]; 256];
+        self.chroma_txtp.fill([0u16; 2]);
+        self.chroma_eob.fill([-1i16; 2]);
         self.chroma_u_has_cf = 0;
         self.chroma_tx.clear();
         self.chroma_tx_cf8.clear();
         self.chroma_tx_cf32.clear();
+        self.chroma_tx_txtp.clear();
+        self.chroma_tx_eob.clear();
         self.chroma_tx_rpos = 0;
         self.block_rec.clear();
         self.block_rpos = 0;
@@ -1881,6 +1904,7 @@ where
                             l: &mut *l,
                             msac: &mut *msac,
                             cdf_m: &mut ts.cdf.m,
+                            cdf_mv: &mut ts.cdf.mv,
                             cdf_dmv: &mut ts.cdf.dmv,
                             part_w: &mut *part_w,
                             part_w_idx: &mut part_w_idx,
@@ -1947,6 +1971,7 @@ where
                         l: &mut *l,
                         msac: &mut *msac,
                         cdf_m: &mut ts.cdf.m,
+                        cdf_mv: &mut ts.cdf.mv,
                         cdf_dmv: &mut ts.cdf.dmv,
                         part_w: &mut replay_part_w,
                         part_w_idx: &mut replay_part_w_idx,
@@ -1982,6 +2007,7 @@ where
                     l: &mut *l,
                     msac: &mut *msac,
                     cdf_m: &mut ts.cdf.m,
+                    cdf_mv: &mut ts.cdf.mv,
                     cdf_dmv: &mut ts.cdf.dmv,
                     part_w: &mut *part_w,
                     part_w_idx: &mut part_w_idx,
@@ -3618,14 +3644,24 @@ pub fn decode_frame(
     let r = decode_frame_main(fc, n_passes, n_tc, pool);
     r.map_err(|_| TealdustError::InvalidTileData)?;
 
-    // path the update tile's adapted CDF becomes `out_cdf` with its symbol counts
-    // reset. avg_cdf_type (tile CDF shift/accumulate) is not exercised by the
-    // single-tile bring-up clips and is deferred. Only produced when CDF update
+    // path the update tile's adapted CDF (or, with avg_cdf_type, the average of
+    // the tiles' CDFs) becomes `out_cdf` with its symbol counts reset. Only produced when CDF update
     // is enabled (otherwise refs keep `in_cdf`, handled by the ref-list update).
     if frame_hdr.tip.frame_mode != 2 && frame_hdr.disable_cdf_update == 0 {
+        let n_tiles = frame_hdr.tiling.t.cols as usize * frame_hdr.tiling.t.rows as usize;
+        let averaged = if seq_hdr.avg_cdf && seq_hdr.avg_cdf_type != 0 && n_tiles > 1 {
+            // AVM averages the first `1 << log2` tiles (log2 = floor(log2(n)),
+            // at most 3).
+            let log2 = (usize::BITS - 1 - n_tiles.leading_zeros()).min(3);
+            let used = 1usize << log2;
+            (fc.ts.len() >= used).then(|| {
+                crate::cdf::CdfContext::tile_average(fc.ts[..used].iter().map(|t| &t.cdf), log2)
+            })
+        } else {
+            None
+        };
         let upd = frame_hdr.tiling.update as usize;
-        if let Some(ts) = fc.ts.get(upd) {
-            let mut out = ts.cdf.clone();
+        if let Some(mut out) = averaged.or_else(|| fc.ts.get(upd).map(|ts| ts.cdf.clone())) {
             out.reset_count(frame_hdr.is_key_or_intra());
             fc.out_cdf = Some(std::sync::Arc::new(out));
         }
@@ -3961,12 +3997,25 @@ fn submit_frame_inner(
     } else {
         None
     };
+    let cur_tp = crate::internal::ThreadPicture {
+        showable: frame_hdr.show_immediate == 0,
+        frame_hdr: Some(frame_hdr.clone()),
+        pic: Some(shared.clone()),
+        disp_order: crate::output_order::disp_order_hint(
+            c,
+            frame_hdr.frame_offset as u32,
+            seq_hdr.order_hint_n_bits as u32,
+            frame_hdr.closed_loop_key != 0,
+        ),
+        out_done: Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+            false,
+        ))),
+    };
     let refresh = frame_hdr.refresh_frame_flags;
     for i in 0..8 {
         if refresh & (1 << i) != 0 {
-            c.refs[i].p.pic = Some(shared.clone());
-            c.refs[i].p.frame_hdr = Some(frame_hdr.clone());
-            c.refs[i].p.showable = frame_hdr.show_immediate == 0;
+            crate::output_order::output_before_overwrite(c, i);
+            c.refs[i].p = cur_tp.clone();
             c.refs[i].cdf = out_cdf_for_refs.clone();
             c.refs[i].segmap = if frame_hdr.segmentation.update_map != 0 {
                 cur_segmap_arc.clone()
@@ -3985,18 +4034,13 @@ fn submit_frame_inner(
         }
     }
 
-    // Hand the reconstructed picture to the decoder's output path. (Visibility
-    // filtering / POC reordering is wired with full output queueing later.)
-    // The frame is read-only once decoded, so the output shares the ref slots'
-    // plane buffers by reference count rather than deep-copying ~megabytes of
-    // pixels. Film grain (applied at output time) writes to a fresh picture, and
-    // any other mutation copies on write, so the shared storage is never
-    // observed changing.
-    let out = shared.shallow_clone();
-    c.frame_out
-        .try_reserve_exact(1)
-        .map_err(|_| TealdustError::OutOfMemory)?;
-    c.frame_out.push(out);
+    // Output follows AVM: a frame shown immediately is output now (with the
+    // waiting implicitly shown frames around it in display order); others
+    // wait in their reference slots. Outputs share the slots' plane buffers by
+    // reference count; film grain is applied to a fresh copy at output time.
+    if frame_hdr.show_immediate != 0 {
+        crate::output_order::output_frame_buffers(c, &cur_tp);
+    }
     Ok(())
 }
 

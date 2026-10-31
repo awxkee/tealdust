@@ -915,3 +915,361 @@ pub(crate) fn resolve_warp_t_hbd() -> WarpHbdTfn {
         _f
     })
 }
+
+#[cfg(test)]
+mod simd_vs_scalar {
+    use super::*;
+
+    // Widths cover every SIMD width + remainder path; heights cover the
+    // 4-tap (h <= 4) and 8-tap filter selection. Subpel positions sample
+    // copy, edge phases and the 64-phase range used by filter -1.
+    const W_SIZES: [usize; 11] = [2, 4, 6, 8, 12, 16, 20, 24, 36, 64, 128];
+    const H_SIZES: [usize; 4] = [2, 4, 6, 16];
+    const SUBPEL: [i32; 6] = [0, 1, 8, 15, 16, 63];
+    const PAD: usize = 8;
+
+    fn src_8bpc(stride: usize, rows: usize) -> Vec<u8> {
+        let mut seed = 0x1234_5678u32;
+        (0..stride * rows)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mc_8bpc_resolved_matches_scalar() {
+        let stride = 128 + 2 * PAD;
+        let src = src_8bpc(stride, 128 + 2 * PAD);
+        let off = PAD * stride + PAD;
+        let mut fails = Vec::new();
+        for &w in &W_SIZES {
+            for &h in &H_SIZES {
+                for ts in [w, w + PAD] {
+                    let n = ts * (h - 1) + w;
+                    for mx in SUBPEL {
+                        for my in SUBPEL {
+                            let mut mid = vec![0i16; 160 * 160];
+                            let bilin = mx < 16 && my < 16;
+                            if bilin {
+                                let (mut a, mut b) = (vec![0i16; n], vec![0i16; n]);
+                                unsafe {
+                                    prep_bilin_8bpc_scalar_dispatch(
+                                        &mut a[..n],
+                                        ts,
+                                        &src[off..],
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        &mut mid,
+                                    );
+                                    resolve_prep_bilin_8bpc()(
+                                        &mut b[..n],
+                                        ts,
+                                        &src[off..],
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        &mut mid,
+                                    );
+                                }
+                                if a != b {
+                                    fails.push(format!(
+                                        "prep_bilin ts={ts} w={w} h={h} mx={mx} my={my}"
+                                    ));
+                                }
+                                let (mut a, mut b) = (vec![0u8; n], vec![0u8; n]);
+                                unsafe {
+                                    put_bilin_8bpc_scalar_dispatch(
+                                        &mut a[..n],
+                                        ts,
+                                        &src[off..],
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        &mut mid,
+                                    );
+                                    resolve_put_bilin_8bpc()(
+                                        &mut b[..n],
+                                        ts,
+                                        &src[off..],
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        &mut mid,
+                                    );
+                                }
+                                if a != b {
+                                    fails.push(format!(
+                                        "put_bilin ts={ts} w={w} h={h} mx={mx} my={my}"
+                                    ));
+                                }
+                            }
+                            for filter in -1..6 {
+                                if filter != -1 && (mx > 15 || my > 15) {
+                                    continue;
+                                }
+                                let (mut a, mut b) = (vec![0i16; n], vec![0i16; n]);
+                                unsafe {
+                                    prep_8tap_8bpc_scalar_dispatch(
+                                        &mut a[..n],
+                                        ts,
+                                        &src,
+                                        off,
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        filter,
+                                        &mut mid,
+                                    );
+                                    resolve_prep_8tap_8bpc()(
+                                        &mut b[..n],
+                                        ts,
+                                        &src,
+                                        off,
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        filter,
+                                        &mut mid,
+                                    );
+                                }
+                                if a != b {
+                                    fails.push(format!(
+                                        "prep_8tap ts={ts} w={w} h={h} mx={mx} my={my} f={filter}"
+                                    ));
+                                }
+                                let (mut a, mut b) = (vec![0u8; n], vec![0u8; n]);
+                                unsafe {
+                                    put_8tap_8bpc_scalar_dispatch(
+                                        &mut a[..n],
+                                        ts,
+                                        &src,
+                                        off,
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        filter,
+                                        &mut mid,
+                                    );
+                                    resolve_put_8tap_8bpc()(
+                                        &mut b[..n],
+                                        ts,
+                                        &src,
+                                        off,
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        filter,
+                                        &mut mid,
+                                    );
+                                }
+                                if a != b {
+                                    fails.push(format!(
+                                        "put_8tap ts={ts} w={w} h={h} mx={mx} my={my} f={filter}"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            fails.is_empty(),
+            "{} mismatches, first: {:?}",
+            fails.len(),
+            &fails[..fails.len().min(12)]
+        );
+    }
+
+    #[test]
+    fn mc_hbd_resolved_matches_scalar() {
+        let stride = 128 + 2 * PAD;
+        let src: Vec<u16> = src_8bpc(2 * stride, 128 + 2 * PAD)
+            .chunks(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]) & 1023)
+            .collect();
+        let off = PAD * stride + PAD;
+        let mut fails = Vec::new();
+        for &w in &W_SIZES {
+            for &h in &H_SIZES {
+                for ts in [w, w + PAD] {
+                    let n = ts * (h - 1) + w;
+                    for mx in SUBPEL {
+                        for my in SUBPEL {
+                            let mut mid = vec![0i16; 160 * 160];
+                            let bilin = mx < 16 && my < 16;
+                            if bilin {
+                                let (mut a, mut b) = (vec![0i16; n], vec![0i16; n]);
+                                unsafe {
+                                    prep_bilin_hbd_scalar(
+                                        &mut a[..n],
+                                        ts,
+                                        &src[off..],
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        10,
+                                        &mut mid,
+                                    );
+                                    resolve_prep_bilin_hbd()(
+                                        &mut b[..n],
+                                        ts,
+                                        &src[off..],
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        10,
+                                        &mut mid,
+                                    );
+                                }
+                                if a != b {
+                                    fails.push(format!(
+                                        "prep_bilin ts={ts} w={w} h={h} mx={mx} my={my}"
+                                    ));
+                                }
+                                let (mut a, mut b) = (vec![0u16; n], vec![0u16; n]);
+                                unsafe {
+                                    put_bilin_hbd_scalar(
+                                        &mut a[..n],
+                                        ts,
+                                        &src[off..],
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        10,
+                                        &mut mid,
+                                    );
+                                    resolve_put_bilin_hbd()(
+                                        &mut b[..n],
+                                        ts,
+                                        &src[off..],
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        10,
+                                        &mut mid,
+                                    );
+                                }
+                                if a != b {
+                                    fails.push(format!(
+                                        "put_bilin ts={ts} w={w} h={h} mx={mx} my={my}"
+                                    ));
+                                }
+                            }
+                            for filter in -1..6 {
+                                if filter != -1 && (mx > 15 || my > 15) {
+                                    continue;
+                                }
+                                let (mut a, mut b) = (vec![0i16; n], vec![0i16; n]);
+                                unsafe {
+                                    prep_8tap_hbd_scalar(
+                                        &mut a[..n],
+                                        ts,
+                                        &src,
+                                        off,
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        filter,
+                                        10,
+                                        &mut mid,
+                                    );
+                                    resolve_prep_8tap_hbd()(
+                                        &mut b[..n],
+                                        ts,
+                                        &src,
+                                        off,
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        filter,
+                                        10,
+                                        &mut mid,
+                                    );
+                                }
+                                if a != b {
+                                    fails.push(format!(
+                                        "prep_8tap ts={ts} w={w} h={h} mx={mx} my={my} f={filter}"
+                                    ));
+                                }
+                                let (mut a, mut b) = (vec![0u16; n], vec![0u16; n]);
+                                unsafe {
+                                    put_8tap_hbd_scalar(
+                                        &mut a[..n],
+                                        ts,
+                                        &src,
+                                        off,
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        filter,
+                                        10,
+                                        &mut mid,
+                                    );
+                                    resolve_put_8tap_hbd()(
+                                        &mut b[..n],
+                                        ts,
+                                        &src,
+                                        off,
+                                        stride,
+                                        w,
+                                        h,
+                                        mx,
+                                        my,
+                                        filter,
+                                        10,
+                                        &mut mid,
+                                    );
+                                }
+                                if a != b {
+                                    fails.push(format!(
+                                        "put_8tap ts={ts} w={w} h={h} mx={mx} my={my} f={filter}"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            fails.is_empty(),
+            "{} mismatches, first: {:?}",
+            fails.len(),
+            &fails[..fails.len().min(12)]
+        );
+    }
+}

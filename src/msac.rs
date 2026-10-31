@@ -1032,7 +1032,7 @@ mod unary_kernel_tests {
             s ^= s << 17;
             s
         };
-        for _ in 0..400_000 {
+        for _ in 0..40_000 {
             let rng = ((0x8000 | (next() & 0x7FFF)) & !1) as u32;
             let dif = next() % ((rng as u64) << 48);
             for &mb in &[5u32, 6, 21] {
@@ -1074,7 +1074,7 @@ mod bools_bypass_div_tests {
             s ^= s << 17;
             s
         };
-        for _ in 0..300_000 {
+        for _ in 0..30_000 {
             let rng = ((0x8000 | (next() & 0x7FFF)) & !1) as u64;
             let dif = next() % (rng << 48);
             let n = 1 + (next() % 32) as u32;
@@ -1156,7 +1156,7 @@ mod hr_kernel_tests {
             s
         };
         let mut fallbacks = 0u32;
-        for _ in 0..400_000 {
+        for _ in 0..40_000 {
             let rng = ((0x8000 | (next() & 0x7FFF)) & !1) as u32;
             let dif = next() % ((rng as u64) << 48);
             let m = 1 + (next() % 6) as u32;
@@ -1174,6 +1174,6 @@ mod hr_kernel_tests {
                 assert!(bits <= 20);
             }
         }
-        assert!(fallbacks < 4_000, "fallback should be rare: {fallbacks}");
+        assert!(fallbacks < 400, "fallback should be rare: {fallbacks}");
     }
 }

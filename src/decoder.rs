@@ -157,9 +157,6 @@ pub struct Decoder {
     dpb_in: usize,
     dpb_out: usize,
     dpb_sz: usize,
-    /// POC (frame_offset) of the most recently appended output frame, mirroring
-    /// deferred `show_implicit` reference frames in display order.
-    dpb_poc: u8,
 }
 
 impl Decoder {
@@ -227,7 +224,6 @@ impl Decoder {
             dpb_in: 0,
             dpb_out: 0,
             dpb_sz,
-            dpb_poc: 0,
         })
     }
 
@@ -265,7 +261,8 @@ impl Decoder {
         self.gen_picture()?;
 
         if self.drain {
-            self.queue_flush();
+            crate::output_order::flush_remaining(&mut self.ctx);
+            self.enqueue_frame_out();
         }
 
         self.output_image()
@@ -295,26 +292,9 @@ impl Decoder {
                     if self.input.is_empty() {
                         self.input.unref();
                     }
-                    // Frames reconstructed during parsing: enqueue all of them in
-                    // decode order (a single parse_obus call may decode several).
-                    // Drain directly into the output ring; collecting into a temporary
-                    // Vec added one avoidable allocation on the single-thread path.
-                    let dpb = &mut self.dpb;
-                    let dpb_sz = self.dpb_sz;
-                    let dpb_in = &mut self.dpb_in;
-                    let dpb_poc = &mut self.dpb_poc;
-                    for pic in self.ctx.frame_out.drain(..) {
-                        // recently queued frame so end-of-stream queue_flush can
-                        // re-display deferred show_implicit frames in order.
-                        if let Some(fh) = pic.frame_hdr.as_ref() {
-                            *dpb_poc = fh.frame_offset;
-                        }
-                        dpb[*dpb_in].pic.p = pic;
-                        *dpb_in += 1;
-                        if *dpb_in == dpb_sz {
-                            *dpb_in = 0;
-                        }
-                    }
+                    // Frames output during parsing (a single parse_obus call may
+                    // output several), in output order.
+                    self.enqueue_frame_out();
                 }
                 Err(e) => {
                     // A malformed OBU can force large transient frame/tile/scratch
@@ -371,64 +351,14 @@ impl Decoder {
         Ok(pic)
     }
 
-    /// Frames coded with `show_implicit` are not displayed at decode time; they
-    /// are held in the reference store and emitted in display order once the
-    /// stream drains. This re-queues each such reference whose POC is later than
-    /// the last-displayed POC (`dpb_poc`), smallest-first, exactly once per slot.
-    fn queue_flush(&mut self) {
-        let nb = match self.ctx.seq_hdr.as_ref() {
-            Some(s) => s.order_hint_n_bits as i32,
-            None => return,
-        };
-        let mut mask: u32 = 0;
-        loop {
-            let mut cand: Option<(usize, u8)> = None; // (slot, poc)
-            for n in 0..8 {
-                if mask & (1 << n) != 0 {
-                    continue;
-                }
-                let r = &self.ctx.refs[n];
-                let pic = match r.p.pic.as_ref() {
-                    Some(p) if p.has_data() => p,
-                    _ => continue,
-                };
-                let hdr = match r.p.frame_hdr.as_ref() {
-                    Some(h) => h,
-                    None => continue,
-                };
-                if hdr.show_implicit == 0 {
-                    continue;
-                }
-                let ipoc = pic
-                    .frame_hdr
-                    .as_ref()
-                    .map(|h| h.frame_offset)
-                    .unwrap_or(hdr.frame_offset);
-                if crate::env::get_poc_diff(nb, ipoc as i32, self.dpb_poc as i32) > 0
-                    && (cand.is_none()
-                        || crate::env::get_poc_diff(nb, ipoc as i32, cand.unwrap().1 as i32) < 0)
-                {
-                    cand = Some((n, ipoc));
-                }
-            }
-            let (slot, ipoc) = match cand {
-                Some(c) => c,
-                None => break,
-            };
-            // Append a fresh, independently-owned copy of the stored picture.
-            let pic = self.ctx.refs[slot].p.pic.as_ref().unwrap().clone();
-            self.dpb[self.dpb_in].pic.p = crate::decode::clone_picture_mt(
-                &pic,
-                self.n_tc,
-                self.ctx.pool.as_ref(),
-                self.ctx.pic_allocator.clone(),
-            );
+    /// Moves the frames output by the parser into the output ring.
+    fn enqueue_frame_out(&mut self) {
+        for pic in self.ctx.frame_out.drain(..) {
+            self.dpb[self.dpb_in].pic.p = pic;
             self.dpb_in += 1;
             if self.dpb_in == self.dpb_sz {
                 self.dpb_in = 0;
             }
-            self.dpb_poc = ipoc;
-            mask |= 1 << slot;
         }
     }
 

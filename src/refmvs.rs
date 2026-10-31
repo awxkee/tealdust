@@ -35,6 +35,11 @@ use crate::levels::INVALID_MV;
 use crate::levels::{Av2Block, BlockSize, Mv, MvXY, RefPair};
 
 pub(crate) const INVALID_TRAJ: u16 = 0x8080;
+
+/// Projected-MV rows kept above each superblock row (copied from the previous
+/// row). A TIP neighbour sampled at its 16x16 unit origin can sit up to three
+/// 8x8 rows above the current superblock row.
+pub(crate) const RP_PROJ_ROWS_ABOVE: usize = 3;
 pub(crate) const INVALID_REF2CUR: i8 = -32;
 
 static DIV_MULT: [u16; 32] = [
@@ -1229,6 +1234,9 @@ pub(crate) struct MvSearchState {
     pub(crate) sngl_iter_cntr: i32,
     pub(crate) iter_cntr: i32,
     pub(crate) b8x8: isize,
+    /// Current block position (4x4 units, absolute).
+    pub(crate) by4: i32,
+    pub(crate) bx4: i32,
 }
 
 impl Default for MvSearchState {
@@ -1245,6 +1253,8 @@ impl Default for MvSearchState {
             sngl_iter_cntr: 0,
             iter_cntr: 0,
             b8x8: 0,
+            by4: 0,
+            bx4: 0,
         }
     }
 }
@@ -1378,9 +1388,15 @@ pub(crate) fn add_spatial_candidate(
             (!seq_hdr.tip_refine_mv && imin(b_dim[0] as i32, b_dim[1] as i32) >= 4)
                 || b.bs == crate::levels::BlockSize::Bs256x256 as u8
         };
-        let tip16m = !(tip16 as isize);
-        off_y_8x8 &= tip16m;
-        off_x_8x8 &= tip16m;
+        // AVM `derive_non_tip_mode_smvp_from_tip`: the projection is sampled
+        // at the TIP block's own 8x8 (or 16x16) unit, counted from the block
+        // origin rather than the frame grid.
+        let t = tip16 as i32;
+        let unit = |pos4: i32, o4: i32| -> isize {
+            (((pos4 - o4) >> 1) + (((o4 >> 1) >> t) << t) - (pos4 >> 1)) as isize
+        };
+        off_y_8x8 += unit(st.by4 + y_off, b.oy4 as i32);
+        off_x_8x8 += unit(st.bx4 + x_off, b.ox4 as i32);
     }
     // (top SB-boundary) projected-MV accesses land in valid buffer memory,
     let off_8x8 = (rp_base + rf.rp_stride * off_y_8x8 + off_x_8x8) as usize;
@@ -2029,11 +2045,71 @@ pub(crate) fn refmvs_find(
     let lms_8x8x = (bx4 >> 1) as isize;
     let mut st = MvSearchState {
         b8x8: lms_8x8x + tms_8x8y * stride,
+        by4,
+        bx4,
         ..Default::default()
     };
 
     let bms_8x8y = (((by4 + bh4 - 1) & (rf.sbsz - 1)) >> 1) as isize;
     let left_8x8x = ((bx4 - 1) >> 1) as isize;
+
+    // AVM `assign_tmvp_high_priority`: without future references, a
+    // single-reference block within two frames of its reference takes the
+    // temporal candidate before the adjacent spatial ones. It keys off the
+    // frame header flag, even when nothing was projected (e.g. the only
+    // reference is a key frame).
+    let tmvp_first = frm_hdr.use_ref_frame_mvs != 0
+        && seq_hdr.drl_reorder != 2
+        && frm_hdr.has_bothside_refs == 0
+        && ref1 == -1
+        && ref0 >= 0
+        && (ref0 as usize) < crate::levels::TIP_FRAME
+        && rf.abspocdiff[ref0 as usize] <= 2;
+    macro_rules! temporal {
+        () => {
+            if rf.use_ref_frame_mvs != 0 && (ref0 != ref1 || skip_mode) && *cnt < 6 {
+                let bw8 = imin(bw4 >> 1, 8);
+                let bh8 = imin(bh4 >> 1, 8);
+                let step_h = if bw4 >= 16 { 2 } else { 1 };
+                let step_v = if bh4 >= 16 { 2 } else { 1 };
+                let tx_off = 2 * bw8 - 2 * step_h;
+                let ty_off = 2 * bh8 - 2 * step_v;
+                let first = (tx_off as u32) < w4 as u32
+                    && (ty_off as u32) < h4 as u32
+                    && add_temporal_candidate(
+                        rf,
+                        rp_proj,
+                        rp_base,
+                        rp_traj,
+                        &mut st,
+                        mvstack,
+                        cnt,
+                        ((((by4 + ty_off) & (rf.sbsz - 1)) >> 1) as isize) * stride
+                            + ((bx4 + tx_off) >> 1) as isize,
+                        reference,
+                        seq_hdr.mv_traj,
+                    );
+                if !first && (bw4 > 4 || bh4 > 4) {
+                    add_temporal_candidate(
+                        rf,
+                        rp_proj,
+                        rp_base,
+                        rp_traj,
+                        &mut st,
+                        mvstack,
+                        cnt,
+                        ((((by4 + bh8) & (rf.sbsz - 1)) >> 1) as isize) * stride
+                            + ((bx4 + bw8) >> 1) as isize,
+                        reference,
+                        seq_hdr.mv_traj,
+                    );
+                }
+            }
+        };
+    }
+    if tmvp_first {
+        temporal!();
+    }
 
     // bottom-most left
     if let Some(bml_b) = bml {
@@ -2178,44 +2254,9 @@ pub(crate) fn refmvs_find(
         );
     }
 
-    // temporal MV projection
-    if rf.use_ref_frame_mvs != 0 && (ref0 != ref1 || skip_mode) && *cnt < 6 {
-        let bw8 = imin(bw4 >> 1, 8);
-        let bh8 = imin(bh4 >> 1, 8);
-        let step_h = if bw4 >= 16 { 2 } else { 1 };
-        let step_v = if bh4 >= 16 { 2 } else { 1 };
-        let tx_off = 2 * bw8 - 2 * step_h;
-        let ty_off = 2 * bh8 - 2 * step_v;
-        let first = (tx_off as u32) < w4 as u32
-            && (ty_off as u32) < h4 as u32
-            && add_temporal_candidate(
-                rf,
-                rp_proj,
-                rp_base,
-                rp_traj,
-                &mut st,
-                mvstack,
-                cnt,
-                ((((by4 + ty_off) & (rf.sbsz - 1)) >> 1) as isize) * stride
-                    + ((bx4 + tx_off) >> 1) as isize,
-                reference,
-                seq_hdr.mv_traj,
-            );
-        if !first && (bw4 > 4 || bh4 > 4) {
-            add_temporal_candidate(
-                rf,
-                rp_proj,
-                rp_base,
-                rp_traj,
-                &mut st,
-                mvstack,
-                cnt,
-                ((((by4 + bh8) & (rf.sbsz - 1)) >> 1) as isize) * stride
-                    + ((bx4 + bw8) >> 1) as isize,
-                reference,
-                seq_hdr.mv_traj,
-            );
-        }
+    // temporal MV projection (here unless AVM gives it high priority)
+    if !tmvp_first {
+        temporal!();
     }
 
     // top-left
@@ -2313,9 +2354,9 @@ pub(crate) fn refmvs_find(
     }
 
     // sort by weight (refmvs.c:869-872): mode 2 = always (count >= 2),
-    // mode 1 = constraint (count >= 4).
+    // mode 1 = constraint (count >= 4, and not with a high-priority TMVP).
     if (seq_hdr.drl_reorder == 2 && nearest_refmv_count >= 2)
-        || (seq_hdr.drl_reorder == 1 && nearest_refmv_count >= 4)
+        || (seq_hdr.drl_reorder == 1 && !tmvp_first && nearest_refmv_count >= 4)
     {
         let mut maxwidx = 0;
         let mut maxw = mvstack[0].weight;
@@ -2891,7 +2932,8 @@ pub(crate) fn load_tmvs(
     let poffset = if rf.have_frame_threading {
         row_start8 as isize * stride
     } else {
-        (sbsz8 as isize + 2) * stride * tile_row_idx as isize + 2 * stride
+        let above = RP_PROJ_ROWS_ABOVE as isize;
+        (sbsz8 as isize + above) * stride * tile_row_idx as isize + above * stride
     };
 
     if !rf.have_frame_threading {
@@ -2899,15 +2941,12 @@ pub(crate) fn load_tmvs(
         let cs = col_start8 as usize;
         let ce = col_end8 as usize;
         let len = ce - cs;
-        let src1_start = po + cs + ((sbsz8 - 2) as usize * stride as usize);
-        let dst1_start = po + cs - (2 * stride as usize);
-        for i in 0..len {
-            rf.rp_proj[dst1_start + i] = rf.rp_proj[src1_start + i];
-        }
-        let src2_start = po + cs + ((sbsz8 - 1) as usize * stride as usize);
-        let dst2_start = po + cs - (stride as usize);
-        for i in 0..len {
-            rf.rp_proj[dst2_start + i] = rf.rp_proj[src2_start + i];
+        // Carry the previous superblock row's last rows above this one.
+        for r in (1..=RP_PROJ_ROWS_ABOVE).rev() {
+            let src_start = po + cs + ((sbsz8 as usize - r) * stride as usize);
+            let dst_start = po + cs - (r * stride as usize);
+            rf.rp_proj
+                .copy_within(src_start..src_start + len, dst_start);
         }
     }
 
@@ -3049,12 +3088,16 @@ pub(crate) fn load_tmvs(
                 if y < y_proj_start || y >= y_proj_end {
                     continue;
                 }
+                // AVM `check_block_position`: the target must lie within the
+                // source's processing block widened by `tmvp_col_offset`.
+                let x_src_base = x & !(mfmv_sbsz8 - 1);
+                if x1 < x_src_base - mfmv_edge || x1 >= x_src_base + mfmv_sbsz8 + mfmv_edge {
+                    continue;
+                }
+                // Trajectory end points are bounded around the target's block.
                 let x_sb_align = x1 & !(mfmv_sbsz8 - 1);
                 let x_proj_start = imax(x_sb_align - mfmv_edge, 0);
                 let x_proj_end = imin(x_sb_align + mfmv_sbsz8 + mfmv_edge, rf.iw8);
-                if x < x_proj_start || x >= x_proj_end {
-                    continue;
-                }
 
                 let pos1 = (y1 as usize & (sbsz8 as usize - 1)) * stride as usize + x1 as usize;
                 let pp = poffset as usize;
@@ -3237,7 +3280,7 @@ pub(crate) fn init_frame(
         let rp_proj_sz = if have_frame_threading {
             ((rf.ih8 + 31) & !31) as usize * rp_stride as usize
         } else {
-            (2 + sbsz8) as usize * n_blocks as usize
+            (RP_PROJ_ROWS_ABOVE + sbsz8 as usize) * n_blocks as usize
         };
         let rp_traj_sz = sbsz8 as usize * n_blocks as usize;
         let rp_map_sz = sbsz8 as usize * n_blocks as usize;
@@ -3316,7 +3359,13 @@ pub(crate) fn init_frame(
         let tip_ref = rf.tip.reference.refs();
         let tip0poc = ref_poc[tip_ref[0] as usize] as i32;
         let tip1poc = ref_poc[tip_ref[1] as usize] as i32;
-        let d2 = get_poc_diff(nbits, tip1poc, tip0poc);
+        // AVM `tip_config_tip_parameter`: the reference distance runs from
+        // ref0 to ref1 with references on both sides, else from ref1 to ref0.
+        let d2 = if frm_hdr.has_bothside_refs != 0 {
+            get_poc_diff(nbits, tip1poc, tip0poc)
+        } else {
+            get_poc_diff(nbits, tip0poc, tip1poc)
+        };
         rf.tip.delta = d2.unsigned_abs() as i8;
         let d1 = rf.pocdiff[tip_ref[0] as usize] as i32;
         let dv = DIV_MULT[imin(d2.abs(), 31) as usize] as i32;
@@ -3594,7 +3643,8 @@ pub(crate) fn tile_sbrow_init(
     let off3 = if rf.have_frame_threading {
         (sby * sbsz8) as isize * rf.rp_stride
     } else {
-        (sbsz8 as isize + 2) * off1 + 2 * rf.rp_stride
+        let above = RP_PROJ_ROWS_ABOVE as isize;
+        (sbsz8 as isize + above) * off1 + above * rf.rp_stride
     };
     rt.rp_proj_off = off3 as usize;
     rt.rp_traj_off = off2 as usize;

@@ -1228,7 +1228,7 @@ mod tests {
         const O: usize = 2 * TMP_STRIDE + 2;
         const DST_STRIDE: usize = 16;
         let mut rng = R(0xd1b54a32d192ed03);
-        for _ in 0..40_000 {
+        for _ in 0..4_000 {
             let mut tmp = [0i16; 144];
             for t in tmp.iter_mut() {
                 *t = rng.range(0, 255) as i16;

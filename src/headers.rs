@@ -802,6 +802,8 @@ pub struct FrameHeader {
     pub frame_presentation_delay: u32,
     pub show_immediate: u8,
     pub show_implicit: u8,
+    /// Coded as a closed-loop key frame (display order restarts at its order hint).
+    pub closed_loop_key: u8,
     pub cross_frame_context: u8,
     pub disable_cdf_update: u8,
     pub allow_screen_content_tools: u8,

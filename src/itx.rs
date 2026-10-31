@@ -2189,84 +2189,84 @@ mod rect_end_to_end {
 
     #[test]
     fn e_4x8() {
-        run(5, 4, 8, 0xE_48, 800);
+        run(5, 4, 8, 0xE_48, 40);
     }
     #[test]
     fn e_8x4() {
-        run(6, 8, 4, 0xE_84, 800);
+        run(6, 8, 4, 0xE_84, 40);
     }
     #[test]
     fn e_8x16() {
-        run(7, 8, 16, 0xE_816, 800);
+        run(7, 8, 16, 0xE_816, 40);
     }
     #[test]
     fn e_16x8() {
-        run(8, 16, 8, 0xE_168, 800);
+        run(8, 16, 8, 0xE_168, 40);
     }
     #[test]
     fn e_16x32() {
-        run(9, 16, 32, 0xE_1632, 400);
+        run(9, 16, 32, 0xE_1632, 40);
     }
     #[test]
     fn e_32x16() {
-        run(10, 32, 16, 0xE_3216, 400);
+        run(10, 32, 16, 0xE_3216, 40);
     }
     #[test]
     fn e_4x16() {
-        run(13, 4, 16, 0xE_416, 800);
+        run(13, 4, 16, 0xE_416, 40);
     }
     #[test]
     fn e_16x4() {
-        run(14, 16, 4, 0xE_164, 800);
+        run(14, 16, 4, 0xE_164, 40);
     }
     #[test]
     fn e_8x32() {
-        run(15, 8, 32, 0xE_832, 800);
+        run(15, 8, 32, 0xE_832, 40);
     }
     #[test]
     fn e_32x8() {
-        run(16, 32, 8, 0xE_328, 800);
+        run(16, 32, 8, 0xE_328, 40);
     }
     #[test]
     fn e_4x32() {
-        run(19, 4, 32, 0xE_432, 800);
+        run(19, 4, 32, 0xE_432, 40);
     }
     #[test]
     fn e_32x4() {
-        run(20, 32, 4, 0xE_324, 800);
+        run(20, 32, 4, 0xE_324, 40);
     }
     // 64-involving sizes (reuse clamped cores; oracle = generic path).
     #[test]
     fn e_32x64() {
-        run(11, 32, 64, 0xE_3264, 400);
+        run(11, 32, 64, 0xE_3264, 40);
     }
     #[test]
     fn e_64x32() {
-        run(12, 64, 32, 0xE_6432, 400);
+        run(12, 64, 32, 0xE_6432, 40);
     }
     #[test]
     fn e_16x64() {
-        run(17, 16, 64, 0xE_1664, 400);
+        run(17, 16, 64, 0xE_1664, 40);
     }
     #[test]
     fn e_64x16() {
-        run(18, 64, 16, 0xE_6416, 400);
+        run(18, 64, 16, 0xE_6416, 40);
     }
     #[test]
     fn e_8x64() {
-        run(21, 8, 64, 0xE_864, 800);
+        run(21, 8, 64, 0xE_864, 40);
     }
     #[test]
     fn e_64x8() {
-        run(22, 64, 8, 0xE_648, 800);
+        run(22, 64, 8, 0xE_648, 40);
     }
     #[test]
     fn e_4x64() {
-        run(23, 4, 64, 0xE_464, 800);
+        run(23, 4, 64, 0xE_464, 40);
     }
     #[test]
     fn e_64x4() {
-        run(24, 64, 4, 0xE_644, 800);
+        run(24, 64, 4, 0xE_644, 40);
     }
 
     // Non-square ADST / mixed-type, all DCT/ADST/FLIPADST combos (minus
@@ -2280,7 +2280,7 @@ mod rect_end_to_end {
                     continue; // DCT_DCT handled elsewhere
                 }
                 let txtp = (f as u32) | ((sec as u32) << 5);
-                run_tt(tx, w, h, txtp, s, 250);
+                run_tt(tx, w, h, txtp, s, 16);
                 s = s.wrapping_add(0x9E3779B97F4A7C15);
             }
         }

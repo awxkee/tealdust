@@ -1614,6 +1614,7 @@ where
     let l = &mut *ctx.l;
     let msac = &mut *ctx.msac;
     let cdf_m = &mut *ctx.cdf_m;
+    let cdf_mv = &mut *ctx.cdf_mv;
     let cdf_dmv = &mut *ctx.cdf_dmv;
     let _ = &mut *recon;
     let bs = if lbs == BlockSize::Invalid { cbs } else { lbs };
@@ -2635,9 +2636,9 @@ where
             inter.refine_mv = 0;
         }
 
-        // TIP decision
+        // TIP decision (AVM `is_tip_allowed_bsize`: own chroma, both sides >= 8)
         let is_tip =
-            if b.skip_mode == 0 && fi.tip_frame_mode != 0 && cbs == lbs && imax(bw4, bh4) >= 2 {
+            if b.skip_mode == 0 && fi.tip_frame_mode != 0 && cbs == lbs && imin(bw4, bh4) >= 2 {
                 let ctx = (if n_ctx >= 1 {
                     (nx_ref0[0] == TIP_FRAME as i8) as usize
                 } else {
@@ -3042,7 +3043,7 @@ where
                     let mv = if amvd_val != 0 {
                         read_amvd(msac, cdf_m)
                     } else {
-                        read_mv_full(msac, cdf_dmv, mv_prec)
+                        read_mv_full(msac, cdf_mv, mv_prec)
                     };
                     b.inter_data_mut().mv[n] = Mv::from_xy(mv.y(), mv.x());
                     if amvd_val == 0 {
@@ -3139,10 +3140,9 @@ where
             }
 
             b.inter_data_mut().refine_mv = 0;
-            // The refine_mv block is skipped entirely (no symbol read) when OPFL
-            // refinement is switchable and the inter mode is one of the explicit
-            // NEW-MV compound modes — these carry their own refine signaling via
-            // reads a spurious refine_mv bit and desyncs the bitstream.
+            // AVM `is_refinemv_allowed`: with switchable OPFL the explicit
+            // (non-OPFL) NEW-MV compound modes carry no refine_mv, and warped
+            // blocks never refine.
             let opfl_switchable_excl = fi.opfl_refine_type == 1
                 && matches!(
                     final_inter_mode,
@@ -3159,14 +3159,16 @@ where
                 && recon.svc[ref0 as usize][0].scale == 0
                 && recon.svc[ref1 as usize][0].scale == 0
                 && !opfl_switchable_excl
+                && b.inter_data().motion_mode == MotionMode::Translation as u8
             {
-                let is_opfl_mode = final_inter_mode >= CompInterPredMode::OpflNearMvNearMv as u8;
                 let nearmv_nearmv = final_inter_mode == CompInterPredMode::NearMvNearMv as u8
                     || final_inter_mode == CompInterPredMode::OpflNearMvNearMv as u8
                     || final_inter_mode == CompInterPredMode::OpflJointNewMv as u8;
+                // AVM `switchable_refinemv_flag`: every other allowed mode,
+                // OPFL ones included, signals the flag.
                 if nearmv_nearmv {
                     b.inter_data_mut().refine_mv = 2;
-                } else if !is_opfl_mode || fi.opfl_refine_type != 1 {
+                } else {
                     let ctx = (final_inter_mode - CompInterPredMode::NearMvNearMv as u8) as usize;
                     let ctx_clamped = ctx.min(10);
                     b.inter_data_mut().refine_mv =
@@ -3597,7 +3599,7 @@ where
                 let mv = if amvd_val != 0 {
                     read_amvd(msac, cdf_m)
                 } else {
-                    read_mv_full(msac, cdf_dmv, mv_prec)
+                    read_mv_full(msac, cdf_mv, mv_prec)
                 };
                 b.inter_data_mut().mv[0] = Mv::from_xy(mv.y(), mv.x());
 

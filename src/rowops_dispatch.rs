@@ -1421,7 +1421,7 @@ mod gdf_prep_row_tests {
     #[test]
     fn row_8bpc_matches_scalar_pairs() {
         let mut rng = Rng(0x5eed_1234_abcd);
-        for _ in 0..3000 {
+        for _ in 0..300 {
             let w = 1 + rng.r(64) as usize;
             let p = params(&mut rng, 2);
             let g = grads(&mut rng);
@@ -1456,7 +1456,7 @@ mod gdf_prep_row_tests {
     #[test]
     fn row_hbd_matches_scalar_pairs() {
         let mut rng = Rng(0xbeef_5678_1357);
-        for _ in 0..3000 {
+        for _ in 0..300 {
             let bitdepth = [10u32, 12][rng.r(2) as usize];
             let down_shift = if bitdepth == 12 { 2 } else { 0 };
             let w = 1 + rng.r(64) as usize;

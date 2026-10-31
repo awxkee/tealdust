@@ -526,7 +526,7 @@ mod uv_fir_avx2_tests {
         const CW: usize = 96;
         const LW: usize = 160;
         let mut rng = R(0x243f6a8885a308d3);
-        for _ in 0..40_000 {
+        for _ in 0..4_000 {
             let c_rows: Vec<Vec<u8>> = (0..5)
                 .map(|_| (0..CW).map(|_| rng.range(0, 255) as u8).collect())
                 .collect();

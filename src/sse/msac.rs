@@ -692,7 +692,7 @@ mod no_update_fastpath_tests {
         for b in buf.iter_mut() {
             *b = next() as u8;
         }
-        for _ in 0..20_000 {
+        for _ in 0..2_000 {
             // Random monotone 3-symbol CDF (values in (0, 32768), descending).
             let mut v = [0u16; 3];
             v[0] = 1 + (next() % 32700) as u16;

@@ -161,7 +161,7 @@ pub(crate) fn put_bilin_8bpc_neon(
     if mx != 0 && my != 0 {
         let mid_stride = w.next_multiple_of(16).max(64);
         let mid = &mut mid_scratch[..mid_stride * (h + 1)];
-        for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(h + 1).enumerate() {
+        for (y, mid_row) in mid.chunks_mut(mid_stride).take(h + 1).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -275,7 +275,7 @@ pub(crate) fn prep_bilin_8bpc_neon(
     if mx != 0 && my != 0 {
         let mid_stride = w.next_multiple_of(16).max(64);
         let mid = &mut mid_scratch[..mid_stride * (h + 1)];
-        for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(h + 1).enumerate() {
+        for (y, mid_row) in mid.chunks_mut(mid_stride).take(h + 1).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -298,7 +298,7 @@ pub(crate) fn prep_bilin_8bpc_neon(
                 *mid_px = bilin_scalar(src_row[si] as i32, src_row[si + 1] as i32, mx) as i16;
             }
         }
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let mid_row = unsafe { mid.get_unchecked(y * mid_stride..) };
             let mid_next_row = unsafe { mid.get_unchecked((y + 1) * mid_stride..) };
             let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
@@ -328,7 +328,7 @@ pub(crate) fn prep_bilin_8bpc_neon(
             }
         }
     } else if mx != 0 {
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
@@ -345,7 +345,7 @@ pub(crate) fn prep_bilin_8bpc_neon(
             }
         }
     } else if my != 0 {
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
@@ -363,7 +363,7 @@ pub(crate) fn prep_bilin_8bpc_neon(
             }
         }
     } else {
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
@@ -722,7 +722,7 @@ pub(crate) fn put_8tap_8bpc_neon(
             let mid = &mut mid_scratch[..mid_stride * tmp_h];
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(tmp_h).enumerate() {
+            for (y, mid_row) in mid.chunks_mut(mid_stride).take(tmp_h).enumerate() {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
                 let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -868,7 +868,7 @@ pub(crate) fn prep_8tap_8bpc_neon(
             let mid = &mut mid_scratch[..mid_stride * tmp_h];
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(tmp_h).enumerate() {
+            for (y, mid_row) in mid.chunks_mut(mid_stride).take(tmp_h).enumerate() {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
                 let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -890,7 +890,7 @@ pub(crate) fn prep_8tap_8bpc_neon(
                 }
             }
             let rnd1 = (1 << bits) >> 1;
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
                     let x = chunk_idx * 16;
@@ -923,7 +923,7 @@ pub(crate) fn prep_8tap_8bpc_neon(
         (Some(fh), None) => {
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
@@ -949,7 +949,7 @@ pub(crate) fn prep_8tap_8bpc_neon(
             let ss = src_stride as isize;
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
@@ -972,7 +972,7 @@ pub(crate) fn prep_8tap_8bpc_neon(
             }
         }
         (None, None) => {
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
                 let src_row = unsafe { src.get_unchecked(base..) };
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
@@ -1162,7 +1162,7 @@ pub(crate) fn warp_affine_8x8t_8bpc_neon(
         mx += beta;
     }
 
-    for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(8).enumerate() {
+    for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(8).enumerate() {
         let (lo, hi) = warp_vert_i16x8(&mid, y * 8, 8, my, gamma);
         store_i16x8_shift_warp(&mut tmp_row[..8], lo, hi, 64, 7);
         my += delta;

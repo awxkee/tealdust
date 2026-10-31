@@ -212,7 +212,7 @@ pub(crate) fn ccso_prep_lut_8bpc_scalar(
     edge_clf: u32,
     bo_only: bool,
 ) {
-    for (y, dst) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+    for (y, dst) in dst.chunks_mut(dst_stride).take(h).enumerate() {
         let row = o + (y << ss_ver) * tmp_stride;
         for (x, out) in dst[..w].iter_mut().enumerate() {
             let ti = row + (x << ss_hor);
@@ -254,7 +254,7 @@ pub(crate) fn ccso_prep_lut_hbd_scalar(
     edge_clf: u32,
     bo_only: bool,
 ) {
-    for (y, dst) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+    for (y, dst) in dst.chunks_mut(dst_stride).take(h).enumerate() {
         let row = o + (y << ss_ver) * tmp_stride;
         for (x, out) in dst[..w].iter_mut().enumerate() {
             let ti = row + (x << ss_hor);
@@ -545,7 +545,7 @@ fn ccso_add_8bpc_scalar_range(
             }
 
             let x_end = (xx + 4).min(x1);
-            for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+            for (yy, idx_row) in idx_rows.chunks(idx_stride).take(block_h).enumerate() {
                 let dst_row = &mut dst_rows[yy * dst_stride..];
                 for (dst, &idx) in dst_row[xx..x_end].iter_mut().zip(idx_row[xx..x_end].iter()) {
                     let off = offset_map[idx as usize] as i32;
@@ -646,7 +646,7 @@ fn ccso_add_hbd_scalar_range(
             }
 
             let x_end = (xx + 4).min(x1);
-            for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+            for (yy, idx_row) in idx_rows.chunks(idx_stride).take(block_h).enumerate() {
                 let dst_row = &mut dst_rows[yy * dst_stride..];
                 for (dst, &idx) in dst_row[xx..x_end].iter_mut().zip(idx_row[xx..x_end].iter()) {
                     let off = offset_map[idx as usize] as i32;

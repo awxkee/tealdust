@@ -870,6 +870,7 @@ pub fn parse_frame_hdr(
         match obu_type {
             ObuType::ClosedLoopKf | ObuType::OpenLoopKf => {
                 hdr.frame_type = FrameType::Key;
+                hdr.closed_loop_key = (obu_type == ObuType::ClosedLoopKf) as u8;
             }
             ObuType::Ras | ObuType::Switch => {
                 hdr.frame_type = FrameType::Switch;
@@ -2872,22 +2873,15 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                 return Err(TealdustError::InvalidReferenceFrame);
             }
             // (`c->refs[idx].p.p.data[0]`) to be present before it can be queued.
-            let ref_pic = match c.refs[idx].p.pic.as_ref() {
-                Some(p) if p.has_data() => p.clone(),
-                _ => return Err(TealdustError::InvalidReferenceFrame),
-            };
+            if !c.refs[idx].p.pic.as_ref().is_some_and(|p| p.has_data()) {
+                return Err(TealdustError::InvalidReferenceFrame);
+            }
             if c.strict_std_compliance && !c.refs[idx].p.showable {
                 return Err(TealdustError::InvalidReferenceFrame);
             }
-            // referenced stored picture. With output_invisible_frames this is a
-            // owned clone of the referenced reconstruction onto the output queue.
-            c.frame_out.push(crate::decode::clone_picture_mt(
-                &ref_pic,
-                c.n_tc,
-                c.pool.as_ref(),
-                c.pic_allocator.clone(),
-            ));
-            // slot into every other ref slot and clears its showable flag.
+            let trigger = c.refs[idx].p.clone();
+            // A shown key frame refreshes every other slot: output the frames
+            // waiting there first (AVM `update_frame_buffers` order).
             if c.refs[idx]
                 .p
                 .frame_hdr
@@ -2895,6 +2889,12 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                 .is_some_and(|h| h.frame_type == FrameType::Key)
             {
                 let r = idx;
+                for i in 0..8 {
+                    if i != r {
+                        crate::output_order::output_before_overwrite(c, i);
+                    }
+                }
+                crate::output_order::output_frame_buffers(c, &trigger);
                 c.refs[r].p.showable = false;
                 for i in 0..8 {
                     if i == r {
@@ -2906,6 +2906,8 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                     // motion field for the overwritten slot (no inc back).
                     c.refs[i].refmvs = None;
                 }
+            } else {
+                crate::output_order::output_frame_buffers(c, &trigger);
             }
             c.frame_hdr = None;
         } else {

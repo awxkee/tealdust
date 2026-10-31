@@ -153,7 +153,7 @@ fn ccso_prep_lut_hbd_neon_impl<const SS_HOR: usize, const SS_VER: usize, const B
     let nq = vdupq_n_s16((-quant_step) as i16);
     let sh = vdupq_n_s16(-(shift as i16));
 
-    for (y, dst_row) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+    for (y, dst_row) in dst.chunks_mut(dst_stride).take(h).enumerate() {
         let row = o + (y << SS_VER) * tmp_stride;
         let dst_row = &mut dst_row[..w];
         let mut x;
@@ -387,7 +387,7 @@ fn ccso_add_4x4_hbd(
     let zero = vdup_n_s16(0);
     let maxv = vdup_n_s16(bitdepth_max as i16);
     let mut off_tmp = [0i16; 4];
-    for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+    for (yy, idx_row) in idx_rows.chunks(idx_stride).take(block_h).enumerate() {
         let dst_row = &mut dst_rows[yy * dst_stride..];
         let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
         fill_offsets_4_i16(&mut off_tmp, idx4, offset_map);
@@ -435,7 +435,7 @@ pub(crate) fn ccso_add_hbd_neon(
                 break;
             }
 
-            for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+            for (yy, idx_row) in idx_rows.chunks(idx_stride).take(block_h).enumerate() {
                 let dst_row = &mut dst_rows[yy * dst_stride..];
                 let idx16 = &idx_row[xx..xx + 16].as_chunks::<16>().0[0];
                 fill_offsets_16(&mut off_tmp16, idx16, &offset_map);
@@ -458,7 +458,7 @@ pub(crate) fn ccso_add_hbd_neon(
         while xx + 8 <= w {
             let bx = xx >> 2;
             if ((row_mask >> bx) & 0x03) == 0 {
-                for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+                for (yy, idx_row) in idx_rows.chunks(idx_stride).take(block_h).enumerate() {
                     let dst_row = &mut dst_rows[yy * dst_stride..];
                     let idx8 = &idx_row[xx..xx + 8].as_chunks::<8>().0[0];
                     fill_offsets_8(&mut off_tmp8, idx8, &offset_map);

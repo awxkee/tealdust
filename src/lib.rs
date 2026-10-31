@@ -90,6 +90,7 @@ pub(crate) mod mc_dispatch;
 pub(crate) mod msac;
 pub(crate) mod mtpool;
 pub(crate) mod obu;
+pub(crate) mod output_order;
 pub(crate) mod pal;
 pub(crate) mod pixel;
 pub(crate) mod qm_tables;
