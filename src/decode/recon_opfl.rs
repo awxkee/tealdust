@@ -1502,13 +1502,15 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
             let mut bottom = [0i32; 2];
             let mut right = [0i32; 2];
             for i in 0..2 {
-                let (mvy, mvx) = if tip {
-                    (rmv[1][i].y(), rmv[1][i].x())
+                // Integer chroma position of the unrefined MV: the TIP grid holds
+                // 1/16 chroma-pel MVs, the block MV is 1/8 luma-pel.
+                let (dy, dx) = if tip {
+                    (rmv[1][i].y() >> 4, rmv[1][i].x() >> 4)
                 } else {
-                    (b_mv[i].y, b_mv[i].x)
+                    (b_mv[i].y >> (3 + ss_ver), b_mv[i].x >> (3 + ss_hor))
                 };
-                top[i] = ((cby + y) * 4 >> ss_ver) + (mvy >> 4);
-                left[i] = ((cbx + x) * 4 >> ss_hor) + (mvx >> 4);
+                top[i] = ((cby + y) * 4 >> ss_ver) + dy;
+                left[i] = ((cbx + x) * 4 >> ss_hor) + dx;
                 bottom[i] = iclip(top[i] + (4 * rh4 >> ss_ver) + hvtaps, 1, h);
                 right[i] = iclip(left[i] + (4 * rw4 >> ss_hor) + hhtaps, 1, w);
                 top[i] = iclip(top[i] + 1 - hvtaps, 0, h - 1);
