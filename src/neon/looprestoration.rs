@@ -523,3 +523,58 @@ pub(crate) fn ns_wiener_uv_fir_run_neon(
         x += 1;
     }
 }
+
+/// Eight samples of a PC-Wiener row as `i16` lanes.
+trait PcwLoad: Copy {
+    fn load8(row: &[Self], x: usize) -> int16x8_t;
+}
+
+impl PcwLoad for u8 {
+    #[inline(always)]
+    fn load8(row: &[u8], x: usize) -> int16x8_t {
+        let v = &row[x..x + 8];
+        unsafe { vreinterpretq_s16_u16(vmovl_u8(vld1_u8(v.as_ptr()))) }
+    }
+}
+
+impl PcwLoad for u16 {
+    #[inline(always)]
+    fn load8(row: &[u16], x: usize) -> int16x8_t {
+        let v = &row[x..x + 8];
+        unsafe { vreinterpretq_s16_u16(vld1q_u16(v.as_ptr())) }
+    }
+}
+
+/// PC-Wiener |Laplacian| feature sums over the 6x6 window at
+/// `(row_center - 1, x0)`: six of the eight lanes are used per row.
+#[inline]
+#[target_feature(enable = "neon")]
+fn pcw_features_neon<P: PcwLoad>(rows: &[&[P]], row_center: usize, x0: usize) -> [i32; 3] {
+    const MASK: [u16; 8] = [0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0, 0];
+    let mask = unsafe { vld1q_u16(MASK.as_ptr()) };
+    let mut acc = [vdupq_n_u32(0); 3];
+    for y in row_center - 1..row_center + 5 {
+        let (up, mid, down) = (rows[y - 1], rows[y], rows[y + 1]);
+        let m2 = vshlq_n_s16::<1>(P::load8(mid, x0));
+        let lap = [
+            vaddq_s16(P::load8(up, x0), P::load8(down, x0)),
+            vaddq_s16(P::load8(up, x0 + 1), P::load8(down, x0 - 1)),
+            vaddq_s16(P::load8(up, x0 - 1), P::load8(down, x0 + 1)),
+        ];
+        for (a, l) in acc.iter_mut().zip(lap) {
+            let v = vandq_u16(vreinterpretq_u16_s16(vabsq_s16(vsubq_s16(l, m2))), mask);
+            *a = vpadalq_u16(*a, v);
+        }
+    }
+    acc.map(|a| vaddvq_u32(a) as i32)
+}
+
+#[target_feature(enable = "neon")]
+pub(crate) fn pcw_features_8bpc_neon(rows: &[&[u8]], row_center: usize, x0: usize) -> [i32; 3] {
+    pcw_features_neon(rows, row_center, x0)
+}
+
+#[target_feature(enable = "neon")]
+pub(crate) fn pcw_features_hbd_neon(rows: &[&[u16]], row_center: usize, x0: usize) -> [i32; 3] {
+    pcw_features_neon(rows, row_center, x0)
+}

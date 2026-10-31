@@ -752,6 +752,12 @@ pub(crate) fn resolve_ipred_dip_8bpc() -> DipPred8Fn {
         {
             _f = crate::neon::ipred_dip_8bpc_neon;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::ipred_dip_8bpc_sse41;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -787,6 +793,12 @@ pub(crate) fn resolve_pal_pred_8bpc() -> PalPred8Fn {
         {
             _f = crate::neon::pal_pred_8bpc_neon;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::pal_pred_8bpc_sse41;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -821,6 +833,12 @@ pub(crate) fn resolve_pal_pred_hbd() -> PalPredHbdFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::pal_pred_hbd_neon;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::pal_pred_hbd_sse41;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1422,6 +1440,12 @@ pub(crate) fn resolve_ipred_dip_hbd() -> DipPredHbdFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::ipred_dip_hbd_neon;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::ipred_dip_hbd_sse41;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {

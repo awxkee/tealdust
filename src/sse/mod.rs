@@ -30,11 +30,20 @@ mod ccso;
 mod ccso_hd;
 mod cdef;
 mod cdef_hd;
+mod cdef_pad;
+mod cdef_pad_hd;
 mod cfl;
+mod cfl_ext;
 mod cfl_hd;
+mod deblock_sb64;
+mod deblock_sb64_8;
 mod deblocking;
+mod dip;
 mod filter;
 mod filter_hd;
+mod gdf;
+mod gdf_pair;
+mod gdf_pair_hd;
 mod inter_hd;
 mod ipred;
 mod itx;
@@ -43,6 +52,10 @@ mod looprestoration_hd;
 mod mc_hd;
 #[cfg(target_arch = "x86_64")]
 mod msac;
+mod pal;
+#[cfg(test)]
+mod port_tests;
+mod warp;
 
 pub(crate) use itx::*;
 
@@ -56,26 +69,49 @@ pub(crate) use cdef_hd::{
     cdef_filter_block_4x4_hbd_sse41, cdef_filter_block_4x8_hbd_sse41,
     cdef_filter_block_8x8_hbd_sse41, cdef_filter_block_hbd_sse41, cdef_find_dir_hbd_sse41,
 };
+pub(crate) use cdef_pad::cdef_padding_8bpc_sse41;
+pub(crate) use cdef_pad_hd::cdef_padding_hbd_sse41;
 pub(crate) use cfl::{
     cfl_apply_420_8bpc_sse41, cfl_apply_422_8bpc_sse41, cfl_apply_444_8bpc_sse41,
+};
+pub(crate) use cfl_ext::{
+    cfl_alpha_accum_8bpc_sse41, cfl_alpha_accum_hbd_sse41, cfl_apply_420_filtered_8bpc_sse41,
+    cfl_apply_420_filtered_hbd_sse41, cfl_gen_mat_8bpc_sse41, cfl_gen_mat_hbd_sse41,
+    cfl_gen_y_row_8bpc_sse41, cfl_gen_y_row_hbd_sse41, cfl_mhccp_pred_8bpc_sse41,
+    cfl_mhccp_pred_hbd_sse41,
 };
 pub(crate) use cfl_hd::{
     cfl_apply_420_hbd_sse41, cfl_apply_422_hbd_sse41, cfl_apply_444_hbd_sse41,
 };
+pub(crate) use deblock_sb64::{
+    deblock_h_sb64uv_hbd_sse41, deblock_h_sb64y_hbd_sse41, deblock_v_sb64uv_hbd_sse41,
+    deblock_v_sb64y_hbd_sse41, setup_thr_cols_dq_8bpc_sse41, setup_thr_cols_seg_8bpc_sse41,
+    setup_thr_cols_simple_8bpc_sse41, setup_thr_rows_dq_8bpc_sse41, setup_thr_rows_seg_8bpc_sse41,
+    setup_thr_rows_simple_8bpc_sse41,
+};
+pub(crate) use deblock_sb64_8::{
+    deblock_h_sb64uv_8bpc_sse41, deblock_h_sb64y_8bpc_sse41, deblock_v_sb64uv_8bpc_sse41,
+    deblock_v_sb64y_8bpc_sse41,
+};
 pub(crate) use deblocking::{deblock_apply_8bpc_sse41, deblock_apply_hbd_sse41};
+pub(crate) use dip::{ipred_dip_8bpc_sse41, ipred_dip_hbd_sse41};
 pub(crate) use filter::{
     avg_row_8bpc_sse41, blend_row_8bpc_sse41, cctx_row_i16_sse41, cctx_row_sse41,
     dc_add_row_8bpc_sse41, gdf_add_run_8bpc_sse41, gdf_gradient_group_sse41, mask_row_8bpc_sse41,
     morph_row_8bpc_sse41, residual_add_row_8bpc_sse41, row_clip_sse41, w_avg_row_8bpc_sse41,
 };
 pub(crate) use filter_hd::{
-    avg_row_hbd_sse41, blend_row_hbd_sse41, dc_add_row_hbd_sse41, mask_row_hbd_sse41,
-    morph_row_hbd_sse41, residual_add_row_hbd_sse41, w_avg_row_hbd_sse41,
+    avg_row_hbd_sse41, blend_row_hbd_sse41, dc_add_row_hbd_sse41, gdf_add_run_hbd_sse41,
+    mask_row_hbd_sse41, morph_row_hbd_sse41, residual_add_row_hbd_sse41, w_avg_row_hbd_sse41,
 };
+pub(crate) use gdf::{gdf_prep_row_8bpc_sse41, gdf_prep_row_hbd_sse41};
+pub(crate) use gdf_pair::gdf_prep_pair_8bpc_sse41;
+pub(crate) use gdf_pair_hd::{gdf_gradient_group_hbd_sse41, gdf_prep_pair_hbd_sse41};
 pub(crate) use inter_hd::*;
 pub(crate) use ipred::*;
 pub(crate) use looprestoration::{
     ns_wiener_fir_run_sse41, ns_wiener_uv_fir_run_sse41, pc_wiener_fir_run_sse41,
+    pcw_features_8bpc_sse41, pcw_features_hbd_sse41,
 };
 pub(crate) use looprestoration_hd::{
     ns_wiener_fir_run_hbd_sse41, ns_wiener_uv_fir_run_hbd_sse41, pc_wiener_fir_run_hbd_sse41,
@@ -83,3 +119,8 @@ pub(crate) use looprestoration_hd::{
 pub(crate) use mc_hd::*;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use msac::MsacContextSse;
+pub(crate) use pal::{pal_pred_8bpc_sse41, pal_pred_hbd_sse41};
+pub(crate) use warp::{
+    warp_affine_8x8_8bpc_sse41, warp_affine_8x8_hbd_sse41, warp_affine_8x8t_8bpc_sse41,
+    warp_affine_8x8t_hbd_sse41,
+};

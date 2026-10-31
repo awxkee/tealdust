@@ -1387,6 +1387,12 @@ pub(crate) fn resolve_cfl_gen_mat_8bpc() -> CflGenMat8Fn {
         {
             _f = crate::neon::cfl_gen_mat_8bpc_neon;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_gen_mat_8bpc_sse41;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1407,6 +1413,12 @@ pub(crate) fn resolve_cfl_gen_mat_hbd() -> CflGenMatHbdFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_gen_mat_hbd_neon;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_gen_mat_hbd_sse41;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1429,6 +1441,12 @@ pub(crate) fn resolve_cfl_alpha_accum_8bpc() -> CflAlphaAccum8Fn {
         {
             _f = crate::neon::cfl_alpha_accum_8bpc_neon;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_alpha_accum_8bpc_sse41;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1449,6 +1467,12 @@ pub(crate) fn resolve_cfl_alpha_accum_hbd() -> CflAlphaAccumHbdFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_alpha_accum_hbd_neon;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_alpha_accum_hbd_sse41;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1471,6 +1495,12 @@ pub(crate) fn resolve_cfl_gen_y_row_8bpc() -> CflGenYRow8Fn {
         {
             _f = crate::neon::cfl_gen_y_row_8bpc_neon;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_gen_y_row_8bpc_sse41;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1491,6 +1521,12 @@ pub(crate) fn resolve_cfl_gen_y_row_hbd() -> CflGenYRowHbdFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_gen_y_row_hbd_neon;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_gen_y_row_hbd_sse41;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1513,6 +1549,12 @@ pub(crate) fn resolve_cfl_mhccp_pred_8bpc() -> CflMhccpPred8Fn {
         {
             _f = crate::neon::cfl_mhccp_pred_8bpc_neon;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_mhccp_pred_8bpc_sse41;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -1533,6 +1575,12 @@ pub(crate) fn resolve_cfl_mhccp_pred_hbd() -> CflMhccpPredHbdFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_mhccp_pred_hbd_neon;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_mhccp_pred_hbd_sse41;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1585,12 +1633,15 @@ pub(crate) fn resolve_cfl_apply_420() -> CflApplyFn {
 pub(crate) fn resolve_cfl_apply_420_filtered() -> CflApplyFn {
     *CFL_APPLY_420_8BPC_FILTERED.get_or_init(|| {
         let mut _f: CflApplyFn = cfl_apply_420_8bpc_scalar;
-        // Filtered 4:2:0 variants (VSTRIP/GAUSS) have NEON and AVX2 entries.
-        // Keep SSE on the scalar fallback until its 4:2:0 entry grows the same
-        // filter coverage.
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_apply_420_8bpc_neon;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_apply_420_filtered_8bpc_sse41;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -1686,11 +1737,15 @@ pub(crate) fn resolve_cfl_apply_420_hbd() -> CflApplyHbdFn {
 pub(crate) fn resolve_cfl_apply_420_hbd_filtered() -> CflApplyHbdFn {
     *CFL_APPLY_420_HBD_FILTERED.get_or_init(|| {
         let mut _f: CflApplyHbdFn = cfl_apply_420_hbd_scalar;
-        // Filtered HBD 4:2:0 has NEON and AVX2 implementations; keep SSE on
-        // the scalar fallback until its 4:2:0 entry grows the same filter coverage.
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::cfl_apply_420_hbd_neon;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::cfl_apply_420_filtered_hbd_sse41;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {

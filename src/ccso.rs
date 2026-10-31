@@ -93,26 +93,45 @@ fn ccso_padding<P: Pixel>(
     h: usize,
     edges: u8,
 ) {
-    let x_min: i32 = if edges & CDEF_HAVE_LEFT != 0 { -2 } else { 0 };
-    let x_max: i32 = w as i32 - 1 + if edges & CDEF_HAVE_RIGHT != 0 { 2 } else { 0 };
+    let have_left = edges & CDEF_HAVE_LEFT != 0;
+    let have_right = edges & CDEF_HAVE_RIGHT != 0;
     let y_min: i32 = if edges & CDEF_HAVE_TOP != 0 { -2 } else { 0 };
     let y_max: i32 = h as i32 - 1 + if edges & CDEF_HAVE_BOTTOM != 0 { 2 } else { 0 };
 
+    // Row-wise form of the per-pixel clip: each output row picks its source
+    // row once (top / block / bottom, clamped to the available edges), copies
+    // the interior, and fills the two left and two right border columns.
     for y in -2i32..h as i32 + 2 {
         let src_y = iclip(y, y_min, y_max);
-        for x in -2i32..w as i32 + 2 {
-            let src_x = iclip(x, x_min, x_max);
-            let v = if src_y < 0 {
-                top[(top_off as i32 + src_x + (2 + src_y) * src_stride as i32) as usize]
-            } else if src_y >= h as i32 {
-                bottom
-                    [(bottom_off as i32 + src_x + (src_y - h as i32) * src_stride as i32) as usize]
-            } else if src_x < 0 {
-                left[src_y as usize][(2 + src_x) as usize]
-            } else {
-                src[(src_off as i32 + src_x + src_y * src_stride as i32) as usize]
-            };
-            tmp[(o as i32 + x + y * tmp_stride as i32) as usize] = v;
+        let (row, base): (&[P], usize) = if src_y < 0 {
+            (
+                top,
+                (top_off as i32 + (2 + src_y) * src_stride as i32) as usize,
+            )
+        } else if src_y >= h as i32 {
+            (
+                bottom,
+                (bottom_off as i32 + (src_y - h as i32) * src_stride as i32) as usize,
+            )
+        } else {
+            (src, src_off + src_y as usize * src_stride)
+        };
+        let d = (o as i32 + y * tmp_stride as i32 - 2) as usize;
+        let out = &mut tmp[d..d + w + 4];
+        out[2..2 + w].copy_from_slice(&row[base..base + w]);
+        if !have_left {
+            out[0] = row[base];
+            out[1] = row[base];
+        } else if (0..h as i32).contains(&src_y) {
+            out[..2].copy_from_slice(&left[src_y as usize]);
+        } else {
+            out[..2].copy_from_slice(&row[base - 2..base]);
+        }
+        if have_right {
+            out[w + 2..].copy_from_slice(&row[base + w..base + w + 2]);
+        } else {
+            out[w + 2] = row[base + w - 1];
+            out[w + 3] = row[base + w - 1];
         }
     }
 }
@@ -804,4 +823,101 @@ pub(crate) fn ccso_add<BD: BitDepth>(
     }
 
     unreachable!("unsupported CCSO pixel storage");
+}
+
+#[cfg(test)]
+mod padding_tests {
+    use super::*;
+
+    /// The original per-pixel clipped copy.
+    #[allow(clippy::too_many_arguments)]
+    fn padding_ref(
+        tmp: &mut [u16],
+        tmp_stride: usize,
+        o: usize,
+        src: &[u16],
+        src_stride: usize,
+        src_off: usize,
+        left: &[[u16; 2]],
+        top: &[u16],
+        top_off: usize,
+        bottom: &[u16],
+        bottom_off: usize,
+        w: usize,
+        h: usize,
+        edges: u8,
+    ) {
+        let x_min: i32 = if edges & CDEF_HAVE_LEFT != 0 { -2 } else { 0 };
+        let x_max: i32 = w as i32 - 1 + if edges & CDEF_HAVE_RIGHT != 0 { 2 } else { 0 };
+        let y_min: i32 = if edges & CDEF_HAVE_TOP != 0 { -2 } else { 0 };
+        let y_max: i32 = h as i32 - 1 + if edges & CDEF_HAVE_BOTTOM != 0 { 2 } else { 0 };
+        for y in -2i32..h as i32 + 2 {
+            let src_y = iclip(y, y_min, y_max);
+            for x in -2i32..w as i32 + 2 {
+                let src_x = iclip(x, x_min, x_max);
+                let v = if src_y < 0 {
+                    top[(top_off as i32 + src_x + (2 + src_y) * src_stride as i32) as usize]
+                } else if src_y >= h as i32 {
+                    bottom[(bottom_off as i32 + src_x + (src_y - h as i32) * src_stride as i32)
+                        as usize]
+                } else if src_x < 0 {
+                    left[src_y as usize][(2 + src_x) as usize]
+                } else {
+                    src[(src_off as i32 + src_x + src_y * src_stride as i32) as usize]
+                };
+                tmp[(o as i32 + x + y * tmp_stride as i32) as usize] = v;
+            }
+        }
+    }
+
+    #[test]
+    fn padding_matches_per_pixel_reference() {
+        let mut s = 0x1234_5678_u64;
+        let mut r = move || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 33) as u16
+        };
+        for &(w, h) in &[
+            (1usize, 1usize),
+            (4, 4),
+            (8, 8),
+            (16, 16),
+            (64, 64),
+            (7, 3),
+            (64, 16),
+        ] {
+            for edges in 0..16u8 {
+                let stride = w + 8;
+                let src: Vec<u16> = (0..stride * (h + 2)).map(|_| r()).collect();
+                let top: Vec<u16> = (0..stride * 2 + 4).map(|_| r()).collect();
+                let bottom: Vec<u16> = (0..stride * 2 + 4).map(|_| r()).collect();
+                let left: Vec<[u16; 2]> = (0..h).map(|_| [r(), r()]).collect();
+                let tmp_stride = 68;
+                let o = 2 * tmp_stride + 2;
+                let len = tmp_stride * (h + 4) + 4;
+                let (mut a, mut b) = (vec![0u16; len], vec![0u16; len]);
+                let args = (
+                    &src[..],
+                    stride,
+                    2usize,
+                    &left[..],
+                    &top[..],
+                    2usize,
+                    &bottom[..],
+                    2usize,
+                );
+                padding_ref(
+                    &mut a, tmp_stride, o, args.0, args.1, args.2, args.3, args.4, args.5, args.6,
+                    args.7, w, h, edges,
+                );
+                ccso_padding(
+                    &mut b, tmp_stride, o, args.0, args.1, args.2, args.3, args.4, args.5, args.6,
+                    args.7, w, h, edges,
+                );
+                assert_eq!(a, b, "{w}x{h} edges={edges:04b}");
+            }
+        }
+    }
 }

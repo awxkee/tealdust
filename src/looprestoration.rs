@@ -301,6 +301,75 @@ fn gdf_bitdepth_from_max(bitdepth_max: i32) -> i32 {
     }
 }
 
+/// Pixel rows the PC-Wiener feature kernels accept.
+pub(crate) trait PcwPx: Copy + Into<i32> {
+    /// SIMD feature sums, or `None` when no kernel applies.
+    fn simd_features(rows: &[&[Self]], row_center: usize, x0: usize) -> Option<[i32; 3]>;
+}
+
+impl PcwPx for u8 {
+    #[inline(always)]
+    #[allow(unreachable_code, unused_variables)]
+    fn simd_features(rows: &[&[u8]], row_center: usize, x0: usize) -> Option<[i32; 3]> {
+        #[cfg(target_arch = "aarch64")]
+        return Some(unsafe { crate::neon::pcw_features_8bpc_neon(rows, row_center, x0) });
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        if std::is_x86_feature_detected!("sse4.1") {
+            return Some(unsafe { crate::sse::pcw_features_8bpc_sse41(rows, row_center, x0) });
+        }
+        None
+    }
+}
+
+impl PcwPx for u16 {
+    #[inline(always)]
+    #[allow(unreachable_code, unused_variables)]
+    fn simd_features(rows: &[&[u16]], row_center: usize, x0: usize) -> Option<[i32; 3]> {
+        #[cfg(target_arch = "aarch64")]
+        return Some(unsafe { crate::neon::pcw_features_hbd_neon(rows, row_center, x0) });
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        if std::is_x86_feature_detected!("sse4.1") {
+            return Some(unsafe { crate::sse::pcw_features_hbd_sse41(rows, row_center, x0) });
+        }
+        None
+    }
+}
+
+/// Sums of |vertical|, |anti-diagonal| and |diagonal| Laplacians over the
+/// 6x6 window whose top-left sample is `(row_center - 1, x0)`.
+pub(crate) fn pcw_features_scalar<P: PcwPx>(
+    rows: &[&[P]],
+    row_center: usize,
+    x0: usize,
+) -> [i32; 3] {
+    let mut f = [0i32; 3];
+    for y in row_center - 1..row_center + 5 {
+        let (up, mid, down) = (rows[y - 1], rows[y], rows[y + 1]);
+        for x in x0..x0 + 6 {
+            let px = |r: &[P], i: usize| -> i32 { r[i].into() };
+            let m2 = 2 * px(mid, x);
+            f[0] += (px(up, x) - m2 + px(down, x)).abs();
+            f[1] += (px(up, x + 1) - m2 + px(down, x - 1)).abs();
+            f[2] += (px(up, x - 1) - m2 + px(down, x + 1)).abs();
+        }
+    }
+    f
+}
+
+/// PC-Wiener features for one 4x4 block; the SIMD kernels read 8 samples
+/// from `x0 - 1` to `x0 + 8`, so rows too short for that use the scalar sum.
+#[inline]
+fn pcw_features<P: PcwPx>(rows: &[&[P]], row_center: usize, x0: usize) -> [i32; 3] {
+    let fits = x0 >= 1
+        && rows[row_center - 2..row_center + 6]
+            .iter()
+            .all(|r| x0 + 9 <= r.len());
+    if fits && let Some(f) = P::simd_features(rows, row_center, x0) {
+        return f;
+    }
+    pcw_features_scalar(rows, row_center, x0)
+}
+
 /// Compute PC-Wiener class LUT index from gradient features and skip mask.
 pub(crate) fn get_class_lut_idx_8bpc(
     rows: &[&[u8]],
@@ -312,31 +381,8 @@ pub(crate) fn get_class_lut_idx_8bpc(
     by: usize,
     bh: usize,
 ) -> i32 {
-    let mut f = [0i32; 3];
+    let mut f = pcw_features(rows, row_center, col_off + bx * 4 - 1);
     let mut s = 0i32;
-
-    for dy in -1i32..=4 {
-        for dx in -1i32..=4 {
-            let x = (col_off as i32 + bx as i32 * 4 + dx) as usize;
-            let y = (row_center as i32 + dy) as usize;
-            let m = rows[y][x] as i32;
-            let up = rows[y - 1][x] as i32;
-            let down = rows[y + 1][x] as i32;
-            let vert = up - 2 * m + down;
-
-            let up_right = rows[y - 1][x + 1] as i32;
-            let down_left = rows[y + 1][x.wrapping_sub(1)] as i32;
-            let anti_diag = up_right - 2 * m + down_left;
-
-            let down_right = rows[y + 1][x + 1] as i32;
-            let up_left = rows[y - 1][x.wrapping_sub(1)] as i32;
-            let diag = up_left - 2 * m + down_right;
-
-            f[0] += vert.abs();
-            f[1] += anti_diag.abs();
-            f[2] += diag.abs();
-        }
-    }
 
     let num_pixels: [u8; 3] = [16, 4, 1];
     for dy in -1i32..=1 {
@@ -2912,31 +2958,8 @@ pub(crate) fn get_class_lut_idx_hbd(
     bh: usize,
     bitdepth_min_8: i32,
 ) -> i32 {
-    let mut f = [0i32; 3];
+    let mut f = pcw_features(rows, row_center, col_off + bx * 4 - 1);
     let mut s = 0i32;
-
-    for dy in -1i32..=4 {
-        for dx in -1i32..=4 {
-            let x = (col_off as i32 + bx as i32 * 4 + dx) as usize;
-            let y = (row_center as i32 + dy) as usize;
-            let m = rows[y][x] as i32;
-            let up = rows[y - 1][x] as i32;
-            let down = rows[y + 1][x] as i32;
-            let vert = up - 2 * m + down;
-
-            let up_right = rows[y - 1][x + 1] as i32;
-            let down_left = rows[y + 1][x.wrapping_sub(1)] as i32;
-            let anti_diag = up_right - 2 * m + down_left;
-
-            let down_right = rows[y + 1][x + 1] as i32;
-            let up_left = rows[y - 1][x.wrapping_sub(1)] as i32;
-            let diag = up_left - 2 * m + down_right;
-
-            f[0] += vert.abs();
-            f[1] += anti_diag.abs();
-            f[2] += diag.abs();
-        }
-    }
 
     let num_pixels: [u8; 3] = [16, 4, 1];
     for dy in -1i32..=1 {
@@ -4834,5 +4857,48 @@ mod avm_looprestoration_shape_tests {
             ]
         );
         assert_eq!(&PC_WIENER_CONFIG[..], &WIENER_NS_CONFIG_Y[..12]);
+    }
+}
+
+#[cfg(test)]
+mod pcw_feature_tests {
+    use super::*;
+
+    #[test]
+    fn pcw_features_simd_matches_scalar() {
+        let mut s = 0xfeed_u64;
+        let mut r = move |max: u32| {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((s >> 33) as u32) % (max + 1)
+        };
+        for &bits in &[8u32, 10, 12] {
+            let max = (1 << bits) - 1;
+            let len = 80;
+            let data: Vec<Vec<u16>> = (0..10)
+                .map(|_| (0..len).map(|_| r(max) as u16).collect())
+                .collect();
+            let rows16: Vec<&[u16]> = data.iter().map(|v| &v[..]).collect();
+            let data8: Vec<Vec<u8>> = data
+                .iter()
+                .map(|v| v.iter().map(|&x| x as u8).collect())
+                .collect();
+            let rows8: Vec<&[u8]> = data8.iter().map(|v| &v[..]).collect();
+            for x0 in 1..len - 6 {
+                if bits == 8 {
+                    assert_eq!(
+                        pcw_features(&rows8, 4, x0),
+                        pcw_features_scalar(&rows8, 4, x0),
+                        "8b x0={x0}"
+                    );
+                }
+                assert_eq!(
+                    pcw_features(&rows16, 4, x0),
+                    pcw_features_scalar(&rows16, 4, x0),
+                    "{bits}b x0={x0}"
+                );
+            }
+        }
     }
 }

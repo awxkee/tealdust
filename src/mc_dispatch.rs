@@ -762,7 +762,7 @@ pub(crate) type WarpHbdTfn =
     unsafe fn(&mut [i16], usize, &[u16], usize, usize, &[i16; 4], i32, i32, u8);
 
 #[allow(clippy::too_many_arguments)]
-fn warp_affine_8x8_8bpc_scalar(
+pub(crate) fn warp_affine_8x8_8bpc_scalar(
     dst: &mut [u8],
     dst_stride: usize,
     src: &[u8],
@@ -776,7 +776,7 @@ fn warp_affine_8x8_8bpc_scalar(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn warp_affine_8x8t_8bpc_scalar(
+pub(crate) fn warp_affine_8x8t_8bpc_scalar(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u8],
@@ -790,7 +790,7 @@ fn warp_affine_8x8t_8bpc_scalar(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn warp_affine_8x8_hbd_scalar(
+pub(crate) fn warp_affine_8x8_hbd_scalar(
     dst: &mut [u16],
     dst_stride: usize,
     src: &[u16],
@@ -815,7 +815,7 @@ fn warp_affine_8x8_hbd_scalar(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn warp_affine_8x8t_hbd_scalar(
+pub(crate) fn warp_affine_8x8t_hbd_scalar(
     tmp: &mut [i16],
     tmp_stride: usize,
     src: &[u16],
@@ -852,6 +852,12 @@ pub(crate) fn resolve_warp_8bpc() -> Warp8Fn {
         {
             _f = crate::neon::warp_affine_8x8_8bpc_neon as Warp8Fn;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::warp_affine_8x8_8bpc_sse41 as Warp8Fn;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -869,6 +875,12 @@ pub(crate) fn resolve_warp_t_8bpc() -> Warp8tFn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::warp_affine_8x8t_8bpc_neon as Warp8tFn;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::warp_affine_8x8t_8bpc_sse41 as Warp8tFn;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
@@ -888,6 +900,12 @@ pub(crate) fn resolve_warp_hbd() -> WarpHbdFn {
         {
             _f = crate::neon::warp_affine_8x8_hbd_neon as WarpHbdFn;
         }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::warp_affine_8x8_hbd_sse41 as WarpHbdFn;
+            }
+        }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {
             if std::is_x86_feature_detected!("avx2") {
@@ -905,6 +923,12 @@ pub(crate) fn resolve_warp_t_hbd() -> WarpHbdTfn {
         #[cfg(target_arch = "aarch64")]
         {
             _f = crate::neon::warp_affine_8x8t_hbd_neon as WarpHbdTfn;
+        }
+        #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), feature = "sse"))]
+        {
+            if std::is_x86_feature_detected!("sse4.1") {
+                _f = crate::sse::warp_affine_8x8t_hbd_sse41 as WarpHbdTfn;
+            }
         }
         #[cfg(all(target_arch = "x86_64", feature = "avx"))]
         {

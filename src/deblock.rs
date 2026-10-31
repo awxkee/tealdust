@@ -2514,3 +2514,109 @@ pub(crate) fn copy_db_hbd(
         }
     }
 }
+
+#[cfg(test)]
+mod setup_thr_simd_tests {
+    use super::*;
+    use crate::exec_context::ExecContext;
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn r(&mut self, n: u32) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 16) as u32 % n
+        }
+    }
+
+    /// Every `setup_thr_*` kernel the resolvers picked against the scalar
+    /// fallback (all six exec fields cleared).
+    #[test]
+    fn setup_thr_matches_scalar() {
+        let fast = ExecContext::new();
+        let mut slow = ExecContext::new();
+        slow.setup_thr_cols_seg_8bpc = None;
+        slow.setup_thr_rows_seg_8bpc = None;
+        slow.setup_thr_cols_dq_8bpc = None;
+        slow.setup_thr_rows_dq_8bpc = None;
+        slow.setup_thr_cols_simple_8bpc = None;
+        slow.setup_thr_rows_simple_8bpc = None;
+        let mut rng = Rng(0x0dd5_eed5_1234_5678);
+        for _ in 0..3000 {
+            let mut mask = [[[0u16; 4]; 5]; 64];
+            for m in mask.iter_mut().flatten().flatten() {
+                *m = rng.r(65536) as u16;
+            }
+            let lut = |rng: &mut Rng| -> [[u32; 16]; 2] {
+                core::array::from_fn(|_| core::array::from_fn(|_| rng.r(64)))
+            };
+            let (thr_lut, above_lut) = (lut(&mut rng), lut(&mut rng));
+            // Subsampled planes cover at most 8 4px units per 64px block.
+            let ss = rng.r(2) as i32;
+            let (w4, h4) = (rng.r((16 >> ss) + 1) as i32, rng.r((16 >> ss) + 1) as i32);
+            let pos = rng.r(4 << ss) as i32;
+            let base = rng.r(64 - w4.max(h4) as u32 + 1) as usize;
+            let seg_stride = [0isize, 16, 23][rng.r(3) as usize];
+            let segmap: Vec<u8> = (0..16 * 24 + 8).map(|_| rng.r(16) as u8).collect();
+            let seg_off = rng.r(8) as isize;
+            let aseg: Vec<u8> = (0..24).map(|_| rng.r(16) as u8).collect();
+            let aoff = rng.r(8) as isize;
+            let above = rng.r(3);
+            let above_thr = (above > 0).then_some(&above_lut);
+            let above_seg = (above == 2).then_some((&aseg[..], aoff));
+            let left_q: [u8; 16] = core::array::from_fn(|_| rng.r(64) as u8);
+            let left_side: [u8; 16] = core::array::from_fn(|_| rng.r(64) as u8);
+            let init: [u8; 256] = core::array::from_fn(|_| rng.r(256) as u8);
+
+            for kind in 0..6 {
+                let mut out = [(init, init, left_q, left_side); 2];
+                for (exec, (q, side, lq, ls)) in [&fast, &slow].into_iter().zip(out.iter_mut()) {
+                    match kind {
+                        0 => setup_thr_cols(
+                            exec, q, side, &segmap, seg_off, seg_stride, &mask, base, &thr_lut, lq,
+                            ls, pos, ss, w4, h4,
+                        ),
+                        1 => setup_thr_cols_simple(
+                            exec, q, side, &mask, base, &thr_lut, pos, ss, w4, h4,
+                        ),
+                        2 => setup_thr_cols_dq(
+                            exec, q, side, &mask, base, &thr_lut, lq, ls, pos, ss, w4, h4,
+                        ),
+                        3 => setup_thr_rows_simple(
+                            exec, q, side, &mask, base, &thr_lut, pos, ss, w4, h4,
+                        ),
+                        4 => setup_thr_rows_dq(
+                            exec, q, side, &mask, base, &thr_lut, above_thr, above_seg, pos, ss,
+                            w4, h4,
+                        ),
+                        _ => setup_thr_rows(
+                            exec, q, side, &segmap, seg_off, seg_stride, &mask, base, &thr_lut,
+                            above_thr, above_seg, pos, ss, w4, h4,
+                        ),
+                    }
+                }
+                // SIMD stores whole 16-entry rows/columns; only the w4 x h4
+                // region (and `left[..h4]`) is defined output.
+                let (w, h) = (w4 as usize, h4 as usize);
+                let cols = kind < 3;
+                for y in 0..h {
+                    for x in 0..w {
+                        let i = if cols { x * 16 + y } else { y * 16 + x };
+                        assert_eq!(
+                            (out[0].0[i], out[0].1[i]),
+                            (out[1].0[i], out[1].1[i]),
+                            "kind={kind} w4={w4} h4={h4} ss={ss} pos={pos} base={base} \
+                             above={above} x={x} y={y}"
+                        );
+                    }
+                }
+                if cols && w > 0 {
+                    assert_eq!(out[0].2[..h], out[1].2[..h], "kind={kind} left_q");
+                    assert_eq!(out[0].3[..h], out[1].3[..h], "kind={kind} left_side");
+                }
+            }
+        }
+    }
+}
