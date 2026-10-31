@@ -214,7 +214,7 @@ pub(crate) fn decode_frame_init(
     a: &mut Vec<BlockContext>,
     a_sz: &mut i32,
     dq: &mut [[[u32; 2]; 3]; MAX_SEGMENTS],
-    qm: &mut [[Option<Vec<u8>>; 3]; crate::levels::N_RECT_TX_SIZES],
+    qm: &mut [[Option<&'static [u8]>; 3]; crate::levels::N_RECT_TX_SIZES],
     absrefdist: &[u8; 7],
     sbh: i32,
     sb256w: i32,
@@ -229,6 +229,12 @@ pub(crate) fn decode_frame_init(
         frame_hdr.tiling.t.rows,
         frame_hdr.tiling.t.row_start_sb.as_ref(),
     )?;
+    lf.seam_lpf.resize(
+        frame_hdr.tiling.t.cols as usize,
+        frame_hdr.tiling.t.rows as usize,
+        sb256h as usize * 64,
+        sb256w as usize * 64,
+    );
 
     let new_n_ts = frame_hdr.tiling.t.cols as i32 * frame_hdr.tiling.t.rows as i32;
     if new_n_ts != *n_ts {
@@ -303,6 +309,20 @@ pub(crate) fn decode_frame_init(
 
     if frame_hdr.quant.qm.enabled == 0 {
         *qm = Default::default();
+    } else {
+        // Per-segment QM levels are not signalled separately yet; like dav2d,
+        // every block uses the first set.
+        let tables = crate::quantizer::qm_tables();
+        let levels = [
+            frame_hdr.quant.qm.y[0],
+            frame_hdr.quant.qm.u[0],
+            frame_hdr.quant.qm.v[0],
+        ];
+        for (tx, planes) in qm.iter_mut().enumerate() {
+            for (pl, slot) in planes.iter_mut().enumerate() {
+                *slot = tables.get(levels[pl], pl != 0, tx);
+            }
+        }
     }
 
     Ok(())

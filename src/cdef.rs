@@ -125,7 +125,9 @@ pub(crate) fn constrain(diff: i32, threshold: i32, shift: i32) -> i32 {
 }
 
 pub(crate) fn fill(tmp: &mut [i16], stride: usize, w: usize, h: usize) {
-    for row in tmp.chunks_exact_mut(stride).take(h) {
+    // `chunks_mut`, not `chunks_exact_mut`: a right-edge fill starts mid-row,
+    // so its last row is a short tail chunk that must still be filled.
+    for row in tmp.chunks_mut(stride).take(h) {
         row[..w].fill(i16::MIN);
     }
 }
@@ -554,8 +556,6 @@ pub(crate) struct CdefBrowParams<'a> {
     pub(crate) any_lossless: bool,
     /// CCSO config; `None` when CCSO is disabled for this frame.
     pub(crate) ccso: Option<CcsoCfg>,
-    /// True for 128px superblocks; selects CCSO per-SB flag granularity.
-    pub(crate) sb128: bool,
 }
 
 pub(crate) struct CdefPlaneSetMut<'a, P: Pixel> {
@@ -595,16 +595,10 @@ impl<'a> CdefBrowParams<'a> {
 
     #[inline(always)]
     fn ccso_mask(&self, sb256x: usize, sbx: i32, by: i32) -> [u8; 3] {
-        // CCSO flags are per coding-SB (128px for sb128, 64px for sb64), but the
-        // lf mask is per-256px region. `ccso_sb` holds the per-sub-SB flags; pick
-        // the sub covering this 64px filter unit. Last-wins `ccso` would otherwise
-        // smear one SB'"'"'s flag across the whole 256px region.
-        let sb128i = self.sb128 as i32;
-        let unit_mi = 16 << sb128i;
-        let upr = 64 / unit_mi;
-        let sub_x = (sbx & 3) >> sb128i;
-        let sub_y = (by & 63) / unit_mi;
-        let sub = (sub_y * upr + sub_x) as usize;
+        // `ccso_sb` holds one flag set per 64px slot of the 256px region (the
+        // reader splats each CCSO unit over the slots it covers), so pick the
+        // slot of this 64px filter unit whatever the unit / SB size.
+        let sub = (((by & 63) >> 4) * 4 + (sbx & 3)) as usize;
         match self.mask_at(sb256x) {
             Some(m) => [
                 m.ccso_sb[sub * 3],

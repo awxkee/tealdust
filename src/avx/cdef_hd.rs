@@ -34,14 +34,15 @@ use std::arch::x86_64::*;
 #[target_feature(enable = "avx2")]
 fn cdef_fill_i16_avx2(tmp: &mut [i16], stride: usize, w: usize, h: usize) {
     let sentinel = _mm_set1_epi16(i16::MIN);
-    for row in tmp.chunks_exact_mut(stride).take(h) {
+    // `chunks_mut`, not `chunks_exact_mut`: a right-edge fill starts mid-row,
+    // so its last row is a short tail chunk that must still be filled.
+    for row in tmp.chunks_mut(stride).take(h) {
+        let row = &mut row[..w];
         if w >= 8 {
             unsafe { _mm_storeu_si128(row.as_mut_ptr().cast(), sentinel) };
-            for v in &mut row[8..w] {
-                *v = i16::MIN;
-            }
+            row[8..].fill(i16::MIN);
         } else {
-            row[..w].fill(i16::MIN);
+            row.fill(i16::MIN);
         }
     }
 }

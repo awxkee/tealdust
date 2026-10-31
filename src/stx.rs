@@ -277,3 +277,77 @@ pub(crate) fn stxfm8_dispatch<C: Coeff>(
         cf[scan_out[map as usize] as usize] = C::from_i32(sum);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stx_tables::{
+        COEFF8X8_MAPPING, STX_4X4_KERNEL, STX_8X8_KERNEL, STX_SCAN_ORDERS_4X4, STX_SCAN_ORDERS_8X8,
+    };
+
+    struct Lcg(u32);
+
+    impl Lcg {
+        fn coef(&mut self) -> i32 {
+            self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            ((self.0 >> 16) as i32 % 2048) - 1024
+        }
+    }
+
+    // The resolved (SIMD where available) kernels must match the scalar ones
+    // for every kernel and scan table, including scans that write positions
+    // 4..8 (4-wide), which the scalar path clears before scattering.
+    #[test]
+    fn stxfm4_resolved_matches_scalar() {
+        let mut rng = Lcg(1);
+        for k in 0..STX_4X4_KERNEL.len() / 128 {
+            let kernel = &STX_4X4_KERNEL[k * 128..];
+            for scan in STX_SCAN_ORDERS_4X4.iter().flatten() {
+                for eob in 0..8 {
+                    let src: Vec<i32> = (0..128)
+                        .map(|i| if i <= eob { rng.coef() } else { 0 })
+                        .collect();
+
+                    let mut a: Vec<i16> = src.iter().map(|&v| v as i16).collect();
+                    let mut b = a.clone();
+                    unsafe { resolve_stxfm4_8bpc()(&mut a, kernel, eob, scan) };
+                    stxfm4_8bpc_scalar(&mut b, kernel, eob, scan);
+                    assert_eq!(a, b, "8bpc kernel {k} eob {eob}");
+
+                    let mut a = src.clone();
+                    let mut b = src.clone();
+                    unsafe { resolve_stxfm4_hbd()(&mut a, kernel, eob, 1023, scan) };
+                    stxfm4_hbd_scalar(&mut b, kernel, eob, 1023, scan);
+                    assert_eq!(a, b, "hbd kernel {k} eob {eob}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stxfm8_resolved_matches_scalar() {
+        let mut rng = Lcg(2);
+        for (k, mapping) in COEFF8X8_MAPPING.iter().enumerate() {
+            let kernel = &STX_8X8_KERNEL[k * 1536..];
+            for scan in STX_SCAN_ORDERS_8X8.iter().flatten() {
+                for eob in [0, 1, 7, 19, 31] {
+                    let src: Vec<i32> = (0..256)
+                        .map(|i| if i <= eob { rng.coef() } else { 0 })
+                        .collect();
+
+                    let mut a: Vec<i16> = src.iter().map(|&v| v as i16).collect();
+                    let mut b = a.clone();
+                    unsafe { resolve_stxfm8_8bpc()(&mut a, kernel, eob, scan, mapping) };
+                    stxfm8_8bpc_scalar(&mut b, kernel, eob, scan, mapping);
+                    assert_eq!(a, b, "8bpc kernel {k} eob {eob}");
+
+                    let mut a = src.clone();
+                    let mut b = src.clone();
+                    unsafe { resolve_stxfm8_hbd()(&mut a, kernel, eob, 1023, scan, mapping) };
+                    stxfm8_hbd_scalar(&mut b, kernel, eob, 1023, scan, mapping);
+                    assert_eq!(a, b, "hbd kernel {k} eob {eob}");
+                }
+            }
+        }
+    }
+}

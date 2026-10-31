@@ -89,6 +89,7 @@ pub(crate) struct FilterShared<'a> {
     pub(crate) lr_mask: &'a [crate::lf_mask::Av2Restoration],
     pub(crate) segmap_uv: &'a [u8],
     pub(crate) start_of_tile_row: &'a [u8],
+    pub(crate) seams: crate::lf_mask::TileSeams<'a>,
     pub(crate) uv_segmap_stride: isize,
     pub(crate) base_q: i32,
     pub(crate) gdf_ref_dst_idx: i32,
@@ -563,6 +564,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
             exec,
             frame_hdr,
             mask: sh.mask,
+            seams: sh.seams,
             mask_row,
             sb256w,
             cur_segmap,
@@ -699,7 +701,6 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                     uv_strength: &fp.cdef_uv_strength,
                     any_lossless,
                     ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
-                    sb128: sb128 != 0,
                 };
                 crate::cdef::cdef_brow_8bpc(
                     exec,
@@ -744,7 +745,6 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                 uv_strength: &fp.cdef_uv_strength,
                 any_lossless,
                 ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
-                sb128: sb128 != 0,
             };
             crate::cdef::cdef_brow_8bpc(
                 exec,
@@ -770,59 +770,61 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                 },
             );
         }
+    }
 
-        // Cross-tile-row CDEF line save (findings issue #2). The integrated top
-        // context for tile row T is tile row T-1's CDEF-filtered bottom rows.
-        // CDEF defers each band's bottom 2 block-rows: they are finalised by the
-        // *next* band's CDEF (`by_start = start-2, sbrow_start=true`). So tile
-        // row T-1's bottom rows are only final once the FIRST band of tile row T
-        // has run its CDEF. We therefore save tile row T-1's bottom rows here,
-        // when this band is the first band of tile row T (T>0), after this band's
-        // CDEF has finalised them — and before this tile row's LR (a later,
-        // CDEF-gated stage) reads them. This timing is identical in the ST
-        // (stage-major) and MT (per-band) drivers, which is what keeps them
-        // byte-exact.
-        //
-        // Geometry mirrors the read in `lr_stripe`: per tile row the buffer holds
-        // 6 luma rows (`(T-1)*6*stride`) / 2 chroma rows (`(T-1)*2*stride`); the
-        // integrated path consumes 4 rows from luma offset `+2*stride` / chroma
-        // offset `+0`, i.e. the bottom 4 CDEF rows of tile row T-1.
-        if stages & (STAGE_CDEF | STAGE_CDEF_FILTER) != 0
-            && sh.restore_planes != 0
-            && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
-        {
-            let this_first_in_tr = sh
+    // Cross-tile-row CDEF line save (findings issue #2). The integrated top
+    // context for tile row T is tile row T-1's CDEF-filtered bottom rows.
+    // CDEF defers each band's bottom 2 block-rows: they are finalised by the
+    // *next* band's CDEF (`by_start = start-2, sbrow_start=true`). So tile
+    // row T-1's bottom rows are only final once the FIRST band of tile row T
+    // has run its CDEF. We therefore save tile row T-1's bottom rows here,
+    // when this band is the first band of tile row T (T>0), after this band's
+    // CDEF has finalised them — and before this tile row's LR (a later,
+    // CDEF-gated stage) reads them. This timing is identical in the ST
+    // (stage-major) and MT (per-band) drivers, which is what keeps them
+    // byte-exact.
+    // It runs even when CDEF/CCSO are off (the rows are then just deblocked):
+    // LR and GDF still read the seam from here.
+    //
+    // Geometry mirrors the read in `lr_stripe`: per tile row the buffer holds
+    // 6 luma rows (`(T-1)*6*stride`) / 2 chroma rows (`(T-1)*2*stride`); the
+    // integrated path consumes 4 rows from luma offset `+2*stride` / chroma
+    // offset `+0`, i.e. the bottom 4 CDEF rows of tile row T-1.
+    if stages & (STAGE_CDEF | STAGE_CDEF_FILTER) != 0
+        && sh.restore_planes != 0
+        && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
+    {
+        let this_first_in_tr = sh
+            .start_of_tile_row
+            .get(root_sby as usize)
+            .map(|v| v & 1 != 0)
+            .unwrap_or(false);
+        // First band of the first root of a non-top tile row.
+        let first_band_of_root = by64 & ((1 << sb128) - 1) == 0;
+        if this_first_in_tr && root_sby > 0 && first_band_of_root {
+            let prev_tr = ((sh
                 .start_of_tile_row
                 .get(root_sby as usize)
-                .map(|v| v & 1 != 0)
-                .unwrap_or(false);
-            // First band of the first root of a non-top tile row.
-            let first_band_of_root = !last_sb64_in_root || sb128 == 0;
-            if this_first_in_tr && root_sby > 0 && first_band_of_root {
-                let prev_tr = ((sh
-                    .start_of_tile_row
-                    .get(root_sby as usize)
-                    .copied()
-                    .unwrap_or(0)
-                    >> 1) as usize)
-                    .wrapping_sub(1);
-                let mono = seq_hdr.layout == crate::headers::PixelLayout::I400;
-                // Bottom luma row of the previous tile row = this tile row's top - 1.
-                let tile_row_bottom_y = ((root_sby << (6 + sb128)) - 1).max(0).min(bh * 4 - 1);
-                let src: [&[u8]; 3] = [&*dst_y, &*dst_u, &*dst_v];
-                crate::decode::lr_cdef_line_save::save_lr_cdef_line_8bpc(
-                    lr_cdef_line,
-                    &src,
-                    &[fp.y_stride, fp.uv_stride],
-                    prev_tr,
-                    tile_row_bottom_y,
-                    bw * 4,
-                    bh * 4,
-                    fp.ss_hor as i32,
-                    fp.ss_ver as i32,
-                    mono,
-                );
-            }
+                .copied()
+                .unwrap_or(0)
+                >> 1) as usize)
+                .wrapping_sub(1);
+            let mono = seq_hdr.layout == crate::headers::PixelLayout::I400;
+            // Bottom luma row of the previous tile row = this tile row's top - 1.
+            let tile_row_bottom_y = ((root_sby << (6 + sb128)) - 1).max(0).min(bh * 4 - 1);
+            let src: [&[u8]; 3] = [&*dst_y, &*dst_u, &*dst_v];
+            crate::decode::lr_cdef_line_save::save_lr_cdef_line_8bpc(
+                lr_cdef_line,
+                &src,
+                &[fp.y_stride, fp.uv_stride],
+                prev_tr,
+                tile_row_bottom_y,
+                bw * 4,
+                bh * 4,
+                fp.ss_hor as i32,
+                fp.ss_ver as i32,
+                mono,
+            );
         }
     }
 
@@ -892,6 +894,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                 unit_size: frame_hdr.restoration.unit_size,
                 restore_planes: sh.restore_planes,
                 col_start_sb: &frame_hdr.tiling.t.col_start_sb[..=frame_hdr.tiling.t.cols as usize],
+                row_start_sb: &frame_hdr.tiling.t.row_start_sb[..=frame_hdr.tiling.t.rows as usize],
                 sbsz: 4 * sb_step,
             };
             let mut dst: [&mut [u8]; 3] = [dst_y, dst_u, dst_v];
@@ -977,6 +980,7 @@ fn filter_sb64_hbd(
             exec,
             frame_hdr,
             mask: sh.mask,
+            seams: sh.seams,
             mask_row,
             sb256w,
             cur_segmap,
@@ -1106,7 +1110,6 @@ fn filter_sb64_hbd(
                     uv_strength: &fp.cdef_uv_strength,
                     any_lossless,
                     ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
-                    sb128: sb128 != 0,
                 };
                 crate::cdef::cdef_brow(
                     bd,
@@ -1152,7 +1155,6 @@ fn filter_sb64_hbd(
                 uv_strength: &fp.cdef_uv_strength,
                 any_lossless,
                 ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
-                sb128: sb128 != 0,
             };
             crate::cdef::cdef_brow(
                 bd,
@@ -1179,43 +1181,43 @@ fn filter_sb64_hbd(
                 },
             );
         }
+    }
 
-        // Cross-tile-row CDEF line save (findings issue #2), hbd. See the 8bpc
-        // path for the full rationale. Strides here are already in u16 samples.
-        if stages & (STAGE_CDEF | STAGE_CDEF_FILTER) != 0
-            && sh.restore_planes != 0
-            && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
-        {
-            let this_first_in_tr = sh
+    // Cross-tile-row CDEF line save (findings issue #2), hbd. See the 8bpc
+    // path for the full rationale. Strides here are already in u16 samples.
+    if stages & (STAGE_CDEF | STAGE_CDEF_FILTER) != 0
+        && sh.restore_planes != 0
+        && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
+    {
+        let this_first_in_tr = sh
+            .start_of_tile_row
+            .get(root_sby as usize)
+            .map(|v| v & 1 != 0)
+            .unwrap_or(false);
+        let first_band_of_root = by64 & ((1 << sb128) - 1) == 0;
+        if this_first_in_tr && root_sby > 0 && first_band_of_root {
+            let prev_tr = ((sh
                 .start_of_tile_row
                 .get(root_sby as usize)
-                .map(|v| v & 1 != 0)
-                .unwrap_or(false);
-            let first_band_of_root = !last_sb64_in_root || sb128 == 0;
-            if this_first_in_tr && root_sby > 0 && first_band_of_root {
-                let prev_tr = ((sh
-                    .start_of_tile_row
-                    .get(root_sby as usize)
-                    .copied()
-                    .unwrap_or(0)
-                    >> 1) as usize)
-                    .wrapping_sub(1);
-                let mono = seq_hdr.layout == crate::headers::PixelLayout::I400;
-                let tile_row_bottom_y = ((root_sby << (6 + sb128)) - 1).max(0).min(bh * 4 - 1);
-                let src: [&[u16]; 3] = [&*dst_y, &*dst_u, &*dst_v];
-                crate::decode::lr_cdef_line_save::save_lr_cdef_line_hbd(
-                    lr_cdef_line,
-                    &src,
-                    &[y_stride, uv_stride],
-                    prev_tr,
-                    tile_row_bottom_y,
-                    bw * 4,
-                    bh * 4,
-                    fp.ss_hor as i32,
-                    fp.ss_ver as i32,
-                    mono,
-                );
-            }
+                .copied()
+                .unwrap_or(0)
+                >> 1) as usize)
+                .wrapping_sub(1);
+            let mono = seq_hdr.layout == crate::headers::PixelLayout::I400;
+            let tile_row_bottom_y = ((root_sby << (6 + sb128)) - 1).max(0).min(bh * 4 - 1);
+            let src: [&[u16]; 3] = [&*dst_y, &*dst_u, &*dst_v];
+            crate::decode::lr_cdef_line_save::save_lr_cdef_line_hbd(
+                lr_cdef_line,
+                &src,
+                &[y_stride, uv_stride],
+                prev_tr,
+                tile_row_bottom_y,
+                bw * 4,
+                bh * 4,
+                fp.ss_hor as i32,
+                fp.ss_ver as i32,
+                mono,
+            );
         }
     }
 
@@ -1285,6 +1287,7 @@ fn filter_sb64_hbd(
                 unit_size: frame_hdr.restoration.unit_size,
                 restore_planes: sh.restore_planes,
                 col_start_sb: &frame_hdr.tiling.t.col_start_sb[..=frame_hdr.tiling.t.cols as usize],
+                row_start_sb: &frame_hdr.tiling.t.row_start_sb[..=frame_hdr.tiling.t.rows as usize],
                 sbsz: 4 * sb_step,
                 bitdepth_min_8: bd.bitdepth_min_8(),
                 bitdepth_max: bd.bitdepth_max(),

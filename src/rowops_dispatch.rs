@@ -28,7 +28,7 @@
  */
 use std::sync::OnceLock;
 
-use crate::gdf_tables::{GDF_ALPHA, GDF_INTER_ERROR, GDF_INTRA_ERROR, GDF_WEIGHT};
+use crate::gdf_tables::{GDF_ALPHA, GDF_BIAS, GDF_INTER_ERROR, GDF_INTRA_ERROR, GDF_WEIGHT};
 
 const GDF_PREP_COORDS: [[i8; 2]; 18] = [
     [6, 0],
@@ -43,12 +43,12 @@ const GDF_PREP_COORDS: [[i8; 2]; 18] = [
     [1, 0],
     [1, -1],
     [1, -2],
+    [0, 6],
+    [0, 5],
+    [0, 4],
     [0, 3],
     [0, 2],
     [0, 1],
-    [0, -1],
-    [0, -2],
-    [0, -3],
 ];
 
 const GDF_PREP_COORDS_8BPC: [[i8; 2]; 18] = [
@@ -1146,6 +1146,166 @@ pub(crate) fn resolve_gdf_prep_pair_hbd() -> GdfPrepPairHbdFn {
     })
 }
 
+/// Per-row constants of one GDF prep call.
+#[derive(Clone, Copy)]
+pub(crate) struct GdfPrepRow {
+    pub(crate) alpha_base: usize,
+    pub(crate) weight_base: usize,
+    pub(crate) bias_idx: usize,
+    pub(crate) error_lut_base: usize,
+    pub(crate) scale: i32,
+    pub(crate) ref_dst_idx: usize,
+    /// Shift applied to the 4x4 gradient sums before the alpha clamp.
+    pub(crate) grad_shift: i32,
+}
+
+/// Filter class and gradient-derived accumulator start of the pixel pair at
+/// half-column `hx`: the four gradient directions are summed over the 4x4
+/// region held by the two gradient rows.
+#[inline(always)]
+pub(crate) fn gdf_prep_class(
+    grad: [&[[u16; 4]]; 2],
+    hx: usize,
+    p: &GdfPrepRow,
+) -> (usize, [i32; 3]) {
+    let mut grad_sums = [0i32; 4];
+    for (d, sum) in grad_sums.iter_mut().enumerate() {
+        *sum = grad[0][hx][d] as i32
+            + grad[0][hx + 1][d] as i32
+            + grad[1][hx][d] as i32
+            + grad[1][hx + 1][d] as i32;
+    }
+    let cls = ((grad_sums[0] <= grad_sums[1]) as usize)
+        | (((grad_sums[2] <= grad_sums[3]) as usize) << 1);
+
+    let mut shared = GDF_BIAS[p.bias_idx].map(i32::from);
+    for (d, &sum) in grad_sums.iter().enumerate() {
+        let k = d + 18;
+        let alpha = GDF_ALPHA[p.alpha_base + k * 4 + cls] as i32;
+        let v = (sum >> p.grad_shift).min(alpha);
+        for (idx, acc) in shared.iter_mut().enumerate() {
+            *acc += v * GDF_WEIGHT[p.weight_base + idx * 88 + k * 4 + cls] as i32;
+        }
+    }
+    (cls, shared)
+}
+
+/// One GDF prep row of `w` error values, two pixels per pair-kernel call.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gdf_prep_row_8bpc_scalar(
+    rows: [&[u8]; 13],
+    o: usize,
+    w: usize,
+    grad: [&[[u16; 4]]; 2],
+    dst: &mut [i8],
+    p: &GdfPrepRow,
+) {
+    let pair = resolve_gdf_prep_pair_8bpc();
+    let mut x1 = 0usize;
+    while x1 < w {
+        let (cls, shared) = gdf_prep_class(grad, x1 >> 1, p);
+        if x1 + 1 < w {
+            let e = unsafe {
+                pair(
+                    rows,
+                    o + x1,
+                    cls,
+                    shared,
+                    p.alpha_base,
+                    p.weight_base,
+                    p.error_lut_base,
+                    p.scale,
+                    p.ref_dst_idx,
+                )
+            };
+            dst[x1] = e[0];
+            dst[x1 + 1] = e[1];
+        } else {
+            dst[x1] = gdf_prep_pixel_8bpc(
+                rows,
+                o + x1,
+                cls,
+                shared,
+                p.alpha_base,
+                p.weight_base,
+                p.error_lut_base,
+                p.scale,
+                p.ref_dst_idx,
+            );
+        }
+        x1 += 2;
+    }
+}
+
+/// High-bit-depth GDF prep row; see [`gdf_prep_row_8bpc_scalar`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn gdf_prep_row_hbd_scalar(
+    rows: [&[u16]; 13],
+    o: usize,
+    w: usize,
+    grad: [&[[u16; 4]]; 2],
+    dst: &mut [i8],
+    p: &GdfPrepRow,
+    down_shift: u32,
+    up_scale: i32,
+) {
+    let pair = resolve_gdf_prep_pair_hbd();
+    let mut x1 = 0usize;
+    while x1 < w {
+        let (cls, shared) = gdf_prep_class(grad, x1 >> 1, p);
+        let e = unsafe {
+            pair(
+                rows,
+                o + x1,
+                cls,
+                shared,
+                p.alpha_base,
+                p.weight_base,
+                p.error_lut_base,
+                p.scale,
+                down_shift,
+                up_scale,
+                p.ref_dst_idx,
+            )
+        };
+        dst[x1] = e[0];
+        if x1 + 1 < w {
+            dst[x1 + 1] = e[1];
+        }
+        x1 += 2;
+    }
+}
+
+pub(crate) type GdfPrepRow8bpcFn =
+    unsafe fn([&[u8]; 13], usize, usize, [&[[u16; 4]]; 2], &mut [i8], &GdfPrepRow);
+
+pub(crate) type GdfPrepRowHbdFn =
+    unsafe fn([&[u16]; 13], usize, usize, [&[[u16; 4]]; 2], &mut [i8], &GdfPrepRow, u32, i32);
+
+#[inline]
+pub(crate) fn resolve_gdf_prep_row_8bpc() -> GdfPrepRow8bpcFn {
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::neon::gdf_prep_row_8bpc_neon as GdfPrepRow8bpcFn
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        gdf_prep_row_8bpc_scalar as GdfPrepRow8bpcFn
+    }
+}
+
+#[inline]
+pub(crate) fn resolve_gdf_prep_row_hbd() -> GdfPrepRowHbdFn {
+    #[cfg(target_arch = "aarch64")]
+    {
+        crate::neon::gdf_prep_row_hbd_neon as GdfPrepRowHbdFn
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        gdf_prep_row_hbd_scalar as GdfPrepRowHbdFn
+    }
+}
+
 pub(crate) type CctxI16Fn = unsafe fn(&mut [i16], &mut [i16], i32, i32, usize, i32, i32);
 
 pub(crate) fn cctx_row_i16_scalar(
@@ -1191,4 +1351,148 @@ pub(crate) fn resolve_cctx_i16() -> CctxI16Fn {
         }
         _f
     })
+}
+
+#[cfg(test)]
+mod gdf_prep_row_tests {
+    use super::*;
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn r(&mut self, n: u32) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 16) as u32 % n
+        }
+    }
+
+    const O: usize = 8;
+    const STRIDE: usize = 64 + 2 * O;
+
+    fn params(rng: &mut Rng, grad_shift: i32) -> GdfPrepRow {
+        let ref_dst_idx = rng.r(6) as usize;
+        let qp_idx = rng.r(6) as usize;
+        let (error_lut_base, scale) = if ref_dst_idx == 0 {
+            (qp_idx * 4096, 8)
+        } else {
+            ((ref_dst_idx - 1) * 6000 + qp_idx * 1000, 5)
+        };
+        GdfPrepRow {
+            alpha_base: ref_dst_idx * 528 + qp_idx * 88,
+            weight_base: ref_dst_idx * 1584 + qp_idx * 264,
+            bias_idx: ref_dst_idx * 6 + qp_idx,
+            error_lut_base,
+            scale,
+            ref_dst_idx,
+            grad_shift,
+        }
+    }
+
+    fn grads(rng: &mut Rng) -> [Vec<[u16; 4]>; 2] {
+        core::array::from_fn(|_| {
+            (0..40)
+                .map(|_| core::array::from_fn(|_| rng.r(2048) as u16))
+                .collect()
+        })
+    }
+
+    /// Smooth rows with occasional edges, so both the alpha clamps and the
+    /// small-difference paths are exercised.
+    fn rows<T: Copy>(rng: &mut Rng, max: u32, cast: fn(u32) -> T) -> Vec<Vec<T>> {
+        (0..13)
+            .map(|_| {
+                let mut v = rng.r(max);
+                (0..STRIDE)
+                    .map(|_| {
+                        v = if rng.r(8) == 0 {
+                            rng.r(max)
+                        } else {
+                            (v + rng.r(9)).saturating_sub(4).min(max - 1)
+                        };
+                        cast(v)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn row_8bpc_matches_scalar_pairs() {
+        let mut rng = Rng(0x5eed_1234_abcd);
+        for _ in 0..3000 {
+            let w = 1 + rng.r(64) as usize;
+            let p = params(&mut rng, 2);
+            let g = grads(&mut rng);
+            let r = rows(&mut rng, 256, |v| v as u8);
+            let rows: [&[u8]; 13] = core::array::from_fn(|i| &r[i][..]);
+            let grad = [&g[0][..], &g[1][..]];
+            let mut want = vec![0i8; w];
+            for x1 in (0..w).step_by(2) {
+                let (cls, shared) = gdf_prep_class(grad, x1 >> 1, &p);
+                let e = gdf_prep_pair_8bpc_scalar(
+                    rows,
+                    O + x1,
+                    cls,
+                    shared,
+                    p.alpha_base,
+                    p.weight_base,
+                    p.error_lut_base,
+                    p.scale,
+                    p.ref_dst_idx,
+                );
+                want[x1] = e[0];
+                if x1 + 1 < w {
+                    want[x1 + 1] = e[1];
+                }
+            }
+            let mut got = vec![0i8; w];
+            unsafe { resolve_gdf_prep_row_8bpc()(rows, O, w, grad, &mut got, &p) };
+            assert_eq!(want, got, "w={w} ref={} bias={}", p.ref_dst_idx, p.bias_idx);
+        }
+    }
+
+    #[test]
+    fn row_hbd_matches_scalar_pairs() {
+        let mut rng = Rng(0xbeef_5678_1357);
+        for _ in 0..3000 {
+            let bitdepth = [10u32, 12][rng.r(2) as usize];
+            let down_shift = if bitdepth == 12 { 2 } else { 0 };
+            let w = 1 + rng.r(64) as usize;
+            let p = params(&mut rng, 4);
+            let g = grads(&mut rng);
+            let r = rows(&mut rng, 1 << bitdepth, |v| v as u16);
+            let rows: [&[u16]; 13] = core::array::from_fn(|i| &r[i][..]);
+            let grad = [&g[0][..], &g[1][..]];
+            let mut want = vec![0i8; w];
+            for x1 in (0..w).step_by(2) {
+                let (cls, shared) = gdf_prep_class(grad, x1 >> 1, &p);
+                let e = gdf_prep_pair_hbd_scalar(
+                    rows,
+                    O + x1,
+                    cls,
+                    shared,
+                    p.alpha_base,
+                    p.weight_base,
+                    p.error_lut_base,
+                    p.scale,
+                    down_shift,
+                    1,
+                    p.ref_dst_idx,
+                );
+                want[x1] = e[0];
+                if x1 + 1 < w {
+                    want[x1 + 1] = e[1];
+                }
+            }
+            let mut got = vec![0i8; w];
+            unsafe { resolve_gdf_prep_row_hbd()(rows, O, w, grad, &mut got, &p, down_shift, 1) };
+            assert_eq!(
+                want, got,
+                "w={w} bitdepth={bitdepth} ref={} bias={}",
+                p.ref_dst_idx, p.bias_idx
+            );
+        }
+    }
 }

@@ -110,7 +110,9 @@ pub(crate) type CdefPaddingHbdFn = unsafe fn(
 
 #[inline(always)]
 fn cdef_fill_i16(tmp: &mut [i16], stride: usize, w: usize, h: usize) {
-    for row in tmp.chunks_exact_mut(stride).take(h) {
+    // `chunks_mut`, not `chunks_exact_mut`: a right-edge fill starts mid-row,
+    // so its last row is a short tail chunk that must still be filled.
+    for row in tmp.chunks_mut(stride).take(h) {
         row[..w].fill(i16::MIN);
     }
 }

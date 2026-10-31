@@ -112,6 +112,126 @@ pub fn compute_gdf_ref_dst_idx(frame_hdr: &FrameHeader, absrefdist: &[u8; 7]) ->
     REF_DST_IDX_TBL[imin(max_dist, 11) as usize]
 }
 
+/// Superblock geometry needed to read its loop-restoration unit info.
+#[derive(Clone, Copy)]
+pub(crate) struct SbLrGeom {
+    pub(crate) bx: i32,
+    pub(crate) by: i32,
+    pub(crate) col_start: i32,
+    pub(crate) col_end: i32,
+    pub(crate) row_start: i32,
+    pub(crate) row_end: i32,
+    pub(crate) ss_hor: i32,
+    pub(crate) ss_ver: i32,
+    pub(crate) sbsz: i32,
+    pub(crate) sb256w: i32,
+}
+
+/// The chroma loop-restoration read deferred to between the SDP luma and
+/// chroma partition trees: with a 64x64 superblock root in an intra frame the
+/// two trees split at the root, and AVM reads each tree's restoration info at
+/// its own root (dav2d `read_sb_restoration` in `decode_sb`).
+pub(crate) struct SdpLrRead<'a> {
+    pub(crate) lr_mask: &'a mut [crate::lf_mask::Av2Restoration],
+    pub(crate) bank: &'a mut [NsWienerBank; 3],
+    pub(crate) frame_hdr: &'a FrameHeader,
+    pub(crate) geom: SbLrGeom,
+}
+
+/// Reads the loop-restoration unit info of `planes` for the superblock at
+/// `g.bx`/`g.by`.
+pub(crate) fn read_sb_restoration<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    msac: &mut M,
+    cdf_m: &mut crate::cdf::CdfModeContext,
+    lr_mask: &mut [crate::lf_mask::Av2Restoration],
+    bank: &mut [NsWienerBank; 3],
+    frame_hdr: &FrameHeader,
+    g: &SbLrGeom,
+    planes: std::ops::Range<usize>,
+) {
+    for p in planes {
+        let (ss_ver, ss_hor) = if p == 0 { (0, 0) } else { (g.ss_ver, g.ss_hor) };
+        let rtype_u8 = frame_hdr.restoration.p[p].restoration_type;
+        if rtype_u8 == RestorationType::None as u8 {
+            continue;
+        }
+        // Restoration is active for this plane, so the LR mask is
+        // allocated for valid streams. Guard against an empty mask (a
+        // degenerate frame from a malformed header) before indexing it.
+        if lr_mask.is_empty() || lr_mask[0].lr[p].is_empty() {
+            continue;
+        }
+        let tx = (4 * (g.bx - g.col_start)) >> ss_hor;
+        let ty = (4 * (g.by - g.row_start)) >> ss_ver;
+        let unit_sz_log2 = frame_hdr.restoration.unit_size[(p != 0) as usize] as i32;
+        let unit_sz = 1i32 << unit_sz_log2;
+        let mask = unit_sz - 1;
+        if (tx | ty) & mask != 0 {
+            continue;
+        }
+        let tw = (g.col_end * 4) >> ss_hor;
+        let th = (g.row_end * 4) >> ss_ver;
+        let half_unit = unit_sz >> 1;
+        let fx = (4 * g.bx) >> ss_hor;
+        let fy = (g.by * 4) >> ss_ver;
+        if (ty != 0 && fy + half_unit > th) || (tx != 0 && fx + half_unit > tw) {
+            continue;
+        }
+
+        let frame_type = match rtype_u8 {
+            1 => RestorationType::PcWiener,
+            2 => RestorationType::NsWiener,
+            3 => RestorationType::Switchable,
+            _ => RestorationType::None,
+        };
+
+        let sbw = g.sbsz >> ss_hor;
+        let sbh = g.sbsz >> ss_ver;
+        let lruw = imax(1, imin(tw - fx + half_unit, sbw) >> unit_sz_log2);
+        let lruh = imax(1, imin(th - fy + half_unit, sbh) >> unit_sz_log2);
+        for _y in 0..lruh {
+            for x in 0..lruw {
+                // Derive the (slot, unit_idx) of this restoration unit from
+                // its frame position, mirroring the filter side
+                // (looprestoration.rs `lr_sbrow`/`lr_stripe`): the filter
+                // derives both the SB-256 slot and the 4x4 local unit index
+                // from the unit's *luma-scale* top-left, so the read side
+                // must do the same for the two to agree when an SB spans
+                // more than one unit (unit_size < superblock size).
+                //
+                // `fx`/`fy` are this SB's subsampled top-left; the unit's
+                // subsampled position is `fx + x*unit_sz` / `fy + _y*unit_sz`.
+                // Shift back to luma scale (`<< ss_*`) before the >>8 (slot)
+                // and >>6 (local 64-grid index) reductions, exactly as the
+                // filter does (`aligned_unit_pos <<= ss_ver`; horizontal uses
+                // `shift_hor = 8 - ss_hor`). At x == _y == 0 this reduces to
+                // the previous `sb_idx` / `start_unit_idx` byte-for-byte, so
+                // single-unit streams are unchanged.
+                let upx = (fx + x * unit_sz) << ss_hor;
+                let upy = (fy + _y * unit_sz) << ss_ver;
+                let slot = (upy >> 8) * g.sb256w + (upx >> 8);
+                let uidx = (((upy >> 6) & 3) << 2) | ((upx >> 6) & 3);
+                // For valid streams these indices are always in range;
+                // clamp so a malformed unit-size/geometry can't index the
+                // LR mask out of bounds (the entropy read still happens, so
+                // MSAC stays in sync). No-op for valid input.
+                let unit_idx = (uidx.max(0) as usize).min(lr_mask[0].lr[p].len() - 1);
+                let lr_slot = (slot.max(0) as usize).min(lr_mask.len() - 1);
+                let ns_plane = &frame_hdr.restoration.p[p].ns;
+                read_restoration_info(
+                    &mut *msac,
+                    &mut *cdf_m,
+                    &mut bank[p],
+                    &mut lr_mask[lr_slot].lr[p][unit_idx],
+                    p,
+                    frame_type,
+                    ns_plane,
+                );
+            }
+        }
+    }
+}
+
 pub(crate) fn init_ns_wiener_bank(bank: &mut NsWienerBank, pl: usize, n_classes: usize) {
     bank.bank_size = [0; 16];
     bank.bank_idx = [0; 16];
@@ -630,7 +750,7 @@ impl SbFrameInfo {
 pub struct ReconFrameCtx<'a> {
     pub exec: &'a crate::exec_context::ExecContext,
     pub dq: &'a [[[u32; 2]; 3]; MAX_SEGMENTS],
-    pub qm: &'a [[Option<Vec<u8>>; 3]; crate::levels::N_RECT_TX_SIZES],
+    pub qm: &'a [[Option<&'static [u8]>; 3]; crate::levels::N_RECT_TX_SIZES],
     pub y_stride_px: usize,
     pub uv_stride_px: usize,
     pub ss_hor: i32,
@@ -925,6 +1045,9 @@ pub struct ReconScratch {
     pub chroma_cf32: Vec<i32>,
     pub chroma_txtp: [[u16; 2]; 256],
     pub chroma_eob: [[i16; 2]; 256],
+    /// IntraBC chroma: co-located luma transform type of the coding block's
+    /// origin, used to seed chroma TUs when chroma covers several luma blocks.
+    pub ibc_uv_txtp_seed: u16,
     pub chroma_u_has_cf: i32,
     /// Deferred chroma residual payloads for entropy/recon replay.
     chroma_tx: Vec<ChromaTxRecord>,
@@ -993,6 +1116,7 @@ impl Default for ReconScratch {
             chroma_cf32: Vec::new(),
             chroma_txtp: [[0u16; 2]; 256],
             chroma_eob: [[-1i16; 2]; 256],
+            ibc_uv_txtp_seed: 0,
             chroma_u_has_cf: 0,
             chroma_tx: Vec::new(),
             chroma_tx_cf8: Vec::new(),
@@ -1179,7 +1303,7 @@ fn make_refmv_tile(ra_len: usize, bw: i32, bh: i32) -> refmvs::Tile {
         ra: vec![refmvs::Block::default(); ra_len.max(1)],
         ra_off: 0,
         ra_tl: refmvs::Block::default(),
-        r: Box::new([refmvs::Block::default(); 64 * 128]),
+        r: refmvs::zeroed_block_rows(),
         tile_col: refmvs::TileRange { start: 0, end: bw },
         tile_row: refmvs::TileRange { start: 0, end: bh },
         bank: refmvs::MvBank {
@@ -1438,6 +1562,11 @@ pub(crate) struct DecodeTileSbrowEntropyCtx<
     pub(crate) a_arr: &'a mut [BlockContext],
     pub(crate) lf_mask: &'a mut [crate::lf_mask::Av2Filter],
     pub(crate) lr_mask: &'a mut [crate::lf_mask::Av2Restoration],
+    /// `TileSeamLpf::right` / `bottom` (see there), plus its `h4` / `w4`.
+    pub(crate) seam_right: &'a mut [u8],
+    pub(crate) seam_bottom: &'a mut [u8],
+    pub(crate) seam_h4: usize,
+    pub(crate) seam_w4: usize,
     pub(crate) l: &'a mut BlockContext,
     pub(crate) dst_y: &'a mut [BD::Pixel],
     pub(crate) dst_u: &'a mut [BD::Pixel],
@@ -1492,6 +1621,10 @@ where
         a_arr,
         lf_mask,
         lr_mask,
+        seam_right,
+        seam_bottom,
+        seam_h4,
+        seam_w4,
         l,
         dst_y,
         dst_u,
@@ -1605,95 +1738,34 @@ where
             }
         }
 
-        // Per-plane loop-restoration unit info.
+        // Per-plane loop-restoration unit info. With SDP and a 64x64 root the
+        // chroma planes are read later, between the luma and chroma trees.
         let sbsz = sb_step * 4;
+        let sdp_root_split =
+            root_bs == BlockSize::Bs64x64 && fi.sdp && !fi.is_inter_or_switch && !is_tip_frame;
+        let lr_geom = SbLrGeom {
+            bx,
+            by,
+            col_start,
+            col_end,
+            row_start,
+            row_end,
+            ss_hor: fi.ss_hor,
+            ss_ver: fi.ss_ver,
+            sbsz,
+            sb256w,
+        };
         if !is_tip_frame {
-            for p in 0..3 {
-                let (ss_ver, ss_hor) = if p == 0 {
-                    (0, 0)
-                } else {
-                    (fi.ss_ver, fi.ss_hor)
-                };
-                let rtype_u8 = frame_hdr.restoration.p[p].restoration_type;
-                if rtype_u8 == RestorationType::None as u8 {
-                    continue;
-                }
-                // Restoration is active for this plane, so the LR mask is
-                // allocated for valid streams. Guard against an empty mask (a
-                // degenerate frame from a malformed header) before indexing it.
-                if lr_mask.is_empty() || lr_mask[0].lr[p].is_empty() {
-                    continue;
-                }
-                let tx = (4 * (bx - col_start)) >> ss_hor;
-                let ty = (4 * (by - row_start)) >> ss_ver;
-                let unit_sz_log2 = frame_hdr.restoration.unit_size[(p != 0) as usize] as i32;
-                let unit_sz = 1i32 << unit_sz_log2;
-                let mask = unit_sz - 1;
-                if (tx | ty) & mask != 0 {
-                    continue;
-                }
-                let tw = (col_end * 4) >> ss_hor;
-                let th = (row_end * 4) >> ss_ver;
-                let half_unit = unit_sz >> 1;
-                let fx = (4 * bx) >> ss_hor;
-                let fy = (by * 4) >> ss_ver;
-                if (ty != 0 && fy + half_unit > th) || (tx != 0 && fx + half_unit > tw) {
-                    continue;
-                }
-
-                let frame_type = match rtype_u8 {
-                    1 => RestorationType::PcWiener,
-                    2 => RestorationType::NsWiener,
-                    3 => RestorationType::Switchable,
-                    _ => RestorationType::None,
-                };
-
-                let sbw = sbsz >> ss_hor;
-                let sbh = sbsz >> ss_ver;
-                let lruw = imax(1, imin(tw - fx + half_unit, sbw) >> unit_sz_log2);
-                let lruh = imax(1, imin(th - fy + half_unit, sbh) >> unit_sz_log2);
-                for _y in 0..lruh {
-                    for x in 0..lruw {
-                        // Derive the (slot, unit_idx) of this restoration unit from
-                        // its frame position, mirroring the filter side
-                        // (looprestoration.rs `lr_sbrow`/`lr_stripe`): the filter
-                        // derives both the SB-256 slot and the 4x4 local unit index
-                        // from the unit's *luma-scale* top-left, so the read side
-                        // must do the same for the two to agree when an SB spans
-                        // more than one unit (unit_size < superblock size).
-                        //
-                        // `fx`/`fy` are this SB's subsampled top-left; the unit's
-                        // subsampled position is `fx + x*unit_sz` / `fy + _y*unit_sz`.
-                        // Shift back to luma scale (`<< ss_*`) before the >>8 (slot)
-                        // and >>6 (local 64-grid index) reductions, exactly as the
-                        // filter does (`aligned_unit_pos <<= ss_ver`; horizontal uses
-                        // `shift_hor = 8 - ss_hor`). At x == _y == 0 this reduces to
-                        // the previous `sb_idx` / `start_unit_idx` byte-for-byte, so
-                        // single-unit streams are unchanged.
-                        let upx = (fx + x * unit_sz) << ss_hor;
-                        let upy = (fy + _y * unit_sz) << ss_ver;
-                        let slot = (upy >> 8) * sb256w + (upx >> 8);
-                        let uidx = (((upy >> 6) & 3) << 2) | ((upx >> 6) & 3);
-                        // For valid streams these indices are always in range;
-                        // clamp so a malformed unit-size/geometry can't index the
-                        // LR mask out of bounds (the entropy read still happens, so
-                        // MSAC stays in sync). No-op for valid input.
-                        let unit_idx = (uidx.max(0) as usize).min(lr_mask[0].lr[p].len() - 1);
-                        let lr_slot = (slot.max(0) as usize).min(lr_mask.len() - 1);
-                        let ns_plane = &frame_hdr.restoration.p[p].ns;
-                        read_restoration_info(
-                            msac,
-                            &mut ts.cdf.m,
-                            &mut ts.ns_wiener_bank[p],
-                            &mut lr_mask[lr_slot].lr[p][unit_idx],
-                            p,
-                            frame_type,
-                            ns_plane,
-                        );
-                    }
-                }
-            }
-        } // end if !is_tip_frame (loop-restoration info read)
+            read_sb_restoration(
+                &mut *msac,
+                &mut ts.cdf.m,
+                &mut *lr_mask,
+                &mut ts.ns_wiener_bank,
+                frame_hdr,
+                &lr_geom,
+                0..if sdp_root_split { 1 } else { 3 },
+            );
+        }
         let mut dir = 0i32;
         let mut sdp_cfl_disallowed = 0i32;
         let mut intra_region = 0i32;
@@ -1814,6 +1886,12 @@ where
                             part_w_idx: &mut part_w_idx,
                             part_r,
                             part_r_idx: &mut part_r_idx,
+                            sdp_lr: sdp_root_split.then_some(SdpLrRead {
+                                lr_mask: &mut *lr_mask,
+                                bank: &mut ts.ns_wiener_bank,
+                                frame_hdr,
+                                geom: lr_geom,
+                            }),
                         };
                         decode_sb(
                             &mut sb_ctx,
@@ -1874,6 +1952,7 @@ where
                         part_w_idx: &mut replay_part_w_idx,
                         part_r: replay_part_r,
                         part_r_idx: &mut part_r_idx,
+                        sdp_lr: None,
                     };
                     decode_sb(
                         &mut sb_ctx,
@@ -1908,6 +1987,12 @@ where
                     part_w_idx: &mut part_w_idx,
                     part_r,
                     part_r_idx: &mut part_r_idx,
+                    sdp_lr: sdp_root_split.then_some(SdpLrRead {
+                        lr_mask: &mut *lr_mask,
+                        bank: &mut ts.ns_wiener_bank,
+                        frame_hdr,
+                        geom: lr_geom,
+                    }),
                 };
                 decode_sb(
                     &mut sb_ctx,
@@ -1957,6 +2042,35 @@ where
     // Write back the running per-tile delta-q state.
     ts.last_qidx = sb_last_qidx;
     ts.dqmem = sb_dqmem;
+
+    // Capture this tile's right column (from `l`) and, on its last sbrow, its
+    // bottom row (from `a`) for the deblocker's tile-seam clamp.
+    let ss_hor = (seq_hdr.layout != crate::headers::PixelLayout::I444) as usize;
+    let ss_ver = (seq_hdr.layout == crate::headers::PixelLayout::I420) as usize;
+    let tiles = &frame_hdr.tiling.t;
+    let tile_col = ts.tiling.col as usize;
+    if tile_col + 1 < tiles.cols as usize {
+        let by = by as usize;
+        let rows = (sb_step as usize).min(row_end as usize - by);
+        for (pl, src, ss) in [(0, &l.tx_lpf_y, 0), (1, &l.tx_lpf_uv, ss_ver)] {
+            let base = (tile_col * 2 + pl) * seam_h4 + (by >> ss);
+            let n = (rows + ss) >> ss;
+            let off = (by & 63) >> ss;
+            seam_right[base..base + n].copy_from_slice(&src[off..off + n]);
+        }
+    }
+    let tile_row_u = tile_row as usize;
+    if by + sb_step >= row_end && tile_row_u + 1 < tiles.rows as usize {
+        let a_row = tile_row_u * sb256w as usize;
+        for x4 in col_start as usize..(col_end as usize).min(seam_w4) {
+            let a = &a_arr[a_row + (x4 >> 6)];
+            seam_bottom[tile_row_u * 2 * seam_w4 + x4] = a.tx_lpf_y[x4 & 63];
+        }
+        for xc in (col_start as usize >> ss_hor)..((col_end as usize + ss_hor) >> ss_hor) {
+            let a = &a_arr[a_row + ((xc << ss_hor) >> 6)];
+            seam_bottom[(tile_row_u * 2 + 1) * seam_w4 + xc] = a.tx_lpf_uv[xc & (63 >> ss_hor)];
+        }
+    }
 
     // Abort the frame on an out-of-range segment id (C `return -1`).
     if sb_seg_err {
@@ -2310,7 +2424,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
             let bd_local = $bd;
             let estimated_decode_units = (((bh + sb_step - 1) / sb_step).max(0) as usize)
                 .saturating_mul(cols.max(0) as usize);
-            let estimated_filter_bands = (bh >> 4).max(0) as usize;
+            let estimated_filter_bands = ((bh + 15) >> 4).max(0) as usize;
             let do_parallel = (n_tc as usize) >= 2
                 && !need_load_tmvs
                 && (estimated_decode_units > 1 || estimated_filter_bands > 1);
@@ -2369,10 +2483,15 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                 let lf_start_of_tile_row: &[u8] = &lf.start_of_tile_row;
                 let mask_dm = DisjointMut::new(&mut lf.mask[..]);
                 let lrmask_dm = DisjointMut::new(&mut lf.lr_mask[..]);
+                let (seam_h4, seam_w4) = (lf.seam_lpf.h4, lf.seam_lpf.w4);
+                let seam_r_dm = DisjointMut::new(&mut lf.seam_lpf.right[..]);
+                let seam_b_dm = DisjointMut::new(&mut lf.seam_lpf.bottom[..]);
                 let seguv_dm =
                     DisjointMut::new(std::sync::Arc::make_mut(&mut lf.segmap_uv).as_mut_slice());
                 let mask_dm = &mask_dm;
                 let lrmask_dm = &lrmask_dm;
+                let seam_r_dm = &seam_r_dm;
+                let seam_b_dm = &seam_b_dm;
                 let seguv_dm = &seguv_dm;
 
                 let got_err = std::sync::atomic::AtomicBool::new(false);
@@ -2410,18 +2529,11 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                 let by64_tile_row = &by64_tile_row[..];
                 let n_decode_units = tile_nsb.iter().copied().sum::<usize>();
                 let n_filter_units = sb64h_us;
-                // Bands the filter actually processes. The serial path filters
-                // `by64 in [row_rs>>4, (row_re>>4).min(sb64h))` per tile row; the union
-                // over rows ends at the bottom tile's `row_re = bh`, i.e. `bh>>4`
-                // (floor). When `bh` is not a multiple of 16 there is a partial bottom
-                // sb64 band (index `sb64h-1`) that the serial filter does NOT process
-                // as its own slice — its few rows are covered by the last full band's
-                // bottom-edge handling. `n_filter_units` (= `sb64h`) still counts every
-                // band for decode coverage, but the filter loop and its completion
-                // accounting must use `n_filter_bands` so MT filters exactly the serial
-                // set (otherwise MT filters one extra band, which silently matches on
-                // some content but diverges by up to the loop-filter delta on others).
-                let n_filter_bands = ((bh >> 4).max(0) as usize).min(n_filter_units);
+                // Every sb64 band is filtered, including a partial bottom band when
+                // `bh` is not a multiple of 16 (`h4 = min(bh - y64 * 16, 16)` inside
+                // the band filters). Skipping it left the last rows unfiltered, e.g.
+                // the horizontal edge at the frame bottom that AVM deblocks.
+                let n_filter_bands = n_filter_units;
                 let n_workers = max_workers
                     .min(n_decode_units.max(n_filter_units).max(1))
                     .max(1);
@@ -2695,6 +2807,9 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                     let dst_v = unsafe { dst_v_dm.whole() };
                                     let mask = unsafe { mask_dm.whole() };
                                     let lr_mask = unsafe { lrmask_dm.whole() };
+                                    // Each tile writes only its own seam slots.
+                                    let seam_right = unsafe { seam_r_dm.whole() };
+                                    let seam_bottom = unsafe { seam_b_dm.whole() };
                                     let segmap_uv = unsafe { seguv_dm.whole() };
                                     let (cs, ce, rs, re) = {
                                         let tb = &ts[ts_idx].tiling;
@@ -2752,6 +2867,10 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                                     a_arr: &mut *a,
                                                     lf_mask: &mut *mask,
                                                     lr_mask: &mut *lr_mask,
+                                                    seam_right: &mut *seam_right,
+                                                    seam_bottom: &mut *seam_bottom,
+                                                    seam_h4,
+                                                    seam_w4,
                                                     l: &mut l,
                                                     dst_y: &mut *dst_y,
                                                     dst_u: &mut *dst_u,
@@ -2857,27 +2976,17 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                         let dst_y = unsafe { dst_y_dm.whole() };
                                         let dst_u = unsafe { dst_u_dm.whole() };
                                         let dst_v = unsafe { dst_v_dm.whole() };
-                                        if $stages
-                                            & (crate::decode::STAGE_DEBLOCK
-                                                | crate::decode::STAGE_DEBLOCK_COLS)
-                                            != 0
-                                        {
-                                            let mr = ((by64 >> 2) * sb256w) as usize;
-                                            crate::deblock::deblock_crop_bottom_edge(
-                                                unsafe { mask_dm.whole() },
-                                                mr,
-                                                sb256w,
-                                                bw,
-                                                bh,
-                                                0,
-                                                by64,
-                                            );
-                                        }
                                         let sh = FilterShared {
                                             mask: unsafe { &*mask_dm.whole() },
                                             lr_mask: unsafe { &*lrmask_dm.whole() },
                                             segmap_uv: unsafe { &*seguv_dm.whole() },
                                             start_of_tile_row: lf_start_of_tile_row,
+                                            seams: crate::lf_mask::TileSeams {
+                                                right: unsafe { &*seam_r_dm.whole() },
+                                                bottom: unsafe { &*seam_b_dm.whole() },
+                                                h4: seam_h4,
+                                                w4: seam_w4,
+                                            },
                                             uv_segmap_stride,
                                             base_q,
                                             gdf_ref_dst_idx,
@@ -3014,8 +3123,16 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                     if k >= n_filter_bands {
                                         break;
                                     }
+                                    // The next root's LR backup (`copy_db`, taken
+                                    // once its last band is deblocked) includes the
+                                    // two rows above its first stripe, which lie in
+                                    // band `k`: filtering them first would back up
+                                    // CDEF output (sb128/sb256 roots span bands).
+                                    let next_root_end = (((k + 1) >> sb128) + 1) << sb128;
                                     let ready = cdef_save_done[k].load(Acquire)
-                                        && (k == 0 || cdef_save_done[k - 1].load(Acquire));
+                                        && (k == 0 || cdef_save_done[k - 1].load(Acquire))
+                                        && deblock_progress.load(Acquire)
+                                            >= next_root_end.min(n_filter_bands);
                                     if !ready {
                                         break;
                                     }
@@ -3267,6 +3384,10 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                                 a_arr: &mut *a,
                                                 lf_mask: &mut lf.mask,
                                                 lr_mask: &mut lf.lr_mask,
+                                                seam_right: &mut lf.seam_lpf.right,
+                                                seam_bottom: &mut lf.seam_lpf.bottom,
+                                                seam_h4: lf.seam_lpf.h4,
+                                                seam_w4: lf.seam_lpf.w4,
                                                 l: &mut l,
                                                 dst_y: &mut *dst_y,
                                                 dst_u: &mut *dst_u,
@@ -3312,7 +3433,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                             // PHASE B: frame-level spec-order filter
                             if tr + 1 == rows {
                                 let sb64h = (bh + 15) >> 4;
-                                let nfb = ((bh >> 4).max(0) as usize).min(sb64h as usize) as i32;
+                                let nfb = sb64h;
                                 let n_roots = ((sb64h >> sb128) + 2) as usize;
                                 let mono = seq_hdr.layout == crate::headers::PixelLayout::I400;
                                 ensure_filter_lines(
@@ -3365,23 +3486,12 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                     crate::decode::STAGE_LR,
                                 ] {
                                     for by64 in 0..nfb {
-                                        if stage & crate::decode::STAGE_DEBLOCK != 0 {
-                                            let mask_row = ((by64 >> 2) * sb256w) as usize;
-                                            crate::deblock::deblock_crop_bottom_edge(
-                                                &mut lf.mask,
-                                                mask_row,
-                                                sb256w,
-                                                bw,
-                                                bh,
-                                                0,
-                                                by64,
-                                            );
-                                        }
                                         let sh = FilterShared {
                                             mask: &lf.mask[..],
                                             lr_mask: &lf.lr_mask[..],
                                             segmap_uv: &lf.segmap_uv[..],
                                             start_of_tile_row: &lf.start_of_tile_row[..],
+                                            seams: lf.seam_lpf.view(),
                                             uv_segmap_stride: lf.uv_segmap_stride,
                                             base_q: lf.base_q,
                                             gdf_ref_dst_idx: lf.gdf_ref_dst_idx,

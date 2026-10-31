@@ -117,6 +117,7 @@ pub(crate) struct LoopFilterState {
     pub(crate) base_q: i32,
     pub(crate) gdf_ref_dst_idx: i32,
     pub(crate) start_of_tile_row: Vec<u8>,
+    pub(crate) seam_lpf: crate::lf_mask::TileSeamLpf,
     pub(crate) restore_planes: i32,
     pub(crate) wiener_idx: usize,
     pub(crate) ns_subclass_class_idx: Option<usize>,
@@ -190,7 +191,7 @@ pub(crate) struct FrameContext {
     pub(crate) ss_hor: i32,
 
     pub(crate) dq: [[[u32; 2]; 3]; MAX_SEGMENTS],
-    pub(crate) qm: [[Option<Vec<u8>>; 3]; N_RECT_TX_SIZES],
+    pub(crate) qm: [[Option<&'static [u8]>; 3]; N_RECT_TX_SIZES],
 
     pub(crate) a: Vec<BlockContext>,
     pub(crate) a_sz: i32,

@@ -27,7 +27,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-use crate::gdf_tables::{GDF_ALPHA, GDF_BIAS, GDF_WEIGHT};
 use crate::headers::{FhRestorationPlane, PixelLayout};
 use crate::intops::{iclip, iclip64to32, imax, imin};
 use crate::lf_mask::{Av2Filter, Av2Restoration};
@@ -518,6 +517,12 @@ pub(crate) fn backup_row_luma_8bpc(
 ) {
     if ss_ver == 0 {
         backup_row_lpf_8bpc(dst, o, src, src_o, w, 4, edges);
+        // 4:2:2 point-samples the even luma columns, so past the right edge
+        // AVM repeats the last sampled column, not the last luma column.
+        if ss_hor != 0 && edges & LR_HAVE_RIGHT == 0 {
+            let fill_val = src[src_o + w - 2];
+            dst[o + w..o + w + 4].fill(fill_val);
+        }
         return;
     }
 
@@ -1272,11 +1277,13 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
             ds_flt,
         );
         l_ptrs[0] = 0;
+        // Chroma row -1 averages saved luma rows 0 and 1 when vertically
+        // subsampled; without vertical subsampling it is saved row 1 alone.
         backup_row_luma_8bpc(
             &mut l_buffers[1],
             o,
             luma_top,
-            luma_top_off,
+            luma_top_off + if ss_ver == 0 { lstride } else { 0 },
             lstride,
             luma_w,
             edges,
@@ -1545,6 +1552,15 @@ pub(crate) fn gdf_prep_8bpc(
     } else {
         ((ref_dst_idx - 1) * 6000 + qp_idx * 1000, 5i32)
     };
+    let prep = crate::rowops_dispatch::GdfPrepRow {
+        alpha_base,
+        weight_base,
+        bias_idx,
+        error_lut_base,
+        scale,
+        ref_dst_idx,
+        grad_shift: 2,
+    };
 
     let mut grad = [[[0u16; 4]; GRADIENT_BUF_STRIDE]; 2];
     {
@@ -1605,62 +1621,16 @@ pub(crate) fn gdf_prep_8bpc(
         }
 
         let refs: [&[u8]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u8]);
-        let mut x1 = 0usize;
-        while x1 < w {
-            let mut grad_sums = [0i32; 4];
-            let hx = x1 >> 1;
-            for d in 0..4 {
-                grad_sums[d] = grad[0][hx][d] as i32
-                    + grad[0][hx + 1][d] as i32
-                    + grad[1][hx][d] as i32
-                    + grad[1][hx + 1][d] as i32;
-            }
-            let cls = ((grad_sums[0] <= grad_sums[1]) as usize)
-                | (((grad_sums[2] <= grad_sums[3]) as usize) << 1);
-
-            let mut shared_vals = [0i32; 3];
-            for idx in 0..3 {
-                shared_vals[idx] = GDF_BIAS[bias_idx][idx] as i32;
-            }
-            for d in 0..4 {
-                let k = d + 18;
-                let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
-                let v = imin(grad_sums[d] >> 2, alpha);
-                for idx in 0..3 {
-                    shared_vals[idx] += v * GDF_WEIGHT[weight_base + idx * 88 + k * 4 + cls] as i32;
-                }
-            }
-
-            if x1 + 1 < w {
-                let err_pair = crate::filter::gdf_prep_pair_8bpc_ctx(
-                    exec,
-                    refs,
-                    o + x1,
-                    cls,
-                    shared_vals,
-                    alpha_base,
-                    weight_base,
-                    error_lut_base,
-                    scale,
-                    ref_dst_idx,
-                );
-                dst[y * dst_stride + x1] = err_pair[0];
-                dst[y * dst_stride + x1 + 1] = err_pair[1];
-            } else {
-                dst[y * dst_stride + x1] = crate::filter::gdf_prep_pixel_8bpc(
-                    refs,
-                    o + x1,
-                    cls,
-                    shared_vals,
-                    alpha_base,
-                    weight_base,
-                    error_lut_base,
-                    scale,
-                    ref_dst_idx,
-                );
-            }
-            x1 += 2;
-        }
+        unsafe {
+            (exec.gdf_prep_row_8bpc)(
+                refs,
+                o,
+                w,
+                [&grad[0][..], &grad[1][..]],
+                &mut dst[y * dst_stride..],
+                &prep,
+            )
+        };
 
         for r in 0..12 {
             ptrs[r] = ptrs[r + 1];
@@ -1754,6 +1724,15 @@ pub(crate) fn gdf_prep_hbd(
     } else {
         ((ref_dst_idx - 1) * 6000 + qp_idx * 1000, 5i32)
     };
+    let prep = crate::rowops_dispatch::GdfPrepRow {
+        alpha_base,
+        weight_base,
+        bias_idx,
+        error_lut_base,
+        scale,
+        ref_dst_idx,
+        grad_shift,
+    };
 
     let mut grad = [[[0u16; 4]; GRADIENT_BUF_STRIDE]; 2];
     {
@@ -1814,52 +1793,18 @@ pub(crate) fn gdf_prep_hbd(
         }
 
         let refs: [&[u16]; 13] = core::array::from_fn(|i| &row_buffers[ptrs[i]] as &[u16]);
-        let mut x1 = 0usize;
-        while x1 < w {
-            let mut grad_sums = [0i32; 4];
-            let hx = x1 >> 1;
-            for d in 0..4 {
-                grad_sums[d] = grad[0][hx][d] as i32
-                    + grad[0][hx + 1][d] as i32
-                    + grad[1][hx][d] as i32
-                    + grad[1][hx + 1][d] as i32;
-            }
-            let cls = ((grad_sums[0] <= grad_sums[1]) as usize)
-                | (((grad_sums[2] <= grad_sums[3]) as usize) << 1);
-
-            let mut shared_vals = [0i32; 3];
-            for idx in 0..3 {
-                shared_vals[idx] = GDF_BIAS[bias_idx][idx] as i32;
-            }
-            for d in 0..4 {
-                let k = d + 18;
-                let alpha = GDF_ALPHA[alpha_base + k * 4 + cls] as i32;
-                let v = imin(grad_sums[d] >> grad_shift, alpha);
-                for idx in 0..3 {
-                    shared_vals[idx] += v * GDF_WEIGHT[weight_base + idx * 88 + k * 4 + cls] as i32;
-                }
-            }
-
-            let err_pair = crate::filter::gdf_prep_pair_hbd_ctx(
-                exec,
+        unsafe {
+            (exec.gdf_prep_row_hbd)(
                 refs,
-                o + x1,
-                cls,
-                shared_vals,
-                alpha_base,
-                weight_base,
-                error_lut_base,
-                scale,
+                o,
+                w,
+                [&grad[0][..], &grad[1][..]],
+                &mut dst[y * dst_stride..],
+                &prep,
                 down_shift,
                 up_scale,
-                ref_dst_idx,
-            );
-            dst[y * dst_stride + x1] = err_pair[0];
-            if x1 + 1 < w {
-                dst[y * dst_stride + x1 + 1] = err_pair[1];
-            }
-            x1 += 2;
-        }
+            )
+        };
 
         for r in 0..12 {
             ptrs[r] = ptrs[r + 1];
@@ -1928,6 +1873,8 @@ pub(crate) struct LrContext<'a> {
     pub(crate) restore_planes: i32,
     /// Tile column starts in SB units, including the trailing end entry.
     pub(crate) col_start_sb: &'a [u16],
+    /// Tile row starts in SB units, including the trailing end entry.
+    pub(crate) row_start_sb: &'a [u16],
     /// Luma SB size in pixels.
     pub(crate) sbsz: i32,
 }
@@ -2085,8 +2032,10 @@ fn lr_stripe_8bpc(
 
         // GDF prep: compute the per-pixel error into gdf_err.
         if gdf_enabled {
+            // GDF reads all 6 stored seam rows (LR's `cdef_top` skips the
+            // first 2 and would run past the slot).
             let (top_slice, top_off): (&[u8], usize) = match cdef_top {
-                Some(off) => (&ctx.lr_cdef_line[plane_u], off),
+                Some(off) => (&ctx.lr_cdef_line[plane_u], off - 2 * stride_u),
                 None => (&ctx.lr_db_line[plane_u], lpf_off),
             };
             gdf_prep_8bpc(
@@ -2338,6 +2287,147 @@ fn lr_stripe_8bpc(
     }
 }
 
+/// Restoration unit (`lr_mask` slot, unit index) covering plane column `pos`.
+/// A short trailing unit merges into the previous one, but never across the
+/// start of a tile column (same rule as the `lr_sbrow` chunk loop).
+#[allow(clippy::too_many_arguments)]
+fn lr_unit_at_8bpc(
+    ctx: &LrContext,
+    pos: i32,
+    w: i32,
+    unit_size: i32,
+    ss_hor: i32,
+    sb_idx: i32,
+    unit_idx_base: i32,
+) -> (usize, usize) {
+    let shift_hor = 8 - ss_hor;
+    let mut start = pos & !(unit_size - 1);
+    let mut tc = 0usize;
+    while tc + 2 < ctx.col_start_sb.len()
+        && start >= (ctx.col_start_sb[tc + 1] as i32 * ctx.sbsz) >> ss_hor
+    {
+        tc += 1;
+    }
+    let tile_col_start_x = (ctx.col_start_sb[tc] as i32 * ctx.sbsz) >> ss_hor;
+    if start > tile_col_start_x && w - start < unit_size >> 1 {
+        start -= unit_size;
+    }
+    (
+        (sb_idx + (start >> shift_hor)) as usize,
+        (unit_idx_base + ((start >> (shift_hor - 2)) & 3)) as usize,
+    )
+}
+
+/// Restores one up-to-64-wide chunk. When restoration units are narrower than
+/// the chunk (e.g. 32px chroma units), each unit is filtered with its own
+/// parameters; every inner boundary gets its own pre-filter left-border backup.
+#[allow(clippy::too_many_arguments)]
+fn lr_chunk_8bpc(
+    ctx: &LrContext,
+    p: &mut [u8],
+    p_off: usize,
+    left: &[[u8; 6]],
+    x: i32,
+    y: i32,
+    plane: i32,
+    width: i32,
+    row_h: i32,
+    edges: u8,
+    first_sby_in_tile_row: FirstSbInTileRow,
+    tile_row_m1: i32,
+    first_unit: (usize, usize),
+    w: i32,
+    unit_size: i32,
+    ss_hor: i32,
+    sb_idx: i32,
+    unit_idx_base: i32,
+) {
+    type Px = u8;
+    let plane_u = plane as usize;
+    let unit_ok =
+        |(sb, u): (usize, usize)| sb < ctx.lr_mask.len() && u < ctx.lr_mask[sb].lr[plane_u].len();
+
+    // Segments of `width` that map to distinct restoration units.
+    let mut segs: [(i32, (usize, usize)); 4] = [(0, first_unit); 4];
+    let mut n_segs = 1usize;
+    let mut off = unit_size;
+    while unit_size < width && off < width && n_segs < 4 {
+        let unit = lr_unit_at_8bpc(ctx, x + off, w, unit_size, ss_hor, sb_idx, unit_idx_base);
+        if unit != segs[n_segs - 1].1 {
+            segs[n_segs] = (off, unit);
+            n_segs += 1;
+        }
+        off += unit_size;
+    }
+
+    if n_segs == 1 {
+        if unit_ok(first_unit) {
+            let lr_unit = &ctx.lr_mask[first_unit.0].lr[plane_u][first_unit.1];
+            lr_stripe_8bpc(
+                ctx,
+                p,
+                p_off,
+                left,
+                x,
+                y,
+                plane,
+                width,
+                row_h,
+                lr_unit,
+                edges,
+                first_sby_in_tile_row,
+                tile_row_m1,
+            );
+        }
+        return;
+    }
+
+    let abs_stride = ctx.cur_stride[(plane != 0) as usize].unsigned_abs();
+    let n = if plane != 0 { 2 } else { 6 };
+    let rows = (row_h - y).max(0) as usize;
+    let mut borders = [[[Px::default(); 6]; 264]; 3];
+    for (k, border) in borders.iter_mut().enumerate().take(n_segs - 1) {
+        let col = p_off + segs[k + 1].0 as usize;
+        for (row, b) in border.iter_mut().enumerate().take(rows) {
+            let at = col + row * abs_stride;
+            if at >= n && at <= p.len() {
+                b[6 - n..].copy_from_slice(&p[at - n..at]);
+            }
+        }
+    }
+    for k in 0..n_segs {
+        let (seg_x, unit) = segs[k];
+        let seg_w = if k + 1 < n_segs { segs[k + 1].0 } else { width } - seg_x;
+        let mut seg_edges = edges;
+        if k > 0 {
+            seg_edges |= LR_HAVE_LEFT;
+        }
+        if k + 1 < n_segs {
+            seg_edges |= LR_HAVE_RIGHT;
+        }
+        if !unit_ok(unit) {
+            continue;
+        }
+        let seg_left: &[[Px; 6]] = if k == 0 { left } else { &borders[k - 1] };
+        let lr_unit = &ctx.lr_mask[unit.0].lr[plane_u][unit.1];
+        lr_stripe_8bpc(
+            ctx,
+            p,
+            p_off + seg_x as usize,
+            seg_left,
+            x + seg_x,
+            y,
+            plane,
+            seg_w,
+            row_h,
+            lr_unit,
+            seg_edges,
+            first_sby_in_tile_row,
+            tile_row_m1,
+        );
+    }
+}
+
 fn lr_sbrow(
     ctx: &LrContext,
     p: &mut [u8],
@@ -2365,8 +2455,23 @@ fn lr_sbrow(
 
     let mut pre_lr_border = [[[0u8; 6]; 264]; 2];
 
-    let mut aligned_unit_pos = row_y & !(unit_size - 1);
-    if aligned_unit_pos != 0 && aligned_unit_pos + half_unit_size > h {
+    // Units restart at each tile row, and a short last unit merges into the
+    // previous one without crossing the tile row. The `Top` pass filters the
+    // previous tile row's last 8px stripe, so it belongs to that row's units.
+    let probe = if first_sby_in_tile_row == FirstSbInTileRow::Top {
+        y
+    } else {
+        row_y
+    };
+    let tile_row_px = |i: usize| (ctx.row_start_sb[i] as i32 * ctx.sbsz) >> ss_ver;
+    let mut tr = 0usize;
+    while tr + 2 < ctx.row_start_sb.len() && probe >= tile_row_px(tr + 1) {
+        tr += 1;
+    }
+    let tile_top = tile_row_px(tr);
+    let tile_bot = imin(tile_row_px(tr + 1), h);
+    let mut aligned_unit_pos = tile_top + ((probe - tile_top) & !(unit_size - 1));
+    if aligned_unit_pos > tile_top && aligned_unit_pos + half_unit_size > tile_bot {
         aligned_unit_pos -= unit_size;
     }
     aligned_unit_pos <<= ss_ver;
@@ -2407,43 +2512,42 @@ fn lr_sbrow(
 
         let lr_sb = lr_idx_0;
         let lr_u = lr_unit_0;
-        // Skip border copy and stripe call entirely for None units — the common
-        // case when the encoder chose not to apply LR for this segment.
-        if lr_sb < ctx.lr_mask.len()
-            && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len()
-            && ctx.lr_mask[lr_sb].lr[plane as usize][lr_u].restoration_type
-                != RestorationType::None as u8
-        {
-            let lr_unit = &ctx.lr_mask[lr_sb].lr[plane as usize][lr_u];
-            let n = if plane != 0 { 2 } else { 6 };
-            let border_src_off = cur_p_off + 64;
-            if border_src_off + n <= p.len() {
-                for row in 0..(row_h - y) as usize {
-                    let src_row = border_src_off + row * abs_stride;
-                    if src_row >= n && src_row < p.len() {
-                        let start = src_row - n;
-                        for i in 0..n.min(6) {
-                            pre_lr_border[bit][row][6 - n + i] = p[start + i];
-                        }
+        // The right-edge backup must happen for every unit (the next unit reads
+        // it as its left border), and the stripe must run even for LR type None
+        // units because GDF is applied inside it.
+        let n = if plane != 0 { 2 } else { 6 };
+        let border_src_off = cur_p_off + 64;
+        if border_src_off + n <= p.len() {
+            for row in 0..(row_h - y) as usize {
+                let src_row = border_src_off + row * abs_stride;
+                if src_row >= n && src_row < p.len() {
+                    let start = src_row - n;
+                    for i in 0..n.min(6) {
+                        pre_lr_border[bit][row][6 - n + i] = p[start + i];
                     }
                 }
             }
-            lr_stripe_8bpc(
-                ctx,
-                p,
-                cur_p_off,
-                &pre_lr_border[1 - bit],
-                x,
-                y,
-                plane,
-                64,
-                row_h,
-                lr_unit,
-                edges,
-                first_sby_in_tile_row,
-                tile_row_m1,
-            );
         }
+        lr_chunk_8bpc(
+            ctx,
+            p,
+            cur_p_off,
+            &pre_lr_border[1 - bit],
+            x,
+            y,
+            plane,
+            64,
+            row_h,
+            edges,
+            first_sby_in_tile_row,
+            tile_row_m1,
+            (lr_sb, lr_u),
+            w,
+            unit_size,
+            ss_hor,
+            sb_idx,
+            unit_idx_base,
+        );
 
         lr_idx_0 = next_sb_idx as usize;
         lr_unit_0 = next_u_idx as usize;
@@ -2457,28 +2561,26 @@ fn lr_sbrow(
     let end_w = w - x;
     let lr_sb = lr_idx_0;
     let lr_u = lr_unit_0;
-    if lr_sb < ctx.lr_mask.len()
-        && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len()
-        && ctx.lr_mask[lr_sb].lr[plane as usize][lr_u].restoration_type
-            != RestorationType::None as u8
-    {
-        let lr_unit = &ctx.lr_mask[lr_sb].lr[plane as usize][lr_u];
-        lr_stripe_8bpc(
-            ctx,
-            p,
-            cur_p_off,
-            &pre_lr_border[1 - bit],
-            x,
-            y,
-            plane,
-            end_w,
-            row_h,
-            lr_unit,
-            edges,
-            first_sby_in_tile_row,
-            tile_row_m1,
-        );
-    }
+    lr_chunk_8bpc(
+        ctx,
+        p,
+        cur_p_off,
+        &pre_lr_border[1 - bit],
+        x,
+        y,
+        plane,
+        end_w,
+        row_h,
+        edges,
+        first_sby_in_tile_row,
+        tile_row_m1,
+        (lr_sb, lr_u),
+        w,
+        unit_size,
+        ss_hor,
+        sb_idx,
+        unit_idx_base,
+    );
 }
 
 pub(crate) fn lr_sbrow_8bpc(ctx: &LrContext, dst: &mut [&mut [u8]; 3], sby: i32) {
@@ -2705,6 +2807,12 @@ pub(crate) fn backup_row_luma_hbd(
 ) {
     if ss_ver == 0 {
         backup_row_lpf_hbd(dst, o, src, src_o, w, 4, edges);
+        // 4:2:2 point-samples the even luma columns, so past the right edge
+        // AVM repeats the last sampled column, not the last luma column.
+        if ss_hor != 0 && edges & LR_HAVE_RIGHT == 0 {
+            let fill_val = src[src_o + w - 2];
+            dst[o + w..o + w + 4].fill(fill_val);
+        }
         return;
     }
 
@@ -2811,17 +2919,17 @@ pub(crate) fn get_class_lut_idx_hbd(
         for dx in -1i32..=4 {
             let x = (col_off as i32 + bx as i32 * 4 + dx) as usize;
             let y = (row_center as i32 + dy) as usize;
-            let m = (rows[y][x] as i32) >> bitdepth_min_8;
-            let up = (rows[y - 1][x] as i32) >> bitdepth_min_8;
-            let down = (rows[y + 1][x] as i32) >> bitdepth_min_8;
+            let m = rows[y][x] as i32;
+            let up = rows[y - 1][x] as i32;
+            let down = rows[y + 1][x] as i32;
             let vert = up - 2 * m + down;
 
-            let up_right = (rows[y - 1][x + 1] as i32) >> bitdepth_min_8;
-            let down_left = (rows[y + 1][x.wrapping_sub(1)] as i32) >> bitdepth_min_8;
+            let up_right = rows[y - 1][x + 1] as i32;
+            let down_left = rows[y + 1][x.wrapping_sub(1)] as i32;
             let anti_diag = up_right - 2 * m + down_left;
 
-            let down_right = (rows[y + 1][x + 1] as i32) >> bitdepth_min_8;
-            let up_left = (rows[y - 1][x.wrapping_sub(1)] as i32) >> bitdepth_min_8;
+            let down_right = rows[y + 1][x + 1] as i32;
+            let up_left = rows[y - 1][x.wrapping_sub(1)] as i32;
             let diag = up_left - 2 * m + down_right;
 
             f[0] += vert.abs();
@@ -2840,8 +2948,11 @@ pub(crate) fn get_class_lut_idx_hbd(
         }
     }
 
+    // Features are taken at full precision and normalized to 8-bit only after
+    // the normalizer multiply, with rounding (AVM `calculate_features`).
+    let rnd = (1i64 << bitdepth_min_8) >> 1;
     for i in 0..3 {
-        f[i] *= PC_WIENER_NORMALIZER[i] as i32;
+        f[i] = ((f[i] as i64 * PC_WIENER_NORMALIZER[i] as i64 + rnd) >> bitdepth_min_8) as i32;
     }
     s *= PC_WIENER_NORMALIZER[3] as i32;
 
@@ -3555,11 +3666,13 @@ pub(crate) fn ns_wiener_single_uv_hbd(
             ds_flt,
         );
         l_ptrs[0] = 0;
+        // Chroma row -1 averages saved luma rows 0 and 1 when vertically
+        // subsampled; without vertical subsampling it is saved row 1 alone.
         backup_row_luma_hbd(
             &mut l_buffers[1],
             o,
             luma_top,
-            luma_top_off,
+            luma_top_off + if ss_ver == 0 { lstride } else { 0 },
             lstride,
             luma_w,
             edges,
@@ -3782,6 +3895,8 @@ pub(crate) struct LrContextHbd<'a> {
     pub(crate) bitdepth_max: i32,
     /// Tile column starts in SB units, including the trailing end entry.
     pub(crate) col_start_sb: &'a [u16],
+    /// Tile row starts in SB units, including the trailing end entry.
+    pub(crate) row_start_sb: &'a [u16],
     /// Luma SB size in pixels.
     pub(crate) sbsz: i32,
 }
@@ -3938,8 +4053,10 @@ fn lr_stripe_hbd(
 
         // GDF prep: compute the per-pixel error into gdf_err before LR writes back.
         if gdf_enabled {
+            // GDF reads all 6 stored seam rows (LR's `cdef_top` skips the
+            // first 2 and would run past the slot).
             let (top_slice, top_off): (&[u16], usize) = match cdef_top {
-                Some(off) => (&ctx.lr_cdef_line[plane_u], off),
+                Some(off) => (&ctx.lr_cdef_line[plane_u], off - 2 * stride_u),
                 None => (&ctx.lr_db_line[plane_u], lpf_off),
             };
             gdf_prep_hbd(
@@ -4198,6 +4315,147 @@ fn lr_stripe_hbd(
         llpf_off += 4 * lstride_u;
     }
 }
+/// Restoration unit (`lr_mask` slot, unit index) covering plane column `pos`.
+/// A short trailing unit merges into the previous one, but never across the
+/// start of a tile column (same rule as the `lr_sbrow` chunk loop).
+#[allow(clippy::too_many_arguments)]
+fn lr_unit_at_hbd(
+    ctx: &LrContextHbd,
+    pos: i32,
+    w: i32,
+    unit_size: i32,
+    ss_hor: i32,
+    sb_idx: i32,
+    unit_idx_base: i32,
+) -> (usize, usize) {
+    let shift_hor = 8 - ss_hor;
+    let mut start = pos & !(unit_size - 1);
+    let mut tc = 0usize;
+    while tc + 2 < ctx.col_start_sb.len()
+        && start >= (ctx.col_start_sb[tc + 1] as i32 * ctx.sbsz) >> ss_hor
+    {
+        tc += 1;
+    }
+    let tile_col_start_x = (ctx.col_start_sb[tc] as i32 * ctx.sbsz) >> ss_hor;
+    if start > tile_col_start_x && w - start < unit_size >> 1 {
+        start -= unit_size;
+    }
+    (
+        (sb_idx + (start >> shift_hor)) as usize,
+        (unit_idx_base + ((start >> (shift_hor - 2)) & 3)) as usize,
+    )
+}
+
+/// Restores one up-to-64-wide chunk. When restoration units are narrower than
+/// the chunk (e.g. 32px chroma units), each unit is filtered with its own
+/// parameters; every inner boundary gets its own pre-filter left-border backup.
+#[allow(clippy::too_many_arguments)]
+fn lr_chunk_hbd(
+    ctx: &LrContextHbd,
+    p: &mut [u16],
+    p_off: usize,
+    left: &[[u16; 6]],
+    x: i32,
+    y: i32,
+    plane: i32,
+    width: i32,
+    row_h: i32,
+    edges: u8,
+    first_sby_in_tile_row: FirstSbInTileRow,
+    tile_row_m1: i32,
+    first_unit: (usize, usize),
+    w: i32,
+    unit_size: i32,
+    ss_hor: i32,
+    sb_idx: i32,
+    unit_idx_base: i32,
+) {
+    type Px = u16;
+    let plane_u = plane as usize;
+    let unit_ok =
+        |(sb, u): (usize, usize)| sb < ctx.lr_mask.len() && u < ctx.lr_mask[sb].lr[plane_u].len();
+
+    // Segments of `width` that map to distinct restoration units.
+    let mut segs: [(i32, (usize, usize)); 4] = [(0, first_unit); 4];
+    let mut n_segs = 1usize;
+    let mut off = unit_size;
+    while unit_size < width && off < width && n_segs < 4 {
+        let unit = lr_unit_at_hbd(ctx, x + off, w, unit_size, ss_hor, sb_idx, unit_idx_base);
+        if unit != segs[n_segs - 1].1 {
+            segs[n_segs] = (off, unit);
+            n_segs += 1;
+        }
+        off += unit_size;
+    }
+
+    if n_segs == 1 {
+        if unit_ok(first_unit) {
+            let lr_unit = &ctx.lr_mask[first_unit.0].lr[plane_u][first_unit.1];
+            lr_stripe_hbd(
+                ctx,
+                p,
+                p_off,
+                left,
+                x,
+                y,
+                plane,
+                width,
+                row_h,
+                lr_unit,
+                edges,
+                first_sby_in_tile_row,
+                tile_row_m1,
+            );
+        }
+        return;
+    }
+
+    let abs_stride = ctx.cur_stride[(plane != 0) as usize].unsigned_abs();
+    let n = if plane != 0 { 2 } else { 6 };
+    let rows = (row_h - y).max(0) as usize;
+    let mut borders = [[[Px::default(); 6]; 264]; 3];
+    for (k, border) in borders.iter_mut().enumerate().take(n_segs - 1) {
+        let col = p_off + segs[k + 1].0 as usize;
+        for (row, b) in border.iter_mut().enumerate().take(rows) {
+            let at = col + row * abs_stride;
+            if at >= n && at <= p.len() {
+                b[6 - n..].copy_from_slice(&p[at - n..at]);
+            }
+        }
+    }
+    for k in 0..n_segs {
+        let (seg_x, unit) = segs[k];
+        let seg_w = if k + 1 < n_segs { segs[k + 1].0 } else { width } - seg_x;
+        let mut seg_edges = edges;
+        if k > 0 {
+            seg_edges |= LR_HAVE_LEFT;
+        }
+        if k + 1 < n_segs {
+            seg_edges |= LR_HAVE_RIGHT;
+        }
+        if !unit_ok(unit) {
+            continue;
+        }
+        let seg_left: &[[Px; 6]] = if k == 0 { left } else { &borders[k - 1] };
+        let lr_unit = &ctx.lr_mask[unit.0].lr[plane_u][unit.1];
+        lr_stripe_hbd(
+            ctx,
+            p,
+            p_off + seg_x as usize,
+            seg_left,
+            x + seg_x,
+            y,
+            plane,
+            seg_w,
+            row_h,
+            lr_unit,
+            seg_edges,
+            first_sby_in_tile_row,
+            tile_row_m1,
+        );
+    }
+}
+
 fn lr_sbrow_hbd_inner(
     ctx: &LrContextHbd,
     p: &mut [u16],
@@ -4225,8 +4483,23 @@ fn lr_sbrow_hbd_inner(
 
     let mut pre_lr_border = [[[0u16; 6]; 264]; 2];
 
-    let mut aligned_unit_pos = row_y & !(unit_size - 1);
-    if aligned_unit_pos != 0 && aligned_unit_pos + half_unit_size > h {
+    // Units restart at each tile row, and a short last unit merges into the
+    // previous one without crossing the tile row. The `Top` pass filters the
+    // previous tile row's last 8px stripe, so it belongs to that row's units.
+    let probe = if first_sby_in_tile_row == FirstSbInTileRow::Top {
+        y
+    } else {
+        row_y
+    };
+    let tile_row_px = |i: usize| (ctx.row_start_sb[i] as i32 * ctx.sbsz) >> ss_ver;
+    let mut tr = 0usize;
+    while tr + 2 < ctx.row_start_sb.len() && probe >= tile_row_px(tr + 1) {
+        tr += 1;
+    }
+    let tile_top = tile_row_px(tr);
+    let tile_bot = imin(tile_row_px(tr + 1), h);
+    let mut aligned_unit_pos = tile_top + ((probe - tile_top) & !(unit_size - 1));
+    if aligned_unit_pos > tile_top && aligned_unit_pos + half_unit_size > tile_bot {
         aligned_unit_pos -= unit_size;
     }
     aligned_unit_pos <<= ss_ver;
@@ -4281,24 +4554,26 @@ fn lr_sbrow_hbd_inner(
 
         let lr_sb = lr_idx_0;
         let lr_u = lr_unit_0;
-        if lr_sb < ctx.lr_mask.len() && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len() {
-            let lr_unit = &ctx.lr_mask[lr_sb].lr[plane as usize][lr_u];
-            lr_stripe_hbd(
-                ctx,
-                p,
-                cur_p_off,
-                &pre_lr_border[1 - bit],
-                x,
-                y,
-                plane,
-                64,
-                row_h,
-                lr_unit,
-                edges,
-                first_sby_in_tile_row,
-                tile_row_m1,
-            );
-        }
+        lr_chunk_hbd(
+            ctx,
+            p,
+            cur_p_off,
+            &pre_lr_border[1 - bit],
+            x,
+            y,
+            plane,
+            64,
+            row_h,
+            edges,
+            first_sby_in_tile_row,
+            tile_row_m1,
+            (lr_sb, lr_u),
+            w,
+            unit_size,
+            ss_hor,
+            sb_idx,
+            unit_idx_base,
+        );
 
         lr_idx_0 = next_sb_idx as usize;
         lr_unit_0 = next_u_idx as usize;
@@ -4312,24 +4587,26 @@ fn lr_sbrow_hbd_inner(
     let end_w = w - x;
     let lr_sb = lr_idx_0;
     let lr_u = lr_unit_0;
-    if lr_sb < ctx.lr_mask.len() && lr_u < ctx.lr_mask[lr_sb].lr[plane as usize].len() {
-        let lr_unit = &ctx.lr_mask[lr_sb].lr[plane as usize][lr_u];
-        lr_stripe_hbd(
-            ctx,
-            p,
-            cur_p_off,
-            &pre_lr_border[1 - bit],
-            x,
-            y,
-            plane,
-            end_w,
-            row_h,
-            lr_unit,
-            edges,
-            first_sby_in_tile_row,
-            tile_row_m1,
-        );
-    }
+    lr_chunk_hbd(
+        ctx,
+        p,
+        cur_p_off,
+        &pre_lr_border[1 - bit],
+        x,
+        y,
+        plane,
+        end_w,
+        row_h,
+        edges,
+        first_sby_in_tile_row,
+        tile_row_m1,
+        (lr_sb, lr_u),
+        w,
+        unit_size,
+        ss_hor,
+        sb_idx,
+        unit_idx_base,
+    );
 }
 pub(crate) fn lr_sbrow_hbd(ctx: &LrContextHbd, dst: &mut [&mut [u16]; 3], sby: i32) {
     let dst_stride = ctx.cur_stride;

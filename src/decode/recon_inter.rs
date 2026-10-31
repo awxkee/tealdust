@@ -78,6 +78,7 @@ where
         by,
         cbx,
         cby,
+        (bx, by),
         lbs,
         cbs,
         has_luma,
@@ -98,6 +99,9 @@ pub(crate) fn recon_b_intra_phase<
     by: i32,
     cbx: i32,
     cby: i32,
+    // Origin of the whole coding block: AVM measures intra edge availability
+    // from it, also for the 64x64 sub-blocks of a larger block.
+    blk_origin: (i32, i32),
     lbs: BlockSize,
     cbs: BlockSize,
     has_luma: bool,
@@ -216,6 +220,7 @@ where
                         sub_by,
                         sub_cbx,
                         sub_cby,
+                        blk_origin,
                         lbs2,
                         if read_cbs != BlockSize::Invalid {
                             read_cbs
@@ -243,6 +248,7 @@ where
                             },
                             sub_bx,
                             sub_by,
+                            blk_origin,
                             lbs2 as usize,
                             luma_phase,
                         )?;
@@ -389,6 +395,10 @@ where
                     (fi.bh * 4) >> fi.ss_ver,
                 );
             }
+        }
+        if intrabc {
+            recon.scratch.ibc_uv_txtp_seed =
+                recon.scratch.txtp_map[(by & 15) as usize * 16 + (bx & 15) as usize];
         }
         let sdp_active = lbs == BlockSize::Invalid;
         recon_b_intra_chroma_phase(
@@ -1576,7 +1586,7 @@ where
         (-1i32, 0i32, crate::levels::txtp::DCT_DCT as u32)
     } else {
         let dq_tbl = recon.dq_active[seg_id][pl];
-        let qm_ref: Option<&[u8]> = recon.frame.qm[tx][pl].as_deref();
+        let qm_ref: Option<&[u8]> = recon.frame.qm[tx][pl];
         let params = crate::recon::DecodeCoefParams {
             tx,
             bs: b.bs as usize,
@@ -1865,7 +1875,7 @@ where
                         -1i32
                     } else {
                         let dq_tbl = recon.dq_active[seg_id][1 + pl];
-                        let qm_ref: Option<&[u8]> = recon.frame.qm[uvtx][1 + pl].as_deref();
+                        let qm_ref: Option<&[u8]> = recon.frame.qm[uvtx][1 + pl];
                         let params = crate::recon::DecodeCoefParams {
                             tx: uvtx,
                             // Chroma coefficient decode keys its skip context on the

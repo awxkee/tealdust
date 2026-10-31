@@ -94,6 +94,25 @@ fn chroma_sub_valid(w4: i32, h4: i32, ss_hor: i32, ss_ver: i32) -> bool {
         .is_some()
 }
 
+/// AVM `have_nz_chroma_ref_offset`: whether splitting a `bw4`×`bh4` block into
+/// `div` parts along `vert` codes chroma once at the parent's size (`div` is 2
+/// for HORZ/VERT, 4 for the 3-way and 8 for the 4-way splits; the 3-way also
+/// halves the other axis).
+#[inline(always)]
+fn chroma_merged_at_parent(
+    bw4: i32,
+    bh4: i32,
+    ss_hor: i32,
+    ss_ver: i32,
+    vert: bool,
+    div: i32,
+) -> bool {
+    let (cw, ch) = ((bw4 * 4) >> ss_hor, (bh4 * 4) >> ss_ver);
+    let (along, across) = if vert { (cw, ch) } else { (ch, cw) };
+    let across_min = if div == 4 { 8 } else { 4 };
+    along < 4 * div || across < across_min
+}
+
 pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
     ctx: &mut SbCtx<'_, UPDATE_CDF, M>,
     pass: u8,
@@ -128,6 +147,24 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
     let mut cbs = cbs;
 
     if pass & (Pass::Entropy as u8) != 0 {
+        // AVM `check_is_chroma_size_valid` for a SHARED block that codes its own
+        // chroma: a split whose first sub-block has no valid chroma plane size
+        // is not signalled, unless the split codes chroma once at this block's
+        // size. Only 4:2:2 changes the chroma aspect, e.g. VERT of 16×64 gives
+        // 8×64 → 4×64 chroma, so HORZ is implied there.
+        let own_chroma = pl == 0 && cbs == lbs;
+        let (ss_hor, ss_ver) = (fi.ss_hor, fi.ss_ver);
+        let shared_sub_ok = move |vert: bool, div: i32| -> bool {
+            if !own_chroma || chroma_merged_at_parent(bw4, bh4, ss_hor, ss_ver, vert, div) {
+                return true;
+            }
+            let (sw4, sh4) = if vert {
+                (bw4 / div, bh4)
+            } else {
+                (bw4, bh4 / div)
+            };
+            chroma_sub_valid(sw4, sh4, ss_hor, ss_ver)
+        };
         let bx4 = (*bx & 63) as usize;
         let by4 = (*by & 63) as usize;
         let bwh4ss = if lbs == BlockSize::Invalid {
@@ -276,23 +313,19 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                             // chroma sub-block has no valid plane size (AVM
                             // check_is_chroma_size_valid via ss_size_lookup):
                             // chroma dim < 4px or chroma aspect > 8:1.
-                            let chroma_ok = |sw4: i32, sh4: i32| -> bool {
+                            let chroma_ok = |vert: bool| -> bool {
                                 if pl == 0 {
-                                    // SHARED square blocks (128×128/256×256) are
-                                    // chroma-coupled: a rect direction whose chroma
-                                    // sub-block is not a valid plane size (e.g. I422
-                                    // VERT → 64×128 → 32×128 chroma) is disallowed,
-                                    // so AVM forces the orthogonal rect without
-                                    // reading part_dir. Uses frame subsampling.
-                                    if bs == BlockSize::Bs128x128 || bs == BlockSize::Bs256x256 {
-                                        return chroma_sub_valid(sw4, sh4, fi.ss_hor, fi.ss_ver);
-                                    }
-                                    return true;
+                                    return shared_sub_ok(vert, 2);
                                 }
+                                let (sw4, sh4) = if vert {
+                                    (bw4 >> 1, bh4)
+                                } else {
+                                    (bw4, bh4 >> 1)
+                                };
                                 chroma_sub_valid(sw4, sh4, fi.ss_hor, fi.ss_ver)
                             };
-                            let v_ok = v_aspect && chroma_ok(bw4 >> 1, bh4);
-                            let h_ok = h_aspect && chroma_ok(bw4, bh4 >> 1);
+                            let v_ok = v_aspect && chroma_ok(true);
+                            let h_ok = h_aspect && chroma_ok(false);
                             if v_ok && h_ok {
                                 let ctx4 = (ctx1 + pcc.ctx[1] as i32 * 4) as usize;
 
@@ -315,7 +348,40 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                                 plane_dims4_for_layout(bs, fi.ss_hor, fi.ss_ver).unwrap_or([0, 0]);
                             let ndir = (!dir) as usize & 1;
                             let ddir = dir as usize;
+                            // AVM bans chroma-tree dimensions of 4 in luma-sized
+                            // block terms, independent of subsampling; the
+                            // subsampled-size checks below only imply that for
+                            // 4:2:0/4:2:2.
+                            let (bwpx, bhpx) = (b_dim[0] as i32 * 4, b_dim[1] as i32 * 4);
+                            let chroma_tree = pl == 1;
+                            let chroma_ext_ok = !chroma_tree
+                                || !((bwpx <= 16 && bhpx <= 16)
+                                    || (bwpx, bhpx) == (8, 32)
+                                    || (bwpx, bhpx) == (32, 8)
+                                    || (dir == 0 && (bwpx, bhpx) == (32, 16))
+                                    || (dir != 0 && (bwpx, bhpx) == (16, 32)));
+                            // AVM check_is_chroma_size_valid: in the chroma tree the
+                            // first sub-block of the split must map to a valid plane
+                            // size (e.g. I422 VERT_3 of 32×64 → 8×64 → 4×64 invalid,
+                            // VERT_4A of 64×64 → 8×64 invalid).
+                            let sub_ok = |div: i32| -> bool {
+                                let (sw4, sh4) = if dir != 0 {
+                                    (bw4 / div, bh4)
+                                } else {
+                                    (bw4, bh4 / div)
+                                };
+                                chroma_sub_valid(sw4, sh4, fi.ss_hor, fi.ss_ver)
+                            };
+                            let chroma_3way_ok = chroma_ext_ok
+                                && (!chroma_tree || sub_ok(4))
+                                && shared_sub_ok(dir != 0, 4);
+                            let chroma_4way_ok = shared_sub_ok(dir != 0, 8)
+                                && (!chroma_tree
+                                    || (chroma_ext_ok
+                                        && sub_ok(8)
+                                        && if dir == 0 { bhpx == 64 } else { bwpx == 64 }));
                             let has_hv3 = fi.ext_partitions
+                                && chroma_3way_ok
                                 && bwh4ss[ndir] >= 4
                                 && bwh4ss[ddir] >= 2
                                 && b_dim[ndir] as i32 * aspect >= b_dim[ddir] as i32 * 4
@@ -336,6 +402,7 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                                     }));
                             let has_hv4ab = bwh4ss[ndir] >= 8
                                 && fi.uneven_4way
+                                && chroma_4way_ok
                                 && b_dim[ndir] as i32 * aspect >= b_dim[ddir] as i32 * 8
                                 && (cbs != lbs
                                     || bwh4ss2[ndir] >= 8

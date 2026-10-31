@@ -1588,50 +1588,33 @@ fn decode_coefs_dc_tail<C: Coeff, const UPDATE_CDF: bool, M: MsacReader<UPDATE_C
     dc_sign_level = ((dc_sign as i32 - 1) & (2 << 6)) as u32;
 
     if has_qm {
-        let qm_tbl = p.qm.unwrap();
-        dc_dq = (dc_dq * qm_tbl[0] as i32 + 16) >> 5;
-        if dc_tok == 15 {
-            dc_tok = 0;
-            dc_tok &= 0xfffff;
-            let dq_val = ((dc_dq * dc_tok) & 0xffffff) >> dq_shift;
-            let dq_val = imin(dq_val, cf_max + dc_sign as i32);
-            cul_level = dc_tok as u32;
-            cf[0] = C::from_i32(if dc_sign != 0 { -dq_val } else { dq_val });
-        } else {
-            let dq_val = dc_dq * dc_tok;
-            cul_level = dc_tok as u32;
-            let dq_val = dq_val >> dq_shift;
-            let dq_val = imin(dq_val, cf_max + dc_sign as i32);
-            cf[0] = C::from_i32(if dc_sign != 0 { -dq_val } else { dq_val });
-        }
-    } else {
-        let max_br = if chroma { 5 } else { 8 };
-        let tcq_bit = (tcq_state & 2) >> 1;
-        let dc_val: i32;
-        if ph_state >> 18 != 0 && dc_tok > 5 {
-            // Parity hiding codes half the DC magnitude, so the high-range
-            // extension is decoded with a halved average and doubled result.
-            let hr = decode_hr(msac, hr_avg >> 1) << 1;
-            dc_tok += hr;
-            dc_val =
-                ((dc_tok as u32).wrapping_mul(dc_dq as u32).wrapping_add(4) >> dq_shift) as i32;
-        } else if dc_tok >= max_br - tcq_en as i32 {
-            let hr = decode_hr(msac, hr_avg);
-            dc_tok += hr << tcq_en as i32;
-            dc_tok &= 0xfffff;
-            let v = (dc_tok << tcq_en as i32) - tcq_bit;
-            dc_val = imin(
-                ((((v as u32).wrapping_mul(dc_dq as u32)) & 0xffffff).wrapping_add(4) >> dq_shift)
-                    as i32,
-                cf_max + dc_sign as i32,
-            );
-        } else {
-            let v = (dc_tok << tcq_en as i32) - tcq_bit;
-            dc_val = (((v as u32).wrapping_mul(dc_dq as u32)).wrapping_add(4) >> dq_shift) as i32;
-        }
-        cul_level += dc_tok as u32;
-        cf[0] = C::from_i32(if dc_sign != 0 { -dc_val } else { dc_val });
+        dc_dq = (dc_dq * p.qm.unwrap()[0] as i32 + 16) >> 5;
     }
+    let max_br = if chroma { 5 } else { 8 };
+    let tcq_bit = (tcq_state & 2) >> 1;
+    let dc_val: i32;
+    if ph_state >> 18 != 0 && dc_tok > 5 {
+        // Parity hiding codes half the DC magnitude, so the high-range
+        // extension is decoded with a halved average and doubled result.
+        let hr = decode_hr(msac, hr_avg >> 1) << 1;
+        dc_tok += hr;
+        dc_val = ((dc_tok as u32).wrapping_mul(dc_dq as u32).wrapping_add(4) >> dq_shift) as i32;
+    } else if dc_tok >= max_br - tcq_en as i32 {
+        let hr = decode_hr(msac, hr_avg);
+        dc_tok += hr << tcq_en as i32;
+        dc_tok &= 0xfffff;
+        let v = (dc_tok << tcq_en as i32) - tcq_bit;
+        dc_val = imin(
+            ((((v as u32).wrapping_mul(dc_dq as u32)) & 0xffffff).wrapping_add(4) >> dq_shift)
+                as i32,
+            cf_max + dc_sign as i32,
+        );
+    } else {
+        let v = (dc_tok << tcq_en as i32) - tcq_bit;
+        dc_val = (((v as u32).wrapping_mul(dc_dq as u32)).wrapping_add(4) >> dq_shift) as i32;
+    }
+    cul_level += dc_tok as u32;
+    cf[0] = C::from_i32(if dc_sign != 0 { -dc_val } else { dc_val });
 
     *res_ctx = (cul_level.min(63) | dc_sign_level) as u8;
     eob
@@ -1693,7 +1676,12 @@ macro_rules! decode_coefs_impl {
     let ph_enabled =
         !chroma && p.parity_hiding && *txtp != txtp::IDTX as u16 && !p.lossless && eob > 3;
     let mut ph_state: u32 = if ph_enabled { 2 } else { 0 };
-    let has_qm = p.qm.is_some() && (*txtp as u8) < txtp::IDTX;
+    // QMs apply to 2D non-identity transforms only (dav2d `decode_coefs`).
+    let has_qm = p.qm.is_some()
+        && *txtp != txtp::IDTX as u16
+        && *txtp != txtp::WHT_WHT as u16
+        && tx_class != 2
+        && tx_class != 3;
     let dq_shift = tcq_en as i32 + 3 + imax(0, t_dim.ctx as i32 - 2);
     let dc_sign_level: u32 = 1 << 6;
 
@@ -2061,6 +2049,15 @@ macro_rules! decode_coefs_impl {
                         let rc = (rec & 0x1fff) as usize;
                         let mut tok = (rec >> 16) as i32;
                         let tcq_bit = ((rec >> 13) & 1) as i32;
+                        // STX coefficients are stored in scan order; the QM
+                        // weight follows the coefficient's original position.
+                        let ac_dq = match p.qm {
+                            Some(qm) if has_qm => {
+                                let qi = if is_stx { scan[rc] as usize } else { rc };
+                                (ac_dq * qm[qi] as u32 + 16) >> 5
+                            }
+                            _ => ac_dq,
+                        };
                         let ac_val: i32;
                         if hr_term && t == n - 1 {
                             let hr = decode_hr(msac, hr_avg);

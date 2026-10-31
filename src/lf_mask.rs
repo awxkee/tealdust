@@ -35,6 +35,50 @@ pub struct Av2RestorationUnit {
     pub ns_filter: [[i8; 32]; 16],
 }
 
+/// `tx_lpf_*` edge categories along tile seams, captured as each tile sbrow
+/// decodes. Block contexts reset to the maximum category at tile starts, so
+/// the masks of a tile's first column/row are built without the neighbouring
+/// tile; the deblocker clamps those edges with these (AVM takes the min of
+/// both sides' TX sizes from the real neighbouring block).
+#[derive(Default)]
+pub(crate) struct TileSeamLpf {
+    /// `[(c * 2 + chroma) * h4 + y4]`: right column of tile column `c`.
+    pub(crate) right: Vec<u8>,
+    /// `[(r * 2 + chroma) * w4 + x4]`: bottom row of tile row `r`.
+    pub(crate) bottom: Vec<u8>,
+    /// Padded frame height/width in 4px units (luma; chroma rows use the
+    /// leading part of each slot).
+    pub(crate) h4: usize,
+    pub(crate) w4: usize,
+}
+
+/// Read-only view of [`TileSeamLpf`] for the deblocker.
+#[derive(Clone, Copy)]
+pub(crate) struct TileSeams<'a> {
+    pub(crate) right: &'a [u8],
+    pub(crate) bottom: &'a [u8],
+    pub(crate) h4: usize,
+    pub(crate) w4: usize,
+}
+
+impl TileSeamLpf {
+    pub(crate) fn resize(&mut self, cols: usize, rows: usize, h4: usize, w4: usize) {
+        self.h4 = h4;
+        self.w4 = w4;
+        self.right.resize(cols.saturating_sub(1) * 2 * h4, 0);
+        self.bottom.resize(rows.saturating_sub(1) * 2 * w4, 0);
+    }
+
+    pub(crate) fn view(&self) -> TileSeams<'_> {
+        TileSeams {
+            right: &self.right,
+            bottom: &self.bottom,
+            h4: self.h4,
+            w4: self.w4,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Av2Filter {
     pub filter_y: [[[[u16; 4]; 5]; 64]; 2],
@@ -106,6 +150,17 @@ use crate::tables::{DEBLOCK_SIDE_THRESHOLDS, TxfmInfo};
 
 pub type FilterMasks = [[[u16; 4]; 5]; 64];
 
+/// ORs `v` into a mask word atomically and returns its previous value. A
+/// chroma word spans 16 4px units (128 luma px in 4:2:0), so with 64px tiles
+/// two tiles decoded on different threads update the same word.
+#[inline(always)]
+pub(crate) fn mask_or(dst: &mut u16, v: u16) -> u16 {
+    // SAFETY: `dst` is a valid, aligned u16, and every concurrent writer of
+    // the shared mask words goes through this atomic RMW.
+    unsafe { core::sync::atomic::AtomicU16::from_ptr(dst) }
+        .fetch_or(v, core::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn mask_outer_edge_l(masks: &mut [[u16; 4]], by4: i32, h4: i32, bwl4c: u8, l: &mut [u8]) {
     debug_assert!((bwl4c as u32) <= 3);
     let mut mask: u64 = 1 << by4;
@@ -113,7 +168,7 @@ pub fn mask_outer_edge_l(masks: &mut [[u16; 4]], by4: i32, h4: i32, bwl4c: u8, l
         let sidx = ((by4 as usize) + y) >> 4;
         let smask = (mask >> (sidx << 4)) as u16;
         let lvl = imin(bwl4c as i32, l as i32) as usize;
-        masks[lvl][sidx] |= smask;
+        mask_or(&mut masks[lvl][sidx], smask);
         mask <<= 1;
     }
     for dst in l[..h4 as usize].iter_mut() {
@@ -128,7 +183,7 @@ pub fn mask_outer_edge_t(masks: &mut [[u16; 4]], bx4: i32, w4: i32, bhl4c: u8, a
         let sidx = ((bx4 as usize) + x) >> 4;
         let smask = (mask >> (sidx << 4)) as u16;
         let lvl = imin(bhl4c as i32, a as i32) as usize;
-        masks[lvl][sidx] |= smask;
+        mask_or(&mut masks[lvl][sidx], smask);
         mask <<= 1;
     }
     for dst in a[..w4 as usize].iter_mut() {
@@ -155,16 +210,16 @@ pub fn mask_inner_edges_v(
     while x < w4 {
         let idx = (bx4 + x) as usize;
         if inner1 != 0 {
-            masks[0][idx][t][0] |= inner1;
+            mask_or(&mut masks[0][idx][t][0], inner1);
         }
         if inner2 != 0 {
-            masks[0][idx][t][1] |= inner2;
+            mask_or(&mut masks[0][idx][t][1], inner2);
         }
         if inner3 != 0 {
-            masks[0][idx][t][2] |= inner3;
+            mask_or(&mut masks[0][idx][t][2], inner3);
         }
         if inner4 != 0 {
-            masks[0][idx][t][3] |= inner4;
+            mask_or(&mut masks[0][idx][t][3], inner4);
         }
         x += hstep;
     }
@@ -189,16 +244,16 @@ pub fn mask_inner_edges_h(
     while y < h4 {
         let idx = (by4 + y) as usize;
         if inner1 != 0 {
-            masks[1][idx][t][0] |= inner1;
+            mask_or(&mut masks[1][idx][t][0], inner1);
         }
         if inner2 != 0 {
-            masks[1][idx][t][1] |= inner2;
+            mask_or(&mut masks[1][idx][t][1], inner2);
         }
         if inner3 != 0 {
-            masks[1][idx][t][2] |= inner3;
+            mask_or(&mut masks[1][idx][t][2], inner3);
         }
         if inner4 != 0 {
-            masks[1][idx][t][3] |= inner4;
+            mask_or(&mut masks[1][idx][t][3], inner4);
         }
         y += vstep;
     }
@@ -334,10 +389,9 @@ pub fn mask_subpu_edges(
             macro_rules! mask_subpu_v {
                 ($e:expr, $iv:expr) => {
                     if $iv != 0 {
-                        let m = masks[0][idx][t][$e];
-                        masks[0][idx][t][$e] |= $iv;
+                        let m = mask_or(&mut masks[0][idx][t][$e], $iv);
                         if (x & ds_sub_pu_mask) != 0 {
-                            masks[0][idx][4][$e] |= $iv & !m;
+                            mask_or(&mut masks[0][idx][4][$e], $iv & !m);
                         }
                     }
                 };
@@ -363,10 +417,9 @@ pub fn mask_subpu_edges(
             macro_rules! mask_subpu_h {
                 ($e:expr, $iv:expr) => {
                     if $iv != 0 {
-                        let m = masks[1][idx][t][$e];
-                        masks[1][idx][t][$e] |= $iv;
+                        let m = mask_or(&mut masks[1][idx][t][$e], $iv);
                         if (y & ds_sub_pu_mask) != 0 {
-                            masks[1][idx][4][$e] |= $iv & !m;
+                            mask_or(&mut masks[1][idx][4][$e], $iv & !m);
                         }
                     }
                 };

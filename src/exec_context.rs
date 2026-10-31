@@ -136,8 +136,8 @@ pub(crate) struct ExecContext {
     pub(crate) gdf_add_hbd: rowops_dispatch::GdfAddHbdFn,
     pub(crate) gdf_grad: rowops_dispatch::GdfGradFn,
     pub(crate) gdf_grad_hbd: rowops_dispatch::GdfGradHbdFn,
-    pub(crate) gdf_prep_pair_8bpc: rowops_dispatch::GdfPrepPair8bpcFn,
-    pub(crate) gdf_prep_pair_hbd: rowops_dispatch::GdfPrepPairHbdFn,
+    pub(crate) gdf_prep_row_8bpc: rowops_dispatch::GdfPrepRow8bpcFn,
+    pub(crate) gdf_prep_row_hbd: rowops_dispatch::GdfPrepRowHbdFn,
     pub(crate) cctx_i16: rowops_dispatch::CctxI16Fn,
 
     pub(crate) inv_wht_wht_4x4_8bpc: Option<itx_wht_dispatch::InvWht4x4Fn8bpc>,
@@ -271,8 +271,8 @@ impl ExecContext {
             gdf_add_hbd: rowops_dispatch::resolve_gdf_add_hbd(),
             gdf_grad: rowops_dispatch::resolve_gdf_grad(),
             gdf_grad_hbd: rowops_dispatch::resolve_gdf_grad_hbd(),
-            gdf_prep_pair_8bpc: rowops_dispatch::resolve_gdf_prep_pair_8bpc(),
-            gdf_prep_pair_hbd: rowops_dispatch::resolve_gdf_prep_pair_hbd(),
+            gdf_prep_row_8bpc: rowops_dispatch::resolve_gdf_prep_row_8bpc(),
+            gdf_prep_row_hbd: rowops_dispatch::resolve_gdf_prep_row_hbd(),
             cctx_i16: rowops_dispatch::resolve_cctx_i16(),
 
             inv_wht_wht_4x4_8bpc: itx_wht_dispatch::resolve_inv_wht_wht_4x4_8bpc(),
