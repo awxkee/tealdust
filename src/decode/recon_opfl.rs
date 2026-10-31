@@ -64,7 +64,7 @@ fn prep_opfl_prefetch_rect_8bpc<BD: BitDepth>(
     inter_scratch: &mut Vec<i16>,
 ) {
     let ref_stride = ref_pic.stride[0].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(0) {
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(0) {
         Some(s) => s,
         None => return,
     };
@@ -387,7 +387,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                         mc_prep_bounds_8bpc(
                             bd,
                             recon.frame.exec,
-                            &mut tmp[i],
+                            &mut tmp[i][off..],
                             yw,
                             refp[i],
                             0,
@@ -406,7 +406,6 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                             iclip(top[i] + sh4 * 4 + 7, 1, h),
                             recon.scratch.inter_mc_tmp_mut(),
                         );
-                        let _ = off;
                     }
                     update_temporal_grid(
                         recon,
@@ -811,7 +810,10 @@ where
     let tip_subpel = recon.frm_hdr.tip.subpel_filter;
     let mut opfl = recon.seq_hdr.tip_refine_mv
         && (frame_mode == 1 || tip_subpel == crate::headers::FilterMode::Sharp8Tap as u8);
-    let refine = opfl && frame_mode == 1 && fi.refdist[r0] == -fi.refdist[r1];
+    // AVM `is_refinemv_allowed_tip_blocks`: DMVR needs the sequence tool,
+    // TIP-as-reference and equal-distance references.
+    let refine =
+        opfl && recon.seq_hdr.refine_mv && frame_mode == 1 && fi.refdist[r0] == -fi.refdist[r1];
     let bw4_full = BLOCK_DIMENSIONS[bs as u8 as usize][0] as i32;
     let bh4_full = BLOCK_DIMENSIONS[bs as u8 as usize][1] as i32;
     let is_256 = bs == BlockSize::Bs256x256;
@@ -821,7 +823,25 @@ where
         ((!opfl && imin(bw4_full, bh4_full) >= 4) || is_256) as i32
     };
     let step = 2i32 << step_shift;
-    opfl &= recon.seq_hdr.opfl_refine && recon.frm_hdr.has_bothside_refs != 0;
+    // AVM `is_tip_block_with_mv_refinement`: only a refined TIP block keeps
+    // per-8x8 MVs in the TMVP field; otherwise a 16x16 unit stores its
+    // top-left 8x8 MV in all four slots.
+    let refined_tmvp = recon.frm_hdr.has_bothside_refs != 0
+        && (recon.frm_hdr.opfl_refine_type != 0 || recon.seq_hdr.refine_mv)
+        && recon.seq_hdr.tip_refine_mv
+        && cwp_idx == 8
+        && if frame_mode == 2 {
+            tip_subpel == crate::headers::FilterMode::Sharp8Tap as u8 && recon.seq_hdr.opfl_refine
+        } else {
+            !is_256 || recon.seq_hdr.refine_mv
+        };
+    // AVM `is_optflow_refinement_enabled` (TIP): the OPFL delta needs both the
+    // sequence and the frame OPFL type; the refined 8x8 path also runs for
+    // DMVR alone.
+    let do_opfl = recon.seq_hdr.opfl_refine && recon.frm_hdr.opfl_refine_type != 0;
+    opfl &= recon.frm_hdr.has_bothside_refs != 0 && cwp_idx == 8 && (do_opfl || refine);
+    // AVM `TIP_SINGLE_WTD`: not compound, ref0 is predicted straight to pixels.
+    let single = cwp_idx == 16;
 
     // BACP (block adaptive compound prediction) masked-blend predicate.
     let bacp = recon.seq_hdr.imp_msk_bld
@@ -974,7 +994,7 @@ where
                             bd.bitdepth_min_8(),
                         )
                     };
-                    if sad >= sad8x8_thr {
+                    if do_opfl && sad >= sad8x8_thr {
                         let mut res = [crate::mc::OpflRegressionData::default(); 4];
                         let o0 = ((4 + dy) * p_stride as i32 + (4 + dx)) as usize;
                         let o1 = ((4 - dy) * p_stride as i32 + (4 - dx)) as usize;
@@ -1066,9 +1086,33 @@ where
                     crate::recon::scaledown_16pel_mv_for_chroma(&mut cmv, layout);
                 } else {
                     // non-opfl: plain prep-MC, full bounds.
-                    for i in 0..2 {
+                    for i in 0..2 - single as usize {
                         let cy = cmv[i].y();
                         let cx = cmv[i].x();
+                        if single {
+                            let off = dst_off + (y * 4) as usize * y_stride + (x * 4) as usize;
+                            inter_mc_plane_8bpc(
+                                bd,
+                                recon.frame.exec,
+                                &mut recon.dst_y[off..],
+                                y_stride,
+                                refp[0],
+                                0,
+                                bx + x,
+                                by + y,
+                                step,
+                                step,
+                                cx,
+                                cy,
+                                filter,
+                                ss_hor,
+                                ss_ver,
+                                fi.bw,
+                                fi.bh,
+                                recon.scratch.inter_mc_tmp_mut(),
+                            );
+                            continue;
+                        }
                         let off = (y * 4) as usize * yw + (x * 4) as usize;
                         inter_mc_plane_prep_at_8bpc(
                             bd,
@@ -1092,6 +1136,12 @@ where
                             recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
+                    // AVM stores only the ref0 TIP MV for `TIP_SINGLE_WTD`
+                    // (an out-of-range MV quantizes to the invalid marker).
+                    let mut tmvp_mv = cmv;
+                    if single {
+                        tmvp_mv[1] = Mv::from_xy(4096, 4096);
+                    }
                     update_temporal_grid(
                         recon,
                         by + y,
@@ -1099,10 +1149,10 @@ where
                         (step >> 1) as usize,
                         (step >> 1) as usize,
                         r_pair,
-                        &cmv,
+                        &tmvp_mv,
                         t_swap,
                     );
-                    if step == 4 && frame_mode == 1 {
+                    if step == 4 && frame_mode == 1 && refined_tmvp {
                         for p in 1..4i32 {
                             let mut tmv2 = recon.rf.rp_proj[rp_proj_off
                                 + off_8x8
@@ -1166,7 +1216,9 @@ where
         // blend (COMP_INTER_NONE → COMP_INTER_AVG, cwp_idx==8).
         let have_bacp = bacp && luma_bacp;
         let (tmp0, tmp1) = tmp.split_at(1);
-        if have_bacp {
+        if single {
+            // predicted in place above
+        } else if have_bacp {
             mc_mask(
                 recon.frame.exec,
                 bd,
@@ -1178,7 +1230,7 @@ where
                 yh,
                 &seg_mask,
             );
-        } else {
+        } else if cwp_idx == 8 {
             mc_avg(
                 recon.frame.exec,
                 bd,
@@ -1188,6 +1240,19 @@ where
                 &tmp1[0],
                 yw,
                 yh,
+            );
+        } else {
+            // AVM `set_tip_interp_weight_factor`: the frame's TIP weight.
+            crate::decode::recon_intra::mc_w_avg(
+                recon.frame.exec,
+                bd,
+                &mut recon.dst_y[dst_off..],
+                y_stride,
+                &tmp0[0],
+                &tmp1[0],
+                yw,
+                yh,
+                cwp_idx,
             );
         }
         recon.scratch.put_compound_tmp(tmp);
@@ -1273,6 +1338,7 @@ where
                 true,
                 &mut seg_mask,
                 fi,
+                single.then_some(dst_off),
             );
             let use_bacp = if plane == 0 {
                 chroma_bacp = pl_bacp;
@@ -1286,7 +1352,9 @@ where
                 &mut recon.dst_v[dst_off..]
             };
             let (tmp0, tmp1) = tmp.split_at(1);
-            if use_bacp {
+            if single {
+                // predicted in place by rmv_uvpred
+            } else if use_bacp {
                 mc_mask(
                     recon.frame.exec,
                     bd,
@@ -1298,7 +1366,7 @@ where
                     ch,
                     &seg_mask,
                 );
-            } else {
+            } else if cwp_idx == 8 {
                 mc_avg(
                     recon.frame.exec,
                     bd,
@@ -1308,6 +1376,18 @@ where
                     &tmp1[0],
                     cw,
                     ch,
+                );
+            } else {
+                crate::decode::recon_intra::mc_w_avg(
+                    recon.frame.exec,
+                    bd,
+                    dst,
+                    uv_stride,
+                    &tmp0[0],
+                    &tmp1[0],
+                    cw,
+                    ch,
+                    cwp_idx,
                 );
             }
             recon.scratch.put_compound_tmp(tmp);
@@ -1368,6 +1448,7 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
     tip: bool,
     mask: &mut [u8],
     fi: &SbFrameInfo,
+    put_dst: Option<usize>,
 ) -> bool {
     let bd = recon.bd;
     let ss_hor = recon.frame.ss_hor;
@@ -1444,6 +1525,37 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
                         + (by != 0) as usize * 16
                         + (((cbx + x + bx) & 31) >> 1) as usize;
                     let rmv2 = recon.scratch.rmv[rmv2_idx];
+                    if let Some(doff) = put_dst {
+                        // Single-reference prediction straight into the plane.
+                        let uv_stride = recon.frame.uv_stride_px;
+                        let o = doff
+                            + ((y * 4 >> ss_ver) + (by * 4 >> ss_ver)) as usize * uv_stride
+                            + ((x + bx) * 4 >> ss_hor) as usize;
+                        let dst = if plane == 0 {
+                            &mut recon.dst_u[o..]
+                        } else {
+                            &mut recon.dst_v[o..]
+                        };
+                        mc_put_bounded(
+                            bd,
+                            recon.frame.exec,
+                            dst,
+                            uv_stride,
+                            ow4 >> ss_hor,
+                            oh4 >> ss_ver,
+                            (cbx + x + bx) >> ss_hor,
+                            (cby + y + by) >> ss_ver,
+                            1 + plane,
+                            rmv2[0][0].x(),
+                            rmv2[0][0].y(),
+                            refp[0],
+                            filter,
+                            [left[0], right[0], top[0], bottom[0]],
+                            recon.scratch.inter_mc_tmp_mut(),
+                        );
+                        bx += ow4;
+                        continue;
+                    }
                     for i in 0..2 {
                         let off = uvoffi + (((x + bx) * 4 >> ss_hor) as usize);
                         let mvy = rmv2[0][i].y();
@@ -1522,7 +1634,7 @@ fn prep_opfl_prefetch_8bpc<BD: crate::pixel::BitDepth>(
     inter_scratch: &mut Vec<i16>,
 ) {
     let ref_stride = ref_pic.stride[0].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(0) {
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(0) {
         Some(s) => s,
         None => return,
     };
@@ -1742,7 +1854,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
     let v_mul = 4 >> plss_ver;
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(pl) {
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
         Some(s) => s,
         None => return,
     };
@@ -1878,51 +1990,27 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
 ) {
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(pl) {
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
         Some(s) => s,
         None => return,
     };
     let mx = mvx & 15;
     let my = mvy & 15;
-    let dx = bx4 * 4 + (mvx >> 4);
-    let dy = by4 * 4 + (mvy >> 4);
     let w = (bw4 * 4) as usize;
     let h = (bh4 * 4) as usize;
     let is_bilin = filter == 3;
-
-    let need_emu = dx - (mx != 0) as i32 * 3 < left
-        || dy - (my != 0) as i32 * 3 < top
-        || dx + bw4 * 4 + (mx != 0) as i32 * 4 > right
-        || dy + bh4 * 4 + (my != 0) as i32 * 4 > bottom;
-
-    let mut emu_buf = if need_emu {
-        Some(vec![BD::Pixel::default(); 192 * 192])
-    } else {
-        None
-    };
-    let (src, src_off, src_stride) = if let Some(ref mut buf) = emu_buf {
-        let emu_w = w + (mx != 0) as usize * 7;
-        let emu_h = h + (my != 0) as usize * 7;
-        let emu_stride = 192usize;
-        let src_base = ((left + top * ref_stride as i32).max(0) as usize).min(ref_data.len());
-        inter_emu_edge_8bpc::<BD>(
-            buf,
-            emu_stride,
-            &ref_data[src_base..],
-            ref_stride,
-            emu_w,
-            emu_h,
-            (right - left).max(0) as usize,
-            (bottom - top).max(0) as usize,
-            dx - (mx != 0) as i32 * 3 - left,
-            dy - (my != 0) as i32 * 3 - top,
-        );
-        let off = emu_stride * (my != 0) as usize * 3 + (mx != 0) as usize * 3;
-        (&buf[..], off, emu_stride)
-    } else {
-        let off = dy as usize * ref_stride + dx as usize;
-        (ref_data, off, ref_stride)
-    };
+    let (src, src_off, src_stride) = bounded_mc_src::<BD>(
+        ref_data,
+        ref_stride,
+        w,
+        h,
+        mx,
+        my,
+        bx4 * 4 + (mvx >> 4),
+        by4 * 4 + (mvy >> 4),
+        [left, right, top, bottom],
+    );
+    let src = &*src;
 
     if BD::BPC == 8 {
         // SAFETY: BPC==8 => BD::Pixel == u8.
@@ -1980,6 +2068,160 @@ fn mc_opfl_8bpc<BD: crate::pixel::BitDepth>(
             my,
             filter as i32,
         );
+    }
+}
+
+/// Source window for a bounded MC at integer position (`dx`, `dy`): the
+/// reference itself, or an edge-emulated copy when the 8-tap footprint leaves
+/// `[left, right) x [top, bottom)` (`bounds`).
+#[allow(clippy::too_many_arguments)]
+fn bounded_mc_src<BD: crate::pixel::BitDepth>(
+    ref_data: &[BD::Pixel],
+    ref_stride: usize,
+    w: usize,
+    h: usize,
+    mx: i32,
+    my: i32,
+    dx: i32,
+    dy: i32,
+    bounds: [i32; 4],
+) -> (std::borrow::Cow<'_, [BD::Pixel]>, usize, usize) {
+    let [left, right, top, bottom] = bounds;
+    let need_emu = dx - (mx != 0) as i32 * 3 < left
+        || dy - (my != 0) as i32 * 3 < top
+        || dx + w as i32 + (mx != 0) as i32 * 4 > right
+        || dy + h as i32 + (my != 0) as i32 * 4 > bottom;
+    if !need_emu {
+        let off = dy as usize * ref_stride + dx as usize;
+        return (std::borrow::Cow::Borrowed(ref_data), off, ref_stride);
+    }
+    let mut buf = vec![BD::Pixel::default(); 192 * 192];
+    let emu_w = w + (mx != 0) as usize * 7;
+    let emu_h = h + (my != 0) as usize * 7;
+    let emu_stride = 192usize;
+    let src_base = ((left + top * ref_stride as i32).max(0) as usize).min(ref_data.len());
+    inter_emu_edge_8bpc::<BD>(
+        &mut buf,
+        emu_stride,
+        &ref_data[src_base..],
+        ref_stride,
+        emu_w,
+        emu_h,
+        (right - left).max(0) as usize,
+        (bottom - top).max(0) as usize,
+        dx - (mx != 0) as i32 * 3 - left,
+        dy - (my != 0) as i32 * 3 - top,
+    );
+    let off = emu_stride * (my != 0) as usize * 3 + (mx != 0) as usize * 3;
+    (std::borrow::Cow::Owned(buf), off, emu_stride)
+}
+
+/// `mc_opfl_8bpc` with single-reference rounding: writes pixels to `dst`
+/// instead of the compound intermediate (AVM TIP with `TIP_SINGLE_WTD`).
+#[allow(clippy::too_many_arguments)]
+fn mc_put_bounded<BD: crate::pixel::BitDepth>(
+    bd: BD,
+    exec: &crate::exec_context::ExecContext,
+    dst: &mut [BD::Pixel],
+    dst_stride: usize,
+    bw4: i32,
+    bh4: i32,
+    bx4: i32,
+    by4: i32,
+    pl: usize,
+    mvx: i32,
+    mvy: i32,
+    ref_pic: &crate::picture::Picture,
+    filter: u8,
+    bounds: [i32; 4],
+    inter_scratch: &mut Vec<i16>,
+) {
+    let ref_stride =
+        ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
+        Some(s) => s,
+        None => return,
+    };
+    let mx = mvx & 15;
+    let my = mvy & 15;
+    let w = (bw4 * 4) as usize;
+    let h = (bh4 * 4) as usize;
+    let (src, src_off, src_stride) = bounded_mc_src::<BD>(
+        ref_data,
+        ref_stride,
+        w,
+        h,
+        mx,
+        my,
+        bx4 * 4 + (mvx >> 4),
+        by4 * 4 + (mvy >> 4),
+        bounds,
+    );
+    let src = &*src;
+    if BD::BPC == 8 {
+        // SAFETY: BPC==8 => BD::Pixel == u8.
+        let dst8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
+        let src8: &[u8] = BD::Pixel::slice_as_ne_bytes(src);
+        if filter == 3 {
+            exec.put_bilin_8bpc_with_scratch(
+                dst8,
+                dst_stride,
+                &src8[src_off..],
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                inter_scratch,
+            );
+        } else {
+            exec.put_8tap_8bpc_with_scratch(
+                dst8,
+                dst_stride,
+                src8,
+                src_off,
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                filter as i32,
+                inter_scratch,
+            );
+        }
+    } else if let (Some(dst16), Some(src16)) = (
+        <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst),
+        <BD::Pixel as Pixel>::try_as_u16_slice(src),
+    ) {
+        if filter == 3 {
+            exec.put_bilin_hbd_with_scratch(
+                dst16,
+                dst_stride,
+                &src16[src_off..],
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                bd.bitdepth(),
+                inter_scratch,
+            );
+        } else {
+            exec.put_8tap_hbd_with_scratch(
+                dst16,
+                dst_stride,
+                src16,
+                src_off,
+                src_stride,
+                w,
+                h,
+                mx,
+                my,
+                filter as i32,
+                bd.bitdepth(),
+                inter_scratch,
+            );
+        }
     }
 }
 

@@ -619,6 +619,34 @@ impl Picture {
         Some(&samples[..len])
     }
 
+    /// Size of a plane as a reference for inter prediction: AVM decodes and
+    /// extends frames at the 8-aligned luma size (`widths`/`heights`), so
+    /// motion compensation sees the decoded rows and columns past the visible
+    /// edge. Chroma is the aligned luma size subsampled.
+    #[inline]
+    pub(crate) fn ref_plane_dims(&self, pl: usize) -> (i32, i32) {
+        let (aw, ah) = ((self.p.w + 7) & !7, (self.p.h + 7) & !7);
+        if pl == 0 {
+            return (aw, ah);
+        }
+        let ss_hor = (self.p.layout != PixelLayout::I444) as i32;
+        let ss_ver = (self.p.layout == PixelLayout::I420) as i32;
+        (aw >> ss_hor, ah >> ss_ver)
+    }
+
+    /// Typed view of a plane as a motion-compensation reference, covering the
+    /// rows of `ref_plane_dims` (which the decoder reconstructs into the
+    /// allocation's padding rows).
+    #[inline]
+    pub(crate) fn ref_plane_slice<P: crate::pixel::Pixel>(&self, pl: usize) -> Option<&[P]> {
+        debug_assert_eq!(self.bytes_per_sample(), core::mem::size_of::<P>());
+        let stride = self.stride_bytes(pl) / core::mem::size_of::<P>();
+        let rows = self.ref_plane_dims(pl).1.max(0) as usize;
+        let samples = P::slice_from_plane_storage(self.plane_storage(pl)?)?;
+        let len = (stride * rows).min(samples.len());
+        Some(&samples[..len])
+    }
+
     /// Typed mutable view of a visible plane.
     #[inline]
     pub fn plane_slice_mut<P: crate::pixel::Pixel>(&mut self, pl: usize) -> Option<&mut [P]> {

@@ -149,7 +149,7 @@ pub(crate) fn ccso_prep_lut_8bpc_sse41(
     let nq = _mm_set1_epi16((-quant_step) as i16);
     let shiftv = _mm_cvtsi32_si128(shift as i32);
 
-    for (y, dst_row) in dst.chunks_exact_mut(dst_stride).take(h).enumerate() {
+    for (y, dst_row) in dst.chunks_mut(dst_stride).take(h).enumerate() {
         let row = o + (y << ss_ver) * tmp_stride;
         let dst_row = &mut dst_row[..w];
         let n16 = {
@@ -229,7 +229,7 @@ fn ccso_add_4x4_8bpc(
     offset_map: &[i8; 256],
     xx: usize,
 ) {
-    for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+    for (yy, idx_row) in idx_rows.chunks(idx_stride).take(block_h).enumerate() {
         let dst_row = &mut dst_rows[yy * dst_stride..];
         let dst4 = &mut dst_row[xx..xx + 4].as_chunks_mut::<4>().0[0];
         let idx4 = &idx_row[xx..xx + 4].as_chunks::<4>().0[0];
@@ -271,7 +271,7 @@ pub(crate) fn ccso_add_8bpc_sse41(
         while xx + 16 <= w {
             let bx = xx >> 2;
             if ((row_mask >> bx) & 0x0f) == 0 {
-                for (yy, idx_row) in idx_rows.chunks_exact(idx_stride).take(block_h).enumerate() {
+                for (yy, idx_row) in idx_rows.chunks(idx_stride).take(block_h).enumerate() {
                     let dst_row = &mut dst_rows[yy * dst_stride..];
                     let idx16 = &idx_row[xx..xx + 16].as_chunks::<16>().0[0];
                     fill_offsets_16(&mut off_tmp, idx16, &offset_map);

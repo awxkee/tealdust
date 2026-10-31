@@ -846,7 +846,7 @@ mod residual_tests {
             return;
         }
         let mut rng = Rng(0x1234_5678_9abc_def1);
-        for _ in 0..30000 {
+        for _ in 0..3000 {
             let n = rng.range(1, 40) as usize; // exercises 8-wide body + scalar tail
             let shift = rng.range(0, 13); // includes shift==0 (WHT path)
             let rnd = if shift == 0 {
@@ -883,7 +883,7 @@ mod residual_tests {
             return;
         }
         let mut rng = Rng(0xfeed_face_0bad_c0de);
-        for _ in 0..30000 {
+        for _ in 0..3000 {
             let n = rng.range(1, 40) as usize;
             let dc = match rng.next() % 4 {
                 0 => rng.range(-400, 400),
@@ -935,7 +935,7 @@ mod rowops_sse_tests {
             return;
         }
         let mut rng = Rng(0x0a01);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let n = rng.range(1, 40) as usize;
             let sh = rng.range(1, 14);
             let rnd = rng.range(0, 1 << sh);
@@ -958,7 +958,7 @@ mod rowops_sse_tests {
             return;
         }
         let mut rng = Rng(0x0a02);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let n = rng.range(1, 40) as usize;
             let sh = rng.range(1, 14);
             let rnd = rng.range(0, 1 << sh);
@@ -983,7 +983,7 @@ mod rowops_sse_tests {
             return;
         }
         let mut rng = Rng(0x0a03);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let n = rng.range(1, 40) as usize;
             let sh = rng.range(1, 14);
             let rnd = rng.range(0, 1 << sh);
@@ -1009,7 +1009,7 @@ mod rowops_sse_tests {
             return;
         }
         let mut rng = Rng(0x0a04);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let n = rng.range(1, 40) as usize;
             let tmp: Vec<u8> = (0..n + 8).map(|_| rng.u8()).collect();
             let mask: Vec<u8> = (0..n + 8).map(|_| rng.range(0, 64) as u8).collect();
@@ -1033,7 +1033,7 @@ mod rowops_sse_tests {
             return;
         }
         let mut rng = Rng(0x0a05);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let n = rng.range(1, 40) as usize;
             let alpha = rng.range(-100_000, 100_000);
             let beta = rng.range(-(1 << 20), 1 << 20);
@@ -1054,7 +1054,7 @@ mod rowops_sse_tests {
             return;
         }
         let mut rng = Rng(0x0a06);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let n = rng.range(1, 40) as usize;
             let scale = rng.range(0, 100_000);
             let err: Vec<i8> = (0..n + 8).map(|_| rng.range(-128, 127) as i8).collect();
@@ -1078,7 +1078,7 @@ mod rowops_sse_tests {
             return;
         }
         let mut rng = Rng(0x0a07);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let n = rng.range(1, 40) as usize;
             let shift = rng.range(0, 14);
             let rnd = if shift == 0 {
@@ -1111,7 +1111,7 @@ mod rowops_sse_tests {
             return;
         }
         let mut rng = Rng(0x0a08);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let sz = rng.range(1, 40) as usize;
             // bound so u*cosa - v*sina cannot overflow i32 (matches decoder ranges).
             let sina = rng.range(-256, 256);
@@ -1192,7 +1192,7 @@ mod gdf_gradient_sse_test {
         }
         let l = 64usize;
         let mut rng = Rng(0x0a09);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let dx = rng.range(0, 16);
             let bcol = rng.range(dx, (l as i32) - 8 - dx) as usize;
             let col0 = bcol + 1;

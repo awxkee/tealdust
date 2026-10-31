@@ -194,7 +194,7 @@ pub(crate) fn put_bilin_8bpc_avx2(
     if mx != 0 && my != 0 {
         let mid_stride = w.next_multiple_of(16).max(64);
         let mid = &mut mid_scratch[..mid_stride * (h + 1)];
-        for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(h + 1).enumerate() {
+        for (y, mid_row) in mid.chunks_mut(mid_stride).take(h + 1).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, mid_chunk) in mid_chunks.iter_mut().enumerate() {
@@ -292,7 +292,7 @@ pub(crate) fn prep_bilin_8bpc_avx2(
     if mx != 0 && my != 0 {
         let mid_stride = w.next_multiple_of(16).max(64);
         let mid = &mut mid_scratch[..mid_stride * (h + 1)];
-        for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(h + 1).enumerate() {
+        for (y, mid_row) in mid.chunks_mut(mid_stride).take(h + 1).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (mid_chunks, mid_rem) = mid_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, mid_chunk) in mid_chunks.iter_mut().enumerate() {
@@ -305,7 +305,7 @@ pub(crate) fn prep_bilin_8bpc_avx2(
                 *mid_px = bilin_scalar(src_row[si] as i32, src_row[si + 1] as i32, mx) as i16;
             }
         }
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let mid_row = unsafe { mid.get_unchecked(y * mid_stride..) };
             let mid_next_row = unsafe { mid.get_unchecked((y + 1) * mid_stride..) };
             let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
@@ -333,7 +333,7 @@ pub(crate) fn prep_bilin_8bpc_avx2(
             }
         }
     } else if mx != 0 {
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
@@ -347,7 +347,7 @@ pub(crate) fn prep_bilin_8bpc_avx2(
             }
         }
     } else if my != 0 {
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
@@ -362,7 +362,7 @@ pub(crate) fn prep_bilin_8bpc_avx2(
             }
         }
     } else {
-        for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+        for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
             let src_row = unsafe { src.get_unchecked(y * src_stride..) };
             let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
             for (chunk_idx, tmp_chunk) in tmp_chunks.iter_mut().enumerate() {
@@ -451,10 +451,43 @@ fn filter_u8x8_v(src: &[u8], base: usize, stride: isize, f: &[i8; 8]) -> __m256i
     }
 }
 
+/// Whether 8-bit pixels can overflow the 16-bit `maddubs` accumulation: the
+/// 64-scale MC filters cannot, the 128-scale `EXT_WARP_FILTER` (opfl/TIP) can.
+#[inline(always)]
+fn needs_wide(f: &[i8; 8]) -> bool {
+    255 * f.iter().map(|&c| (c as i32).max(0)).sum::<i32>() > i16::MAX as i32
+}
+
+/// 8 pixels with 32-bit accumulation, for filters where `needs_wide` holds.
+#[inline]
+#[target_feature(enable = "avx2")]
+fn filter_u8x8_wide(src: &[u8], base: usize, stride: isize, f: &[i8; 8]) -> __m256i {
+    static OFFSETS: [isize; 8] = [-3isize, -2, -1, 0, 1, 2, 3, 4];
+    let mut sum = _mm256_setzero_si256();
+    for k in (0..8).step_by(2) {
+        let (c0, c1) = (f[k], f[k + 1]);
+        if c0 == 0 && c1 == 0 {
+            continue;
+        }
+        let idx0 = (base as isize + OFFSETS[k] * stride) as usize;
+        let idx1 = (base as isize + OFFSETS[k + 1] * stride) as usize;
+        let (a, b) = unsafe {
+            (
+                _mm_cvtepu8_epi16(_mm_loadl_epi64(src.get_unchecked(idx0..).as_ptr().cast())),
+                _mm_cvtepu8_epi16(_mm_loadl_epi64(src.get_unchecked(idx1..).as_ptr().cast())),
+            )
+        };
+        sum = _mm256_add_epi32(sum, madd_i16x8_pair_s32(a, b, c0 as i16, c1 as i16));
+    }
+    sum
+}
+
 #[inline]
 #[target_feature(enable = "avx2")]
 fn filter_u8x8(src: &[u8], base: usize, stride: isize, f: &[i8; 8]) -> __m256i {
-    if stride == 1 {
+    if needs_wide(f) {
+        filter_u8x8_wide(src, base, stride, f)
+    } else if stride == 1 {
         filter_u8x8_h(src, base, f)
     } else {
         filter_u8x8_v(src, base, stride, f)
@@ -492,7 +525,12 @@ fn filter_u8x16_v(src: &[u8], base: usize, stride: isize, f: &[i8; 8]) -> (__m25
 #[inline]
 #[target_feature(enable = "avx2")]
 fn filter_u8x16(src: &[u8], base: usize, stride: isize, f: &[i8; 8]) -> (__m256i, __m256i) {
-    if stride == 1 {
+    if needs_wide(f) {
+        (
+            filter_u8x8_wide(src, base, stride, f),
+            filter_u8x8_wide(src, base + 8, stride, f),
+        )
+    } else if stride == 1 {
         (filter_u8x8_h(src, base, f), filter_u8x8_h(src, base + 8, f))
     } else {
         filter_u8x16_v(src, base, stride, f)
@@ -664,7 +702,7 @@ pub(crate) fn put_8tap_8bpc_avx2(
             let mid = &mut mid_scratch[..mid_stride * tmp_h];
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(tmp_h).enumerate() {
+            for (y, mid_row) in mid.chunks_mut(mid_stride).take(tmp_h).enumerate() {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
                 let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -820,7 +858,7 @@ pub(crate) fn prep_8tap_8bpc_avx2(
             let mid = &mut mid_scratch[..mid_stride * tmp_h];
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, mid_row) in mid.chunks_exact_mut(mid_stride).take(tmp_h).enumerate() {
+            for (y, mid_row) in mid.chunks_mut(mid_stride).take(tmp_h).enumerate() {
                 let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
                 let (mid_chunks16, mid_rem16) = mid_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, mid_chunk) in mid_chunks16.iter_mut().enumerate() {
@@ -841,7 +879,7 @@ pub(crate) fn prep_8tap_8bpc_avx2(
                 }
             }
             let rnd1 = (1 << bits) >> 1;
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
                     let x = chunk_idx * 16;
@@ -877,7 +915,7 @@ pub(crate) fn prep_8tap_8bpc_avx2(
         (Some(fh), None) => {
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
@@ -902,7 +940,7 @@ pub(crate) fn prep_8tap_8bpc_avx2(
             let ss = src_stride as isize;
             let sh0 = bits - 4;
             let rnd0 = (1 << sh0) >> 1;
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
                 let (tmp_chunks16, tmp_rem16) = tmp_row[..w].as_chunks_mut::<16>();
                 for (chunk_idx, tmp_chunk) in tmp_chunks16.iter_mut().enumerate() {
@@ -924,7 +962,7 @@ pub(crate) fn prep_8tap_8bpc_avx2(
             }
         }
         (None, None) => {
-            for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(h).enumerate() {
+            for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(h).enumerate() {
                 let base = src_off + y * src_stride;
                 let src_row = unsafe { src.get_unchecked(base..) };
                 let (tmp_chunks, tmp_rem) = tmp_row[..w].as_chunks_mut::<16>();
@@ -1072,7 +1110,7 @@ pub(crate) fn warp_affine_8x8t_8bpc_avx2(
         mx += beta;
     }
 
-    for (y, tmp_row) in tmp.chunks_exact_mut(tmp_stride).take(8).enumerate() {
+    for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(8).enumerate() {
         let v = warp_vert_i16x8(&mid, y * 8, 8, my, gamma);
         store_i16x8_shift_warp(&mut tmp_row[..8], v, 64, 7);
         my += delta;

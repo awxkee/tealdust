@@ -528,18 +528,21 @@ pub(crate) fn bawp_plane<BD: BitDepth>(
             [[0, 4], [3, 3], [4, 4]],
         ],
     ];
-    // Single tile: col_start == row_start == 0.
-    let have_left = bx > 0;
-    let have_above = by > 0;
-    let lw4 = (imin(crate::intops::ulog2(w4 as u32), 2) - ss_hor) as usize;
-    let lh4 = (imin(crate::intops::ulog2(h4 as u32), 2) - ss_ver) as usize;
+    // AVM `xd->left_available` / `up_available`: neighbours inside the tile.
+    let have_left = bx > fi.tile_col_start;
+    let have_above = by > fi.tile_row_start;
+    // AVM clamps each template side to BAWP_MAX_REF_NUMB (16) samples, halved
+    // for chroma: 4:2:2 / 4:4:4 chroma sides cap at 8 like 4:2:0.
+    let max_l = if chroma { 1 } else { 2 };
+    let lw4 = imin(imin(crate::intops::ulog2(w4 as u32), 2) - ss_hor, max_l) as usize;
+    let lh4 = imin(imin(crate::intops::ulog2(h4 as u32), 2) - ss_ver, max_l) as usize;
     let idx = (have_above && have_left) as usize;
     let n_above_l2 = have_above as i32 * N_EDGE_SAMPLES[idx][lh4][lw4][0] as i32;
     let n_left_l2 = have_left as i32 * N_EDGE_SAMPLES[idx][lh4][lw4][1] as i32;
 
     let ref_stride =
         ref_pic.stride[(plane != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_base = match ref_pic.plane_slice::<BD::Pixel>(plane) {
+    let ref_base = match ref_pic.ref_plane_slice::<BD::Pixel>(plane) {
         Some(s) => s,
         None => return,
     };
@@ -659,18 +662,9 @@ pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
     let h_mul = 4 >> plss_hor;
     let v_mul = 4 >> plss_ver;
     let ref_stride = ref_pic.stride[(pl != 0) as usize].unsigned_abs() / size_of::<BD::Pixel>();
-    let ref_data: (&[BD::Pixel], i32, i32) = match ref_pic.plane_slice::<BD::Pixel>(pl) {
+    let ref_data: (&[BD::Pixel], i32, i32) = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
         Some(s) => {
-            let pw = if pl == 0 {
-                ref_pic.p.w
-            } else {
-                (ref_pic.p.w + ss_hor) >> ss_hor
-            };
-            let ph = if pl == 0 {
-                ref_pic.p.h
-            } else {
-                (ref_pic.p.h + ss_ver) >> ss_ver
-            };
+            let (pw, ph) = ref_pic.ref_plane_dims(pl);
             (s, pw, ph)
         }
         None => return,
@@ -832,18 +826,9 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
     let v_mul = 4 >> plss_ver;
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_data: (&[BD::Pixel], i32, i32) = match ref_pic.plane_slice::<BD::Pixel>(pl) {
+    let ref_data: (&[BD::Pixel], i32, i32) = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
         Some(s) => {
-            let pw = if pl == 0 {
-                ref_pic.p.w
-            } else {
-                (ref_pic.p.w + ss_hor) >> ss_hor
-            };
-            let ph = if pl == 0 {
-                ref_pic.p.h
-            } else {
-                (ref_pic.p.h + ss_ver) >> ss_ver
-            };
+            let (pw, ph) = ref_pic.ref_plane_dims(pl);
             (s, pw, ph)
         }
         None => return,
@@ -1002,7 +987,7 @@ pub(crate) fn warp_affine_plane_8bpc<BD: BitDepth>(
     let height = frame_bh * 4 >> plss_ver;
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(pl) {
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
         Some(s) => s,
         None => return,
     };
@@ -1114,7 +1099,7 @@ pub(crate) fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
     let h = frame_bh * 4 >> plss_ver;
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(pl) {
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
         Some(s) => s,
         None => return,
     };
@@ -1281,7 +1266,7 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     let height = frame_bh * 4 >> plss_ver;
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(pl) {
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
         Some(s) => s,
         None => return,
     };
@@ -1397,7 +1382,7 @@ fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     let h = frame_bh * 4 >> plss_ver;
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
-    let ref_data: &[BD::Pixel] = match ref_pic.plane_slice::<BD::Pixel>(pl) {
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
         Some(s) => s,
         None => return,
     };
@@ -1971,8 +1956,13 @@ where
             chroma_tx_cf.extend_from_slice(cf_u);
             chroma_tx_cf.extend_from_slice(cf_v);
         }
-        let chroma_txtp = recon.scratch.chroma_txtp;
-        let chroma_eob = recon.scratch.chroma_eob;
+        let meta_off = recon.scratch.chroma_tx_txtp.len() as u32;
+        let (txtp_src, eob_src) = (
+            &recon.scratch.chroma_txtp[..n_tu],
+            &recon.scratch.chroma_eob[..n_tu],
+        );
+        recon.scratch.chroma_tx_txtp.extend_from_slice(txtp_src);
+        recon.scratch.chroma_tx_eob.extend_from_slice(eob_src);
         recon.scratch.chroma_tx.push(ChromaTxRecord {
             cbx: cbx as i16,
             cby: cby as i16,
@@ -1982,8 +1972,7 @@ where
             cf_off: cf_off as u32,
             cf_len: need as u32,
             u_has_cf: recon.scratch_u_has_cf,
-            txtp: chroma_txtp,
-            eob: chroma_eob,
+            meta_off,
         });
         recon.scratch.put_chroma_cf::<BD::Coef>(cf_uv);
         return Ok(());
@@ -2010,8 +1999,10 @@ where
         let chroma_tx_cf = recon.scratch.chroma_tx_cf::<BD::Coef>();
         cf_u.copy_from_slice(&chroma_tx_cf[cf_off..cf_off + cf_len]);
         cf_v.copy_from_slice(&chroma_tx_cf[cf_off + cf_len..cf_off + cf_need]);
-        recon.scratch.chroma_txtp = rec.txtp;
-        recon.scratch.chroma_eob = rec.eob;
+        let mo = rec.meta_off as usize;
+        let scratch = &mut recon.scratch;
+        scratch.chroma_txtp[..n_tu].copy_from_slice(&scratch.chroma_tx_txtp[mo..mo + n_tu]);
+        scratch.chroma_eob[..n_tu].copy_from_slice(&scratch.chroma_tx_eob[mo..mo + n_tu]);
         recon.scratch_u_has_cf = rec.u_has_cf;
     }
 
@@ -2156,47 +2147,57 @@ fn iiblend_plane_8bpc<BD: BitDepth>(
     let w = (ssbw4 * 4) as usize;
     let h = (ssbh4 * 4) as usize;
 
+    // AVM builds the inter-intra predictor with `av2_predict_intra_block` at
+    // the plane's largest rectangular TX, so top-right / bottom-left follow
+    // the intra availability rules (incl. the fully decoded SB row above).
     let mut n_tr = 0i32;
     let mut n_bl = 0i32;
     if m0 == IntraPredMode::SmoothPred as u8 {
-        let bx4 = (bx & 63) as usize;
-        let by4 = (by & 63) as usize;
-        let sbsz = fi.sb_step;
-        if by > fi.tile_row_start {
-            let mut wv = imin(bw4, fi.tile_col_end - bx - bw4);
-            if (by & (sbsz - 1)) == 0 {
-                n_tr = 0; // top sb boundary: simplified (no a_sb_cache)
-            } else {
-                let end = imin(((bx + sbsz) & !(sbsz - 1)) + 0, fi.tile_col_end);
-                wv = imin(wv, end - bx - bw4);
-                if wv <= 0 {
-                    n_tr = 0;
-                } else {
-                    let row = ((by4 >> ss_ver) as i32 - 1) as usize;
-                    if row < 64 {
-                        n_tr = ((recon.scratch.is_coded[chroma as usize][row]
-                            >> (((bx4 + bw4 as usize) >> ss_hor) as u32))
-                            & 1) as i32;
-                    }
-                }
-            }
-        }
-        if bx > fi.tile_col_start {
-            let end = imin((by + sbsz) & !(sbsz - 1), fi.tile_row_end);
-            let hv = imin(bh4, end - by - bh4);
-            if hv <= 0 {
-                n_bl = 0;
-            } else if (bx & (sbsz - 1)) == 0 {
-                n_bl = hv;
-            } else {
-                let row = ((by4 + bh4 as usize) >> ss_ver) as usize;
-                if row < 64 {
-                    n_bl = ((recon.scratch.is_coded[chroma as usize][row]
-                        >> (((bx4 as i32 - 1) >> ss_hor) as u32))
-                        & 1) as i32;
-                }
-            }
-        }
+        let bsize = BlockSize::from_raw(if chroma { b.cbs } else { b.bs });
+        let (px, py) = (bx >> ss_hor, by >> ss_ver);
+        let (txw4, txh4) = (imin(ssbw4, 16), imin(ssbh4, 16));
+        let col_end = fi.tile_col_end >> ss_hor;
+        let row_end = fi.tile_row_end >> ss_ver;
+        let right_edge4 = col_end - px - txw4;
+        let bottom_edge4 = row_end - py - txh4;
+        n_tr = crate::intra::intra_top_right_units(
+            !chroma,
+            b.tx_part,
+            true,
+            &recon.scratch.is_coded,
+            chroma as usize,
+            fi.sb_step,
+            bsize,
+            px,
+            py,
+            0,
+            0,
+            txw4,
+            ss_hor,
+            ss_ver,
+            by > fi.tile_row_start,
+            px + txw4 < col_end,
+            right_edge4,
+        );
+        n_bl = crate::intra::intra_bottom_left_units(
+            !chroma,
+            b.tx_part,
+            true,
+            &recon.scratch.is_coded,
+            chroma as usize,
+            fi.sb_step,
+            bsize,
+            px,
+            py,
+            0,
+            0,
+            txh4,
+            ss_hor,
+            ss_ver,
+            bottom_edge4 > 0 && py + txh4 < row_end,
+            bx > fi.tile_col_start,
+            bottom_edge4,
+        );
     }
 
     let apply_ibp = recon.frame.seq_ibp && imax(ssbw4, ssbh4) > 1;
@@ -3042,8 +3043,41 @@ where
             }
         }
 
+        // AVM `singleref_for_compound`: a thin 4xN / Nx4 (N >= 16) compound
+        // block predicts its own chroma from the first reference only. 4:2:0
+        // merges such chroma into `sub8x8` above; 4:2:2 / 4:4:4 land here.
+        let thin_single =
+            imin(luma_bw4, luma_bh4) == 1 && imax(luma_bw4, luma_bh4) >= 4 && !warp_use[0];
         for pl in (1..3usize).filter(|_| !sub8x8 && do_chroma_mc) {
             let dst_off = 4 * ((cby >> ss_ver) as usize * uv_stride + (cbx >> ss_hor) as usize);
+            if thin_single {
+                let dst: &mut [BD::Pixel] = if pl == 1 {
+                    &mut recon.dst_u[dst_off..]
+                } else {
+                    &mut recon.dst_v[dst_off..]
+                };
+                inter_mc_plane_8bpc(
+                    bd,
+                    recon.frame.exec,
+                    dst,
+                    uv_stride,
+                    refp[0],
+                    pl,
+                    cbx,
+                    cby,
+                    cbw4,
+                    cbh4,
+                    mvs[0].x,
+                    mvs[0].y,
+                    filter,
+                    ss_hor,
+                    ss_ver,
+                    fi.bw,
+                    fi.bh,
+                    recon.scratch.inter_mc_tmp_mut(),
+                );
+                continue;
+            }
             let _len = crate::mc_dispatch::compound_tmp_len(cw, ch);
             let mut tmp = recon.scratch.take_compound_tmp(_len);
             let mut opfl_bacp_chroma = false;
@@ -3063,6 +3097,7 @@ where
                     false,
                     &mut seg_mask,
                     fi,
+                    None,
                 );
                 if pl == 1 {
                     chroma_bacp = opfl_bacp_chroma;

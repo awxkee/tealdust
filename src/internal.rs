@@ -224,6 +224,10 @@ pub(crate) struct ThreadPicture {
     /// Shared decoded picture pixels. Set when this slot references a fully
     /// reconstructed frame (inter reference setup / ref-list update). `None` for
     pub(crate) pic: Option<Arc<crate::picture::Picture>>,
+    /// Display order of the frame (unwrapped order hint), for output ordering.
+    pub(crate) disp_order: i64,
+    /// Whether the frame has been output; shared by every slot holding it.
+    pub(crate) out_done: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 pub(crate) struct TileGroup {

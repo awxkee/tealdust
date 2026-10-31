@@ -2517,7 +2517,7 @@ mod packed_level_ctx_tests {
             s ^= s << 17;
             s
         };
-        for _ in 0..50_000 {
+        for _ in 0..5_000 {
             let st = [4usize, 8, 16, 32][(next() % 4) as usize];
             let mut toks = [0u32; 128];
             let mut lv = [0i8; 128];

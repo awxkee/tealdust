@@ -1854,10 +1854,12 @@ impl CdfContext {
     pub(crate) fn reset_count(&mut self, is_key_or_intra: bool) {
         visit_mode_kf_entries(|o, n| entry_reset_count(&mut self.m.data, o, n));
         visit_coef_entries(|o, n| entry_reset_count(&mut self.coef.data, o, n));
+        // AVM `av2_reset_cdf_symbol_counters` resets `nmvc` and `ndvc` on
+        // every frame.
+        visit_mv_entries(|o, n| entry_reset_count(&mut self.mv.data, o, n));
         visit_mv_entries(|o, n| entry_reset_count(&mut self.dmv.data, o, n));
         if !is_key_or_intra {
             visit_mode_nonkf_entries(|o, n| entry_reset_count(&mut self.m.data, o, n));
-            visit_mv_entries(|o, n| entry_reset_count(&mut self.mv.data, o, n));
         }
     }
 
@@ -1881,6 +1883,38 @@ impl CdfContext {
         avg(&mut self.coef.data, &src1_coef.data, &src2_coef.data);
         avg(&mut self.mv.data, &src1_mv.data, &src2_mv.data);
         avg(&mut self.dmv.data, &src1_dmv.data, &src2_dmv.data);
+    }
+
+    /// AVM `decoder_avg_tiles_cdfs`: the frame CDFs are the average of the
+    /// first `1 << log2` tiles' CDFs, each tile shifted down by `log2` and
+    /// summed. Rate bytes in the counter slots are identical across tiles and
+    /// survive the shift-and-sum unchanged.
+    pub(crate) fn tile_average<'a>(tiles: impl Iterator<Item = &'a CdfContext>, log2: u32) -> Self {
+        fn acc(dst: &mut [u16], src: &[u16], log2: u32) {
+            for (d, &s) in dst.iter_mut().zip(src) {
+                *d += s >> log2;
+            }
+        }
+        let mut tiles = tiles;
+        let first = tiles.next().expect("at least one tile CDF");
+        let mut out = first.clone();
+        for d in out
+            .m
+            .data
+            .iter_mut()
+            .chain(out.coef.data.iter_mut())
+            .chain(out.mv.data.iter_mut())
+            .chain(out.dmv.data.iter_mut())
+        {
+            *d >>= log2;
+        }
+        for t in tiles {
+            acc(&mut out.m.data, &t.m.data, log2);
+            acc(&mut out.coef.data, &t.coef.data, log2);
+            acc(&mut out.mv.data, &t.mv.data, log2);
+            acc(&mut out.dmv.data, &t.dmv.data, log2);
+        }
+        out
     }
 }
 

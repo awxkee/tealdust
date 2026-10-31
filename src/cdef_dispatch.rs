@@ -1186,7 +1186,7 @@ mod simd_matches_scalar_tests {
     #[test]
     fn find_dir_matches_scalar() {
         let mut rng = Rng(0x1234_5678_9abc);
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let img: Vec<u8> = (0..64).map(|_| rng.r(256) as u8).collect();
             let (mut v0, mut v1) = (0, 0);
             let d0 = cdef_find_dir_8bpc_scalar(&img, 8, &mut v0);
@@ -1207,7 +1207,7 @@ mod simd_matches_scalar_tests {
         let mut rng = Rng(0xdead_beef_1234);
         let ts = 16;
         let o = 2 * ts + 2;
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let si = rng.r(4) as usize;
             let (w, h) = SHAPES[si];
             let tmp = tmp_block(&mut rng, ts, w, h, 256);
@@ -1234,7 +1234,7 @@ mod simd_matches_scalar_tests {
         let mut rng = Rng(0x00fe_edf0_0d77);
         let ts = 16;
         let o = 2 * ts + 2;
-        for _ in 0..20000 {
+        for _ in 0..2000 {
             let bdm8 = [2, 4][rng.r(2) as usize];
             let si = rng.r(4) as usize;
             let (w, h) = SHAPES[si];

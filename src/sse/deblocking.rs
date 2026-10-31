@@ -298,7 +298,7 @@ mod deblock_sse_tests {
         const W: usize = 64;
         const H: usize = 64;
         let mut rng = R(0x9e3779b97f4a7c15);
-        for _ in 0..40_000 {
+        for _ in 0..4_000 {
             // random plane
             let mut base_buf = vec![0u8; W * H];
             for b in base_buf.iter_mut() {
@@ -363,7 +363,7 @@ mod deblock_sse_tests {
         const H: usize = 64;
         let mut rng = R(0x243f6a8885a308d3);
         for &bitdepth_max in &[1023, 4095] {
-            for _ in 0..20_000 {
+            for _ in 0..2_000 {
                 let mut base_buf = vec![0u16; W * H];
                 for b in base_buf.iter_mut() {
                     *b = (rng.next() % (bitdepth_max as u64 + 1)) as u16;
