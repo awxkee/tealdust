@@ -765,6 +765,9 @@ pub(crate) struct DeblockCtx<'a> {
     pub(crate) y_stride: isize,
     pub(crate) uv_stride: isize,
     pub(crate) layout: PixelLayout,
+    /// `disable_loopfilters_across_tiles`: tile seam edges are not filtered
+    /// (AVM `set_lpf_parameters` / `filter_block_plane_*` skip them).
+    pub(crate) no_lf_across_tiles: bool,
 }
 
 /// Sub-PU shift for a (q_thr, side_thr) pair; a zero side_thr disables
@@ -1554,6 +1557,7 @@ fn deblock64_cols<BD: BitDepth>(
         for x64 in 0..n64 {
             let col_seam = tile_col_seam(ctx, x64);
             let have_left = x64 > 0;
+            let skip_seam = ctx.no_lf_across_tiles && col_seam.is_some();
             let col = lflvl_row + (x64 >> 2) as usize;
             if col >= ctx.mask.len() {
                 break;
@@ -1642,7 +1646,7 @@ fn deblock64_cols<BD: BitDepth>(
             let cur_off = y_off + (x64 as usize) * 64;
             let ls = ctx.y_stride;
             for x in 0..w4 as usize {
-                if !have_left && x == 0 {
+                if (!have_left || skip_seam) && x == 0 {
                     continue;
                 }
                 let hmask = &col_lflvl.filter_y[0][bx4_base + x];
@@ -1720,6 +1724,7 @@ fn deblock64_cols<BD: BitDepth>(
     for x64 in 0..n64 {
         let col_seam = tile_col_seam(ctx, x64);
         let have_left = x64 > 0;
+        let skip_seam = ctx.no_lf_across_tiles && col_seam.is_some();
         let col = lflvl_row + (x64 >> 2) as usize;
         if col >= ctx.mask.len() {
             break;
@@ -1820,7 +1825,7 @@ fn deblock64_cols<BD: BitDepth>(
         let mask_shift: u32 = if (y64 & 3) & ctx.ss_ver != 0 { 8 } else { 0 };
         let bytes_mask: u32 = if ctx.ss_ver != 0 { 0xff } else { 0xffff };
         for x in 0..uv_w4 as usize {
-            if !have_left && x == 0 {
+            if (!have_left || skip_seam) && x == 0 {
                 continue;
             }
             let hmask = &col_lflvl.filter_uv[0][bx4_base + x];
@@ -1902,6 +1907,7 @@ fn deblock64_rows<BD: BitDepth>(
     let seg_enabled = !ctx.cur_segmap.is_empty();
     let any_lossless = ctx.frame_hdr.any_lossless != 0;
     let row_seam = tile_row_seam(ctx, y64);
+    let skip_seam = ctx.no_lf_across_tiles && row_seam.is_some();
 
     // above SB256 row for cross-SB-row context (single tile: prev mask row).
     let a_row: Option<usize> = if have_top {
@@ -2037,7 +2043,7 @@ fn deblock64_rows<BD: BitDepth>(
             let cur_off = y_off + (x64 as usize) * 64;
             let ls = ctx.y_stride;
             for y in 0..h4 as usize {
-                if !have_top && y == 0 {
+                if (!have_top || skip_seam) && y == 0 {
                     continue;
                 }
                 let row = &col_lflvl.filter_y[1][starty4 + y];
@@ -2223,7 +2229,7 @@ fn deblock64_rows<BD: BitDepth>(
         let mask_shift: u32 = if (x64 & 3) & ctx.ss_hor != 0 { 8 } else { 0 };
         let bytes_mask: u32 = if ctx.ss_hor != 0 { 0xff } else { 0xffff };
         for y in 0..uv_h4 as usize {
-            if !have_top && y == 0 {
+            if (!have_top || skip_seam) && y == 0 {
                 continue;
             }
             let row = &col_lflvl.filter_uv[1][(starty4 >> ctx.ss_ver) + y];

@@ -538,6 +538,53 @@ pub(crate) struct CcsoCfg {
     pub(crate) p: [CcsoPlaneCfg; 3],
 }
 
+/// Interior tile seams that CDEF must not filter across
+/// (`disable_loopfilters_across_tiles`). AVM's `cdef_prepare_fb` pads a tile
+/// edge with `CDEF_VERY_LARGE` exactly like a frame edge, so a block touching a
+/// seam loses the corresponding `CDEF_HAVE_*` flag. Starts are in superblocks.
+#[derive(Clone, Copy)]
+pub(crate) struct CdefTileEdges<'a> {
+    /// `col_start_sb[1..cols]`: interior tile column starts.
+    pub(crate) col_start_sb: &'a [u16],
+    /// `row_start_sb[1..rows]`: interior tile row starts.
+    pub(crate) row_start_sb: &'a [u16],
+    /// Superblock size in 4px units (`16 << sb128`).
+    pub(crate) sb_step: i32,
+}
+
+impl CdefTileEdges<'_> {
+    #[inline]
+    fn is_seam(starts: &[u16], sb_step: i32, pos_b4: i32) -> bool {
+        pos_b4 % sb_step == 0 && starts.iter().any(|&s| s as i32 * sb_step == pos_b4)
+    }
+
+    /// `CDEF_HAVE_TOP`/`CDEF_HAVE_BOTTOM` bits to clear for the 8px block row at `by`.
+    #[inline]
+    fn row_mask(&self, by: i32) -> u8 {
+        let mut m = 0;
+        if Self::is_seam(self.row_start_sb, self.sb_step, by) {
+            m |= CDEF_HAVE_TOP;
+        }
+        if Self::is_seam(self.row_start_sb, self.sb_step, by + 2) {
+            m |= CDEF_HAVE_BOTTOM;
+        }
+        m
+    }
+
+    /// `CDEF_HAVE_LEFT`/`CDEF_HAVE_RIGHT` bits to clear for the 8px block at `bx`.
+    #[inline]
+    fn col_mask(&self, bx: i32) -> u8 {
+        let mut m = 0;
+        if Self::is_seam(self.col_start_sb, self.sb_step, bx) {
+            m |= CDEF_HAVE_LEFT;
+        }
+        if Self::is_seam(self.col_start_sb, self.sb_step, bx + 2) {
+            m |= CDEF_HAVE_RIGHT;
+        }
+        m
+    }
+}
+
 pub(crate) struct CdefBrowParams<'a> {
     pub(crate) bw: i32,
     pub(crate) bh: i32,
@@ -556,6 +603,8 @@ pub(crate) struct CdefBrowParams<'a> {
     pub(crate) any_lossless: bool,
     /// CCSO config; `None` when CCSO is disabled for this frame.
     pub(crate) ccso: Option<CcsoCfg>,
+    /// Tile seams CDEF treats as frame edges; `None` when filtering across tiles.
+    pub(crate) tile_edges: Option<CdefTileEdges<'a>>,
 }
 
 pub(crate) struct CdefPlaneSetMut<'a, P: Pixel> {
@@ -872,6 +921,10 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
             if by + 2 >= p.bh {
                 edges &= !CDEF_HAVE_BOTTOM;
             }
+            // Tile seams only narrow what the CDEF kernels may read; `edges`
+            // itself keeps driving the 2x8 backups and CCSO, whose tile-edge
+            // handling differs (AVM replicates the tile border for CCSO).
+            let tile_row_mask = p.tile_edges.map_or(0, |t| t.row_mask(by));
 
             let _ = (sbrow_start, by_end);
 
@@ -1087,6 +1140,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                             }
                         }
 
+                        let fedges =
+                            edges & !(tile_row_mask | p.tile_edges.map_or(0, |t| t.col_mask(bx)));
+
                         let y_filter_active = !y_lossless && (y_pri_lvl != 0 || y_sec_lvl != 0);
                         let uv_filter_active = uv_lvl != 0 && have_chroma && !uv_lossless;
                         let need_dir = (y_pri_lvl != 0 && y_filter_active)
@@ -1107,7 +1163,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                             let adj = adjust_strength(y_pri_lvl, variance);
                             if y_filter_active && (adj != 0 || y_sec_lvl != 0) {
                                 let (y_bottom, y_bottom_off, y_bottom_stride) =
-                                    saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, edges);
+                                    saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, fedges);
                                 cdef_filter_block(
                                     bd,
                                     exec,
@@ -1126,12 +1182,12 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                     damping,
                                     8,
                                     8,
-                                    edges,
+                                    fedges,
                                 );
                             }
                         } else if y_filter_active {
                             let (y_bottom, y_bottom_off, y_bottom_stride) =
-                                saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, edges);
+                                saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, fedges);
                             cdef_filter_block(
                                 bd,
                                 exec,
@@ -1150,7 +1206,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                 damping,
                                 8,
                                 8,
-                                edges,
+                                fedges,
                             );
                         }
 
@@ -1164,9 +1220,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                             let ch = 8 >> ss_ver;
                             let top_col_uv = (bx as usize * 4) >> ss_hor;
                             let (u_bottom, u_bottom_off, u_bottom_stride) =
-                                saved_bottom_ref(cdef_top, ru, 1, top_col_uv, uv_ls, edges);
+                                saved_bottom_ref(cdef_top, ru, 1, top_col_uv, uv_ls, fedges);
                             let (v_bottom, v_bottom_off, v_bottom_stride) =
-                                saved_bottom_ref(cdef_top, ru, 2, top_col_uv, uv_ls, edges);
+                                saved_bottom_ref(cdef_top, ru, 2, top_col_uv, uv_ls, fedges);
                             cdef_filter_block(
                                 bd,
                                 exec,
@@ -1185,7 +1241,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                 damping - 1,
                                 cw,
                                 ch,
-                                edges,
+                                fedges,
                             );
                             cdef_filter_block(
                                 bd,
@@ -1205,7 +1261,7 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                 damping - 1,
                                 cw,
                                 ch,
-                                edges,
+                                fedges,
                             );
                         }
 

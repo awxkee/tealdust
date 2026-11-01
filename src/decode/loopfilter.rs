@@ -579,6 +579,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
             y_stride: fp.y_stride,
             uv_stride: fp.uv_stride,
             layout: seq_hdr.layout,
+            no_lf_across_tiles: seq_hdr.disable_loopfilters_across_tiles,
         };
         let _ = start_of_tile_row;
         if stages & (STAGE_DEBLOCK | STAGE_DEBLOCK_COLS) != 0 {
@@ -678,6 +679,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
         ];
         let any_lossless = frame_hdr.segmentation.enabled != 0
             && (0..MAX_SEGMENTS).any(|i| frame_hdr.segmentation.lossless[i] != 0);
+        let cdef_tiles = cdef_tile_edges(seq_hdr, frame_hdr, sb_step);
 
         let _ = (fp.y_stride, fp.uv_stride);
         // Seam line buffers (`cdef_line`/`cdef_top`) are pre-sized once by the
@@ -701,6 +703,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                     uv_strength: &fp.cdef_uv_strength,
                     any_lossless,
                     ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
+                    tile_edges: cdef_tiles,
                 };
                 crate::cdef::cdef_brow_8bpc(
                     exec,
@@ -745,6 +748,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                 uv_strength: &fp.cdef_uv_strength,
                 any_lossless,
                 ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
+                tile_edges: cdef_tiles,
             };
             crate::cdef::cdef_brow_8bpc(
                 exec,
@@ -995,6 +999,7 @@ fn filter_sb64_hbd(
             y_stride,
             uv_stride,
             layout: seq_hdr.layout,
+            no_lf_across_tiles: seq_hdr.disable_loopfilters_across_tiles,
         };
         let _ = start_of_tile_row;
         if stages & (STAGE_DEBLOCK | STAGE_DEBLOCK_COLS) != 0 {
@@ -1092,6 +1097,7 @@ fn filter_sb64_hbd(
         ];
         let any_lossless = frame_hdr.segmentation.enabled != 0
             && (0..MAX_SEGMENTS).any(|i| frame_hdr.segmentation.lossless[i] != 0);
+        let cdef_tiles = cdef_tile_edges(seq_hdr, frame_hdr, sb_step);
 
         let mut start = by64 * 16;
         let mut n_blks = 16 - 2 * ((by64 + 1 < sb64h) as i32);
@@ -1110,6 +1116,7 @@ fn filter_sb64_hbd(
                     uv_strength: &fp.cdef_uv_strength,
                     any_lossless,
                     ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
+                    tile_edges: cdef_tiles,
                 };
                 crate::cdef::cdef_brow(
                     bd,
@@ -1155,6 +1162,7 @@ fn filter_sb64_hbd(
                 uv_strength: &fp.cdef_uv_strength,
                 any_lossless,
                 ccso: ccso_on.then_some(crate::cdef::CcsoCfg { p: ccso_pcfg }),
+                tile_edges: cdef_tiles,
             };
             crate::cdef::cdef_brow(
                 bd,
@@ -1297,6 +1305,24 @@ fn filter_sb64_hbd(
         });
     }
 }
+
+/// Interior tile seams for CDEF when the sequence disables loop filtering across
+/// tiles (AVM `cdef_prepare_fb` pads them like frame edges).
+fn cdef_tile_edges<'a>(
+    seq_hdr: &crate::headers::SequenceHeader,
+    frame_hdr: &'a crate::headers::FrameHeader,
+    sb_step: i32,
+) -> Option<crate::cdef::CdefTileEdges<'a>> {
+    let t = &frame_hdr.tiling.t;
+    (seq_hdr.disable_loopfilters_across_tiles && (t.cols > 1 || t.rows > 1)).then(|| {
+        crate::cdef::CdefTileEdges {
+            col_start_sb: &t.col_start_sb[1..t.cols as usize],
+            row_start_sb: &t.row_start_sb[1..t.rows as usize],
+            sb_step,
+        }
+    })
+}
+
 /// Borrow the per-SB256 filter-mask row directly.
 pub(crate) fn filter_mask_row(
     mask: &[crate::lf_mask::Av2Filter],
