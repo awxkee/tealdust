@@ -498,7 +498,7 @@ pub fn transpose_lossless_mask(
 }
 
 use crate::headers::{FrameHeader, PixelLayout, SequenceHeader};
-use crate::levels::{Av2Block, BlockSize, CompInterPredMode, CompInterType, TIP_FRAME, TxfmSize};
+use crate::levels::{Av2Block, BlockSize, CompInterType, TIP_FRAME, TxfmSize};
 use crate::tables::{BLOCK_DIMENSIONS, MAX_TXFM_SIZE_FOR_BS, TX_PART_TBL, TXFM_DIMENSIONS};
 
 const FILTER_8TAP_SHARP: u8 = 2;
@@ -525,7 +525,7 @@ fn subpu_flt_lvl(
         };
     } else if r[1] != -1 {
         let inter = *b.inter_data();
-        if inter.inter_mode >= CompInterPredMode::OpflNearMvNearMv as u8 {
+        if inter.is_opfl() {
             return 1 - (bs == BlockSize::Bs8x8) as i32;
         } else if inter.refine_mv != 0 && inter.comp_type == CompInterType::Avg as u8 {
             return 2;

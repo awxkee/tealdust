@@ -184,9 +184,17 @@ impl Decoder {
             exec: exec.clone(),
             seq_hdr: None,
             frame_hdr: None,
+            mfh: [None; crate::headers::MAX_MFH_NUM],
+            qm_list: Default::default(),
+            qm_protected: 0,
             tile: Vec::new(),
             n_tile_data: 0,
             n_tiles: 0,
+            frame_hdr_bits: 0,
+            seen_vcl_in_tu: false,
+            olk_encountered: false,
+            olk_refresh: [-1; 8],
+            olk_co_vcl_refresh: [-1; 8],
             refs: Default::default(),
             content_light: None,
             mastering_display: None,
@@ -260,7 +268,9 @@ impl Decoder {
     pub fn get_picture(&mut self) -> Result<Picture, TealdustError> {
         self.gen_picture()?;
 
-        if self.drain {
+        // Only flush waiting frames once all queued input is parsed, or they
+        // overtake frames still in that input (dav2d 73a4811208).
+        if self.drain && !self.input.has_data() {
             crate::output_order::flush_remaining(&mut self.ctx);
             self.enqueue_frame_out();
         }
@@ -387,10 +397,17 @@ impl Decoder {
 
         self.ctx.frame_hdr = None;
         self.ctx.seq_hdr = None;
+        self.ctx.mfh = [None; crate::headers::MAX_MFH_NUM];
+        self.ctx.qm_list = Default::default();
+        self.ctx.qm_protected = 0;
         self.ctx.tile.clear();
         self.ctx.tile.shrink_to_fit();
         self.ctx.n_tile_data = 0;
         self.ctx.n_tiles = 0;
+        self.ctx.seen_vcl_in_tu = false;
+        self.ctx.olk_encountered = false;
+        self.ctx.olk_refresh = [-1; 8];
+        self.ctx.olk_co_vcl_refresh = [-1; 8];
         self.ctx.frame_out.clear();
         self.ctx.frame_out.shrink_to_fit();
 

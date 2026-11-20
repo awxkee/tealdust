@@ -214,7 +214,8 @@ pub(crate) fn decode_frame_init(
     a: &mut Vec<BlockContext>,
     a_sz: &mut i32,
     dq: &mut [[[u32; 2]; 3]; MAX_SEGMENTS],
-    qm: &mut [[Option<&'static [u8]>; 3]; crate::levels::N_RECT_TX_SIZES],
+    qm: &mut [[Option<crate::quantizer::QmTable>; 3]; crate::levels::N_RECT_TX_SIZES],
+    qm_list: &[crate::quantizer::QmSet; crate::quantizer::NUM_CUSTOM_QMS],
     absrefdist: &[u8; 7],
     sbh: i32,
     sb256w: i32,
@@ -318,9 +319,21 @@ pub(crate) fn decode_frame_init(
             frame_hdr.quant.qm.u[0],
             frame_hdr.quant.qm.v[0],
         ];
+        // AVM setup_qm: a level replaced by a user-defined QM OBU uses it for
+        // 4x4/8x8/4x8/8x4 and keeps the predefined tables for other sizes.
         for (tx, planes) in qm.iter_mut().enumerate() {
             for (pl, slot) in planes.iter_mut().enumerate() {
-                *slot = tables.get(levels[pl], pl != 0, tx);
+                let lvl = levels[pl] as usize;
+                let user = qm_list
+                    .get(lvl)
+                    .filter(|s| s.user)
+                    .and_then(|s| crate::quantizer::user_qm_table(s, pl, tx));
+                *slot = match user {
+                    Some(v) => Some(crate::quantizer::QmTable::Owned(v.into())),
+                    None => tables
+                        .get(levels[pl], pl != 0, tx)
+                        .map(crate::quantizer::QmTable::Static),
+                };
             }
         }
     }

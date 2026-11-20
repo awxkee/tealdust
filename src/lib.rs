@@ -97,6 +97,7 @@ pub(crate) mod qm_tables;
 pub(crate) mod quantizer;
 pub(crate) mod recon;
 pub(crate) mod refmvs;
+pub(crate) mod scale;
 pub(crate) mod scan;
 pub(crate) mod stx;
 pub(crate) mod stx_tables;

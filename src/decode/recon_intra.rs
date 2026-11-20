@@ -828,8 +828,14 @@ where
                     // (AVM `av2_get_tx_type`): chroma inherits the co-located luma
                     // type, per TU when chroma and luma share the block size,
                     // otherwise the coding block's origin type.
+                    // In a lossless segment of an intra frame AVM takes the
+                    // origin type even then (dav2d c3de036db0).
+                    // A lossless block with a transform larger than 4x4 uses
+                    // IDTX for chroma (AVM av2_get_tx_type).
                     let mut txtp: u16 = if is_intrabc && !is_intra {
-                        if b.bs == b.cbs {
+                        if lossless && b.tx_size_ll != 0 {
+                            crate::levels::txtp::IDTX as u16
+                        } else if b.bs == b.cbs && (!lossless || fi.is_inter_or_switch) {
                             let lbx = cbx + (x << ss_hor);
                             let lby = cby + (y << ss_ver);
                             recon.scratch.txtp_map[(lby & 15) as usize * 16 + (lbx & 15) as usize]
@@ -1189,6 +1195,7 @@ where
                         txtp,
                         eob as i32,
                         uvtx,
+                        lossless,
                         &mut recon.scratch.itx_tmp,
                     );
                 }
@@ -1936,6 +1943,7 @@ where
             txtp,
             eob,
             tx,
+            lossless,
             &mut recon.scratch.itx_tmp,
         );
     }
@@ -2195,6 +2203,32 @@ pub(crate) struct SbCtx<'a, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>> {
     /// Chroma loop-restoration read to run between the SDP luma and chroma
     /// trees of a 64x64 superblock root (entropy pass only).
     pub(crate) sdp_lr: Option<crate::decode::SdpLrRead<'a>>,
+    /// Monochrome only: AVM still derives 4:2:0 chroma-reference groups
+    /// (`chroma_ref_info.offset_started`), which make the blocks of a group
+    /// inter. `(offset_started, bsize, partition)` of the parent node, and the
+    /// flag of the block being decoded.
+    pub(crate) mono_parent: (bool, BlockSize, BlockPartition),
+    pub(crate) mono_block_os: bool,
+}
+
+/// AVM `have_nz_chroma_ref_offset` for 4:2:0 subsampling (monochrome).
+fn mono_nz_chroma_ref_offset(bs: BlockSize, bp: BlockPartition) -> bool {
+    if bs == BlockSize::Invalid {
+        return false;
+    }
+    let d = &BLOCK_DIMENSIONS[bs as u8 as usize];
+    let (bw, bh) = (d[0] as i32 * 2, d[1] as i32 * 2); // chroma px
+    match bp {
+        BlockPartition::None => bw < 4 || bh < 4,
+        BlockPartition::H => bw < 4 || bh < 8,
+        BlockPartition::V => bw < 8 || bh < 4,
+        BlockPartition::Split => bw < 8 || bh < 8,
+        BlockPartition::H4A | BlockPartition::H4B => bw < 4 || bh < 32,
+        BlockPartition::V4A | BlockPartition::V4B => bw < 32 || bh < 4,
+        BlockPartition::H3 => bw < 8 || bh < 16,
+        BlockPartition::V3 => bw < 16 || bh < 8,
+        BlockPartition::Invalid => false,
+    }
 }
 
 pub fn decode_sb<BD: BitDepth, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
@@ -2225,6 +2259,17 @@ where
     let have_h_split = ctx.fi.bw > *ctx.bx + hw4;
     let have_v_split = ctx.fi.bh > *ctx.by + hh4;
     let cbs_orig = cbs;
+
+    // Monochrome chroma-reference grouping (AVM set_chroma_ref_info, 4:2:0).
+    let mono_saved = ctx.mono_parent;
+    let node_os = !ctx.fi.has_chroma_layout && {
+        let (pos, pbs, pbp) = mono_saved;
+        // 8x8 children of an 8x32 HORZ_3 / 32x8 VERT_3 are their own chroma refs.
+        let own_ref = bs == BlockSize::Bs8x8
+            && ((pbp == BlockPartition::H3 && pbs == BlockSize::Bs8x32)
+                || (pbp == BlockPartition::V3 && pbs == BlockSize::Bs32x8));
+        pos || (!own_ref && mono_nz_chroma_ref_offset(pbs, pbp))
+    };
 
     if lbs == BlockSize::Bs64x64
         && cbs == BlockSize::Bs64x64
@@ -2270,6 +2315,10 @@ where
     if bs == cbs {
         *ctx.cbx = *ctx.bx;
         *ctx.cby = *ctx.by;
+    }
+    ctx.mono_parent = (node_os, bs, bp);
+    if bp == BlockPartition::None {
+        ctx.mono_block_os = node_os || mono_nz_chroma_ref_offset(bs, BlockPartition::None);
     }
 
     let lim = &PARTITION_LIM[bp as u8 as usize];
@@ -2685,5 +2734,6 @@ where
         *ctx.intra_region = 0;
     }
 
+    ctx.mono_parent = mono_saved;
     Ok(())
 }

@@ -315,6 +315,21 @@ impl<'a> GetBits<'a> {
         self.state = 0;
     }
 
+    /// Number of bits consumed so far.
+    #[inline]
+    pub(crate) fn bit_pos(&self) -> usize {
+        self.ptr * 8 - self.bits_left as usize
+    }
+
+    /// Skips `n` bits (used to skip a repeated frame header).
+    pub(crate) fn skip_bits(&mut self, mut n: usize) {
+        while n > 0 && !self.error {
+            let k = n.min(16);
+            self.get_bits(k as i32);
+            n -= k;
+        }
+    }
+
     #[inline]
     pub(crate) fn byte_pos(&self) -> usize {
         self.ptr

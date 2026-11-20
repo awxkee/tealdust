@@ -1892,7 +1892,8 @@ pub(crate) struct LrContext<'a> {
     pub(crate) restoration_p: &'a [FhRestorationPlane; 3],
     pub(crate) gdf_qp_idx: i32,
     pub(crate) gdf_scale: i32,
-    pub(crate) sb128: bool,
+    /// Frame SB size: 0/1/2 for 64/128/256 px.
+    pub(crate) sb128: i32,
     pub(crate) cfl_ds_filter_index: i32,
     pub(crate) layout: PixelLayout,
     pub(crate) bw: i32,
@@ -1945,7 +1946,7 @@ fn lr_stripe_8bpc(
     let ss_hor = chroma & (ctx.layout != PixelLayout::I444) as i32;
     let stride = ctx.cur_stride[chroma as usize];
     let abs_stride = stride.unsigned_abs();
-    let sby = (y + if y != 0 { 8 << ss_ver } else { 0 }) >> (6 - ss_ver + ctx.sb128 as i32);
+    let sby = (y + if y != 0 { 8 << ss_ver } else { 0 }) >> (6 - ss_ver + ctx.sb128);
     let have_tt = (ctx.n_tc > 1) as i32;
     let sb256x = (x << ss_hor) >> 8;
     let sb64x_idx = ((x << ss_hor) >> 6) & 3;
@@ -2028,10 +2029,10 @@ fn lr_stripe_8bpc(
     // local stripe-relative `y`, so this must track the stripe origin.
     let mut cur_off = p_off;
     let mut lpf_off =
-        (have_tt as isize * (sby as isize * (4 << ctx.sb128 as i32) - 4) * stride_u as isize
+        (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * stride_u as isize
             + x as isize) as usize;
     let mut llpf_off =
-        (have_tt as isize * (sby as isize * (4 << ctx.sb128 as i32) - 4) * lstride_u as isize
+        (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * lstride_u as isize
             + (x << ss_hor) as isize) as usize;
 
     while y + stripe_h <= row_h {
@@ -2658,10 +2659,10 @@ pub(crate) fn lr_sbrow_8bpc(ctx: &LrContext, dst: &mut [&mut [u8]; 3], sby: i32)
         let ss_hor = (ctx.layout != PixelLayout::I444) as i32;
         let h = (ctx.bh * 4) >> ss_ver;
         let w = (ctx.bw * 4) >> ss_hor;
-        let next_row_y = (sby + 1) << ((6 - ss_ver) + ctx.sb128 as i32);
+        let next_row_y = (sby + 1) << ((6 - ss_ver) + ctx.sb128);
         let row_h = imin(next_row_y - (8 >> ss_ver) * not_last, h);
         let offset_uv = (8 * (sby != 0) as i32) >> ss_ver;
-        let mut y_stripe = (sby << ((6 - ss_ver) + ctx.sb128 as i32)) - offset_uv;
+        let mut y_stripe = (sby << ((6 - ss_ver) + ctx.sb128)) - offset_uv;
 
         if sby != 0 && first_sby_in_tile_row_flag != 0 {
             let first_top = if first_sby_in_tile_row_flag != 0 {
@@ -2742,10 +2743,10 @@ pub(crate) fn lr_sbrow_8bpc(ctx: &LrContext, dst: &mut [&mut [u8]; 3], sby: i32)
     if restore_planes & LR_RESTORE_Y != 0 {
         let h = ctx.bh * 4;
         let w = ctx.bw * 4;
-        let next_row_y = (sby + 1) << (6 + ctx.sb128 as i32);
+        let next_row_y = (sby + 1) << (6 + ctx.sb128);
         let row_h = imin(next_row_y - 8 * not_last, h);
         let offset_y = 8 * (sby != 0) as i32;
-        let mut y_stripe = (sby << (6 + ctx.sb128 as i32)) - offset_y;
+        let mut y_stripe = (sby << (6 + ctx.sb128)) - offset_y;
 
         if sby != 0 && first_sby_in_tile_row_flag != 0 {
             let abs_stride_y = dst_stride[0].unsigned_abs();
@@ -3892,7 +3893,8 @@ pub(crate) struct LrContextHbd<'a> {
     pub(crate) gdf_qp_idx: i32,
     pub(crate) gdf_scale: i32,
     pub(crate) gdf_ref_dst_idx: i32,
-    pub(crate) sb128: bool,
+    /// Frame SB size: 0/1/2 for 64/128/256 px.
+    pub(crate) sb128: i32,
     pub(crate) cfl_ds_filter_index: i32,
     pub(crate) layout: PixelLayout,
     pub(crate) bw: i32,
@@ -3943,7 +3945,7 @@ fn lr_stripe_hbd(
     let ss_hor = chroma & (ctx.layout != PixelLayout::I444) as i32;
     let stride = ctx.cur_stride[chroma as usize];
     let abs_stride = stride.unsigned_abs();
-    let sby = (y + if y != 0 { 8 << ss_ver } else { 0 }) >> (6 - ss_ver + ctx.sb128 as i32);
+    let sby = (y + if y != 0 { 8 << ss_ver } else { 0 }) >> (6 - ss_ver + ctx.sb128);
     let have_tt = (ctx.n_tc > 1) as i32;
     let sb256x = (x << ss_hor) >> 8;
     let sb64x_idx = ((x << ss_hor) >> 6) & 3;
@@ -4026,10 +4028,10 @@ fn lr_stripe_hbd(
     // local stripe-relative `y`, so this must track the stripe origin.
     let mut cur_off = p_off;
     let mut lpf_off =
-        (have_tt as isize * (sby as isize * (4 << ctx.sb128 as i32) - 4) * stride_u as isize
+        (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * stride_u as isize
             + x as isize) as usize;
     let mut llpf_off =
-        (have_tt as isize * (sby as isize * (4 << ctx.sb128 as i32) - 4) * lstride_u as isize
+        (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * lstride_u as isize
             + (x << ss_hor) as isize) as usize;
 
     while y + stripe_h <= row_h {
@@ -4655,10 +4657,10 @@ pub(crate) fn lr_sbrow_hbd(ctx: &LrContextHbd, dst: &mut [&mut [u16]; 3], sby: i
         let ss_hor = (ctx.layout != PixelLayout::I444) as i32;
         let h = (ctx.bh * 4) >> ss_ver;
         let w = (ctx.bw * 4) >> ss_hor;
-        let next_row_y = (sby + 1) << ((6 - ss_ver) + ctx.sb128 as i32);
+        let next_row_y = (sby + 1) << ((6 - ss_ver) + ctx.sb128);
         let row_h = imin(next_row_y - (8 >> ss_ver) * not_last, h);
         let offset_uv = (8 * (sby != 0) as i32) >> ss_ver;
-        let mut y_stripe = (sby << ((6 - ss_ver) + ctx.sb128 as i32)) - offset_uv;
+        let mut y_stripe = (sby << ((6 - ss_ver) + ctx.sb128)) - offset_uv;
 
         if sby != 0 && first_sby_in_tile_row_flag != 0 {
             let first_top = if first_sby_in_tile_row_flag != 0 {
@@ -4739,10 +4741,10 @@ pub(crate) fn lr_sbrow_hbd(ctx: &LrContextHbd, dst: &mut [&mut [u16]; 3], sby: i
     if restore_planes & LR_RESTORE_Y != 0 {
         let h = ctx.bh * 4;
         let w = ctx.bw * 4;
-        let next_row_y = (sby + 1) << (6 + ctx.sb128 as i32);
+        let next_row_y = (sby + 1) << (6 + ctx.sb128);
         let row_h = imin(next_row_y - 8 * not_last, h);
         let offset_y = 8 * (sby != 0) as i32;
-        let mut y_stripe = (sby << (6 + ctx.sb128 as i32)) - offset_y;
+        let mut y_stripe = (sby << (6 + ctx.sb128)) - offset_y;
 
         if sby != 0 && first_sby_in_tile_row_flag != 0 {
             let abs_stride_y = dst_stride[0].unsigned_abs();

@@ -191,7 +191,9 @@ pub(crate) struct FrameContext {
     pub(crate) ss_hor: i32,
 
     pub(crate) dq: [[[u32; 2]; 3]; MAX_SEGMENTS],
-    pub(crate) qm: [[Option<&'static [u8]>; 3]; N_RECT_TX_SIZES],
+    pub(crate) qm: [[Option<crate::quantizer::QmTable>; 3]; N_RECT_TX_SIZES],
+    /// The decoder's QM list (QM OBUs) as of this frame.
+    pub(crate) qm_list: [crate::quantizer::QmSet; crate::quantizer::NUM_CUSTOM_QMS],
 
     pub(crate) a: Vec<BlockContext>,
     pub(crate) a_sz: i32,
@@ -240,10 +242,26 @@ pub(crate) struct DecoderContext {
     pub(crate) exec: crate::exec_context::ExecContext,
     pub(crate) seq_hdr: Option<Arc<SequenceHeader>>,
     pub(crate) frame_hdr: Option<Arc<FrameHeader>>,
+    /// QM list (QM OBUs) and the levels signalled in the current temporal
+    /// unit, which key/RAS/restricted-switch frames do not reset.
+    pub(crate) qm_list: [crate::quantizer::QmSet; crate::quantizer::NUM_CUSTOM_QMS],
+    pub(crate) qm_protected: u16,
+    /// Multi-frame headers by `mfh_id` (entry 0 is never stored).
+    pub(crate) mfh: [Option<crate::headers::MfhParams>; crate::headers::MAX_MFH_NUM],
 
     pub(crate) tile: Vec<TileGroup>,
     pub(crate) n_tile_data: i32,
     pub(crate) n_tiles: i32,
+    /// Size in bits of the current frame header, so a later tile group that
+    /// repeats it can skip it.
+    pub(crate) frame_hdr_bits: usize,
+    /// Temporal-unit / open-loop key frame (OLK) bookkeeping (AVM
+    /// `seen_vcl_obu_in_this_tu`, `olk_encountered`, `olk_refresh_frame_flags`,
+    /// `olk_co_vcl_refresh_frame_flags`; -1 = unset, per mlayer).
+    pub(crate) seen_vcl_in_tu: bool,
+    pub(crate) olk_encountered: bool,
+    pub(crate) olk_refresh: [i16; 8],
+    pub(crate) olk_co_vcl_refresh: [i16; 8],
 
     pub(crate) refs: [RefState; 8],
 

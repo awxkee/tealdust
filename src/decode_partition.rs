@@ -176,10 +176,15 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
             [bw4, bh4]
         };
         let mut dir = -1i32;
+        // 4x8/8x4 blocks in mixed intra/inter regions of inter frames cannot
+        // split (4x4 is invalid there), also not at the frame edge.
+        let mix_inter_nosplit =
+            fi.is_inter_or_switch && *intra_region == 0 && b_dim[2] + b_dim[3] == 1;
 
         if imax(bwh4ss[0], bwh4ss[1]) == 1
             || (pl == 1 && bs == BlockSize::Bs8x8)
             || (pcc.part[0][0] & pcc.part[1][0]) == -1
+            || mix_inter_nosplit
         {
             bp = BlockPartition::None;
         } else if !have_h_split || !have_v_split {
@@ -209,6 +214,18 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                         BlockPartition::V
                     };
                 }
+            } else if lbs != BlockSize::Invalid
+                && cbs != BlockSize::Invalid
+                && fi.has_chroma_layout
+                && if bw4 > bh4 {
+                    ((bw4 >> fi.ss_hor) < 2 || (bh4 >> fi.ss_ver) < 1) && !have_h_split
+                } else {
+                    ((bw4 >> fi.ss_hor) < 1 || (bh4 >> fi.ss_ver) < 2) && !have_v_split
+                }
+            {
+                // A forced split would leave the chroma-carrying sub-block
+                // outside the frame; AVM allows no partition, i.e. NONE.
+                bp = BlockPartition::None;
             } else if bw4 > bh4 {
                 if !have_h_split || fi.bh <= *by + qh4 {
                     dir = 1;
@@ -375,7 +392,14 @@ pub(crate) fn decode_partition<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
                             let chroma_3way_ok = chroma_ext_ok
                                 && (!chroma_tree || sub_ok(4))
                                 && shared_sub_ok(dir != 0, 4);
+                            // AVM check_is_chroma_size_valid also applies to the
+                            // luma tree for >= 64x64: in 4:2:2 a vertical 4-way
+                            // split of 64x64 gives 8x64 (4x64 chroma, invalid).
                             let chroma_4way_ok = shared_sub_ok(dir != 0, 8)
+                                && !(fi.ss_hor == 1
+                                    && fi.ss_ver == 0
+                                    && dir != 0
+                                    && bs == BlockSize::Bs64x64)
                                 && (!chroma_tree
                                     || (chroma_ext_ok
                                         && sub_ok(8)
