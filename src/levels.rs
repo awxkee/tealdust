@@ -656,7 +656,20 @@ pub(crate) struct Av2BlockInter {
     pub(crate) bawp: [u8; 2],
     pub(crate) filter: u8,
     pub(crate) refine_mv: u8,
+    /// REFINE_ALL (`opfl_refine_type == 2`): optical flow applied implicitly to
+    /// a non-OPFL compound mode (AVM `opfl_allowed_cur_pred_mode`). The coded
+    /// mode is kept in `inter_mode`.
+    pub(crate) opfl_all: u8,
     pub(crate) mtxbak: [i32; 6],
+}
+
+impl Av2BlockInter {
+    /// Whether the block uses optical-flow refinement: an explicit OPFL mode or
+    /// the REFINE_ALL implicit case.
+    #[inline]
+    pub(crate) fn is_opfl(&self) -> bool {
+        self.inter_mode >= CompInterPredMode::OpflNearMvNearMv as u8 || self.opfl_all != 0
+    }
 }
 
 #[derive(Clone, Copy, Default)]

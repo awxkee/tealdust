@@ -79,11 +79,15 @@ pub(crate) fn init_deblock_thr_lut_uv(
         } else {
             qidx
         };
-        let uac = yac + frame_hdr.quant.uac_delta as i32 + 8 * frame_hdr.deblock.delta_q_u as i32;
+        // AVM final_qindex_ac (av2_q_clamped, base offset folded into the
+        // frame delta) plus the deblock offset.
+        let uac = crate::quantizer::clip_qidx(yac, frame_hdr.quant.uac_delta as i32, qmax)
+            + 8 * frame_hdr.deblock.delta_q_u as i32;
         let uthr = deblock_thr_from_cache(thr_cache, hbd, uac);
         lut[0][0][i] = uthr[0];
         lut[0][1][i] = uthr[1];
-        let vac = yac + frame_hdr.quant.vac_delta as i32 + 8 * frame_hdr.deblock.delta_q_v as i32;
+        let vac = crate::quantizer::clip_qidx(yac, frame_hdr.quant.vac_delta as i32, qmax)
+            + 8 * frame_hdr.deblock.delta_q_v as i32;
         let vthr = deblock_thr_from_cache(thr_cache, hbd, vac);
         lut[1][0][i] = vthr[0];
         lut[1][1][i] = vthr[1];
@@ -657,7 +661,7 @@ pub(crate) fn backup_db(
     src: &[u8],
     stride: usize,
     ss_ver: i32,
-    sb128: bool,
+    sb128: i32,
     mut row: i32,
     row_h: i32,
     w: usize,
@@ -665,9 +669,9 @@ pub(crate) fn backup_db(
     n_tc: i32,
 ) {
     let cdef_backup = (!lr_backup) as i32;
-    let sb128_i = sb128 as i32;
+    let sb128_i = sb128;
 
-    let mut stripe_h = ((64 << (cdef_backup & sb128_i)) - 8 * (row == 0) as i32) >> ss_ver;
+    let mut stripe_h = ((64 << (cdef_backup * sb128_i)) - 8 * (row == 0) as i32) >> ss_ver;
     let mut src_off = (stripe_h - 2) as usize * stride;
     let mut dst_off = 0usize;
 
@@ -700,7 +704,7 @@ pub(crate) fn backup_db_hbd(
     src: &[u16],
     stride: usize,
     ss_ver: i32,
-    sb128: bool,
+    sb128: i32,
     mut row: i32,
     row_h: i32,
     w: usize,
@@ -708,9 +712,9 @@ pub(crate) fn backup_db_hbd(
     n_tc: i32,
 ) {
     let cdef_backup = (!lr_backup) as i32;
-    let sb128_i = sb128 as i32;
+    let sb128_i = sb128;
 
-    let mut stripe_h = ((64 << (cdef_backup & sb128_i)) - 8 * (row == 0) as i32) >> ss_ver;
+    let mut stripe_h = ((64 << (cdef_backup * sb128_i)) - 8 * (row == 0) as i32) >> ss_ver;
     let mut src_off = (stripe_h - 2) as usize * stride;
     let mut dst_off = 0usize;
 
@@ -2330,7 +2334,7 @@ pub(crate) fn copy_db_8bpc(
     bw: usize,
     bh: usize,
     sby: i32,
-    sb128: bool,
+    sb128: i32,
     ss_hor: bool,
     ss_ver: bool,
     lr_backup: bool,
@@ -2341,8 +2345,8 @@ pub(crate) fn copy_db_8bpc(
     let h = (bh * 4) as i32;
     let w = bw * 4;
     let offset = 8 * (sby != 0) as i32;
-    let y_stripe = (sby << (6 + sb128 as i32)) - offset;
-    let row_h = imin((sby + 1) << (6 + sb128 as i32), h - 1);
+    let y_stripe = (sby << (6 + sb128)) - offset;
+    let row_h = imin((sby + 1) << (6 + sb128), h - 1);
     if y_stripe < row_h {
         let ys_off = (y_stripe as isize * strides[0]) as usize;
         backup_db(
@@ -2379,8 +2383,8 @@ pub(crate) fn copy_db_8bpc(
         let ch = (bh * 4 >> ss_ver as i32) as i32;
         let ss_ver_i = ss_ver as i32;
         let offset_uv = offset >> ss_ver_i;
-        let cy_stripe = (sby << ((6 - ss_ver_i) + sb128 as i32)) - offset_uv;
-        let crow_h = imin((sby + 1) << ((6 - ss_ver_i) + sb128 as i32), ch - 1);
+        let cy_stripe = (sby << ((6 - ss_ver_i) + sb128)) - offset_uv;
+        let crow_h = imin((sby + 1) << ((6 - ss_ver_i) + sb128), ch - 1);
         if cy_stripe < crow_h {
             let cys_off = (cy_stripe as isize * strides[1]) as usize;
             backup_db(
@@ -2432,7 +2436,7 @@ pub(crate) fn copy_db_hbd(
     bw: usize,
     bh: usize,
     sby: i32,
-    sb128: bool,
+    sb128: i32,
     ss_hor: bool,
     ss_ver: bool,
     lr_backup: bool,
@@ -2440,8 +2444,8 @@ pub(crate) fn copy_db_hbd(
     let h = (bh * 4) as i32;
     let w = bw * 4;
     let offset = 8 * (sby != 0) as i32;
-    let y_stripe = (sby << (6 + sb128 as i32)) - offset;
-    let row_h = imin((sby + 1) << (6 + sb128 as i32), h - 1);
+    let y_stripe = (sby << (6 + sb128)) - offset;
+    let row_h = imin((sby + 1) << (6 + sb128), h - 1);
     if y_stripe < row_h {
         let ys_off = (y_stripe as isize * strides[0]) as usize;
         backup_db_hbd(
@@ -2475,8 +2479,8 @@ pub(crate) fn copy_db_hbd(
         let ch = (bh * 4 >> ss_ver as i32) as i32;
         let ss_ver_i = ss_ver as i32;
         let offset_uv = offset >> ss_ver_i;
-        let cy_stripe = (sby << ((6 - ss_ver_i) + sb128 as i32)) - offset_uv;
-        let crow_h = imin((sby + 1) << ((6 - ss_ver_i) + sb128 as i32), ch - 1);
+        let cy_stripe = (sby << ((6 - ss_ver_i) + sb128)) - offset_uv;
+        let crow_h = imin((sby + 1) << ((6 - ss_ver_i) + sb128), ch - 1);
         if cy_stripe < crow_h {
             let cys_off = (cy_stripe as isize * strides[1]) as usize;
             backup_db_hbd(

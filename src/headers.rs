@@ -397,6 +397,26 @@ pub struct WarpedMotionParams {
     pub affine: i32,
 }
 
+/// Multi-frame header OBU (AVM `MultiFrameHeader`). Frame headers with a
+/// non-zero `mfh_id` take their sequence header id, default frame size,
+/// deblocking flags and segmentation info from it.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MfhParams {
+    pub seq_id: u32,
+    pub frame_size_present: bool,
+    pub width: i32,
+    pub height: i32,
+    pub db_update: bool,
+    pub db_apply: [bool; 4],
+    pub seg_info_present: bool,
+    pub seg_ext: bool,
+    pub seg_adaptive: bool,
+    pub seg_d: SegmentationDataSet,
+}
+
+/// AVM MAX_MFH_NUM.
+pub const MAX_MFH_NUM: usize = 16;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct SegmentationDataSet {
     pub delta_q: [i16; MAX_SEGMENTS],
@@ -467,10 +487,23 @@ pub struct SequenceHeader {
     pub still_picture: bool,
     pub max_tlayer_id: u8,
     pub max_mlayer_id: u8,
+    /// `seq_max_mlayer_cnt` (1 when `max_mlayer_id == 0`).
+    pub max_mlayer_cnt: u8,
     pub tlayer_dependency_present: bool,
     pub mlayer_dependency_present: bool,
-    pub tlayer_dependencies: [u8; 8],
+    pub multi_tlayer_dependency_map_present: bool,
+    /// Bit `n` of `[m][t]` is set if temporal layer `t` of embedded layer `m`
+    /// may reference temporal layer `n` (`n <= t`).
+    pub tlayer_dependencies: [[u8; 4]; 8],
+    /// Bit `n` of `[m]` is set if embedded layer `m` may reference layer `n`.
     pub mlayer_dependencies: [u8; 8],
+    /// Decoder model info (`decoder_model_info_present_flag` and friends).
+    pub decoder_model_info_present: bool,
+    pub num_units_in_decoding_tick: u32,
+    pub max_decoder_model_present: bool,
+    pub max_decoder_buffer_delay: u32,
+    pub max_encoder_buffer_delay: u32,
+    pub max_low_delay_mode: bool,
     pub monotonic: bool,
     pub max_width: i32,
     pub max_height: i32,
@@ -519,6 +552,8 @@ pub struct SequenceHeader {
     pub num_same_ref_comp: u8,
 
     pub tip: bool,
+    /// `enable_tip`: 0 off, 1 TIP as reference or output, 2 reference only.
+    pub tip_mode: u8,
     pub tip_hole_fill: bool,
     pub mv_traj: bool,
     pub bawp: bool,
@@ -528,7 +563,8 @@ pub struct SequenceHeader {
     pub db_sub_pu: bool,
     pub tip_explicit_qp: bool,
 
-    pub opfl_refine: bool,
+    /// `enable_opfl_refine`: 0 none, 1 switchable, 2 all, 3 auto (per frame).
+    pub opfl_refine: u8,
     pub refine_mv: bool,
     pub tip_refine_mv: bool,
     pub bru: bool,
@@ -570,9 +606,9 @@ pub struct SequenceHeader {
     pub equal_ac_dc_q: bool,
     pub base_ydc_dq: i8,
     pub ydc_dq_enabled: bool,
-    pub base_uvdc_dq: u8,
+    pub base_uvdc_dq: i8,
     pub uvdc_dq_enabled: bool,
-    pub base_uvac_dq: u8,
+    pub base_uvac_dq: i8,
     pub uvac_dq_enabled: bool,
 
     pub tiling: SeqTiling,
@@ -789,6 +825,8 @@ pub struct FhFilmGrain {
 #[derive(Debug, Clone, Default)]
 pub struct FrameHeader {
     pub id: u8,
+    /// The multi-frame header this frame uses (`mfh_id != 0`).
+    pub mfh: Option<MfhParams>,
     pub frame_type: FrameType,
     pub width: i32,
     pub height: i32,
@@ -798,7 +836,16 @@ pub struct FrameHeader {
     pub xlayer_id: u8,
     pub show_existing_frame: u8,
     pub existing_frame_idx: i8,
+    /// SEF: take the display order hint of the shown frame (else `frame_offset`
+    /// carries the SEF's own order hint).
+    pub sef_derive_order_hint: u8,
     pub ltr_id: i8,
+    /// RAS / open-loop key frames: long-term ids of the key frames they keep
+    /// (`num_ref_key_frames`, `ref_long_term_ids`).
+    pub num_ref_key_frames: u8,
+    pub ref_long_term_ids: [u8; 8],
+    /// S-frames: `restricted_prediction_switch`.
+    pub restricted_prediction_switch: u8,
     pub frame_presentation_delay: u32,
     pub show_immediate: u8,
     pub show_implicit: u8,

@@ -29,6 +29,81 @@
 
 use crate::levels::N_RECT_TX_SIZES;
 
+/// AVM NUM_CUSTOM_QMS: QM levels 0..14 can be replaced by QM OBUs.
+pub(crate) const NUM_CUSTOM_QMS: usize = 15;
+
+/// One entry of the decoder's QM list (AVM `quantization_matrix_set`). For a
+/// user-defined set, `m[t * 3 + c]` holds the fundamental matrix `t` (0: 8x8,
+/// 1: 8x4, 2: 4x8, row-major as coded, 8x4 meaning 8 wide) of plane `c`.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct QmSet {
+    pub(crate) user: bool,
+    pub(crate) m: [[u8; 64]; 9],
+}
+
+impl Default for QmSet {
+    fn default() -> Self {
+        Self {
+            user: false,
+            m: [[0; 64]; 9],
+        }
+    }
+}
+
+/// A per-frame QM table: a predefined one, or one built from a QM OBU.
+#[derive(Clone, Debug)]
+pub(crate) enum QmTable {
+    Static(&'static [u8]),
+    Owned(std::sync::Arc<[u8]>),
+}
+
+impl QmTable {
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        match self {
+            QmTable::Static(s) => s,
+            QmTable::Owned(a) => a,
+        }
+    }
+}
+
+/// AVM `scale_tx` for the transform sizes a user-defined set replaces
+/// (4x4, 8x8, 4x8, 8x4; every other size keeps the predefined level). Returns
+/// the table in tealdust's transposed coefficient layout.
+pub(crate) fn user_qm_table(set: &QmSet, plane: usize, tx: usize) -> Option<Vec<u8>> {
+    use crate::levels::txsz::*;
+    let (w, h, avm): (usize, usize, Vec<u8>) = match tx {
+        TX_4X4 => {
+            // downsample(8, 8, 4, 4, 0, 0)
+            let b = &set.m[plane];
+            (4, 4, (0..16).map(|k| b[(k / 4) * 2 * 8 + (k % 4) * 2]).collect())
+        }
+        TX_8X8 => (8, 8, set.m[plane].to_vec()),
+        RTX_8X4 => (8, 4, set.m[3 + plane][..32].to_vec()),
+        RTX_4X8 => (4, 8, set.m[6 + plane][..32].to_vec()),
+        _ => return None,
+    };
+    // Coefficients are stored column-major: entry (row r, col c) at c*h + r.
+    let mut out = vec![0u8; w * h];
+    for r in 0..h {
+        for c in 0..w {
+            out[c * h + r] = avm[r * w + c];
+        }
+    }
+    Some(out)
+}
+
+/// AVM `av2_q_clamped`: qindex plus a (base-inclusive) delta, clamped to
+/// [1, qmax], except that qindex 0 with a non-positive delta stays 0.
+#[inline]
+pub(crate) fn clip_qidx(qidx: i32, delta: i32, qmax: i32) -> i32 {
+    if qidx == 0 && delta <= 0 {
+        0
+    } else {
+        (qidx + delta).clamp(1, qmax)
+    }
+}
+
 /// Dequantization lookup function.
 ///
 /// Maps a quantizer index to a dequantization value.

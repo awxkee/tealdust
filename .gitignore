@@ -6,3 +6,4 @@ Cargo.lock
 findings
 .afl*
 corpus_min
+dav2d-sync*.md

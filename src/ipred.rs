@@ -2866,9 +2866,12 @@ pub(crate) fn cfl_pred_raw<BD: BitDepth>(
             dc[1] = (dc[1] + (npx as i32 >> 1)) >> (npx as u32).trailing_zeros();
             dc[2] = (dc[2] + (npx as i32 >> 1)) >> (npx as u32).trailing_zeros();
         } else {
-            dc[0] = fast_div32_dc(dc[0] as u32, npx as u32) as i32;
-            dc[1] = fast_div32_dc(dc[1] as u32, npx as u32) as i32;
-            dc[2] = fast_div32_dc(dc[2] as u32, npx as u32) as i32;
+            // dav2d 518e8e323d (#100): the approximate division can overshoot;
+            // clamp to the largest exact quotient.
+            let bdmax = bd.bitdepth_max() as u32;
+            dc[0] = fast_div32_dc(dc[0] as u32, npx as u32).min((bdmax << 3) | 7) as i32;
+            dc[1] = fast_div32_dc(dc[1] as u32, npx as u32).min(bdmax) as i32;
+            dc[2] = fast_div32_dc(dc[2] as u32, npx as u32).min(bdmax) as i32;
         }
     }
 

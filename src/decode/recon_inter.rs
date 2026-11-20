@@ -140,6 +140,7 @@ where
         ];
         let ss_hor = fi.ss_hor;
         let ss_ver = fi.ss_ver;
+        let lossless = fi.seg_lossless[b.seg_id as usize] != 0;
         let y_end = imin(by + bh4, fi.bh);
         let x_end = imin(bx + bw4, fi.bw);
         let (step, lbs2, cbs2i) = if imax(bw4, bh4) == 64 {
@@ -158,7 +159,8 @@ where
             )
         } else {
             let csplit_row = (bs as i32 - BlockSize::Bs128x128 as i32) as usize;
-            let csi = (ss_hor + ss_ver) as usize;
+            // Lossless: one chroma unit per 64x64 luma unit (dav2d 8c86497528).
+            let csi = if lossless { 0 } else { (ss_hor + ss_ver) as usize };
             (
                 16,
                 if lbs == BlockSize::Invalid {
@@ -174,6 +176,9 @@ where
             )
         };
 
+        // Per-piece chroma (read and recon with each piece) at the 128 level of a
+        // 256 block, and for lossless blocks.
+        let il = step == 32 || lossless;
         let mut sub_by = by;
         let mut sub_cby = cby;
         let mut yy = 0;
@@ -182,7 +187,7 @@ where
             let mut sub_cbx = cbx;
             let mut xx = 0;
             while sub_bx < x_end {
-                let (read_cbs, recon_cbs) = if step == 32 {
+                let (read_cbs, recon_cbs) = if il {
                     (cbs2i, cbs2i)
                 } else {
                     let read = if ((xx & ss_hor) | (yy & ss_ver)) == 0 {
@@ -292,7 +297,7 @@ where
                 }
 
                 sub_bx += step;
-                if step == 32 {
+                if il {
                     sub_cbx += step;
                 } else if (xx & ss_hor) == ss_hor {
                     sub_cbx += step << ss_hor;
@@ -300,7 +305,7 @@ where
                 xx += 1;
             }
             sub_by += step;
-            if step == 32 {
+            if il {
                 sub_cby += step;
             } else if (yy & ss_ver) == ss_ver {
                 sub_cby += step << ss_ver;
@@ -635,7 +640,7 @@ pub(crate) fn bawp_plane<BD: BitDepth>(
 
 /// Motion-compensate one plane of a single reference into `dst` (8bpc), mirroring
 /// block MV (1/8-pel luma units). Uses the proper separable 8-tap / bilinear
-/// primitives from `mc.rs`. Scaled references (svc.scale != 0) are not handled.
+/// primitives from `mc.rs`. Scaled references go through `scale::mc_scaled`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
     bd: BD,
@@ -653,8 +658,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
     filter: u8,
     ss_hor: i32,
     ss_ver: i32,
-    cur_bw: i32,
-    cur_bh: i32,
+    sf: &crate::scale::ScaleFactors,
     inter_scratch: &mut Vec<i16>,
 ) {
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
@@ -671,10 +675,40 @@ pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
     };
     let (ref_data, ref_pw, ref_ph) = ref_data;
 
+    if sf.is_scaled() {
+        let pos = crate::scale::anchored_block_pos(
+            sf,
+            pl,
+            bx * h_mul,
+            by * v_mul,
+            mvx,
+            mvy,
+            plss_hor,
+            plss_ver,
+            ref_pw,
+            ref_ph,
+        );
+        crate::scale::mc_scaled(
+            bd,
+            crate::scale::ScaledDst::Put(dst, dst_stride),
+            ref_data,
+            ref_stride,
+            ref_pw,
+            ref_ph,
+            pos,
+            (bw4 * h_mul) as usize,
+            (bh4 * v_mul) as usize,
+            sf,
+            filter as i32,
+        );
+        return;
+    }
+
     let left = 0i32;
     let top = 0i32;
-    let right = cur_bw * 4 >> plss_hor;
-    let bottom = cur_bh * 4 >> plss_ver;
+    // Edge bounds are the reference picture's own (8-aligned) size, which
+    // differs from the current frame's for a scaled reference.
+    let (right, bottom) = ref_pic.ref_plane_dims(pl);
 
     let mx = mvx & (15 >> (plss_hor == 0) as i32);
     let my = mvy & (15 >> (plss_ver == 0) as i32);
@@ -816,8 +850,7 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
     filter: u8,
     ss_hor: i32,
     ss_ver: i32,
-    cur_bw: i32,
-    cur_bh: i32,
+    sf: &crate::scale::ScaleFactors,
     inter_scratch: &mut Vec<i16>,
 ) {
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
@@ -835,10 +868,41 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
     };
     let (ref_data, ref_pw, ref_ph) = ref_data;
 
+    if sf.is_scaled() {
+        let w = (bw4 * h_mul) as usize;
+        let pos = crate::scale::anchored_block_pos(
+            sf,
+            pl,
+            bx * h_mul,
+            by * v_mul,
+            mvx,
+            mvy,
+            plss_hor,
+            plss_ver,
+            ref_pw,
+            ref_ph,
+        );
+        crate::scale::mc_scaled(
+            bd,
+            crate::scale::ScaledDst::Prep(tmp, w),
+            ref_data,
+            ref_stride,
+            ref_pw,
+            ref_ph,
+            pos,
+            w,
+            (bh4 * v_mul) as usize,
+            sf,
+            filter as i32,
+        );
+        return;
+    }
+
     let left = 0i32;
     let top = 0i32;
-    let right = cur_bw * 4 >> plss_hor;
-    let bottom = cur_bh * 4 >> plss_ver;
+    // Edge bounds are the reference picture's own (8-aligned) size, which
+    // differs from the current frame's for a scaled reference.
+    let (right, bottom) = ref_pic.ref_plane_dims(pl);
 
     let mx = mvx & (15 >> (plss_hor == 0) as i32);
     let my = mvy & (15 >> (plss_ver == 0) as i32);
@@ -957,6 +1021,79 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
     }
 }
 
+/// Scaled-reference warp (AVM `av2_ext_highbd_warp_affine_scaled_c`, always
+/// 4x4 units). `bx`/`by`/`b_dim` are the block in luma 4x4 units (the chroma
+/// base for chroma), `frame_bw`/`frame_bh` the frame in 4x4 units.
+#[allow(clippy::too_many_arguments)]
+fn warp_scaled_plane<BD: BitDepth>(
+    bd: BD,
+    dst: crate::scale::ScaledDst<'_, BD::Pixel>,
+    ref_pic: &crate::picture::Picture,
+    pl: usize,
+    bx: i32,
+    by: i32,
+    b_dim: &[u8],
+    wmp: &crate::headers::WarpedMotionParams,
+    ss_hor: i32,
+    ss_ver: i32,
+    frame_bw: i32,
+    frame_bh: i32,
+    sf: &crate::scale::ScaleFactors,
+) {
+    let plss_ver = if pl != 0 { ss_ver } else { 0 };
+    let plss_hor = if pl != 0 { ss_hor } else { 0 };
+    let h_mul = 4 >> plss_hor;
+    let v_mul = 4 >> plss_ver;
+    let ref_stride =
+        ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
+    let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
+        Some(s) => s,
+        None => return,
+    };
+    let (pw, ph) = ref_pic.ref_plane_dims(pl);
+    let mut mat = wmp.matrix;
+    if wmp.wm_type == crate::headers::WarpedMotionType::RotZoom {
+        mat[5] = mat[2];
+        mat[4] = -mat[3];
+    }
+    // `clamp_mv_ref` uses the whole coding block, also when this call only
+    // predicts a 64x64 piece of it.
+    let (adx4, ady4) = sf.anchor.offset4(pl);
+    let blk = crate::scale::WarpBlockCtx {
+        bx4: bx - adx4,
+        by4: by - ady4,
+        bw4: if sf.anchor.bw4 != 0 {
+            sf.anchor.bw4
+        } else {
+            b_dim[0] as i32
+        },
+        bh4: if sf.anchor.bh4 != 0 {
+            sf.anchor.bh4
+        } else {
+            b_dim[1] as i32
+        },
+        mi_cols: frame_bw,
+        mi_rows: frame_bh,
+    };
+    crate::scale::warp_scaled(
+        bd,
+        dst,
+        ref_data,
+        ref_stride,
+        pw,
+        ph,
+        &mat,
+        (bx * 4) >> plss_hor,
+        (by * 4) >> plss_ver,
+        b_dim[0] as i32 * h_mul,
+        b_dim[1] as i32 * v_mul,
+        plss_hor,
+        plss_ver,
+        sf,
+        &blk,
+    );
+}
+
 /// `warp_affine`, affine path). Predicts the block in 8x8 sub-tiles using the
 /// derived warp matrix `wmp`. Only the affine sub-path is implemented (block is
 /// >= 8px and `wmp.affine`); callers gate on those conditions, falling back to
@@ -977,14 +1114,34 @@ pub(crate) fn warp_affine_plane_8bpc<BD: BitDepth>(
     ss_ver: i32,
     frame_bw: i32,
     frame_bh: i32,
+    sf: &crate::scale::ScaleFactors,
 ) {
+    if sf.is_scaled() {
+        warp_scaled_plane(
+            bd,
+            crate::scale::ScaledDst::Put(dst, dst_stride),
+            ref_pic,
+            pl,
+            bx,
+            by,
+            b_dim,
+            wmp,
+            ss_hor,
+            ss_ver,
+            frame_bw,
+            frame_bh,
+            sf,
+        );
+        return;
+    }
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
     let h_mul = 4 >> plss_hor;
     let v_mul = 4 >> plss_ver;
     let mat = &wmp.matrix;
-    let width = frame_bw * 4 >> plss_hor;
-    let height = frame_bh * 4 >> plss_ver;
+    // Bounds are the reference's own size (it differs when scaled).
+    let (width, height) = ref_pic.ref_plane_dims(pl);
+    let _ = (frame_bw, frame_bh);
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
     let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
@@ -1088,15 +1245,35 @@ pub(crate) fn ext_warp_plane_8bpc<BD: crate::pixel::BitDepth>(
     ss_ver: i32,
     frame_bw: i32,
     frame_bh: i32,
+    sf: &crate::scale::ScaleFactors,
     inter_scratch: &mut Vec<i16>,
 ) {
+    if sf.is_scaled() {
+        warp_scaled_plane(
+            bd,
+            crate::scale::ScaledDst::Put(dst, dst_stride),
+            ref_pic,
+            pl,
+            bx,
+            by,
+            b_dim,
+            wmp,
+            ss_hor,
+            ss_ver,
+            frame_bw,
+            frame_bh,
+            sf,
+        );
+        return;
+    }
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
     let h_mul = 4 >> plss_hor;
     let v_mul = 4 >> plss_ver;
     let mat = &wmp.matrix;
-    let w = frame_bw * 4 >> plss_hor;
-    let h = frame_bh * 4 >> plss_ver;
+    // Bounds are the reference's own size (it differs when scaled).
+    let (w, h) = ref_pic.ref_plane_dims(pl);
+    let _ = (frame_bw, frame_bh);
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
     let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
@@ -1235,8 +1412,27 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     ss_ver: i32,
     frame_bw: i32,
     frame_bh: i32,
+    sf: &crate::scale::ScaleFactors,
     inter_scratch: &mut Vec<i16>,
 ) {
+    if sf.is_scaled() {
+        warp_scaled_plane(
+            bd,
+            crate::scale::ScaledDst::Prep(tmp, tmp_stride),
+            ref_pic,
+            pl,
+            bx,
+            by,
+            b_dim,
+            wmp,
+            ss_hor,
+            ss_ver,
+            frame_bw,
+            frame_bh,
+            sf,
+        );
+        return;
+    }
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
     let h_mul = 4 >> plss_hor;
@@ -1257,13 +1453,15 @@ fn warp_affine_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
             ss_ver,
             frame_bw,
             frame_bh,
+            sf,
             inter_scratch,
         );
         return;
     }
     let mat = &wmp.matrix;
-    let width = frame_bw * 4 >> plss_hor;
-    let height = frame_bh * 4 >> plss_ver;
+    // Bounds are the reference's own size (it differs when scaled).
+    let (width, height) = ref_pic.ref_plane_dims(pl);
+    let _ = (frame_bw, frame_bh);
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
     let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
@@ -1371,15 +1569,35 @@ fn ext_warp_plane_prep_8bpc<BD: crate::pixel::BitDepth>(
     ss_ver: i32,
     frame_bw: i32,
     frame_bh: i32,
+    sf: &crate::scale::ScaleFactors,
     inter_scratch: &mut Vec<i16>,
 ) {
+    if sf.is_scaled() {
+        warp_scaled_plane(
+            bd,
+            crate::scale::ScaledDst::Prep(tmp, tmp_stride),
+            ref_pic,
+            pl,
+            bx,
+            by,
+            b_dim,
+            wmp,
+            ss_hor,
+            ss_ver,
+            frame_bw,
+            frame_bh,
+            sf,
+        );
+        return;
+    }
     let plss_ver = if pl != 0 { ss_ver } else { 0 };
     let plss_hor = if pl != 0 { ss_hor } else { 0 };
     let h_mul = 4 >> plss_hor;
     let v_mul = 4 >> plss_ver;
     let mat = &wmp.matrix;
-    let w = frame_bw * 4 >> plss_hor;
-    let h = frame_bh * 4 >> plss_ver;
+    // Bounds are the reference's own size (it differs when scaled).
+    let (w, h) = ref_pic.ref_plane_dims(pl);
+    let _ = (frame_bw, frame_bh);
     let ref_stride =
         ref_pic.stride[(pl != 0) as usize].unsigned_abs() / std::mem::size_of::<BD::Pixel>();
     let ref_data: &[BD::Pixel] = match ref_pic.ref_plane_slice::<BD::Pixel>(pl) {
@@ -1761,6 +1979,7 @@ where
         txtp,
         eob,
         tx,
+        lossless,
         &mut recon.scratch.itx_tmp,
     );
     Ok(())
@@ -1848,7 +2067,11 @@ where
                     // (`txtp_seed`) is used for every TU. For inter blocks the seed
                     // only matters for lossless (WHT vs IDTX), where using the wrong
                     // per-TU luma type produces a transposed residual.
-                    let mut txtp: u16 = if b.bs == b.cbs {
+                    // AVM av2_get_tx_type: a lossless inter block whose
+                    // transform is larger than 4x4 uses IDTX for all chroma.
+                    let mut txtp: u16 = if lossless && b.tx_size_ll != 0 {
+                        crate::levels::txtp::IDTX as u16
+                    } else if b.bs == b.cbs {
                         recon.scratch.txtp_map[(by & 15) as usize * 16 + (bx & 15) as usize]
                     } else {
                         txtp_seed
@@ -2062,6 +2285,7 @@ where
                     txtp,
                     eob as i32,
                     uvtx,
+                    lossless,
                     &mut recon.scratch.itx_tmp,
                 );
             }
@@ -2336,7 +2560,7 @@ pub(crate) fn splat_tworef_mv<BD: crate::pixel::BitDepth>(
     let blk_mv = [b.inter_data().mv[0], b.inter_data().mv[1]];
 
     let t_swap = (recon.rf.ref_flip & (1u64 << (ref0 as u32 * 8 + ref1 as u32))) != 0;
-    let opfl = inter_mode >= CompInterPredMode::OpflNearMvNearMv as u8;
+    let opfl = b.inter_data().is_opfl();
     let refine_mv = b.inter_data().refine_mv != 0 && comp_type == 1;
     let write_temporal =
         recon.seq_hdr.ref_frame_mvs && (!opfl || !refine_mv) && !recon.cur_mvs.is_empty();
@@ -2671,8 +2895,7 @@ where
     // on an AVG-compound block. These use `opfl_pred` to fill `tmp[0]`/`tmp[1]`
     // (per-2x2/per-bs refined MC) instead of the plain two-reference MC loop.
     let refine_mv = b.inter_data().refine_mv;
-    let is_opfl = inter_mode >= CompInterPredMode::OpflNearMvNearMv as u8
-        || (refine_mv != 0 && comp_type == 1);
+    let is_opfl = b.inter_data().is_opfl() || (refine_mv != 0 && comp_type == 1);
 
     // reference a block uses warp-affine prediction (into the i16 tmp buffer)
     // when its inter mode is GLOBALMV_GLOBALMV with an affine-allowed global
@@ -2691,8 +2914,7 @@ where
             let mut gmv = recon.frm_hdr.gmv.m[refs[i] as usize];
             let gmv_warp_allowed = gmv.wm_type > crate::headers::WarpedMotionType::Translation
                 && force_integer_mv == 0
-                && crate::warpmv::get_shear_params(&mut gmv) == 0
-                && recon.svc[refs[i] as usize][0].scale == 0;
+                && crate::warpmv::get_shear_params(&mut gmv) == 0;
             let warp = force_integer_mv == 0
                 && ((inter_mode == CompInterPredMode::GlobalMvGlobalMv as u8
                     && imin(bw4d, bh4d) > 1
@@ -2708,7 +2930,7 @@ where
         }
     }
 
-    let mut seg_mask = recon.scratch.take_compound_seg_mask();
+    let mut seg_mask = recon.scratch.take_compound_seg_mask(128 * 128);
     let mut seg_mask_stride = 0usize;
     if has_luma {
         let b_dim = &BLOCK_DIMENSIONS[lbs as u8 as usize];
@@ -2756,6 +2978,8 @@ where
                         ss_ver,
                         fi.bw,
                         fi.bh,
+                        &crate::scale::ScaleFactors::from_svc(&recon.svc[refs[i] as usize])
+                            .with_anchor(recon.scratch.mc_anchor),
                         recon.scratch.inter_mc_tmp_mut(),
                     );
                 } else {
@@ -2774,8 +2998,8 @@ where
                         filter,
                         ss_hor,
                         ss_ver,
-                        fi.bw,
-                        fi.bh,
+                        &crate::scale::ScaleFactors::from_svc(&recon.svc[refs[i] as usize])
+                            .with_anchor(recon.scratch.mc_anchor),
                         recon.scratch.inter_mc_tmp_mut(),
                     );
                 }
@@ -2818,6 +3042,28 @@ where
                 } else {
                     (&tmp1[0], &tmp0[0])
                 };
+                // A 64x64 piece of a split block: its mask goes to its place in
+                // the chroma unit's mask, which the unit's chroma pass reads
+                // after the last piece (AVM builds one mask for the block).
+                let anchor = recon.scratch.mc_anchor;
+                let mut split_mask = if anchor.cu_w4 != 0 {
+                    let ustride = (anchor.cu_w4 * 4 >> ss_hor) as usize;
+                    let uh = (anchor.cu_h4 * 4 >> ss_ver) as usize;
+                    let ox4 = anchor.l_dx4 % anchor.cu_w4;
+                    let oy4 = anchor.l_dy4 % anchor.cu_h4;
+                    let off = ((oy4 * 4 >> ss_ver) as usize) * ustride + (ox4 * 4 >> ss_hor) as usize;
+                    let mut m = core::mem::take(&mut recon.scratch.split_seg_mask);
+                    if m.len() < ustride * uh {
+                        m.resize(ustride * uh, 0);
+                    }
+                    Some((m, off, ustride))
+                } else {
+                    None
+                };
+                let (mask_buf, mask_stride): (&mut [u8], usize) = match split_mask {
+                    Some((ref mut m, off, ustride)) => (&mut m[off..], ustride),
+                    None => (&mut seg_mask[..], seg_mask_stride),
+                };
                 mc_w_mask(
                     recon.frame.exec,
                     recon.bd,
@@ -2827,12 +3073,15 @@ where
                     a1,
                     w,
                     h,
-                    &mut seg_mask,
-                    seg_mask_stride,
+                    mask_buf,
+                    mask_stride,
                     mask_sign,
                     ss_hor != 0,
                     ss_ver != 0,
                 );
+                if let Some((m, _, _)) = split_mask {
+                    recon.scratch.split_seg_mask = m;
+                }
             }
             _ => {
                 // AVG (or implicit mask / CWP weighted)
@@ -2963,7 +3212,7 @@ where
 
         // o_step = 4>>opfl.
         let opfl_refine = comp_type == 1 && refine_mv != 0;
-        let opfl_mode = inter_mode >= CompInterPredMode::OpflNearMvNearMv as u8;
+        let opfl_mode = b.inter_data().is_opfl();
         let r_step = 2 << opfl_refine as i32;
         let o_step = 4 >> opfl_mode as i32;
         let r_pair = b.ref_pair;
@@ -3034,8 +3283,8 @@ where
                             s_filter,
                             ss_hor,
                             ss_ver,
-                            fi.bw,
-                            fi.bh,
+                            &crate::scale::ScaleFactors::from_svc(&recon.svc[s_ref0 as usize])
+                                .with_anchor(recon.scratch.mc_anchor),
                             recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
@@ -3072,8 +3321,8 @@ where
                     filter,
                     ss_hor,
                     ss_ver,
-                    fi.bw,
-                    fi.bh,
+                    &crate::scale::ScaleFactors::from_svc(&recon.svc[refs[0] as usize])
+                        .with_anchor(recon.scratch.mc_anchor),
                     recon.scratch.inter_mc_tmp_mut(),
                 );
                 continue;
@@ -3120,6 +3369,8 @@ where
                             ss_ver,
                             fi.bw,
                             fi.bh,
+                            &crate::scale::ScaleFactors::from_svc(&recon.svc[refs[i] as usize])
+                                .with_anchor(recon.scratch.mc_anchor),
                             recon.scratch.inter_mc_tmp_mut(),
                         );
                     } else {
@@ -3138,8 +3389,8 @@ where
                             filter,
                             ss_hor,
                             ss_ver,
-                            fi.bw,
-                            fi.bh,
+                            &crate::scale::ScaleFactors::from_svc(&recon.svc[refs[i] as usize])
+                                .with_anchor(recon.scratch.mc_anchor),
                             recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
@@ -3173,17 +3424,13 @@ where
                     } else {
                         (&tmp1[0], &tmp0[0])
                     };
-                    mc_mask(
-                        recon.frame.exec,
-                        bd,
-                        dst,
-                        uv_stride,
-                        a0,
-                        a1,
-                        cw,
-                        ch,
-                        &seg_mask,
-                    );
+                    // Split block: the mask was assembled per luma piece.
+                    let mask: &[u8] = if recon.scratch.mc_anchor.cu_w4 != 0 {
+                        &recon.scratch.split_seg_mask
+                    } else {
+                        &seg_mask
+                    };
+                    mc_mask(recon.frame.exec, bd, dst, uv_stride, a0, a1, cw, ch, mask);
                 }
                 _ => {
                     if cwp_idx == 8 {

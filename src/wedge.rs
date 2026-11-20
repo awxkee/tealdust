@@ -539,9 +539,12 @@ fn fill_tmvp(dst: &mut [u8], src: &[u8], w8: usize, h8: usize) {
     for (y, dst_row) in dst.chunks_exact_mut(w8).take(h8).enumerate() {
         for (x, dst) in dst_row.iter_mut().enumerate() {
             let mut score = [0i32; 2];
-            let block = &src[(y * 8) * stride + x * 8..];
-            for row in block.chunks_exact(stride).take(8) {
-                for &p in &row[..8] {
+            // Index each of the 8 rows explicitly: chunking the tail that starts
+            // at column x*8 drops the cell's last row whenever x > 0 in the
+            // bottom 8-row band (the tail is shorter than 8 full strides).
+            for r in 0..8 {
+                let row = &src[(y * 8 + r) * stride + x * 8..][..8];
+                for &p in row {
                     score[0] += (p < 4) as i32;
                     score[1] += (p > 60) as i32;
                 }

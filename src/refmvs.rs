@@ -42,6 +42,9 @@ pub(crate) const INVALID_TRAJ: u16 = 0x8080;
 pub(crate) const RP_PROJ_ROWS_ABOVE: usize = 3;
 pub(crate) const INVALID_REF2CUR: i8 = -32;
 
+/// `mfmv_ref2ref` marker for a ref-of-ref distance outside [-31, 31].
+pub(crate) const INVALID_REF2REF: i8 = i8::MIN;
+
 static DIV_MULT: [u16; 32] = [
     0, 16384, 8192, 5461, 4096, 3276, 2730, 2340, 2048, 1820, 1638, 1489, 1365, 1260, 1170, 1092,
     1024, 963, 910, 862, 819, 780, 744, 712, 682, 655, 630, 606, 585, 564, 546, 528,
@@ -54,7 +57,8 @@ pub(crate) fn mv_projection(mv: Mv, num: i32, den: i32, min: i32, max: i32) -> M
     // values in that grid, so clamp here to keep the DIV_MULT index valid and
     // avoid overflow. No-op for valid input.
     let num = num.clamp(-31, 31);
-    let den = den.clamp(1, 31);
+    // den 0 (a same-POC reference) gives DIV_MULT[0] = 0, i.e. a zero MV.
+    let den = den.clamp(0, 31);
     let (y, x) = (mv.y(), mv.x());
     let frac = num as i64 * DIV_MULT[den as usize] as i64;
     let py = y as i64 * frac;
@@ -166,9 +170,10 @@ pub(crate) fn get_warpmv_proj(
     }
 }
 
-pub(crate) fn abs_closest_ref(ref2ref: &[i8; 7], cur2ref: &[i8; 7], dir: bool) -> u32 {
+pub(crate) fn abs_closest_ref(ref2ref: &[i8; 7], cur2ref: &[i8; 7], cnt: u8, dir: bool) -> u32 {
     let mut b = 0xffu32;
-    for n in 0..7 {
+    // Only the reference's own active refs count (dav2d d1bde23607).
+    for n in 0..(cnt as usize).min(7) {
         let a = (ref2ref[n] as i32).unsigned_abs();
         if ((cur2ref[n] > 0 && ref2ref[n] > 0 && dir) || (cur2ref[n] < 0 && ref2ref[n] < 0 && !dir))
             && a < b
@@ -192,7 +197,7 @@ pub(crate) fn topo_insert(
     }
     rev_order[idx] = 0;
     if refcnt[idx] != 0 {
-        for n in 0..7 {
+        for n in 0..(refcnt[idx] as usize).min(7) {
             let r_idx = cnv[idx][n];
             if r_idx == -1 {
                 continue;
@@ -1177,15 +1182,17 @@ pub(crate) fn fill_gap_traj(
     }
 }
 
+/// AVM `decide_rmb_unit_update_count`: the superblock is split into 8x8 bank
+/// units (8/16/32 px for sb64/sb128/sb256), each granting update hits.
 pub(crate) fn bank_update(
     bank: &mut MvBank,
     bs: crate::levels::BlockSize,
     by4: i32,
     bx4: i32,
     sbsz: i32,
-    sb128: bool,
 ) {
-    let bsh = 1 + sb128 as i32;
+    // sbsz is in 4px units (16/32/64): unit size in 4px units = sbsz / 8.
+    let bsh = sbsz.trailing_zeros() as i32 - 3;
     let bsz = 1 << bsh;
     let b_dim = &crate::tables::BLOCK_DIMENSIONS[bs as usize];
     if (by4 | bx4) & (sbsz - 1) == 0 {
@@ -1205,11 +1212,10 @@ pub(crate) fn bank_add(
     by4: i32,
     bx4: i32,
     sbsz: i32,
-    sb128: bool,
     b: &Av2Block,
 ) {
     debug_assert!(b.is_intra == 0 || b.intrabc != 0);
-    bank_update(bank, bs, by4, bx4, sbsz, sb128);
+    bank_update(bank, bs, by4, bx4, sbsz);
     if bank.hits[0] >= 64 || bank.hits[1] >= 16 || bank.avail == 0 {
         return;
     }
@@ -3068,7 +3074,8 @@ pub(crate) fn load_tmvs(
                 }
 
                 let ref2ref = rf.mfmv_ref2ref[n][b_ref as usize];
-                if ref2ref == 0 || (ref2ref < 0) != (ref_sign != 0) {
+                // ref2ref 0 (same-POC ref) still projects (AVM pos_valid).
+                if ref2ref == INVALID_REF2REF || (ref2ref != 0 && (ref2ref < 0) != (ref_sign != 0)) {
                     continue;
                 }
                 let mv1 = scale_mv(b_mv, -rf.mfmv_ref2sf[n][b_ref as usize][0]);
@@ -3313,13 +3320,24 @@ pub(crate) fn init_frame(
     let mut ref2cur = [[0i8; 7]; 7];
     let mut refref2curref_idx = [[0i8; 7]; 7];
     let mut have_ref_sign = [[0u8; 2]; 7];
+    // A reference with a reference at its own POC (an overlay / inter-layer
+    // ref) is no trajectory endpoint for other refs' projections.
+    let mut is_overlay = [false; 7];
+    for i in 0..n_refs {
+        for n in 0..(refcnt[i] as usize).min(7) {
+            if ref_ref_poc[i][n] == ref_poc[i] {
+                is_overlay[i] = true;
+            }
+        }
+    }
 
     for i in 0..n_refs {
         let poc_diff = get_poc_diff(nbits, ref_poc[i] as i32, poc);
         rf.ref_sign[i] = (poc_diff < 0) as u8;
         rf.pocdiff[i] = iclip(get_poc_diff(nbits, poc, ref_poc[i] as i32), -31, 31) as i8;
         rf.abspocdiff[i] = rf.pocdiff[i].unsigned_abs();
-        let rn = if refcnt[i] != 0 { 7 } else { 0 };
+        // AVM stores -1 for ref-of-ref slots past the reference's own count.
+        let rn = (refcnt[i] as usize).min(7);
         for n in 0..rn {
             ref2ref[i][n] = get_poc_diff(nbits, ref_poc[i] as i32, ref_ref_poc[i][n] as i32) as i8;
             if ref2ref[i][n] > 0 {
@@ -3331,7 +3349,7 @@ pub(crate) fn init_frame(
             ref2cur[i][n] = get_poc_diff(nbits, poc, ref_ref_poc[i][n] as i32) as i8;
             let mut m = 0;
             while m < n_refs {
-                if ref_ref_poc[i][n] == ref_poc[m] {
+                if ref_ref_poc[i][n] == ref_poc[m] && !is_overlay[m] {
                     break;
                 }
                 m += 1;
@@ -3366,9 +3384,9 @@ pub(crate) fn init_frame(
         } else {
             get_poc_diff(nbits, tip0poc, tip1poc)
         };
-        rf.tip.delta = d2.unsigned_abs() as i8;
+        rf.tip.delta = imin(d2.abs(), 31) as i8;
         let d1 = rf.pocdiff[tip_ref[0] as usize] as i32;
-        let dv = DIV_MULT[imin(d2.abs(), 31) as usize] as i32;
+        let dv = DIV_MULT[rf.tip.delta as usize] as i32;
         rf.tip.sf[0] = imin(d1.abs(), 31) * dv;
         if (d1 < 0) ^ (d2 < 0) {
             rf.tip.sf[0] *= -1;
@@ -3385,14 +3403,15 @@ pub(crate) fn init_frame(
     rf.mfmv_mask = 0;
     if frm_hdr.use_ref_frame_mvs != 0 && nbits != 0 {
         let mut order = [0u8; 7];
+        // AVM's exchange sort (stable differently on equal POC distances).
         for n in 0..n_refs {
-            let pocdiff = rf.pocdiff[n];
-            let mut m = n;
-            while m > 0 && pocdiff > rf.pocdiff[order[m - 1] as usize] {
-                order[m] = order[m - 1];
-                m -= 1;
+            let mut cur = n as u8;
+            for m in 0..n {
+                if rf.pocdiff[cur as usize] > rf.pocdiff[order[m] as usize] {
+                    std::mem::swap(&mut order[m], &mut cur);
+                }
             }
-            order[m] = n as u8;
+            order[n] = cur;
         }
         let mut first_fut = 0usize;
         while first_fut < n_refs && rf.ref_sign[order[first_fut] as usize] != 0 {
@@ -3432,14 +3451,18 @@ pub(crate) fn init_frame(
                     ref_poc[tip_ref[1 - o] as usize] as i32,
                     ref_poc[tip_ref[o] as usize] as i32,
                 ) < 0) as u8;
-                let n_mfmvs = rf.n_mfmvs as usize;
-                rf.mfmv[n_mfmvs] = MfmvRef {
-                    reference: tip_ref[1 - o] as u8,
-                    tgt: tip_ref[o],
-                    dir,
-                };
-                rf.n_mfmvs += 1;
-                ref_done[tip_ref[1 - o] as usize][dir as usize] = 1;
+                // Refs without a usable motion field (intra frames, other
+                // sizes) are not projected (dav2d 9b5d2f6ef6).
+                if !rf.rp_ref[tip_ref[1 - o] as usize].is_empty() {
+                    let n_mfmvs = rf.n_mfmvs as usize;
+                    rf.mfmv[n_mfmvs] = MfmvRef {
+                        reference: tip_ref[1 - o] as u8,
+                        tgt: tip_ref[o],
+                        dir,
+                    };
+                    rf.n_mfmvs += 1;
+                    ref_done[tip_ref[1 - o] as usize][dir as usize] = 1;
+                }
             }
 
             'adj: for n in 0..2usize {
@@ -3465,10 +3488,15 @@ pub(crate) fn init_frame(
                 };
                 let mut ord = 0;
                 if ref1 >= 0 && ref2 >= 0 {
-                    let acr1 =
-                        abs_closest_ref(&ref2ref[ref1 as usize], &ref2cur[ref1 as usize], false);
-                    let acr2 =
-                        abs_closest_ref(&ref2ref[ref2 as usize], &ref2cur[ref2 as usize], true);
+                    let acr = |r: usize, dir: bool| {
+                        if rf.rp_ref[r].is_empty() {
+                            0xff
+                        } else {
+                            abs_closest_ref(&ref2ref[r], &ref2cur[r], refcnt[r], dir)
+                        }
+                    };
+                    let acr1 = acr(ref1 as usize, false);
+                    let acr2 = acr(ref2 as usize, true);
                     ord = (acr1 < acr2) as i32;
                 }
                 if ord != 0 && ref_done[ref1 as usize][1] == 0 {
@@ -3544,7 +3572,8 @@ pub(crate) fn init_frame(
             while n_idx > 0 {
                 n_idx -= 1;
                 let r = topo_order[n_idx] as usize;
-                let dir = (rf.pocdiff[r] >= 0) as usize;
+                // a same-POC ref is on side 0
+                let dir = (rf.pocdiff[r] > 0) as usize;
                 if ref_done[r][dir] == 0 {
                     let nm = rf.n_mfmvs as usize;
                     rf.mfmv[nm] = MfmvRef {
@@ -3579,6 +3608,12 @@ pub(crate) fn init_frame(
                 }
             }
 
+            // reduced_ref_frame_mvs_mode projects only the first selected
+            // reference combination (AVM caps process_count to 1).
+            if seq_hdr.reduced_ref_frame_mvs_mode != 0 {
+                rf.n_mfmvs = imin(rf.n_mfmvs, 1);
+            }
+
             for n in 0..rf.n_mfmvs as usize {
                 let rpoc = ref_poc[rf.mfmv[n].reference as usize] as i32;
                 let diff1 = get_poc_diff(nbits, rpoc, frm_hdr.frame_offset as i32);
@@ -3586,24 +3621,31 @@ pub(crate) fn init_frame(
                     rf.mfmv_ref2cur[n] = INVALID_REF2CUR;
                 } else {
                     rf.mfmv_ref2cur[n] = diff1 as i8;
-                    for m in 0..7 {
+                    let mcnt = (refcnt[rf.mfmv[n].reference as usize] as usize).min(7);
+                    for m in mcnt..7 {
+                        rf.mfmv_ref2ref[n][m] = INVALID_REF2REF;
+                        rf.mfmv_ref2idx[n][m] = -1;
+                    }
+                    for m in 0..mcnt {
                         let rrpoc = ref_ref_poc[rf.mfmv[n].reference as usize][m] as i32;
                         let diff2 = get_poc_diff(nbits, rpoc, rrpoc);
-                        rf.mfmv_ref2ref[n][m] = if ((diff2 + 31) as u32) < 63 {
-                            diff2 as i8
-                        } else {
-                            0
-                        };
-                        let mut l = 0usize;
-                        while l < 7 {
-                            if rrpoc == ref_poc[l] as i32 {
-                                break;
+                        let in_range = ((diff2 + 31) as u32) < 63;
+                        rf.mfmv_ref2ref[n][m] = if in_range { diff2 as i8 } else { INVALID_REF2REF };
+                        // refs at the same POC as the projected ref have no
+                        // trajectory endpoint (overlays, inter-layer refs)
+                        let mut l = n_refs;
+                        if diff2 != 0 {
+                            l = 0;
+                            while l < n_refs {
+                                if rrpoc == ref_poc[l] as i32 {
+                                    break;
+                                }
+                                l += 1;
                             }
-                            l += 1;
                         }
-                        rf.mfmv_ref2idx[n][m] = if l == 7 { -1 } else { l as i8 };
+                        rf.mfmv_ref2idx[n][m] = if l == n_refs { -1 } else { l as i8 };
                         let d1 = rf.mfmv_ref2cur[n] as i32;
-                        let d2 = rf.mfmv_ref2ref[n][m] as i32;
+                        let d2 = if in_range { diff2 } else { 0 };
                         let dv = DIV_MULT[imin(d2.abs(), 31) as usize] as i32;
                         rf.mfmv_ref2sf[n][m][0] = imin(d1.abs(), 31) * dv;
                         if (d1 < 0) ^ (d2 < 0) {

@@ -1152,10 +1152,18 @@ fn decode_coefs_header<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
 
     if all_skip != 0 {
         *res_ctx = 0x40;
+        // Lossless: WHT only exists at 4x4; larger lossless TUs are IDTX
+        // (dav2d decode_coefs).
         *txtp = if !chroma && p.fsc {
             txtp::IDTX as u16
+        } else if p.lossless {
+            if t_dim.max == 0 {
+                txtp::WHT_WHT as u16
+            } else {
+                txtp::IDTX as u16
+            }
         } else {
-            (p.lossless as u16) * txtp::WHT_WHT as u16
+            txtp::DCT_DCT as u16
         };
         return CoefHeader::Done(-1);
     }
@@ -1268,11 +1276,18 @@ fn decode_coefs_header<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
             if p.intra {
                 *txtp = TXTP_FROM_UVMODE[p.uv_mode] as u16;
             }
+            // Restrict the inherited (inter) / mode-derived (intra) type to the
+            // chroma transform set (AVM av2_get_tx_type): (flip)adst sides only
+            // below 32, identity sides only below 64, 32x32 allows only
+            // DCT_DCT/IDTX, and 64x64, 64x32, 32x64 only DCT_DCT.
             let t = *txtp as u8;
-            if (t_dim.w >= 8 && t & 0x02 != 0)
-                || (t_dim.h >= 8 && t & 0x40 != 0)
-                || (p.tx == 2 /* TX_16X16 */
-                    && ((t & 0x47 == 0x41) || (t & 0xe2 == 0x22)))
+            use crate::levels::txsz;
+            let (lw, lh) = (t_dim.lw as usize, t_dim.lh as usize);
+            if (lw >= txsz::TX_32X32 && t & (if lw == txsz::TX_64X64 { 0x03 } else { 0x02 }) != 0)
+                || (lh >= txsz::TX_32X32 && t & (if lh == txsz::TX_64X64 { 0x60 } else { 0x40 }) != 0)
+                || (p.tx == txsz::TX_16X16 && ((t & 0x47 == 0x41) || (t & 0xe2 == 0x22)))
+                || (p.tx == txsz::TX_32X32 && (t == txtp::V_DCT || t == txtp::H_DCT))
+                || matches!(p.tx, txsz::TX_64X64 | txsz::RTX_64X32 | txsz::RTX_32X64)
             {
                 *txtp = txtp::DCT_DCT as u16;
             } else if t == txtp::IDTX_INV {
@@ -1501,7 +1516,6 @@ fn decode_coefs_idtx<C: Coeff, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
         levels[off] = tok as i8;
     }
 
-    let dq = p.dq_tbl[1];
     let dq_shift = dq_shift - tcq_en as i32;
     for i in bob..(sz + 1) {
         let rc = scan[i as usize] as usize;
@@ -1509,6 +1523,9 @@ fn decode_coefs_idtx<C: Coeff, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
         if tok_val == 0 {
             continue;
         }
+        // AVM get_dqv(dequant, scan[c]): position 0 takes the DC quantizer
+        // here too. Only visible when a DC delta-q makes it differ from AC.
+        let dq = p.dq_tbl[(rc != 0) as usize];
         let x = rc >> shift;
         let y = rc & mask;
         let off = (1 + x) * stride + (1 + y);
@@ -1673,13 +1690,15 @@ macro_rules! decode_coefs_impl {
     // Upper 16 bits: number of non-zero coefficients decoded so far.
     // Middle 15 bits: scratch space for the parity accumulation.
     // Low bit: hidden DC parity.
-    let ph_enabled =
-        !chroma && p.parity_hiding && *txtp != txtp::IDTX as u16 && !p.lossless && eob > 3;
+    // Compare the transform type alone: bits 8+ carry the secondary transform
+    // or, for chroma, the CCTX type (dav2d e4556157b2).
+    let base_txtp = *txtp as u8;
+    let ph_enabled = !chroma && p.parity_hiding && base_txtp != txtp::IDTX && !p.lossless && eob > 3;
     let mut ph_state: u32 = if ph_enabled { 2 } else { 0 };
     // QMs apply to 2D non-identity transforms only (dav2d `decode_coefs`).
     let has_qm = p.qm.is_some()
-        && *txtp != txtp::IDTX as u16
-        && *txtp != txtp::WHT_WHT as u16
+        && base_txtp != txtp::IDTX
+        && base_txtp != txtp::WHT_WHT
         && tx_class != 2
         && tx_class != 3;
     let dq_shift = tcq_en as i32 + 3 + imax(0, t_dim.ctx as i32 - 2);

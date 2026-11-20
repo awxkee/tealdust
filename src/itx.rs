@@ -48,7 +48,7 @@ pub(crate) fn inv_txfm_add<BD: BitDepth>(
 ) {
     let exec = crate::exec_context::ExecContext::new();
     inv_txfm_add_ctx(
-        &exec, bd, dst, dst_off, stride, coeff, txtp, eob, tx, tmp_buf,
+        &exec, bd, dst, dst_off, stride, coeff, txtp, eob, tx, false, tmp_buf,
     );
 }
 
@@ -1964,10 +1964,60 @@ pub(crate) fn inv_txfm_add_ctx<BD: BitDepth>(
     txtp: u32,
     eob: i32,
     tx: usize,
+    lossless: bool,
     tmp_buf: &mut [i32; ITX_TMP_PIXELS],
 ) {
+    // `& 0xe7` drops the tx class, so IDTX_INV (IDTX with the inverted scan
+    // class) takes this path too.
+    if lossless && (txtp & 0xe7) == txtp_kind::IDTX as u32 {
+        lossless_idtx_add(exec, bd, dst, dst_off, stride, coeff, txtp, tx);
+        return;
+    }
     inv_txfm_add_typed(
         exec, bd, dst, dst_off, stride, coeff, txtp, eob, tx, tmp_buf,
+    );
+}
+
+/// Lossless identity transform (AVM `av2_lossless_inv_idtx_add{,_horz,_vert}`,
+/// CONFIG_IMPROVE_LOSSLESS_TXM): `Residual = Dequant >> (3 - tx_scale)` with
+/// `tx_scale = (w*h > 256)` (lossless TUs are at most 32x32), followed by the
+/// plain or DPCM (row/column accumulating) clipped add. The generic identity
+/// 1-D passes only approximate this with their sqrt(2) scales and rounding.
+#[allow(clippy::too_many_arguments)]
+fn lossless_idtx_add<BD: BitDepth, C: Coeff>(
+    exec: &crate::exec_context::ExecContext,
+    bd: BD,
+    dst: &mut [BD::Pixel],
+    dst_off: usize,
+    stride: usize,
+    coeff: &mut [C],
+    txtp: u32,
+    tx: usize,
+) {
+    let t_dim = &TXFM_DIMENSIONS[tx];
+    let w = 4 * t_dim.w as usize;
+    let h = 4 * t_dim.h as usize;
+    debug_assert!(w <= 32 && h <= 32);
+    let shift = 3 - (w * h > 256) as u32;
+    let mut res = [0i32; 32 * 32];
+    // Coefficients are stored column-major: (y, x) lives at `y + x * h`.
+    for y in 0..h {
+        for x in 0..w {
+            res[y * w + x] = coeff[y + x * h].to_i32() >> shift;
+        }
+    }
+    coeff[..w * h].fill(C::ZERO);
+    residual_add_ctx(
+        exec,
+        bd,
+        &mut dst[dst_off..],
+        stride,
+        &res[..w * h],
+        w,
+        h,
+        0,
+        0,
+        (txtp >> TX_TYPE_EXT_SHIFT) as u8,
     );
 }
 

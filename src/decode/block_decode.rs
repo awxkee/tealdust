@@ -880,12 +880,23 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                 ..Default::default()
             };
             let s_off = by4r * 128 + (bx & 127) as usize;
-            let t_src = crate::refmvs::TemporalBlock::default();
+            // An IntraBC block in an inter frame stores an invalid (intra) entry
+            // in the temporal MV field, like other intra blocks (AVM
+            // av2_copy_frame_mvs); otherwise the cell keeps a stale MV.
+            let t_src = refmvs::TemporalBlock {
+                mv: refmvs::TemporalBlockMv::from_packed(refmvs::INVALID_TRAJ as u32 * 0x10001),
+                reference: RefPair::from_pair(-1),
+            };
+            let write_temporal = fi.is_inter_or_switch
+                && recon.seq_hdr.ref_frame_mvs
+                && !recon.cur_mvs.is_empty();
+            let t_stride = recon.rf.rp_stride;
+            let t_off = (by >> 1) as isize * t_stride + (bx >> 1) as isize;
             crate::refmvs::splat_mv(
                 &mut recon.rt.r[s_off..],
                 &mut s_src,
-                None,
-                0,
+                if write_temporal { Some(&mut recon.cur_mvs[t_off as usize..]) } else { None },
+                if write_temporal { t_stride } else { 0 },
                 &t_src,
                 bw4,
                 bh4,
@@ -909,7 +920,6 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                     by,
                     bx,
                     fi.sb_step,
-                    fi.sb128 != 0,
                     b,
                 );
             }
@@ -966,7 +976,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                 );
             }
             if recon.seq_hdr.refmv_bank {
-                refmvs::bank_update(&mut recon.rt.bank, bs, by, bx, fi.sb_step, fi.sb128 != 0);
+                refmvs::bank_update(&mut recon.rt.bank, bs, by, bx, fi.sb_step);
             }
         }
     }
@@ -1225,7 +1235,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
             }
 
             if recon.seq_hdr.refmv_bank {
-                refmvs::bank_add(&mut recon.rt.bank, bs, by, bx, fi.sb_step, fi.sb128 != 0, b);
+                refmvs::bank_add(&mut recon.rt.bank, bs, by, bx, fi.sb_step, b);
             }
             // derived warp matrix to the per-ref warp bank so later WARP_DELTA /
             // WARP_MV blocks can use it as a base candidate.
@@ -1417,7 +1427,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
             }
 
             if recon.seq_hdr.refmv_bank {
-                refmvs::bank_add(&mut recon.rt.bank, bs, by, bx, fi.sb_step, fi.sb128 != 0, b);
+                refmvs::bank_add(&mut recon.rt.bank, bs, by, bx, fi.sb_step, b);
             }
             splat_tworef_mv(recon, b, bx, by, by4r, bw4, bh4, bs);
         } else if is_comp {
@@ -1584,7 +1594,20 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
             }
 
             if recon.seq_hdr.refmv_bank {
-                refmvs::bank_add(&mut recon.rt.bank, bs, by, bx, fi.sb_step, fi.sb128 != 0, b);
+                refmvs::bank_add(&mut recon.rt.bank, bs, by, bx, fi.sb_step, b);
+            }
+            // AVM update_warp_param_bank: a compound warp block adds the model of
+            // each reference (`can_use_second_model`), not just the first.
+            if b.inter_data().motion_mode > MotionMode::InterIntra as u8 {
+                for i in 0..2 {
+                    if recon.warpmv[i].wm_type != crate::headers::WarpedMotionType::Invalid {
+                        crate::refmvs::warp_bank_add(
+                            &mut recon.rt.warp,
+                            &recon.warpmv[i],
+                            refs[i] as usize,
+                        );
+                    }
+                }
             }
             splat_tworef_mv(recon, b, bx, by, by4r, bw4, bh4, bs);
         }
@@ -1796,7 +1819,10 @@ where
         && bw4 * bh4 > 2
         && intra_region == 0
     {
-        let ctx = nx_skip_mode[0] as usize + nx_skip_mode[1] as usize;
+        // AVM sums only the neighbours it found (`neighbors_line_buffer`); with
+        // one neighbour the gathered pair holds it twice.
+        let ctx = nx_skip_mode[0] as usize * (n_ctx > 0) as usize
+            + nx_skip_mode[1] as usize * (n_ctx > 1) as usize;
         b.skip_mode = msac.decode_bool_adapt(cdf_m.skip_mode(ctx)) as u8;
     } else {
         b.skip_mode = 0;
@@ -1806,7 +1832,17 @@ where
     if b.skip_mode != 0 {
         b.is_intra = 0;
     } else if fi.is_inter_or_switch && intra_region == 0 {
-        if fi.has_chroma_layout && lbs != cbs {
+        // AVM read_is_inter_block: a block sharing its chroma unit with
+        // neighbours (chroma_ref_info.offset_started) is inter. AVM derives the
+        // grouping from 4:2:0 subsampling for monochrome too, where tealdust
+        // has no chroma tree: there the group members are the 4-wide/4-high
+        // blocks.
+        let shares_chroma_unit = if fi.has_chroma_layout {
+            lbs != cbs
+        } else {
+            ctx.mono_block_os
+        };
+        if shares_chroma_unit {
             b.is_intra = 0;
         } else {
             // gathered neighbors (nx[0], nx[n_ctx-1]), plus 1 if all are intra.
@@ -1862,7 +1898,9 @@ where
             b.skip_txfm = 0;
         }
     } else {
-        let ctx = nx_skip_txfm[0] as usize + nx_skip_txfm[1] as usize + b.skip_mode as usize * 3;
+        let ctx = nx_skip_txfm[0] as usize * (n_ctx > 0) as usize
+            + nx_skip_txfm[1] as usize * (n_ctx > 1) as usize
+            + b.skip_mode as usize * 3;
         b.skip_txfm = msac.decode_bool_adapt(cdf_m.skip_txfm(ctx)) as u8;
     }
 
@@ -1934,9 +1972,9 @@ where
         let gdf_bs = 16 << gdf_sz_log2;
         if (bx | by) & (gdf_bs - 1) == 0 {
             let idx = (((by & 48) >> 2) + ((bx & 48) >> 4)) as usize;
-            let flag = if fi.gdf_enabled == AdaptiveBoolean::Adaptive
-                && imax(fi.cur_w, fi.cur_h) > 4 * gdf_bs
-            {
+            // Adaptive is only signalled when the frame has more than one GDF
+            // unit (AVM read_gdf: gdf_mode == 2 && gdf_block_num > 1).
+            let flag = if fi.gdf_enabled == AdaptiveBoolean::Adaptive {
                 msac.decode_bool_adapt(cdf_m.gdf()) as u8
             } else {
                 (fi.gdf_enabled != AdaptiveBoolean::Off) as u8
@@ -1961,28 +1999,32 @@ where
             if fi.cdef_n_strengths == 1 {
                 v = 0i8;
             } else {
-                let left_cdef_idx = if bx - 16 < fi.tile_col_start {
+                // The left/top units are unavailable outside the tile or the
+                // superblock; an available unit with only skipped blocks has
+                // cdef_idx -1, which counts as "not index 0" (AVM
+                // av2_get_cdef_context).
+                let have_left = bx - 16 >= fi.tile_col_start;
+                let have_top = (by & !15) & (fi.sb_step - 1) != 0;
+                let left_cdef_idx = if !have_left {
                     -1i32
                 } else if idx & 3 != 0 {
                     recon.lf_mask[recon.lf_idx].cdef_idx[idx - 1] as i32
                 } else {
                     recon.lf_mask[recon.lf_idx - 1].cdef_idx[idx + 3] as i32
                 };
-                let top_cdef_idx = if (by & !15) & (fi.sb_step - 1) == 0 {
+                let top_cdef_idx = if !have_top {
                     -1i32
                 } else if idx & 0xc != 0 {
                     recon.lf_mask[recon.lf_idx].cdef_idx[idx - 4] as i32
                 } else {
                     recon.lf_mask[recon.lf_idx - recon.sb256w as usize].cdef_idx[idx + 12] as i32
                 };
-                let ctx = if (left_cdef_idx | top_cdef_idx) != -1 {
-                    // both edges available
+                let ctx = if have_left && have_top {
                     let mut c = (left_cdef_idx == 0) as i32 + (top_cdef_idx == 0) as i32;
                     c += (c == 2) as i32;
                     c
                 } else {
-                    // C: !(left & top) * 2  (logical-not, so 0 -> 1, nonzero -> 0)
-                    ((left_cdef_idx & top_cdef_idx) == 0) as i32 * 2
+                    2 * ((have_left && left_cdef_idx == 0) || (have_top && top_cdef_idx == 0)) as i32
                 };
                 if msac.decode_bool_adapt(cdf_m.cdef_idx0(ctx as usize)) != 0 {
                     v = 0;
@@ -2636,9 +2678,15 @@ where
             inter.refine_mv = 0;
         }
 
-        // TIP decision (AVM `is_tip_allowed_bsize`: own chroma, both sides >= 8)
-        let is_tip =
-            if b.skip_mode == 0 && fi.tip_frame_mode != 0 && cbs == lbs && imin(bw4, bh4) >= 2 {
+        // TIP decision (AVM `is_tip_allowed_bsize`: own chroma, both sides >= 8).
+        // Monochrome uses AVM's 4:2:0 chroma-reference grouping instead.
+        let owns_chroma_unit =
+            if fi.has_chroma_layout { cbs == lbs } else { !ctx.mono_block_os };
+        let is_tip = if b.skip_mode == 0
+            && fi.tip_frame_mode != 0
+            && owns_chroma_unit
+            && imin(bw4, bh4) >= 2
+        {
                 let ctx = (if n_ctx >= 1 {
                     (nx_ref0[0] == TIP_FRAME as i8) as usize
                 } else {
@@ -2856,10 +2904,14 @@ where
             };
 
             let mut final_inter_mode = inter_mode;
+            // AVM opfl_allowed_cur_refs_bsize: refs on opposite sides, where a
+            // same-POC ref (distance 0) counts as a future ref, and unscaled.
             if fi.opfl_refine_type == 1
                 && inter_mode != CompInterPredMode::GlobalMvGlobalMv as u8
                 && imin(bw4, bh4) >= 2
-                && fi.refdir[ref0 as usize] != fi.refdir[ref1 as usize]
+                && (fi.refdist[ref0 as usize] >= 0) != (fi.refdist[ref1 as usize] >= 0)
+                && recon.svc[ref0 as usize][0].scale == 0
+                && recon.svc[ref1 as usize][0].scale == 0
             {
                 let ctx = (inter_mode > CompInterPredMode::NearMvNearMv as u8) as usize;
                 if msac.decode_bool_adapt(cdf_m.opfl(ctx)) != 0 {
@@ -2931,19 +2983,32 @@ where
                 let match_ref_a = |off: usize, r: i8| -> bool {
                     a.reference[0][off] == r || a.reference[1][off] == r
                 };
+                // At an SB-row top edge the above neighbours come from the
+                // previous SB row's bottom line (8x8 units, `rt.ra`); the 4x4
+                // above context may already hold this row's blocks there.
+                let ra = &recon.rt.ra;
+                let ra_off = recon.rt.ra_off;
+                let match_ra = |x: i32, r: i8| -> bool {
+                    let blk = &ra[ra_off + (x >> 1) as usize];
+                    blk.reference.ref_at(0) == r || blk.reference.ref_at(1) == r
+                };
+                // AVM gates each neighbour on it lying inside the tile; at a
+                // tile's top row `rt.ra` still holds the previous frame's line.
                 let match_refs = |r: i8| -> bool {
-                    let left = match_ref_l(by4, r)
-                        || (by + bh4 <= fi.tile_row_end && match_ref_l(by4 + bh4 as usize - 1, r));
-                    let top = if is_sb_boundary {
-                        let o0 = bx4 & !1;
-                        match_ref_a(o0, r)
-                            || (((bx + bw4 - 2) & !1) < fi.tile_col_end
-                                && match_ref_a((bx4 + bw4 as usize - 2) & !1, r))
-                    } else {
-                        match_ref_a(bx4, r)
-                            || (bx + bw4 <= fi.tile_col_end
-                                && match_ref_a(bx4 + bw4 as usize - 1, r))
-                    };
+                    let left = have_left
+                        && (match_ref_l(by4, r)
+                            || (by + bh4 <= fi.tile_row_end
+                                && match_ref_l(by4 + bh4 as usize - 1, r)));
+                    let top = have_top
+                        && if is_sb_boundary {
+                            match_ra(bx & !1, r)
+                                || (((bx + bw4 - 2) & !1) < fi.tile_col_end
+                                    && match_ra((bx + bw4 - 2) & !1, r))
+                        } else {
+                            match_ref_a(bx4, r)
+                                || (bx + bw4 <= fi.tile_col_end
+                                    && match_ref_a(bx4 + bw4 as usize - 1, r))
+                        };
                     left || top
                 };
                 if match_refs(ref0) && match_refs(ref1) {
@@ -3018,12 +3083,17 @@ where
                 // refdist[0] = |refdist(ref0)|, refdist[1] = ±|refdist(ref1)| with
                 // the sign set when the two references point in opposite temporal
                 // projection of the non-decoded reference.
-                let rd0 = fi.absrefdist[ref0 as usize] as i32;
-                let mut rd1 = fi.absrefdist[ref1 as usize] as i32;
+                let mut rdist = [
+                    fi.absrefdist[ref0 as usize] as i32,
+                    fi.absrefdist[ref1 as usize] as i32,
+                ];
                 let (start, end) = if is_joint {
-                    let s = (rd0 < rd1) as usize;
+                    // The farther ref carries the coded MVD (AVM
+                    // get_joint_mvd_base_ref_list); the other one's distance is
+                    // negated when the refs lie on opposite sides.
+                    let s = (rdist[0] < rdist[1]) as usize;
                     if (fi.refdir[ref0 as usize] ^ fi.refdir[ref1 as usize]) != 0 {
-                        rd1 = -rd1;
+                        rdist[s ^ 1] = -rdist[s ^ 1];
                     }
                     (s, s + 1)
                 } else {
@@ -3120,10 +3190,13 @@ where
                             (mv_prec as u8) | (6 << 4)
                         };
                         b.inter_data_mut().mv_prec = prec_packed as i8;
+                        // AVM get_mv_projection(diff, sec_ref_dist, first_ref_dist):
+                        // numerator is the derived ref's distance, denominator the
+                        // coded (farther) ref's.
                         let proj = crate::refmvs::mv_projection(
                             b.inter_data().mv[source],
-                            rd1,
-                            rd0,
+                            rdist[derived],
+                            rdist[source],
                             -0xffff,
                             0xffff,
                         );
@@ -3156,6 +3229,7 @@ where
                 && bw4 * bh4 > 4
                 && final_inter_mode != CompInterPredMode::GlobalMvGlobalMv as u8
                 && fi.refdist[ref0 as usize] == -fi.refdist[ref1 as usize]
+                && fi.refdist[ref0 as usize] != 0
                 && recon.svc[ref0 as usize][0].scale == 0
                 && recon.svc[ref1 as usize][0].scale == 0
                 && !opfl_switchable_excl
@@ -3245,14 +3319,32 @@ where
                     n += 1;
                 }
                 // cwp_weighting_factor[!(refdir[ref0] ^ refdir[ref1])][n]
-                // refs' directions: same-direction pair -> row 1, opposite -> row 0.
+                // AVM ref_frame_side: future 1, past 0, same POC -1. Row 1 only
+                // when both refs are future or both are strictly past.
                 static CWP_WEIGHTING_FACTOR: [[i8; 5]; 2] = [[8, 12, 4, 10, 6], [8, 12, 4, 20, -4]];
-                let xor = (fi.refdir[ref0 as usize] ^ fi.refdir[ref1 as usize]) & 1;
-                let row = (xor == 0) as usize;
+                let d0 = fi.refdist.get(ref0 as usize).copied().unwrap_or(1);
+                let d1 = fi.refdist.get(ref1 as usize).copied().unwrap_or(1);
+                let row = ((d0 > 0 && d1 > 0) || (d0 < 0 && d1 < 0)) as usize;
                 b.inter_data_mut().cwp_idx = CWP_WEIGHTING_FACTOR[row][n as usize];
             }
 
-            if refine_mv_val != 0 || final_inter_mode >= CompInterPredMode::OpflNearMvNearMv as u8 {
+            // AVM opfl_allowed_cur_pred_mode, REFINE_ALL: optical flow without a
+            // coded flag for plain-average, equal-weight, translational compound
+            // blocks of a non-OPFL mode (other than GLOBAL_GLOBALMV), under the
+            // same reference/size rules as the switchable OPFL flag.
+            let opfl_all = fi.opfl_refine_type == 2
+                && final_inter_mode >= CompInterPredMode::NearMvNearMv as u8
+                && final_inter_mode < CompInterPredMode::OpflNearMvNearMv as u8
+                && final_inter_mode != CompInterPredMode::GlobalMvGlobalMv as u8
+                && b.inter_data().cwp_idx == 8
+                && b.inter_data().motion_mode == MotionMode::Translation as u8
+                && b.inter_data().comp_type == 1
+                && imin(bw4, bh4) >= 2
+                && (fi.refdist[ref0 as usize] >= 0) != (fi.refdist[ref1 as usize] >= 0)
+                && recon.svc[ref0 as usize][0].scale == 0
+                && recon.svc[ref1 as usize][0].scale == 0;
+            b.inter_data_mut().opfl_all = opfl_all as u8;
+            if refine_mv_val != 0 || b.inter_data().is_opfl() {
                 b.inter_data_mut().filter = 2; // SHARP
             } else if fi.subpel_filter_mode == 4 && has_subpel_filter {
                 const N_SW: u8 = N_SWITCHABLE_FILTERS as u8;
@@ -3408,7 +3500,12 @@ where
             }
 
             if !is_tip && inter_mode <= InterPredMode::NewMv as u8 {
-                if fi.bawp && inter_mode != InterPredMode::GlobalMv as u8 && imin(bw4, bh4) >= 2 {
+                // BAWP is off when the reference is at a different resolution.
+                if fi.bawp
+                    && inter_mode != InterPredMode::GlobalMv as u8
+                    && imin(bw4, bh4) >= 2
+                    && recon.svc[ref0 as usize][0].scale == 0
+                {
                     let bawp0 = msac.decode_bool_adapt(cdf_m.bawp(0)) as u8;
                     if bawp0 != 0 {
                         let ctx = if inter_mode == InterPredMode::NewMv as u8 {
@@ -3477,10 +3574,16 @@ where
                                 && match_ref_l(by4 + bh4 as usize - 1)));
                     let top_match = have_top && {
                         if is_sb_boundary {
-                            let o0 = bx4 & !1;
-                            match_ref_a(o0)
+                            // previous SB row's bottom line (8x8 units, `rt.ra`)
+                            let ra = &recon.rt.ra;
+                            let ra_off = recon.rt.ra_off;
+                            let match_ra = |x: i32| -> bool {
+                                let blk = &ra[ra_off + (x >> 1) as usize];
+                                blk.reference.ref_at(0) == ref0 || blk.reference.ref_at(1) == ref0
+                            };
+                            match_ra(bx & !1)
                                 || (((bx + bw4 - 2) & !1) < fi.tile_col_end
-                                    && match_ref_a((bx4 + bw4 as usize - 2) & !1))
+                                    && match_ra((bx + bw4 - 2) & !1))
                         } else {
                             match_ref_a(bx4)
                                 || (bx + bw4 <= fi.tile_col_end

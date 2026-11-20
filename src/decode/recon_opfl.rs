@@ -163,7 +163,6 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
     let r1 = refs[1] as usize;
     let filter = b.inter_data().filter;
     let cwp_idx = b.inter_data().cwp_idx as i32;
-    let inter_mode = b.inter_data().inter_mode;
     let comp_type = b.inter_data().comp_type;
     let refine_mv = b.inter_data().refine_mv;
     let b_mv = [b.inter_data().mv[0].xy(), b.inter_data().mv[1].xy()];
@@ -172,7 +171,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
     // comp_type AVG is value 1 in this codebase (1=AVG,2=WEDGE,3=SEG), matching
     // C `COMP_INTER_AVG` in `refine = comp_type == COMP_INTER_AVG && refine_mv`.
     let refine = comp_type == 1 && refine_mv != 0;
-    let opfl = inter_mode >= crate::levels::CompInterPredMode::OpflNearMvNearMv as u8;
+    let opfl = b.inter_data().is_opfl();
 
     let refp0 = match recon.refp[r0].clone() {
         Some(p) => p,
@@ -199,7 +198,8 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
     let d1 = fi.absrefdist[r1] as i32;
     let dw0 = apply_sign_i8(1 + (d0 > d1) as i32, -(fi.refdist[r0] as i32));
     let dw1 = apply_sign_i8(1 + (d1 > d0) as i32, fi.refdist[r1] as i32);
-    let dweights = [dw0, dw1];
+    // AVM zeroes the opfl offsets when either reference is at distance 0.
+    let dweights = if d0 != 0 && d1 != 0 { [dw0, dw1] } else { [0, 0] };
 
     let bs = 2 - (b.bs == BlockSize::Bs8x8 as u8 as i8) as i32;
     let t_swap = (recon.rf.ref_flip & (1u64 << (r0 * 8 + r1))) != 0;
@@ -279,9 +279,9 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                             let mut dd = crate::recon::OpflMvDeltaBlock::default();
                             crate::recon::opfl_mv_adj(&res[ri], &mut dd, dweights);
                             ri += 1;
-                            let rmv_idx = (((by + y) & 31) >> 1) as usize * 16
-                                + (byi != 0) as usize * 16
-                                + (((bx + x + bxi) & 31) >> 1) as usize;
+                            let rmv_idx = (((by + y) & 63) >> 1) as usize * 32
+                                + (byi != 0) as usize * 32
+                                + (((bx + x + bxi) & 63) >> 1) as usize;
                             let mut mv = [Mv::default(); 2];
                             mv[0] = Mv {
                                 c: MvXY {
@@ -368,7 +368,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                     }
                 } else {
                     let rmv_idx =
-                        (((by + y) & 31) >> 1) as usize * 16 + (((bx + x) & 31) >> 1) as usize;
+                        (((by + y) & 63) >> 1) as usize * 32 + (((bx + x) & 63) >> 1) as usize;
                     let mut mv = [Mv::default(); 2];
                     mv[0] = Mv {
                         c: MvXY {
@@ -481,10 +481,18 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                     let ri = row * cols + xx;
                     let mut dd = crate::recon::OpflMvDeltaBlock::default();
                     crate::recon::opfl_mv_adj(&res[ri], &mut dd, dweights);
-                    let store_rmv = !(bs == 1 && (bxi != 0 || byi != 0));
-                    let rmv_idx = (((by + y) & 31) >> 1) as usize * 16
-                        + (byi != 0) as usize * 16
-                        + (((bx + bxi) & 31) >> 1) as usize;
+                    // For 8x8 blocks the opfl unit is 4x4: 4:2:0 chroma uses only
+                    // the top-left one, 4:2:2 the left ones and 4:4:4 all four.
+                    // rmv[] is per-block scratch, so they go into the 8x8 cells
+                    // around the block's own (xor keeps them inside rmv[]).
+                    let rmv_idx = if bs == 1 {
+                        let base = (((by + y) & 63) >> 1) as usize * 32 + ((bx & 63) >> 1) as usize;
+                        base ^ (byi as usize * 32 + bxi as usize)
+                    } else {
+                        (((by + y) & 63) >> 1) as usize * 32
+                            + (byi != 0) as usize * 32
+                            + (((bx + bxi) & 63) >> 1) as usize
+                    };
                     let mut mv = [Mv::default(); 2];
                     mv[0] = Mv {
                         c: MvXY {
@@ -572,9 +580,7 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
                         );
                     }
                     crate::recon::scaledown_16pel_mv_for_chroma(&mut mv, layout);
-                    if store_rmv {
-                        recon.scratch.rmv[rmv_idx][0] = mv;
-                    }
+                    recon.scratch.rmv[rmv_idx][0] = mv;
                     bxi += bs;
                     xx += 1;
                 }
@@ -756,6 +762,8 @@ where
         has_chroma,
         ChromaPhase::Both,
         fi,
+        // skip_txfm: no residual to order per piece
+        TipPhase::Full,
     )
 }
 
@@ -767,6 +775,17 @@ where
 /// Residual decode is identical to compound (`inter_luma_tx_walk` /
 /// `inter_chroma_residual_8bpc`).
 #[allow(clippy::too_many_arguments)]
+/// Which halves of a TIP block `recon_b_inter_tip` runs. A >64px TIP block is
+/// predicted as a whole (`PredOnly`), but its residual is coded per 64x64
+/// piece like any other >64px block (luma piece, then the chroma unit with the
+/// first piece of it, ...), so the pieces run `ResidOnly` from the split walk.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TipPhase {
+    Full,
+    PredOnly,
+    ResidOnly,
+}
+
 fn recon_b_inter_tip<
     BD: crate::pixel::BitDepth,
     const UPDATE_CDF: bool,
@@ -788,6 +807,7 @@ fn recon_b_inter_tip<
     has_chroma: bool,
     chroma_stage: ChromaPhase,
     fi: &SbFrameInfo,
+    phase: TipPhase,
 ) -> Result<(), ()>
 where
     BD::Coef: DecodeCoeff,
@@ -831,15 +851,19 @@ where
         && recon.seq_hdr.tip_refine_mv
         && cwp_idx == 8
         && if frame_mode == 2 {
-            tip_subpel == crate::headers::FilterMode::Sharp8Tap as u8 && recon.seq_hdr.opfl_refine
+            tip_subpel == crate::headers::FilterMode::Sharp8Tap as u8 && recon.seq_hdr.opfl_refine != 0
         } else {
             !is_256 || recon.seq_hdr.refine_mv
         };
     // AVM `is_optflow_refinement_enabled` (TIP): the OPFL delta needs both the
     // sequence and the frame OPFL type; the refined 8x8 path also runs for
     // DMVR alone.
-    let do_opfl = recon.seq_hdr.opfl_refine && recon.frm_hdr.opfl_refine_type != 0;
+    let do_opfl = recon.seq_hdr.opfl_refine != 0 && recon.frm_hdr.opfl_refine_type != 0;
     opfl &= recon.frm_hdr.has_bothside_refs != 0 && cwp_idx == 8 && (do_opfl || refine);
+    // AVM `opfl_allowed_cur_refs_bsize` / `is_refinemv_allowed_reference`:
+    // no OPFL or DMVR when a TIP reference has a different resolution. The
+    // unit size (`step`) above does not depend on it.
+    opfl &= recon.svc[r0][0].scale == 0 && recon.svc[r1][0].scale == 0;
     // AVM `TIP_SINGLE_WTD`: not compound, ref0 is predicted straight to pixels.
     let single = cwp_idx == 16;
 
@@ -853,7 +877,8 @@ where
     let d1 = fi.absrefdist[r1] as i32;
     let dw0 = apply_sign_i8(1 + (d0 > d1) as i32, -(fi.refdist[r0] as i32));
     let dw1 = apply_sign_i8(1 + (d1 > d0) as i32, fi.refdist[r1] as i32);
-    let dweights = [dw0, dw1];
+    // AVM zeroes the opfl offsets when either reference is at distance 0.
+    let dweights = if d0 != 0 && d1 != 0 { [dw0, dw1] } else { [0, 0] };
 
     let sad8x8_thr: u32 = if frame_mode == 1 { 6 } else { 15 };
     let t_stride = recon.rf.rp_stride;
@@ -874,13 +899,22 @@ where
     // SB-local projected-MV grid (`t->rt.rp_proj`).
     let rp_proj_off = recon.rt.rp_proj_off;
 
-    let mut seg_mask = recon.scratch.take_compound_seg_mask();
+    // TIP blocks span the whole superblock, so with sb256 they are 256x256.
+    let mut seg_mask = recon.scratch.take_compound_seg_mask(imax(
+        128 * 128,
+        (bw4_full * 4 * bh4_full * 4) as i32,
+    ) as usize);
     let mut luma_bacp = false;
     if has_luma {
-        let bw4 = bw4_full;
-        let bh4 = bh4_full;
-        let w4 = imin(bw4, fi.bw - bx);
-        let h4 = imin(bh4, fi.bh - by);
+        let w4 = imin(bw4_full, fi.bw - bx);
+        let h4 = imin(bh4_full, fi.bh - by);
+        if phase != TipPhase::ResidOnly {
+        // Predict and blend only the `step` units that cover the frame; the
+        // tmp/mask stride is this clipped width. Pictures are padded to 128 px,
+        // so blending a whole sb256 TIP block at the right edge would run past
+        // the row stride into the next row (and past the plane at the bottom).
+        let bw4 = imin(bw4_full, (w4 + step - 1) & !(step - 1));
+        let bh4 = imin(bh4_full, (h4 + step - 1) & !(step - 1));
         let yw = (bw4 * 4) as usize;
         let yh = (bh4 * 4) as usize;
         let y_stride = recon.frame.y_stride_px;
@@ -918,7 +952,7 @@ where
                 }
                 // rmv grid slot for this 8x8 (version 0=cmv, 1=chroma-scaled).
                 let rmv_idx =
-                    (((by + y) & 31) >> 1) as usize * 16 + (((bx + x) & 31) >> 1) as usize;
+                    (((by + y) & 63) >> 1) as usize * 32 + (((bx + x) & 63) >> 1) as usize;
                 let mut cmv = [Mv::default(); 2];
                 let mut rmv1 = [Mv::default(); 2];
                 let mut left = [0i32; 2];
@@ -1107,8 +1141,8 @@ where
                                 filter,
                                 ss_hor,
                                 ss_ver,
-                                fi.bw,
-                                fi.bh,
+                                &crate::scale::ScaleFactors::from_svc(&recon.svc[r0])
+                                    .with_anchor(recon.scratch.mc_anchor),
                                 recon.scratch.inter_mc_tmp_mut(),
                             );
                             continue;
@@ -1256,11 +1290,14 @@ where
             );
         }
         recon.scratch.put_compound_tmp(tmp);
+        }
 
         // luma residual.
         let seg_id = b.seg_id as usize;
         let lossless = recon.frame.seg_lossless[seg_id] != 0;
-        if lossless {
+        if phase == TipPhase::PredOnly {
+            // read per 64x64 piece by the split walk (`ResidOnly`)
+        } else if lossless {
             let tx = if b.tx_size_ll != 0 {
                 crate::tables::MAX_TXFM_SIZE_FOR_BS[bs as usize][3] as usize
             } else {
@@ -1307,8 +1344,11 @@ where
         let cw4ss = (cw4 + ss_hor) >> ss_hor;
         let ch4ss = (ch4 + ss_ver) >> ss_ver;
         let uv_stride = recon.frame.uv_stride_px;
-        let cw = (cbw4 * 4 >> ss_hor) as usize;
-        let ch = (cbh4 * 4 >> ss_ver) as usize;
+        // Prediction covers only the units inside the frame (see luma above).
+        let pbw4 = imin(cbw4, (cw4 + step - 1) & !(step - 1));
+        let pbh4 = imin(cbh4, (ch4 + step - 1) & !(step - 1));
+        let cw = (pbw4 * 4 >> ss_hor) as usize;
+        let ch = (pbh4 * 4 >> ss_ver) as usize;
 
         // r_step = o_step = step.
         let r_step = step;
@@ -1317,7 +1357,7 @@ where
         // ..)` selects the picture plane. BACP is decided on the U plane and
         // carried to V (`bacpu`). Chroma MC runs only at the recon stage
         // (`Both`/`ReconOnly`); the read stage consumes coefficients only.
-        let do_chroma_mc = chroma_stage != ChromaPhase::ReadOnly;
+        let do_chroma_mc = chroma_stage != ChromaPhase::ReadOnly && phase != TipPhase::ResidOnly;
         let mut chroma_bacp = false;
         for plane in (0..2usize).filter(|_| do_chroma_mc) {
             let dst_off = 4 * ((cby >> ss_ver) as usize * uv_stride + (cbx >> ss_hor) as usize);
@@ -1330,8 +1370,8 @@ where
                 plane,
                 r_step,
                 o_step,
-                cbw4,
-                cbh4,
+                pbw4,
+                pbh4,
                 cbx,
                 cby,
                 r_pair,
@@ -1394,6 +1434,10 @@ where
         }
 
         // chroma residual.
+        if phase == TipPhase::PredOnly {
+            recon.scratch.put_compound_seg_mask(seg_mask);
+            return Ok(());
+        }
         let seg_id = b.seg_id as usize;
         let lossless = recon.frame.seg_lossless[seg_id] != 0;
         let uvtx = if lossless {
@@ -1470,7 +1514,13 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
     let filter = b.inter_data().filter;
 
     let stride = (bw4 * 4 >> ss_hor) as usize;
-    let bacp = plane == 0 && recon.seq_hdr.imp_msk_bld && b.inter_data().cwp_idx == 8;
+    // AVM `use_bacp` (tip.c / reconinter.c) is off when a reference has a
+    // different resolution.
+    let bacp = plane == 0
+        && recon.seq_hdr.imp_msk_bld
+        && b.inter_data().cwp_idx == 8
+        && recon.svc[r0][0].scale == 0
+        && recon.svc[r1][0].scale == 0;
     if bacp {
         for m in mask.iter_mut().take((bw4 * bh4 * 16) as usize) {
             *m = 0x20;
@@ -1480,10 +1530,17 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
 
     let w = fi.bw * 4 >> ss_hor;
     let h = fi.bh * 4 >> ss_ver;
-    let rw4 = imin(bw4, r_step);
-    let rh4 = imin(bh4, r_step);
-    let ow4 = imin(bw4, o_step);
-    let oh4 = imin(bh4, o_step);
+    // Without vertical subsampling the 4x4 opfl sub-blocks of an 8x8 block are
+    // visible in chroma; each has its own refined MV and reference window.
+    let opfl_8x8 = !tip
+        && ss_ver == 0
+        && b.bs == BlockSize::Bs8x8 as u8 as i8
+        && b.inter_data().is_opfl();
+    let rmv_base0 = ((cby & 63) >> 1) as usize * 32 + ((cbx & 63) >> 1) as usize;
+    let rw4 = if opfl_8x8 { 1 << ss_hor } else { imin(bw4, r_step) };
+    let rh4 = if opfl_8x8 { 1 } else { imin(bh4, r_step) };
+    let ow4 = if opfl_8x8 { rw4 } else { imin(bw4, o_step) };
+    let oh4 = if opfl_8x8 { rh4 } else { imin(bh4, o_step) };
     let hhtaps = 2 + 2 * (rw4 > 1 + ss_hor) as i32;
     let hvtaps = 2 + 2 * (rh4 > 1 + ss_ver) as i32;
     let h4 = imin(bh4, fi.bh - cby);
@@ -1495,7 +1552,7 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
         // rmv_line base for this outer row.
         let mut x = 0i32;
         while x < w4 {
-            let rmv_base = (((cby + y) & 31) >> 1) as usize * 16 + (((cbx + x) & 31) >> 1) as usize;
+            let rmv_base = (((cby + y) & 63) >> 1) as usize * 32 + (((cbx + x) & 63) >> 1) as usize;
             let rmv = recon.scratch.rmv[rmv_base];
             let mut top = [0i32; 2];
             let mut left = [0i32; 2];
@@ -1523,9 +1580,13 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
                 while bx < rw4 {
                     // advanced by the outer-row term; reconstruct the absolute
                     // grid index.
-                    let rmv2_idx = (((cby + y) & 31) >> 1) as usize * 16
-                        + (by != 0) as usize * 16
-                        + (((cbx + x + bx) & 31) >> 1) as usize;
+                    let rmv2_idx = if opfl_8x8 {
+                        rmv_base0 ^ (y as usize * 32 + x as usize)
+                    } else {
+                        (((cby + y) & 63) >> 1) as usize * 32
+                            + (by != 0) as usize * 32
+                            + (((cbx + x + bx) & 63) >> 1) as usize
+                    };
                     let rmv2 = recon.scratch.rmv[rmv2_idx];
                     if let Some(doff) = put_dst {
                         // Single-reference prediction straight into the plane.
@@ -2263,6 +2324,69 @@ where
     let ref0 = refs[0];
     let ref1 = refs[1];
     if ref0 as usize == crate::levels::TIP_FRAME {
+        let bs0 = if lbs == BlockSize::Invalid { cbs } else { lbs };
+        let bdim0 = &BLOCK_DIMENSIONS[bs0 as u8 as usize];
+        let (bw4_0, bh4_0) = (bdim0[0] as i32, bdim0[1] as i32);
+        let big = imax(bw4_0, bh4_0) > 16;
+        // A >64px TIP block is predicted as a whole, then its residual is
+        // read per 64x64 piece through the same walk as other >64px blocks
+        // (nested 256 -> 128 -> 64), which re-enters here with
+        // `tip_resid_only` set.
+        if recon.scratch.tip_resid_only {
+            if big {
+                return recon_b_inter_split(
+                    recon, msac, cdf_m, a, l, b, bx, by, cbx, cby, lbs, cbs, has_luma, has_chroma,
+                    fi, bs0, bw4_0, bh4_0,
+                );
+            }
+            return recon_b_inter_tip(
+                recon,
+                msac,
+                cdf_m,
+                a,
+                l,
+                b,
+                bx,
+                by,
+                cbx,
+                cby,
+                lbs,
+                cbs,
+                has_luma,
+                has_chroma,
+                chroma_stage,
+                fi,
+                TipPhase::ResidOnly,
+            );
+        }
+        if big {
+            recon_b_inter_tip(
+                recon,
+                msac,
+                cdf_m,
+                a,
+                l,
+                b,
+                bx,
+                by,
+                cbx,
+                cby,
+                lbs,
+                cbs,
+                has_luma,
+                has_chroma,
+                chroma_stage,
+                fi,
+                TipPhase::PredOnly,
+            )?;
+            recon.scratch.tip_resid_only = true;
+            let res = recon_b_inter_split(
+                recon, msac, cdf_m, a, l, b, bx, by, cbx, cby, lbs, cbs, has_luma, has_chroma, fi,
+                bs0, bw4_0, bh4_0,
+            );
+            recon.scratch.tip_resid_only = false;
+            return res;
+        }
         return recon_b_inter_tip(
             recon,
             msac,
@@ -2280,6 +2404,7 @@ where
             has_chroma,
             chroma_stage,
             fi,
+            TipPhase::Full,
         );
     }
     if ref0 < 0 || ref0 as usize >= 7 {
@@ -2355,8 +2480,7 @@ where
         let mut gmv = recon.frm_hdr.gmv.m[ref0 as usize];
         let gmv_warp_allowed = gmv.wm_type > crate::headers::WarpedMotionType::Translation
             && recon.frm_hdr.force_integer_mv == 0
-            && crate::warpmv::get_shear_params(&mut gmv) == 0
-            && recon.svc[ref0 as usize][0].scale == 0;
+            && crate::warpmv::get_shear_params(&mut gmv) == 0;
         recon.frm_hdr.force_integer_mv == 0
             && ((inter_mode == crate::levels::InterPredMode::GlobalMv as u8
                 && imin(bw4, bh4) > 1
@@ -2399,6 +2523,8 @@ where
                     ss_ver,
                     fi.bw,
                     fi.bh,
+                    &crate::scale::ScaleFactors::from_svc(&recon.svc[ref0 as usize])
+                        .with_anchor(recon.scratch.mc_anchor),
                 );
             } else {
                 ext_warp_plane_8bpc(
@@ -2416,6 +2542,8 @@ where
                     ss_ver,
                     fi.bw,
                     fi.bh,
+                    &crate::scale::ScaleFactors::from_svc(&recon.svc[ref0 as usize])
+                        .with_anchor(recon.scratch.mc_anchor),
                     recon.scratch.inter_mc_tmp_mut(),
                 );
             }
@@ -2436,8 +2564,8 @@ where
                 filter,
                 ss_hor,
                 ss_ver,
-                fi.bw,
-                fi.bh,
+                &crate::scale::ScaleFactors::from_svc(&recon.svc[ref0 as usize])
+                    .with_anchor(recon.scratch.mc_anchor),
                 recon.scratch.inter_mc_tmp_mut(),
             );
         }
@@ -2462,7 +2590,10 @@ where
                 h4c,
                 bx,
                 by,
-                bs,
+                // The partition size, not the 64x64 split piece (`bs`): the
+                // later pieces of a >64px block must reuse the first piece's
+                // model (dav2d/AVM pass b->bs).
+                BlockSize::from_raw(b.bs),
                 fi,
             );
         } else if motion_mode == MotionMode::InterIntra as u8 || b.inter_data().warp_ii != 0 {
@@ -2599,8 +2730,8 @@ where
                             s_filter,
                             ss_hor,
                             ss_ver,
-                            fi.bw,
-                            fi.bh,
+                            &crate::scale::ScaleFactors::from_svc(&recon.svc[s_ref0 as usize])
+                                .with_anchor(recon.scratch.mc_anchor),
                             recon.scratch.inter_mc_tmp_mut(),
                         );
                     }
@@ -2639,6 +2770,8 @@ where
                         ss_ver,
                         fi.bw,
                         fi.bh,
+                        &crate::scale::ScaleFactors::from_svc(&recon.svc[ref0 as usize])
+                            .with_anchor(recon.scratch.mc_anchor),
                     );
                 } else {
                     ext_warp_plane_8bpc(
@@ -2656,6 +2789,8 @@ where
                         ss_ver,
                         fi.bw,
                         fi.bh,
+                        &crate::scale::ScaleFactors::from_svc(&recon.svc[ref0 as usize])
+                            .with_anchor(recon.scratch.mc_anchor),
                         recon.scratch.inter_mc_tmp_mut(),
                     );
                 }
@@ -2676,8 +2811,8 @@ where
                     filter,
                     ss_hor,
                     ss_ver,
-                    fi.bw,
-                    fi.bh,
+                    &crate::scale::ScaleFactors::from_svc(&recon.svc[ref0 as usize])
+                        .with_anchor(recon.scratch.mc_anchor),
                     recon.scratch.inter_mc_tmp_mut(),
                 );
             }
@@ -2815,6 +2950,7 @@ where
     ];
     let ss_hor = fi.ss_hor;
     let ss_ver = fi.ss_ver;
+    let lossless = fi.seg_lossless[b.seg_id as usize] != 0;
     let y_end = imin(by + bh4, fi.bh);
     let x_end = imin(bx + bw4, fi.bw);
     let (step, lbs2, cbs2i) = if imax(bw4, bh4) == 64 {
@@ -2833,7 +2969,8 @@ where
         )
     } else {
         let csplit_row = (bs as i32 - BlockSize::Bs128x128 as i32) as usize;
-        let csi = (ss_hor + ss_ver) as usize;
+        // Lossless: one chroma unit per 64x64 luma unit (dav2d 8c86497528).
+        let csi = if lossless { 0 } else { (ss_hor + ss_ver) as usize };
         (
             16,
             if lbs == BlockSize::Invalid {
@@ -2849,7 +2986,23 @@ where
         )
     };
     let _ = (has_luma, has_chroma);
+    // AVM predicts the whole block at once; scaled-reference MC of each piece
+    // has to step from the block origin. Nested splits (256 -> 128 -> 64)
+    // keep the outermost block as the anchor.
+    let outer_anchor = recon.scratch.mc_anchor;
+    let base_anchor = if outer_anchor.bw4 != 0 {
+        outer_anchor
+    } else {
+        crate::scale::McAnchor {
+            bw4,
+            bh4,
+            ..Default::default()
+        }
+    };
 
+    // Per-piece chroma (read and recon with each piece) at the 128 level of a
+    // 256 block, and for lossless blocks.
+    let il = step == 32 || lossless;
     let mut sub_by = by;
     let mut sub_cby = cby;
     let mut yy = 0;
@@ -2859,7 +3012,7 @@ where
         let mut xx = 0;
         while sub_bx < x_end {
             // cbs2[0] = chroma coef-read stage, cbs2[1] = chroma recon stage
-            let (read_cbs, recon_cbs) = if step == 32 {
+            let (read_cbs, recon_cbs) = if il {
                 (cbs2i, cbs2i)
             } else {
                 let read = if ((xx & ss_hor) | (yy & ss_ver)) == 0 {
@@ -2896,7 +3049,22 @@ where
                 BlockSize::Invalid
             };
 
-            recon_b_inter(
+            let (cu_w4, cu_h4) = if cbs2i == BlockSize::Invalid {
+                (0, 0)
+            } else {
+                let d = &BLOCK_DIMENSIONS[cbs2i as u8 as usize];
+                (d[0] as i32, d[1] as i32)
+            };
+            recon.scratch.mc_anchor = crate::scale::McAnchor {
+                l_dx4: base_anchor.l_dx4 + (sub_bx - bx),
+                l_dy4: base_anchor.l_dy4 + (sub_by - by),
+                c_dx4: base_anchor.c_dx4 + (sub_cbx - cbx),
+                c_dy4: base_anchor.c_dy4 + (sub_cby - cby),
+                cu_w4,
+                cu_h4,
+                ..base_anchor
+            };
+            let res = recon_b_inter(
                 recon,
                 msac,
                 cdf_m,
@@ -2913,10 +3081,12 @@ where
                 sub_has_chroma,
                 chroma_stage,
                 fi,
-            )?;
+            );
+            recon.scratch.mc_anchor = outer_anchor;
+            res?;
 
             sub_bx += step;
-            if step == 32 {
+            if il {
                 sub_cbx += step;
             } else if (xx & ss_hor) == ss_hor {
                 sub_cbx += step << ss_hor;
@@ -2924,7 +3094,7 @@ where
             xx += 1;
         }
         sub_by += step;
-        if step == 32 {
+        if il {
             sub_cby += step;
         } else if (yy & ss_ver) == ss_ver {
             sub_cby += step << ss_ver;

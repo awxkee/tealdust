@@ -36,7 +36,7 @@ use crate::levels::{Av2Block, BlockSize, Mv, RefPair, TIP_FRAME};
 use crate::msac::{MsacBackend, MsacReader};
 
 use crate::pixel::{BitDepth, Pixel};
-use crate::quantizer::dq_lookup;
+use crate::quantizer::{clip_qidx, dq_lookup};
 use crate::tables::{NS_WIENER_COEF_RANGE_UV, NS_WIENER_COEF_RANGE_Y};
 use crate::{TealdustError, refmvs};
 
@@ -337,19 +337,16 @@ pub(crate) fn init_quant_tables(
         } else {
             qidx
         };
-        let ydc = yac + frame_hdr.quant.ydc_delta as i32;
-        let uac = yac + frame_hdr.quant.uac_delta as i32;
-        let udc = yac + frame_hdr.quant.udc_delta as i32;
-        let vac = yac + frame_hdr.quant.vac_delta as i32;
-        let vdc = yac + frame_hdr.quant.vdc_delta as i32;
-
-        // AVM clamps the effective qindex to the bit-depth MAXQ (255/303/351).
-        dq[i][0][0] = dq_lookup(ydc.min(qmax)) as u32;
-        dq[i][0][1] = dq_lookup(yac.min(qmax)) as u32;
-        dq[i][1][0] = dq_lookup(udc.min(qmax)) as u32;
-        dq[i][1][1] = dq_lookup(uac.min(qmax)) as u32;
-        dq[i][2][0] = dq_lookup(vdc.min(qmax)) as u32;
-        dq[i][2][1] = dq_lookup(vac.min(qmax)) as u32;
+        // AVM get_qindex_with_offsets: segment qindex clamped to [0, qmax],
+        // then each plane's delta applied with av2_q_clamped.
+        let yac = yac.clamp(0, qmax);
+        let q = &frame_hdr.quant;
+        dq[i][0][0] = dq_lookup(clip_qidx(yac, q.ydc_delta as i32, qmax)) as u32;
+        dq[i][0][1] = dq_lookup(clip_qidx(yac, 0, qmax)) as u32;
+        dq[i][1][0] = dq_lookup(clip_qidx(yac, q.udc_delta as i32, qmax)) as u32;
+        dq[i][1][1] = dq_lookup(clip_qidx(yac, q.uac_delta as i32, qmax)) as u32;
+        dq[i][2][0] = dq_lookup(clip_qidx(yac, q.vdc_delta as i32, qmax)) as u32;
+        dq[i][2][1] = dq_lookup(clip_qidx(yac, q.vac_delta as i32, qmax)) as u32;
     }
 }
 
@@ -369,19 +366,14 @@ pub fn init_quant_tables_fi(
         } else {
             qidx
         };
-        let ydc = yac + fi.q_ydc_delta;
-        let uac = yac + fi.q_uac_delta;
-        let udc = yac + fi.q_udc_delta;
-        let vac = yac + fi.q_vac_delta;
-        let vdc = yac + fi.q_vdc_delta;
-
-        // AVM clamps the effective qindex to the bit-depth MAXQ (255/303/351).
-        dq[i][0][0] = dq_lookup(ydc.min(qmax)) as u32;
-        dq[i][0][1] = dq_lookup(yac.min(qmax)) as u32;
-        dq[i][1][0] = dq_lookup(udc.min(qmax)) as u32;
-        dq[i][1][1] = dq_lookup(uac.min(qmax)) as u32;
-        dq[i][2][0] = dq_lookup(vdc.min(qmax)) as u32;
-        dq[i][2][1] = dq_lookup(vac.min(qmax)) as u32;
+        // Same clamping as `init_quant_tables`.
+        let yac = yac.clamp(0, qmax);
+        dq[i][0][0] = dq_lookup(clip_qidx(yac, fi.q_ydc_delta, qmax)) as u32;
+        dq[i][0][1] = dq_lookup(clip_qidx(yac, 0, qmax)) as u32;
+        dq[i][1][0] = dq_lookup(clip_qidx(yac, fi.q_udc_delta, qmax)) as u32;
+        dq[i][1][1] = dq_lookup(clip_qidx(yac, fi.q_uac_delta, qmax)) as u32;
+        dq[i][2][0] = dq_lookup(clip_qidx(yac, fi.q_vdc_delta, qmax)) as u32;
+        dq[i][2][1] = dq_lookup(clip_qidx(yac, fi.q_vac_delta, qmax)) as u32;
     }
 }
 
@@ -459,8 +451,6 @@ pub struct SbFrameInfo {
     pub gdf_enabled: crate::headers::AdaptiveBoolean,
     /// log2 of the GDF unit size in 64px units.
     pub gdf_sz_log2: i32,
-    pub cur_w: i32,
-    pub cur_h: i32,
     pub cdef_enabled: bool,
     pub cdef_on_skiptx: bool,
     pub cdef_n_strengths: u8,
@@ -681,8 +671,6 @@ impl SbFrameInfo {
             seg_delta_q: frame_hdr.segmentation.d.delta_q,
             gdf_enabled: frame_hdr.gdf.enabled,
             gdf_sz_log2: gdf_unit_log2_from_headers(seq_hdr, frame_hdr),
-            cur_w: frame_hdr.width,
-            cur_h: frame_hdr.height,
             cdef_enabled: frame_hdr.cdef.enabled != 0,
             cdef_on_skiptx: frame_hdr.cdef.on_skiptx != 0,
             cdef_n_strengths: frame_hdr.cdef.n_strengths,
@@ -730,10 +718,16 @@ impl SbFrameInfo {
             num_same_ref_comp: seq_hdr.num_same_ref_comp,
             refdir,
             refdist: refdist8,
-            opfl_refine_type: frame_hdr.opfl_refine_type,
+            // S-frames signal these but may not use them.
+            opfl_refine_type: if frame_hdr.frame_type == crate::headers::FrameType::Switch {
+                0
+            } else {
+                frame_hdr.opfl_refine_type
+            },
             masked_compound: seq_hdr.masked_compound,
             cwp: seq_hdr.cwp,
-            refine_mv_enabled: seq_hdr.refine_mv,
+            refine_mv_enabled: seq_hdr.refine_mv
+                && frame_hdr.frame_type != crate::headers::FrameType::Switch,
             absrefdist: absrefdist8,
             furthest_future_refidx,
             tip,
@@ -750,7 +744,7 @@ impl SbFrameInfo {
 pub struct ReconFrameCtx<'a> {
     pub exec: &'a crate::exec_context::ExecContext,
     pub dq: &'a [[[u32; 2]; 3]; MAX_SEGMENTS],
-    pub qm: &'a [[Option<&'static [u8]>; 3]; crate::levels::N_RECT_TX_SIZES],
+    pub qm: [[Option<&'a [u8]>; 3]; crate::levels::N_RECT_TX_SIZES],
     pub y_stride_px: usize,
     pub uv_stride_px: usize,
     pub ss_hor: i32,
@@ -1086,12 +1080,13 @@ pub struct ReconScratch {
     /// Per-4x4 luma transform type map (full txtp incl. secondary-tx bits),
     /// indexed `(by & 15) * 16 + (bx & 15)`. Written by the luma residual walk
     pub txtp_map: [u16; 256],
-    /// TIP per-8x8 refined-MV grid (`t->rmv`): a 16x16 grid (one entry per 8x8
-    /// unit within a 128x128 superblock) of `[2 versions][2 refs]` MVs. Written
+    /// TIP per-8x8 refined-MV grid (`t->rmv`): a 32x32 grid (one entry per 8x8
+    /// unit within a 256x256 superblock, since sb256 TIP blocks are 256 wide)
+    /// of `[2 versions][2 refs]` MVs. Written
     /// by the luma `tip_pred` (version 0 = luma MV post-refine, version 1 =
     /// chroma-scaled MV) and read back by the chroma `rmv_uvpred`. Indexed
-    /// `((by & 31) >> 1) * 16 + ((bx & 31) >> 1)`.
-    pub rmv: [[[Mv; 2]; 2]; 256],
+    /// `((by & 63) >> 1) * 32 + ((bx & 63) >> 1)`.
+    pub rmv: [[[Mv; 2]; 2]; 1024],
     /// Above/left palette-color cache (`t->al_pal`): `[a/l][bx4|by4][8 colors]`,
     /// indexed by `bx & 63` (above) / `by & 63` (left). Written by the palette
     /// recon (`copy_pal_block_y`) and read by `read_pal_plane` to build the
@@ -1123,6 +1118,17 @@ pub struct ReconScratch {
     inter_mc_tmp: Vec<i16>,
     /// Reusable 128x128 mask buffer for SEG/BACP compound blending.
     compound_seg_mask: Vec<u8>,
+    /// Position of the current inter MC piece within its coding block, set
+    /// while `recon_b_inter_split` predicts a >64px block per 64x64 piece.
+    /// Only scaled-reference MC depends on it.
+    pub(crate) mc_anchor: crate::scale::McAnchor,
+    /// Chroma-subsampled DIFFWTD mask of the current chroma unit of a split
+    /// (>64px) compound block, filled piece by piece by the luma pass (stride:
+    /// the unit's chroma width). `compound_seg_mask` is cleared per call.
+    pub(crate) split_seg_mask: Vec<u8>,
+    /// Set while a >64px TIP block, already predicted as a whole, walks its
+    /// 64x64 pieces to read and apply the residual in bitstream order.
+    pub(crate) tip_resid_only: bool,
 }
 
 impl Default for ReconScratch {
@@ -1150,7 +1156,7 @@ impl Default for ReconScratch {
             luma_tx_cf32: Vec::new(),
             luma_tx_rpos: 0,
             txtp_map: [0u16; 256],
-            rmv: [[[Mv::default(); 2]; 2]; 256],
+            rmv: [[[Mv::default(); 2]; 2]; 1024],
             al_pal: [[[0u16; 8]; 64]; 2],
             pal: [0u16; 8],
             pal_idx_y: Box::new([0u8; 64 * 64]),
@@ -1162,6 +1168,9 @@ impl Default for ReconScratch {
             compound_tmp1: Vec::new(),
             inter_mc_tmp: Vec::new(),
             compound_seg_mask: Vec::new(),
+            mc_anchor: crate::scale::McAnchor::default(),
+            split_seg_mask: Vec::new(),
+            tip_resid_only: false,
         }
     }
 }
@@ -1255,7 +1264,7 @@ impl ReconScratch {
         self.luma_tx_rpos = 0;
         self.txtp_map = [0u16; 256];
         if inter {
-            self.rmv = [[[Mv::default(); 2]; 2]; 256];
+            self.rmv = [[[Mv::default(); 2]; 2]; 1024];
         }
         self.al_pal = [[[0u16; 8]; 64]; 2];
         self.pal = [0u16; 8];
@@ -1294,14 +1303,13 @@ impl ReconScratch {
         self.compound_tmp1 = tmp1;
     }
 
+    /// Zeroed compound/BACP segment mask of `len` entries (`w * h` of the
+    /// block: up to 128x128 for coded blocks, 256x256 for sb256 TIP blocks).
     #[inline]
-    pub(crate) fn take_compound_seg_mask(&mut self) -> Vec<u8> {
+    pub(crate) fn take_compound_seg_mask(&mut self, len: usize) -> Vec<u8> {
         let mut mask = core::mem::take(&mut self.compound_seg_mask);
-        if mask.len() != 128 * 128 {
-            mask.resize(128 * 128, 0);
-        } else {
-            mask.fill(0);
-        }
+        mask.clear();
+        mask.resize(len, 0);
         mask
     }
 
@@ -1451,7 +1459,9 @@ const MAX_RETAINED_REPLAY_COEF_BYTES: usize = 8 << 20;
 fn drop_vec_if_capacity_gt<T>(v: &mut Vec<T>, max_bytes: usize) {
     let elem = core::mem::size_of::<T>().max(1);
     if v.capacity() > max_bytes / elem {
-        *v = Vec::new();
+        // Release the allocation, not just the contents.
+        v.clear();
+        v.shrink_to_fit();
     }
 }
 
@@ -1916,6 +1926,8 @@ where
                                 frame_hdr,
                                 geom: lr_geom,
                             }),
+                            mono_parent: (false, BlockSize::Invalid, crate::levels::BlockPartition::None),
+                            mono_block_os: false,
                         };
                         decode_sb(
                             &mut sb_ctx,
@@ -1978,6 +1990,8 @@ where
                         part_r: replay_part_r,
                         part_r_idx: &mut part_r_idx,
                         sdp_lr: None,
+                        mono_parent: (false, BlockSize::Invalid, crate::levels::BlockPartition::None),
+                        mono_block_os: false,
                     };
                     decode_sb(
                         &mut sb_ctx,
@@ -2019,6 +2033,8 @@ where
                         frame_hdr,
                         geom: lr_geom,
                     }),
+                    mono_parent: (false, BlockSize::Invalid, crate::levels::BlockPartition::None),
+                    mono_block_os: false,
                 };
                 decode_sb(
                     &mut sb_ctx,
@@ -2331,7 +2347,9 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     let recon_frame = ReconFrameCtx {
         exec,
         dq: &*dq,
-        qm: &*qm,
+        qm: std::array::from_fn(|t| {
+            std::array::from_fn(|p| qm[t][p].as_ref().map(|q| q.as_slice()))
+        }),
         y_stride_px,
         uv_stride_px,
         ss_hor: ss_hor_v,
@@ -3613,6 +3631,7 @@ pub fn decode_frame(
         &mut fc.a_sz,
         &mut fc.dq,
         &mut fc.qm,
+        &fc.qm_list,
         &fc.absrefdist,
         fc.sbh,
         fc.sb256w,
@@ -3645,9 +3664,12 @@ pub fn decode_frame(
     r.map_err(|_| TealdustError::InvalidTileData)?;
 
     // path the update tile's adapted CDF (or, with avg_cdf_type, the average of
-    // the tiles' CDFs) becomes `out_cdf` with its symbol counts reset. Only produced when CDF update
-    // is enabled (otherwise refs keep `in_cdf`, handled by the ref-list update).
-    if frame_hdr.tip.frame_mode != 2 && frame_hdr.disable_cdf_update == 0 {
+    // the tiles' CDFs) becomes `out_cdf` with its symbol counts reset, for every
+    // non-TIP-output frame. AVM does this with disable_cdf_update too (dav2d 36eda9fde3):
+    // the tile CDFs are then unadapted copies of in_cdf, but averaging and the
+    // count reset still apply.
+    fc.out_cdf = None;
+    if frame_hdr.tip.frame_mode != 2 {
         let n_tiles = frame_hdr.tiling.t.cols as usize * frame_hdr.tiling.t.rows as usize;
         let averaged = if seq_hdr.avg_cdf && seq_hdr.avg_cdf_type != 0 && n_tiles > 1 {
             // AVM averages the first `1 << log2` tiles (log2 = floor(log2(n)),
@@ -3758,9 +3780,9 @@ fn submit_frame_inner(
     let allow_intrabc = frame_hdr.allow_intrabc != 0;
 
     // Validate each signaled reference, share its picture into `fc.refp[i]`,
-    // and compute the per-ref scaling / global-warp-allowed flags. Single-ref
-    // bring-up: scaled references (svc != 0) are validated but the scaled-MC
-    // path is a follow-up; an unequal-dimension ref triggers the deferral note.
+    // and compute the per-ref scaling / global-warp-allowed flags. Scaled
+    // references (svc != 0) predict through `scale.rs`; AVM `av2_allow_warp`
+    // ignores the scale, so global warp stays allowed on them.
     let mut ref_coded_width = [0i32; 7];
     if is_inter_or_switch {
         for i in 0..7 {
@@ -3802,8 +3824,8 @@ fn submit_frame_inner(
             let mut gm = frame_hdr.gmv.m[i];
             fc.gmv_warp_allowed[i] = (gm.wm_type > crate::headers::WarpedMotionType::Translation
                 && frame_hdr.force_integer_mv == 0
-                && crate::warpmv::get_shear_params(&mut gm) == 0
-                && fc.svc[i][0].scale == 0) as u8;
+                && crate::warpmv::get_shear_params(&mut gm) == 0)
+                as u8;
         }
     }
 
@@ -3811,7 +3833,11 @@ fn submit_frame_inner(
     // clone the saved CDF of the primary ref. The avg primary/secondary CDF
     // path (use_pri_sec_cdf) is deferred (not exercised by the bring-up clips).
     let p_ref_idx = frame_hdr.primary_ref_frame;
-    let in_cdf: Option<crate::cdf::CdfContext> = if p_ref_idx == crate::headers::PRIMARY_REF_NONE {
+    // cross_frame_context DISABLED also starts from the default CDFs (AVM
+    // decodeframe.c), though the primary ref still serves everything else.
+    let in_cdf: Option<crate::cdf::CdfContext> = if p_ref_idx == crate::headers::PRIMARY_REF_NONE
+        || frame_hdr.cross_frame_context != 0
+    {
         fc.use_pri_sec_cdf = 0;
         None
     } else {
@@ -3854,6 +3880,7 @@ fn submit_frame_inner(
 
     fc.seq_hdr = seq_hdr.clone();
     fc.frame_hdr = frame_hdr.clone();
+    fc.qm_list = c.qm_list;
     fc.exec = c.exec.clone();
     fc.in_cdf = in_cdf;
 
@@ -3863,7 +3890,14 @@ fn submit_frame_inner(
             let poc = frame_hdr.frame_offset as i32;
             let nbits = seq_hdr.order_hint_n_bits as i32;
             let mut furthest_future_refidx: i32 = -2;
-            for i in 0..7 {
+            // Only the active refs (dav2d d1bde23607). The stored refpoc is the
+            // next frames' ref-of-ref list, which they bound by n_ref_frames.
+            let n_active = (frame_hdr.n_ref_frames as usize).min(7);
+            fc.refpoc = [0; 7];
+            fc.refdist = [0; 7];
+            fc.absrefdist = [0; 7];
+            fc.refdir[..7].fill(0);
+            for i in 0..n_active {
                 let rpoc = fc.refp[i]
                     .frame_hdr
                     .as_ref()
@@ -3982,7 +4016,7 @@ fn submit_frame_inner(
     let cur_pic = std::mem::take(&mut fc.cur_pic);
     let shared = std::sync::Arc::new(cur_pic);
     let out_cdf_for_refs: Option<std::sync::Arc<crate::cdf::CdfContext>> =
-        if frame_hdr.disable_cdf_update == 0 {
+        if frame_hdr.tip.frame_mode != 2 {
             fc.out_cdf.clone()
         } else {
             in_cdf_ref.map(std::sync::Arc::new)
@@ -4012,9 +4046,21 @@ fn submit_frame_inner(
         ))),
     };
     let refresh = frame_hdr.refresh_frame_flags;
+    // AVM av2_frame_clears_multiple_inserted_in_one: a key or S-frame that
+    // refreshes several slots is stored only in the first; the others are
+    // cleared (emptied after their pending output).
+    let first_slot = refresh.trailing_zeros() as usize;
+    let insert_in_one = matches!(
+        frame_hdr.frame_type,
+        crate::headers::FrameType::Key | crate::headers::FrameType::Switch
+    ) && refresh.count_ones() > 1;
     for i in 0..8 {
         if refresh & (1 << i) != 0 {
             crate::output_order::output_before_overwrite(c, i);
+            if insert_in_one && i != first_slot {
+                c.refs[i] = Default::default();
+                continue;
+            }
             c.refs[i].p = cur_tp.clone();
             c.refs[i].cdf = out_cdf_for_refs.clone();
             c.refs[i].segmap = if frame_hdr.segmentation.update_map != 0 {
@@ -4022,13 +4068,13 @@ fn submit_frame_inner(
             } else {
                 fc.prev_segmap.clone()
             };
-            if is_inter_or_switch {
-                c.refs[i].refmvs = if fc.rf.rp.is_empty() {
-                    None
-                } else {
-                    Some(try_clone_vec(&fc.rf.rp).map_err(|_| TealdustError::OutOfMemory)?)
-                };
-            }
+            // An intra frame has no motion field; don't leave the slot's
+            // previous one behind for later projections.
+            c.refs[i].refmvs = if !is_inter_or_switch || fc.rf.rp.is_empty() {
+                None
+            } else {
+                Some(try_clone_vec(&fc.rf.rp).map_err(|_| TealdustError::OutOfMemory)?)
+            };
             c.refs[i].ccsomap = cur_ccsomap_arc.clone();
             c.refs[i].refpoc = fc.refpoc;
         }

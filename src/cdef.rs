@@ -1095,7 +1095,9 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                         let y_lossless = ((y_ll0 | y_ll1) & bx_mask) != 0;
                         let uvbx_mask = (3u16 >> ss_hor) << ((bx & 14) >> ss_hor);
                         let uv_lossless = ((uv_ll0 | uv_ll1) & uvbx_mask) != 0;
-                        if (noskip_full & bx_mask) == 0 || (y_lossless && uv_lossless) {
+                        // AVM av2_cdef_compute_sb_list: an 8x8 whose luma
+                        // contains a lossless block is not filtered in any plane.
+                        if (noskip_full & bx_mask) == 0 || y_lossless {
                             prev_flag = 0;
                             edges |= CDEF_HAVE_LEFT;
                             b_y += 8;
