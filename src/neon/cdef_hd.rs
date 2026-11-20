@@ -284,12 +284,6 @@ fn load_i16x4(tmp: &[i16], p: isize, off: isize) -> int16x4_t {
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn load_i16x8(tmp: &[i16], p: isize, off: isize) -> int16x8_t {
-    unsafe { vld1q_s16(tmp.as_ptr().offset(p + off)) }
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
 fn cdef_min_i16(a: int16x4_t, b: int16x4_t) -> int16x4_t {
     vreinterpret_s16_u16(vmin_u16(vreinterpret_u16_s16(a), vreinterpret_u16_s16(b)))
 }
@@ -394,113 +388,46 @@ fn store_i16x4_u16(dst: &mut [u16], p: usize, v: int16x4_t) {
     }
 }
 
+/// The rows of one filter step at `p + off`: one 8-pixel row, or two
+/// 4-pixel rows so that narrow blocks also fill the vector.
 #[inline]
 #[target_feature(enable = "neon")]
-fn store_i16x8_u16(dst: &mut [u16], p: usize, v: int16x8_t) {
-    unsafe { vst1q_u16(dst.as_mut_ptr().add(p), vreinterpretq_u16_s16(v)) };
+fn load_rows<const W: usize>(tmp: &[i16], p: isize, stride: isize, off: isize) -> int16x8_t {
+    unsafe {
+        let p = tmp.as_ptr().offset(p + off);
+        if W == 8 {
+            vld1q_s16(p)
+        } else {
+            vcombine_s16(vld1_s16(p), vld1_s16(p.offset(stride)))
+        }
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Stores what `load_rows` covers: one row of 8 or two rows of 4.
 #[inline]
 #[target_feature(enable = "neon")]
-fn cdef_filter_block_4w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, const HAS_SEC: bool>(
-    dst: &mut [u16],
-    dst_stride: usize,
-    dst_off: usize,
-    tmp: &[i16],
-    tmp_stride: usize,
-    o: usize,
-    pri_strength: i32,
-    sec_strength: i32,
-    pri_shift: i32,
-    sec_shift: i32,
-    pri_tap: i32,
-    dir: usize,
-) {
-    debug_assert!(H == 4 || H == 8);
-    let clip = HAS_PRI && HAS_SEC;
-    let pri_s = vdup_n_s16(pri_strength as i16);
-    let sec_s = vdup_n_s16(sec_strength as i16);
-    let pri_nsh = vdup_n_s16(-(pri_shift as i16));
-    let sec_nsh = vdup_n_s16(-(sec_shift as i16));
-    let zero = vdup_n_s16(0);
-    let eight = vdup_n_s16(8);
-    let dirs = &crate::tables::CDEF_DIRECTIONS;
-    let mut dp = dst_off;
-    let mut tp = o;
-
-    for _ in 0..H {
-        let tpx = tp as isize;
-        let load = |off: isize| load_i16x4(tmp, tpx, off);
-        let px = load(0);
-        let mut sum = zero;
-        let mut min_v = px;
-        let mut max_v = px;
-
-        if HAS_PRI {
-            let mut ptap = pri_tap;
-            for k in 0..2 {
-                let off = dirs[dir + 2][k] as isize;
-                let p0 = load(off);
-                let p1 = load(-off);
-                sum = madd_tap_i16(sum, cnst_i16(vsub_s16(p0, px), pri_s, pri_nsh), ptap);
-                sum = madd_tap_i16(sum, cnst_i16(vsub_s16(p1, px), pri_s, pri_nsh), ptap);
-                ptap = (ptap & 3) | 2;
-                if clip {
-                    min_v = cdef_min_i16(min_v, cdef_min_i16(p0, p1));
-                    max_v = vmax_s16(max_v, vmax_s16(p0, p1));
-                }
-                if HAS_SEC {
-                    let off2 = dirs[dir + 4][k] as isize;
-                    let off3 = dirs[dir][k] as isize;
-                    let s0 = load(off2);
-                    let s1 = load(-off2);
-                    let s2 = load(off3);
-                    let s3 = load(-off3);
-                    let st = 2 - k as i32;
-                    sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s0, px), sec_s, sec_nsh), st);
-                    sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s1, px), sec_s, sec_nsh), st);
-                    sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s2, px), sec_s, sec_nsh), st);
-                    sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s3, px), sec_s, sec_nsh), st);
-                    min_v = cdef_min_i16(
-                        min_v,
-                        cdef_min_i16(cdef_min_i16(s0, s1), cdef_min_i16(s2, s3)),
-                    );
-                    max_v = vmax_s16(max_v, vmax_s16(vmax_s16(s0, s1), vmax_s16(s2, s3)));
-                }
-            }
-        } else if HAS_SEC {
-            for k in 0..2 {
-                let off1 = dirs[dir + 4][k] as isize;
-                let off2 = dirs[dir][k] as isize;
-                let s0 = load(off1);
-                let s1 = load(-off1);
-                let s2 = load(off2);
-                let s3 = load(-off2);
-                let st = 2 - k as i32;
-                sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s0, px), sec_s, sec_nsh), st);
-                sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s1, px), sec_s, sec_nsh), st);
-                sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s2, px), sec_s, sec_nsh), st);
-                sum = madd_tap_i16(sum, cnst_i16(vsub_s16(s3, px), sec_s, sec_nsh), st);
-            }
+fn store_rows_u16<const W: usize>(dst: &mut [u16], p: usize, stride: usize, v: int16x8_t) {
+    let v = vreinterpretq_u16_s16(v);
+    unsafe {
+        let d = dst.as_mut_ptr().add(p);
+        if W == 8 {
+            vst1q_u16(d, v);
+        } else {
+            vst1_u16(d, vget_low_u16(v));
+            vst1_u16(d.add(stride), vget_high_u16(v));
         }
-
-        let mask = vreinterpret_s16_u16(vclt_s16(sum, zero));
-        let delta = vshr_n_s16::<4>(vadd_s16(vadd_s16(sum, mask), eight));
-        let mut res = vadd_s16(px, delta);
-        if clip {
-            res = vmin_s16(vmax_s16(res, min_v), max_v);
-        }
-        store_i16x4_u16(dst, dp, res);
-        dp += dst_stride;
-        tp += tmp_stride;
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "neon")]
-fn cdef_filter_block_8w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, const HAS_SEC: bool>(
+fn cdef_filter_block_8w_hbd_neon_shape<
+    const W: usize,
+    const H: usize,
+    const HAS_PRI: bool,
+    const HAS_SEC: bool,
+>(
     dst: &mut [u16],
     dst_stride: usize,
     dst_off: usize,
@@ -514,7 +441,10 @@ fn cdef_filter_block_8w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, cons
     pri_tap: i32,
     dir: usize,
 ) {
+    debug_assert!(W == 4 || W == 8);
     debug_assert!(H == 4 || H == 8);
+    // Rows per vector: one of 8 pixels, or two of 4.
+    let rows = 8 / W;
     let clip = HAS_PRI && HAS_SEC;
     let pri_s = vdupq_n_s16(pri_strength as i16);
     let sec_s = vdupq_n_s16(sec_strength as i16);
@@ -526,9 +456,9 @@ fn cdef_filter_block_8w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, cons
     let mut dp = dst_off;
     let mut tp = o;
 
-    for _ in 0..H {
+    for _ in 0..H / rows {
         let tpx = tp as isize;
-        let load = |off: isize| load_i16x8(tmp, tpx, off);
+        let load = |off: isize| load_rows::<W>(tmp, tpx, tmp_stride as isize, off);
         let px = load(0);
         let mut sum = zero;
         let mut min_v = px;
@@ -537,7 +467,7 @@ fn cdef_filter_block_8w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, cons
         if HAS_PRI {
             let mut ptap = pri_tap;
             for k in 0..2 {
-                let off = dirs[dir + 2][k] as isize;
+                let off = crate::cdef::cdef_dir_offset(dirs[dir + 2][k], tmp_stride);
                 let p0 = load(off);
                 let p1 = load(-off);
                 sum = madd_tap_i16q(sum, constrain_i16q(vsubq_s16(p0, px), pri_s, pri_nsh), ptap);
@@ -548,8 +478,8 @@ fn cdef_filter_block_8w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, cons
                     max_v = vmaxq_s16(max_v, vmaxq_s16(p0, p1));
                 }
                 if HAS_SEC {
-                    let off2 = dirs[dir + 4][k] as isize;
-                    let off3 = dirs[dir][k] as isize;
+                    let off2 = crate::cdef::cdef_dir_offset(dirs[dir + 4][k], tmp_stride);
+                    let off3 = crate::cdef::cdef_dir_offset(dirs[dir][k], tmp_stride);
                     let s0 = load(off2);
                     let s1 = load(-off2);
                     let s2 = load(off3);
@@ -568,8 +498,8 @@ fn cdef_filter_block_8w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, cons
             }
         } else if HAS_SEC {
             for k in 0..2 {
-                let off1 = dirs[dir + 4][k] as isize;
-                let off2 = dirs[dir][k] as isize;
+                let off1 = crate::cdef::cdef_dir_offset(dirs[dir + 4][k], tmp_stride);
+                let off2 = crate::cdef::cdef_dir_offset(dirs[dir][k], tmp_stride);
                 let s0 = load(off1);
                 let s1 = load(-off1);
                 let s2 = load(off2);
@@ -588,9 +518,9 @@ fn cdef_filter_block_8w_hbd_neon_shape<const H: usize, const HAS_PRI: bool, cons
         if clip {
             res = vminq_s16(vmaxq_s16(res, min_v), max_v);
         }
-        store_i16x8_u16(dst, dp, res);
-        dp += dst_stride;
-        tp += tmp_stride;
+        store_rows_u16::<W>(dst, dp, dst_stride, res);
+        dp += rows * dst_stride;
+        tp += rows * tmp_stride;
     }
 }
 
@@ -612,7 +542,7 @@ fn cdef_filter_block_8w_hbd_neon_shape_dispatch<const H: usize>(
     dir: usize,
 ) {
     match (pri_strength != 0, sec_strength != 0) {
-        (true, true) => cdef_filter_block_8w_hbd_neon_shape::<H, true, true>(
+        (true, true) => cdef_filter_block_8w_hbd_neon_shape::<8, H, true, true>(
             dst,
             dst_stride,
             dst_off,
@@ -626,7 +556,7 @@ fn cdef_filter_block_8w_hbd_neon_shape_dispatch<const H: usize>(
             pri_tap,
             dir,
         ),
-        (true, false) => cdef_filter_block_8w_hbd_neon_shape::<H, true, false>(
+        (true, false) => cdef_filter_block_8w_hbd_neon_shape::<8, H, true, false>(
             dst,
             dst_stride,
             dst_off,
@@ -640,7 +570,7 @@ fn cdef_filter_block_8w_hbd_neon_shape_dispatch<const H: usize>(
             pri_tap,
             dir,
         ),
-        (false, true) => cdef_filter_block_8w_hbd_neon_shape::<H, false, true>(
+        (false, true) => cdef_filter_block_8w_hbd_neon_shape::<8, H, false, true>(
             dst,
             dst_stride,
             dst_off,
@@ -675,7 +605,7 @@ fn cdef_filter_block_4w_hbd_neon_shape_dispatch<const H: usize>(
     dir: usize,
 ) {
     match (pri_strength != 0, sec_strength != 0) {
-        (true, true) => cdef_filter_block_4w_hbd_neon_shape::<H, true, true>(
+        (true, true) => cdef_filter_block_8w_hbd_neon_shape::<4, H, true, true>(
             dst,
             dst_stride,
             dst_off,
@@ -689,7 +619,7 @@ fn cdef_filter_block_4w_hbd_neon_shape_dispatch<const H: usize>(
             pri_tap,
             dir,
         ),
-        (true, false) => cdef_filter_block_4w_hbd_neon_shape::<H, true, false>(
+        (true, false) => cdef_filter_block_8w_hbd_neon_shape::<4, H, true, false>(
             dst,
             dst_stride,
             dst_off,
@@ -703,7 +633,7 @@ fn cdef_filter_block_4w_hbd_neon_shape_dispatch<const H: usize>(
             pri_tap,
             dir,
         ),
-        (false, true) => cdef_filter_block_4w_hbd_neon_shape::<H, false, true>(
+        (false, true) => cdef_filter_block_8w_hbd_neon_shape::<4, H, false, true>(
             dst,
             dst_stride,
             dst_off,

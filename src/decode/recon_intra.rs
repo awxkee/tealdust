@@ -684,6 +684,44 @@ pub(crate) enum ChromaPhase {
     ReconOnly,
 }
 
+/// Which half of an inter block the walkers run when entropy decoding and
+/// reconstruction are split (`n_passes > 1`).
+///
+/// - `Fused`: parse coefficients and reconstruct together (single pass).
+/// - `Parse`: walk the block in reconstruction order, parse and record its
+///   coefficients, update the parse-side contexts; no prediction.
+/// - `Replay`: walk the same way, take the recorded coefficients, predict and
+///   reconstruct; no entropy reads.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub(crate) enum SplitPhase {
+    #[default]
+    Fused,
+    Parse,
+    Replay,
+}
+
+impl SplitPhase {
+    /// Chroma stage for a residual call made at `stage` under this phase, or
+    /// `None` when this phase has nothing to do at that stage (the >64px walk
+    /// reads chroma with the first piece and applies it with the last).
+    #[inline(always)]
+    pub(crate) fn chroma_stage(self, stage: ChromaPhase) -> Option<ChromaPhase> {
+        match (self, stage) {
+            (SplitPhase::Fused, s) => Some(s),
+            (SplitPhase::Parse, ChromaPhase::ReconOnly) => None,
+            (SplitPhase::Parse, _) => Some(ChromaPhase::ReadOnly),
+            (SplitPhase::Replay, ChromaPhase::ReadOnly) => None,
+            (SplitPhase::Replay, _) => Some(ChromaPhase::ReconOnly),
+        }
+    }
+
+    /// Whether prediction runs in this phase.
+    #[inline(always)]
+    pub(crate) fn predicts(self) -> bool {
+        self != SplitPhase::Parse
+    }
+}
+
 #[inline(always)]
 pub(crate) fn chroma_phase_intersect(
     local: ChromaPhase,
@@ -2142,6 +2180,25 @@ pub(crate) fn mc_w_mask<BD: BitDepth>(
     let _ = exec;
     if BD::BPC == 8 {
         let d8: &mut [u8] = BD::Pixel::slice_as_ne_bytes_mut(dst);
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        if std::is_x86_feature_detected!("avx2") {
+            // SAFETY: AVX2 was just detected.
+            return unsafe {
+                crate::avx::w_mask_8bpc_avx2(
+                    d8,
+                    dst_stride,
+                    tmp1,
+                    tmp2,
+                    w,
+                    h,
+                    m,
+                    mask_stride,
+                    sign,
+                    ss_hor,
+                    ss_ver,
+                )
+            };
+        }
         crate::mc::w_mask_8bpc(
             d8,
             dst_stride,

@@ -696,6 +696,211 @@ fn store_i16x16_shift(
     }
 }
 
+/// Output sample of the 16-bit 8-tap paths: rounded words in, saturated to
+/// the sample type on store.
+trait TapOut: Copy + Default {
+    fn from_i32(v: i32) -> Self;
+    /// Stores 8 words; `dst` must be valid for 8 samples.
+    unsafe fn store8(dst: *mut Self, v: int16x8_t);
+}
+
+impl TapOut for i16 {
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v as i16
+    }
+    #[inline(always)]
+    unsafe fn store8(dst: *mut Self, v: int16x8_t) {
+        unsafe { vst1q_s16(dst, v) }
+    }
+}
+
+impl TapOut for u8 {
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v.clamp(0, 255) as u8
+    }
+    #[inline(always)]
+    unsafe fn store8(dst: *mut Self, v: int16x8_t) {
+        unsafe { vst1_u8(dst, vqmovun_s16(v)) }
+    }
+}
+
+/// Stores the first `dst.len()` (< 8) of 8 words.
+#[inline(always)]
+fn store_tail<O: TapOut>(dst: &mut [O], v: int16x8_t) {
+    let mut t = [O::default(); 8];
+    unsafe { O::store8(t.as_mut_ptr(), v) };
+    dst.copy_from_slice(&t[..dst.len()]);
+}
+
+/// Whether the 8-tap sum of 8-bit pixels plus the rounding offset always
+/// fits i16, so it can be accumulated in (wrapping) 16-bit lanes.
+#[inline(always)]
+fn fits_i16(f: &[i8; 8], rnd: i32) -> bool {
+    let pos: i32 = f.iter().map(|&c| (c as i32).max(0)).sum();
+    let neg: i32 = f.iter().map(|&c| (c as i32).min(0)).sum();
+    255 * pos + rnd <= i16::MAX as i32 && 255 * neg >= i16::MIN as i32
+}
+
+/// One row of a 1-D filter over 8-bit pixels with 16-bit accumulation.
+/// `base` is the index of the row's first centre pixel and `stride` the tap
+/// direction (1 for horizontal). `f` must satisfy `fits_i16(f, rnd)`.
+#[inline]
+#[target_feature(enable = "neon")]
+fn tap_row_u8<O: TapOut>(
+    dst: &mut [O],
+    src: &[u8],
+    base: usize,
+    stride: isize,
+    f: &[i8; 8],
+    rnd: i32,
+    sh: i32,
+) {
+    let w = dst.len();
+    // First index read, and one past the last for `n` bytes loaded at `x`.
+    let first = base as isize - 3 * stride;
+    let end = |x: usize, n: usize| (base as isize + 4 * stride) as usize + x + n;
+    let mag = f.map(|c| vdupq_n_u8(c.unsigned_abs()));
+    let vrnd = vdupq_n_s16(rnd as i16);
+    let vsh = vdupq_n_s16(-(sh as i16));
+    let round = |v: uint16x8_t| vshlq_s16(vaddq_s16(vreinterpretq_s16_u16(v), vrnd), vsh);
+    let mut x = 0;
+    if first >= 0 {
+        // SAFETY: each block checks its furthest read against `src`.
+        unsafe {
+            let p = src.as_ptr().add(base);
+            let tap = |x: usize, t: usize| p.offset(x as isize + (t as isize - 3) * stride);
+            while x + 16 <= w && end(x, 16) <= src.len() {
+                // The lanes wrap, which is harmless as the total fits.
+                let (mut lo, mut hi) = (vdupq_n_u16(0), vdupq_n_u16(0));
+                for t in 0..8 {
+                    let s = vld1q_u8(tap(x, t));
+                    if f[t] > 0 {
+                        lo = vmlal_u8(lo, vget_low_u8(s), vget_low_u8(mag[t]));
+                        hi = vmlal_high_u8(hi, s, mag[t]);
+                    } else if f[t] < 0 {
+                        lo = vmlsl_u8(lo, vget_low_u8(s), vget_low_u8(mag[t]));
+                        hi = vmlsl_high_u8(hi, s, mag[t]);
+                    }
+                }
+                O::store8(dst.as_mut_ptr().add(x), round(lo));
+                O::store8(dst.as_mut_ptr().add(x + 8), round(hi));
+                x += 16;
+            }
+            while x < w && end(x, 8) <= src.len() {
+                let mut acc = vdupq_n_u16(0);
+                for t in 0..8 {
+                    let s = vld1_u8(tap(x, t));
+                    if f[t] > 0 {
+                        acc = vmlal_u8(acc, s, vget_low_u8(mag[t]));
+                    } else if f[t] < 0 {
+                        acc = vmlsl_u8(acc, s, vget_low_u8(mag[t]));
+                    }
+                }
+                if x + 8 <= w {
+                    O::store8(dst.as_mut_ptr().add(x), round(acc));
+                    x += 8;
+                } else {
+                    store_tail(&mut dst[x..], round(acc));
+                    x = w;
+                }
+            }
+        }
+    }
+    for (x, d) in dst.iter_mut().enumerate().skip(x) {
+        *d = O::from_i32(round_scalar(
+            filter_u8_scalar(src, base + x, stride, f),
+            rnd,
+            sh,
+        ));
+    }
+}
+
+/// Rounding of the 16-bit 8-tap paths: `(rnd, shift)` of the horizontal-only,
+/// vertical-only and second (vertical) stage of the 2-D case. The first 2-D
+/// stage always rounds by `bits - 4`.
+struct TapRounding {
+    h: (i32, i32),
+    v: (i32, i32),
+    hv: (i32, i32),
+}
+
+/// 8-tap filtering of 8-bit pixels for filters whose sums fit 16 bits.
+/// Returns false, having written nothing, when they do not.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+#[target_feature(enable = "neon")]
+fn tap8_u8_s16<O: TapOut>(
+    dst: &mut [O],
+    dst_stride: usize,
+    src: &[u8],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    fh: Option<[i8; 8]>,
+    fv: Option<[i8; 8]>,
+    bits: i32,
+    r: TapRounding,
+    mid_scratch: &mut [i16],
+) -> bool {
+    match (fh, fv) {
+        (Some(fh), Some(fv)) => {
+            let sh0 = bits - 4;
+            let rnd0 = (1 << sh0) >> 1;
+            if !fits_i16(&fh, rnd0) {
+                return false;
+            }
+            let tmp_h = h + 7;
+            let mid_stride = w.next_multiple_of(16).max(64);
+            let mid = &mut mid_scratch[..mid_stride * tmp_h];
+            for (y, mid_row) in mid.chunks_mut(mid_stride).enumerate() {
+                let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
+                tap_row_u8(&mut mid_row[..w], src, base, 1, &fh, rnd0, sh0);
+            }
+            let vrnd = vdupq_n_s32(r.hv.0);
+            let vsh = vdupq_n_s32(-r.hv.1);
+            for (y, dst_row) in dst.chunks_mut(dst_stride).take(h).enumerate() {
+                let dst_row = &mut dst_row[..w];
+                let mut x = 0;
+                while x < w {
+                    // Rows y..y+8 of `mid` exist (tmp_h = h + 7), and every
+                    // block of 8 words starting below `w` lies inside a
+                    // `mid_stride`-wide row (a multiple of 16).
+                    let (lo, hi) =
+                        filter_i16x8_8tap(mid, (y + 3) * mid_stride + x, mid_stride as isize, &fv);
+                    let v = vcombine_s16(
+                        vqmovn_s32(vshlq_s32(vaddq_s32(lo, vrnd), vsh)),
+                        vqmovn_s32(vshlq_s32(vaddq_s32(hi, vrnd), vsh)),
+                    );
+                    if x + 8 <= w {
+                        unsafe { O::store8(dst_row.as_mut_ptr().add(x), v) };
+                        x += 8;
+                    } else {
+                        store_tail(&mut dst_row[x..], v);
+                        x = w;
+                    }
+                }
+            }
+        }
+        (Some(f), None) | (None, Some(f)) => {
+            let horizontal = fh.is_some();
+            let (rnd, sh) = if horizontal { r.h } else { r.v };
+            if !fits_i16(&f, rnd) {
+                return false;
+            }
+            let stride = if horizontal { 1 } else { src_stride as isize };
+            for (y, dst_row) in dst.chunks_mut(dst_stride).take(h).enumerate() {
+                let base = src_off + y * src_stride;
+                tap_row_u8(&mut dst_row[..w], src, base, stride, &f, rnd, sh);
+            }
+        }
+        (None, None) => return false,
+    }
+    true
+}
+
 #[target_feature(enable = "neon")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn put_8tap_8bpc_neon(
@@ -715,6 +920,27 @@ pub(crate) fn put_8tap_8bpc_neon(
     let intermediate_rnd = ((1 << bits) >> 1) + ((1 << (bits - 4)) >> 1);
     let fh = crate::mc::get_h_filter(mx, filter_type, w);
     let fv = crate::mc::get_v_filter(my, filter_type, h);
+    let rounding = TapRounding {
+        h: (intermediate_rnd, bits),
+        v: ((1 << bits) >> 1, bits),
+        hv: ((1 << (bits + 4)) >> 1, bits + 4),
+    };
+    if tap8_u8_s16(
+        dst,
+        dst_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        fh,
+        fv,
+        bits,
+        rounding,
+        mid_scratch,
+    ) {
+        return;
+    }
     match (fh, fv) {
         (Some(fh), Some(fv)) => {
             let tmp_h = h + 7;
@@ -861,6 +1087,28 @@ pub(crate) fn prep_8tap_8bpc_neon(
     let bits = 6 + (filter_type < 0) as i32;
     let fh = crate::mc::get_h_filter(mx, filter_type, w);
     let fv = crate::mc::get_v_filter(my, filter_type, h);
+    let rnd0 = (1 << (bits - 4)) >> 1;
+    let rounding = TapRounding {
+        h: (rnd0, bits - 4),
+        v: (rnd0, bits - 4),
+        hv: ((1 << bits) >> 1, bits),
+    };
+    if tap8_u8_s16(
+        tmp,
+        tmp_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        fh,
+        fv,
+        bits,
+        rounding,
+        mid_scratch,
+    ) {
+        return;
+    }
     match (fh, fv) {
         (Some(fh), Some(fv)) => {
             let tmp_h = h + 7;
@@ -1008,55 +1256,62 @@ fn round_s32_warp(v: int32x4_t, rnd: i32, shift: i32) -> int32x4_t {
     vshlq_s32(vaddq_s32(v, vdupq_n_s32(rnd)), vdupq_n_s32(-shift))
 }
 
+/// Tap `t` of the eight per-pixel warp filters at `pos + x * step`, as one
+/// word per pixel: the 8 filters x 8 taps are loaded once and transposed.
 #[inline]
 #[target_feature(enable = "neon")]
-fn load_u8x8_i32_warp(src: &[u8]) -> (int32x4_t, int32x4_t) {
-    let v = unsafe { vmovl_u8(vld1_u8(src.as_ptr())) };
-    let lo = vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(v)));
-    let hi = vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(v)));
-    (lo, hi)
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn load_i16x8_i32_warp(src: &[i16]) -> (int32x4_t, int32x4_t) {
-    let v = unsafe { vld1q_s16(src.as_ptr()) };
-    (vmovl_s16(vget_low_s16(v)), vmovl_s16(vget_high_s16(v)))
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn warp_coeff_i32x4(pos: i32, step: i32, tap: usize, lane_base: i32) -> int32x4_t {
-    let f0 =
-        &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * lane_base + 512) >> 10)) as usize];
-    let f1 = &crate::tables::MC_WARP_FILTER
-        [(192 + ((pos + step * (lane_base + 1) + 512) >> 10)) as usize];
-    let f2 = &crate::tables::MC_WARP_FILTER
-        [(192 + ((pos + step * (lane_base + 2) + 512) >> 10)) as usize];
-    let f3 = &crate::tables::MC_WARP_FILTER
-        [(192 + ((pos + step * (lane_base + 3) + 512) >> 10)) as usize];
-    unsafe {
-        vld1q_s32(
-            [
-                f0[tap] as i32,
-                f1[tap] as i32,
-                f2[tap] as i32,
-                f3[tap] as i32,
-            ]
-            .as_ptr(),
+pub(super) fn warp_tap_coeffs(pos: i32, step: i32) -> [int16x8_t; 8] {
+    let f = |x: i32| -> int8x8_t {
+        let taps: &[i8; 8] =
+            &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * x + 512) >> 10)) as usize];
+        unsafe { vld1_s8(taps.as_ptr()) }
+    };
+    // Bytes of two filters interleaved, as tap pairs.
+    let z8 = |a: int8x8_t, b: int8x8_t| {
+        (
+            vreinterpret_s16_s8(vzip1_s8(a, b)),
+            vreinterpret_s16_s8(vzip2_s8(a, b)),
         )
-    }
+    };
+    let (a0, a1) = z8(f(0), f(1));
+    let (b0, b1) = z8(f(2), f(3));
+    let (c0, c1) = z8(f(4), f(5));
+    let (d0, d1) = z8(f(6), f(7));
+    // Four filters per tap, then all eight.
+    let z16 = |a: int16x4_t, b: int16x4_t| {
+        (
+            vreinterpret_s32_s16(vzip1_s16(a, b)),
+            vreinterpret_s32_s16(vzip2_s16(a, b)),
+        )
+    };
+    let (p0, p1) = z16(a0, b0);
+    let (p2, p3) = z16(a1, b1);
+    let (q0, q1) = z16(c0, d0);
+    let (q2, q3) = z16(c1, d1);
+    let z32 = |a: int32x2_t, b: int32x2_t| {
+        [
+            vmovl_s8(vreinterpret_s8_s32(vzip1_s32(a, b))),
+            vmovl_s8(vreinterpret_s8_s32(vzip2_s32(a, b))),
+        ]
+    };
+    let [t0, t1] = z32(p0, q0);
+    let [t2, t3] = z32(p1, q1);
+    let [t4, t5] = z32(p2, q2);
+    let [t6, t7] = z32(p3, q3);
+    [t0, t1, t2, t3, t4, t5, t6, t7]
 }
 
 #[inline]
 #[target_feature(enable = "neon")]
 fn warp_horz_u8x8(src: &[u8], row_base: usize, mx: i32, alpha: i32) -> int16x8_t {
+    let c = warp_tap_coeffs(mx, alpha);
     let mut lo = vdupq_n_s32(0);
     let mut hi = vdupq_n_s32(0);
-    for tap in 0..8 {
-        let (px_lo, px_hi) = load_u8x8_i32_warp(unsafe { src.get_unchecked(row_base + tap..) });
-        lo = vmlaq_s32(lo, px_lo, warp_coeff_i32x4(mx, alpha, tap, 0));
-        hi = vmlaq_s32(hi, px_hi, warp_coeff_i32x4(mx, alpha, tap, 4));
+    for (tap, c) in c.into_iter().enumerate() {
+        let px = unsafe { vld1_u8(src.get_unchecked(row_base + tap..).as_ptr()) };
+        let px = vreinterpretq_s16_u16(vmovl_u8(px));
+        lo = vmlal_s16(lo, vget_low_s16(px), vget_low_s16(c));
+        hi = vmlal_high_s16(hi, px, c);
     }
     let lo = round_s32_warp(lo, 4, 3);
     let hi = round_s32_warp(hi, 4, 3);
@@ -1072,13 +1327,13 @@ fn warp_vert_i16x8(
     my: i32,
     gamma: i32,
 ) -> (int32x4_t, int32x4_t) {
+    let c = warp_tap_coeffs(my, gamma);
     let mut lo = vdupq_n_s32(0);
     let mut hi = vdupq_n_s32(0);
-    for tap in 0..8 {
-        let (px_lo, px_hi) =
-            load_i16x8_i32_warp(unsafe { mid.get_unchecked(base + tap * stride..) });
-        lo = vmlaq_s32(lo, px_lo, warp_coeff_i32x4(my, gamma, tap, 0));
-        hi = vmlaq_s32(hi, px_hi, warp_coeff_i32x4(my, gamma, tap, 4));
+    for (tap, c) in c.into_iter().enumerate() {
+        let px = unsafe { vld1q_s16(mid.get_unchecked(base + tap * stride..).as_ptr()) };
+        lo = vmlal_s16(lo, vget_low_s16(px), vget_low_s16(c));
+        hi = vmlal_high_s16(hi, px, c);
     }
     (lo, hi)
 }

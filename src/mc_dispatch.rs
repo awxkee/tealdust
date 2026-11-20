@@ -962,6 +962,105 @@ mod simd_vs_scalar {
             .collect()
     }
 
+    /// The AVX2 `w_mask` against the scalar one for every chroma layout,
+    /// mask sign, block size and both rows of a 4:2:0 pair.
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+    #[test]
+    fn w_mask_avx2_matches_scalar() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let mut seed = 0x51ed_270bu32;
+        let mut r = |n: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) % n
+        };
+        for &w in &[4usize, 8, 16, 24, 32, 64, 128] {
+            for &h in &[2usize, 4, 8, 16, 34] {
+                for (ss_hor, ss_ver) in [(false, false), (true, false), (true, true)] {
+                    for sign in 0..2 {
+                        // Prepared 8-bit predictions: 4 fraction bits, with
+                        // some filter overshoot; mostly close, sometimes far.
+                        let t1: Vec<i16> = (0..w * h).map(|_| r(4500) as i16 - 200).collect();
+                        let t2: Vec<i16> = t1
+                            .iter()
+                            .map(|&v| {
+                                if r(3) == 0 {
+                                    r(4500) as i16 - 200
+                                } else {
+                                    v + r(700) as i16 - 350
+                                }
+                            })
+                            .collect();
+                        let (ds, ms) = (w + 5, w + 3);
+                        let (mut d0, mut d1) = (vec![9u8; ds * h], vec![9u8; ds * h]);
+                        let m0: Vec<u8> = (0..ms * h).map(|_| r(129) as u8).collect();
+                        let (mut m1, mut m0) = (m0.clone(), m0);
+                        crate::mc::w_mask_8bpc(
+                            &mut d0, ds, &t1, &t2, w, h, &mut m0, ms, sign, ss_hor, ss_ver,
+                        );
+                        unsafe {
+                            crate::avx::w_mask_8bpc_avx2(
+                                &mut d1, ds, &t1, &t2, w, h, &mut m1, ms, sign, ss_hor, ss_ver,
+                            )
+                        };
+                        let what = format!("{w}x{h} ss {ss_hor}/{ss_ver} sign {sign}");
+                        assert_eq!(d0, d1, "pixels {what}");
+                        assert_eq!(m0, m1, "mask {what}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Warp kernels against the scalar reference, over affine steps and start
+    /// phases spanning the filter table.
+    #[test]
+    fn warp_resolved_matches_scalar() {
+        let mut seed = 0x9e37_79b9u32;
+        let mut r = |n: u32| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) % n
+        };
+        let stride = 40;
+        let off = 8 * stride + 8;
+        for iter in 0..4000 {
+            let abcd: [i16; 4] = core::array::from_fn(|_| r(8191) as i16 - 4095);
+            let mx = r(80 << 10) as i32 - (40 << 10);
+            let my = r(80 << 10) as i32 - (40 << 10);
+            let flat = iter % 4 == 0;
+            let src8: Vec<u8> = (0..stride * 32)
+                .map(|_| if flat { 250 + r(6) } else { r(256) } as u8)
+                .collect();
+            let (mut a, mut b) = ([0u8; 64], [0u8; 64]);
+            let (mut ta, mut tb) = ([0i16; 64], [0i16; 64]);
+            unsafe {
+                warp_affine_8x8_8bpc_scalar(&mut a, 8, &src8, stride, off, &abcd, mx, my);
+                resolve_warp_8bpc()(&mut b, 8, &src8, stride, off, &abcd, mx, my);
+                warp_affine_8x8t_8bpc_scalar(&mut ta, 8, &src8, stride, off, &abcd, mx, my);
+                resolve_warp_t_8bpc()(&mut tb, 8, &src8, stride, off, &abcd, mx, my);
+            }
+            assert_eq!(a, b, "warp 8bpc {abcd:?} mx={mx} my={my}");
+            assert_eq!(ta, tb, "warp t 8bpc {abcd:?} mx={mx} my={my}");
+            for bd in [10u8, 12] {
+                let max = 1u32 << bd;
+                let src16: Vec<u16> = (0..stride * 32)
+                    .map(|_| if flat { max - 1 - r(6) } else { r(max) } as u16)
+                    .collect();
+                let (mut a, mut b) = ([0u16; 64], [0u16; 64]);
+                let (mut ta, mut tb) = ([0i16; 64], [0i16; 64]);
+                unsafe {
+                    warp_affine_8x8_hbd_scalar(&mut a, 8, &src16, stride, off, &abcd, mx, my, bd);
+                    resolve_warp_hbd()(&mut b, 8, &src16, stride, off, &abcd, mx, my, bd);
+                    warp_affine_8x8t_hbd_scalar(&mut ta, 8, &src16, stride, off, &abcd, mx, my, bd);
+                    resolve_warp_t_hbd()(&mut tb, 8, &src16, stride, off, &abcd, mx, my, bd);
+                }
+                assert_eq!(a, b, "warp {bd}-bit {abcd:?} mx={mx} my={my}");
+                assert_eq!(ta, tb, "warp t {bd}-bit {abcd:?} mx={mx} my={my}");
+            }
+        }
+    }
+
     #[test]
     fn mc_8bpc_resolved_matches_scalar() {
         let stride = 128 + 2 * PAD;

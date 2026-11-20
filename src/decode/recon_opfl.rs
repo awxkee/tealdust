@@ -80,7 +80,7 @@ fn prep_opfl_prefetch_rect_8bpc<BD: BitDepth>(
     let dwu = dimw as usize;
     let dhu = dimh as usize;
     let mut emu_buf = if need_emu {
-        Some(vec![BD::Pixel::default(); 192 * 192])
+        Some(crate::pixel::EmuBuf::<BD::Pixel>::take())
     } else {
         None
     };
@@ -199,7 +199,11 @@ pub(crate) fn opfl_pred_luma<BD: BitDepth>(
     let dw0 = apply_sign_i8(1 + (d0 > d1) as i32, -(fi.refdist[r0] as i32));
     let dw1 = apply_sign_i8(1 + (d1 > d0) as i32, fi.refdist[r1] as i32);
     // AVM zeroes the opfl offsets when either reference is at distance 0.
-    let dweights = if d0 != 0 && d1 != 0 { [dw0, dw1] } else { [0, 0] };
+    let dweights = if d0 != 0 && d1 != 0 {
+        [dw0, dw1]
+    } else {
+        [0, 0]
+    };
 
     let bs = 2 - (b.bs == BlockSize::Bs8x8 as u8 as i8) as i32;
     let t_swap = (recon.rf.ref_flip & (1u64 << (r0 * 8 + r1))) != 0;
@@ -851,7 +855,8 @@ where
         && recon.seq_hdr.tip_refine_mv
         && cwp_idx == 8
         && if frame_mode == 2 {
-            tip_subpel == crate::headers::FilterMode::Sharp8Tap as u8 && recon.seq_hdr.opfl_refine != 0
+            tip_subpel == crate::headers::FilterMode::Sharp8Tap as u8
+                && recon.seq_hdr.opfl_refine != 0
         } else {
             !is_256 || recon.seq_hdr.refine_mv
         };
@@ -878,7 +883,11 @@ where
     let dw0 = apply_sign_i8(1 + (d0 > d1) as i32, -(fi.refdist[r0] as i32));
     let dw1 = apply_sign_i8(1 + (d1 > d0) as i32, fi.refdist[r1] as i32);
     // AVM zeroes the opfl offsets when either reference is at distance 0.
-    let dweights = if d0 != 0 && d1 != 0 { [dw0, dw1] } else { [0, 0] };
+    let dweights = if d0 != 0 && d1 != 0 {
+        [dw0, dw1]
+    } else {
+        [0, 0]
+    };
 
     let sad8x8_thr: u32 = if frame_mode == 1 { 6 } else { 15 };
     let t_stride = recon.rf.rp_stride;
@@ -900,237 +909,262 @@ where
     let rp_proj_off = recon.rt.rp_proj_off;
 
     // TIP blocks span the whole superblock, so with sb256 they are 256x256.
-    let mut seg_mask = recon.scratch.take_compound_seg_mask(imax(
-        128 * 128,
-        (bw4_full * 4 * bh4_full * 4) as i32,
-    ) as usize);
+    let mut seg_mask = recon
+        .scratch
+        .take_compound_seg_mask(imax(128 * 128, (bw4_full * 4 * bh4_full * 4) as i32) as usize);
     let mut luma_bacp = false;
+    // The entropy pass walks the block for its coefficients only.
+    let predict = recon.scratch.split_phase.predicts();
     if has_luma {
         let w4 = imin(bw4_full, fi.bw - bx);
         let h4 = imin(bh4_full, fi.bh - by);
-        if phase != TipPhase::ResidOnly {
-        // Predict and blend only the `step` units that cover the frame; the
-        // tmp/mask stride is this clipped width. Pictures are padded to 128 px,
-        // so blending a whole sb256 TIP block at the right edge would run past
-        // the row stride into the next row (and past the plane at the bottom).
-        let bw4 = imin(bw4_full, (w4 + step - 1) & !(step - 1));
-        let bh4 = imin(bh4_full, (h4 + step - 1) & !(step - 1));
-        let yw = (bw4 * 4) as usize;
-        let yh = (bh4 * 4) as usize;
-        let y_stride = recon.frame.y_stride_px;
-        let dst_off = 4 * (by as usize * y_stride + bx as usize);
+        if phase != TipPhase::ResidOnly && predict {
+            // Predict and blend only the `step` units that cover the frame; the
+            // tmp/mask stride is this clipped width. Pictures are padded to 128 px,
+            // so blending a whole sb256 TIP block at the right edge would run past
+            // the row stride into the next row (and past the plane at the bottom).
+            let bw4 = imin(bw4_full, (w4 + step - 1) & !(step - 1));
+            let bh4 = imin(bh4_full, (h4 + step - 1) & !(step - 1));
+            let yw = (bw4 * 4) as usize;
+            let yh = (bh4 * 4) as usize;
+            let y_stride = recon.frame.y_stride_px;
+            let dst_off = 4 * (by as usize * y_stride + bx as usize);
 
-        let _len = crate::mc_dispatch::compound_tmp_len(yw, yh);
-        let mut tmp = recon.scratch.take_compound_tmp(_len);
-        if bacp {
-            for m in seg_mask.iter_mut() {
-                *m = 0x20;
+            let _len = crate::mc_dispatch::compound_tmp_len(yw, yh);
+            let mut tmp = recon.scratch.take_compound_tmp(_len);
+            if bacp {
+                for m in seg_mask.iter_mut() {
+                    *m = 0x20;
+                }
             }
-        }
-        let p_stride = ((step as usize + 2) * 4 + 15) & !15; // ((step+2)*4*1 + 63)&~63 ⇒ use 16-byte; keep generous
-        let p_stride = if p_stride < (step as usize + 2) * 4 {
-            (step as usize + 2) * 4
-        } else {
-            p_stride
-        };
-        let psz = p_stride * ((step as usize + 2) * 4);
-        let mut p = [
-            vec![BD::Pixel::default(); psz],
-            vec![BD::Pixel::default(); psz],
-        ];
+            let p_stride = ((step as usize + 2) * 4 + 15) & !15; // ((step+2)*4*1 + 63)&~63 ⇒ use 16-byte; keep generous
+            let p_stride = if p_stride < (step as usize + 2) * 4 {
+                (step as usize + 2) * 4
+            } else {
+                p_stride
+            };
+            let psz = p_stride * ((step as usize + 2) * 4);
+            let mut p = [
+                vec![BD::Pixel::default(); psz],
+                vec![BD::Pixel::default(); psz],
+            ];
 
-        let mut y = 0i32;
-        let mut yy = 0i32;
-        while y < h4 {
-            let off_y8 = (((by + y) & (fi.sb_step - 1)) >> 1) as isize * t_stride;
-            let mut x = 0i32;
-            while x < w4 {
-                let off_8x8 = (off_y8 + ((bx + x) >> 1) as isize) as usize;
-                let mut tmv = recon.rf.rp_proj[rp_proj_off + off_8x8].mv;
-                if tmv.y() == crate::levels::INVALID_MV {
-                    tmv = Mv::from_bits(0);
-                }
-                // rmv grid slot for this 8x8 (version 0=cmv, 1=chroma-scaled).
-                let rmv_idx =
-                    (((by + y) & 63) >> 1) as usize * 32 + (((bx + x) & 63) >> 1) as usize;
-                let mut cmv = [Mv::default(); 2];
-                let mut rmv1 = [Mv::default(); 2];
-                let mut left = [0i32; 2];
-                let mut top = [0i32; 2];
-                for i in 0..2 {
-                    let tipmv = crate::refmvs::scale_mv(tmv, recon.rf.tip.sf[i]);
-                    let cy = iclip(tipmv.y() + b_mv0.y, -0xffff, 0xffff);
-                    let cx = iclip(tipmv.x() + b_mv0.x, -0xffff, 0xffff);
-                    cmv[i] = Mv {
-                        c: MvXY { y: cy, x: cx },
-                    };
-                    rmv1[i] = Mv {
-                        c: MvXY { y: cy, x: cx },
-                    };
-                    top[i] = by * 4 + y * 4 + (cy >> 3) - 3;
-                    left[i] = bx * 4 + x * 4 + (cx >> 3) - 3;
-                }
-                crate::recon::scaleup_8pel_mv_for_chroma(&mut rmv1, layout);
+            let mut y = 0i32;
+            let mut yy = 0i32;
+            while y < h4 {
+                let off_y8 = (((by + y) & (fi.sb_step - 1)) >> 1) as isize * t_stride;
+                let mut x = 0i32;
+                while x < w4 {
+                    let off_8x8 = (off_y8 + ((bx + x) >> 1) as isize) as usize;
+                    let mut tmv = recon.rf.rp_proj[rp_proj_off + off_8x8].mv;
+                    if tmv.y() == crate::levels::INVALID_MV {
+                        tmv = Mv::from_bits(0);
+                    }
+                    // rmv grid slot for this 8x8 (version 0=cmv, 1=chroma-scaled).
+                    let rmv_idx =
+                        (((by + y) & 63) >> 1) as usize * 32 + (((bx + x) & 63) >> 1) as usize;
+                    let mut cmv = [Mv::default(); 2];
+                    let mut rmv1 = [Mv::default(); 2];
+                    let mut left = [0i32; 2];
+                    let mut top = [0i32; 2];
+                    for i in 0..2 {
+                        let tipmv = refmvs::scale_mv(tmv, recon.rf.tip.sf[i]);
+                        let cy = iclip(tipmv.y() + b_mv0.y, -0xffff, 0xffff);
+                        let cx = iclip(tipmv.x() + b_mv0.x, -0xffff, 0xffff);
+                        cmv[i] = Mv {
+                            c: MvXY { y: cy, x: cx },
+                        };
+                        rmv1[i] = Mv {
+                            c: MvXY { y: cy, x: cx },
+                        };
+                        top[i] = by * 4 + y * 4 + (cy >> 3) - 3;
+                        left[i] = bx * 4 + x * 4 + (cx >> 3) - 3;
+                    }
+                    crate::recon::scaleup_8pel_mv_for_chroma(&mut rmv1, layout);
 
-                if opfl {
-                    // bilinear prefetch both refs into p[i] (3-bit subpel mv).
-                    for i in 0..2 {
-                        let cy = cmv[i].y();
-                        let cx = cmv[i].x();
-                        prep_opfl_prefetch_8bpc(
-                            bd,
-                            recon.frame.exec,
-                            &mut p[i],
-                            p_stride,
-                            refp[i],
-                            bx + x,
-                            by + y,
-                            step,
-                            cx - 32,
-                            cy - 32,
-                            iclip(left[i], 0, w - 1),
-                            iclip(left[i] + 7 + step * 4, 1, w),
-                            iclip(top[i], 0, h - 1),
-                            iclip(top[i] + 7 + step * 4, 1, h),
-                            recon.scratch.inter_mc_tmp_mut(),
-                        );
-                    }
-                    let (mut dy, mut dx) = (0i32, 0i32);
-                    if refine {
-                        let (rdx, rdy) = crate::mc::sad_refine_mv::<BD::Pixel>(
-                            &p[0],
-                            p_stride,
-                            &p[1],
-                            p_stride,
-                            (step * 4) as usize,
-                            (step * 4) as usize,
-                            true,
-                            bd.bitdepth_min_8(),
-                        );
-                        dy = rdy;
-                        dx = rdx;
-                        cmv[0].set_y(cmv[0].y() + 8 * dy);
-                        cmv[1].set_y(cmv[1].y() - 8 * dy);
-                        cmv[0].set_x(cmv[0].x() + 8 * dx);
-                        cmv[1].set_x(cmv[1].x() - 8 * dx);
-                    }
-                    let mut dd = crate::recon::OpflMvDeltaBlock::default();
-                    let sad = if is_256 && frame_mode == 1 {
-                        0
-                    } else {
-                        let o0 = ((4 + dy) * p_stride as i32 + (4 + dx)) as usize;
-                        let o1 = ((4 - dy) * p_stride as i32 + (4 - dx)) as usize;
-                        crate::mc::sad8x8::<BD::Pixel>(
-                            &p[0][o0..],
-                            p_stride,
-                            &p[1][o1..],
-                            p_stride,
-                            bd.bitdepth_min_8(),
-                        )
-                    };
-                    if do_opfl && sad >= sad8x8_thr {
-                        let mut res = [crate::mc::OpflRegressionData::default(); 4];
-                        let o0 = ((4 + dy) * p_stride as i32 + (4 + dx)) as usize;
-                        let o1 = ((4 - dy) * p_stride as i32 + (4 - dx)) as usize;
-                        crate::mc::opfl_derive_mv(
-                            bd,
-                            &mut res,
-                            &p[0][o0..],
-                            p_stride,
-                            &p[1][o1..],
-                            p_stride,
-                            (step * 4) as usize,
-                            (step * 4) as usize,
-                            8,
-                            dweights,
-                        );
-                        crate::recon::opfl_mv_adj(&res[0], &mut dd, dweights);
-                    }
-                    for i in 0..2 {
-                        cmv[i].set_x(cmv[i].x() * 2 + dd.d[i].x as i32);
-                        cmv[i].set_y(cmv[i].y() * 2 + dd.d[i].y as i32);
-                    }
-                    for i in 0..2 {
-                        let cy = cmv[i].y();
-                        let cx = cmv[i].x();
-                        let off = (y * 4) as usize * yw + (x * 4) as usize;
-                        mc_opfl_8bpc(
-                            bd,
-                            recon.frame.exec,
-                            &mut tmp[i],
-                            off,
-                            yw,
-                            step,
-                            step,
-                            bx + x,
-                            by + y,
-                            0,
-                            cx,
-                            cy,
-                            refp[i],
-                            filter,
-                            iclip(left[i], 0, w - 1),
-                            iclip(left[i] + 7 + step * 4, 1, w),
-                            iclip(top[i], 0, h - 1),
-                            iclip(top[i] + 7 + step * 4, 1, h),
-                            recon.scratch.inter_mc_tmp_mut(),
-                        );
-                    }
-                    let dmv = [
-                        Mv {
-                            c: MvXY {
-                                y: (cmv[0].y() + (dd.d[0].y > 0) as i32) >> 1,
-                                x: (cmv[0].x() + (dd.d[0].x > 0) as i32) >> 1,
-                            },
-                        },
-                        Mv {
-                            c: MvXY {
-                                y: (cmv[1].y() + (dd.d[1].y > 0) as i32) >> 1,
-                                x: (cmv[1].x() + (dd.d[1].x > 0) as i32) >> 1,
-                            },
-                        },
-                    ];
-                    update_temporal_grid(
-                        recon,
-                        by + y,
-                        bx + x,
-                        (step >> 1) as usize,
-                        (step >> 1) as usize,
-                        r_pair,
-                        &dmv,
-                        t_swap,
-                    );
-                    if bacp {
-                        luma_bacp |= crate::recon::get_mask(
-                            &mut seg_mask,
-                            (bw4 * 4) as usize,
-                            bx,
-                            x,
-                            by,
-                            y,
-                            &cmv,
-                            4,
-                            4,
-                            step,
-                            step,
-                            w,
-                            h,
-                        );
-                    }
-                    crate::recon::scaledown_16pel_mv_for_chroma(&mut cmv, layout);
-                } else {
-                    // non-opfl: plain prep-MC, full bounds.
-                    for i in 0..2 - single as usize {
-                        let cy = cmv[i].y();
-                        let cx = cmv[i].x();
-                        if single {
-                            let off = dst_off + (y * 4) as usize * y_stride + (x * 4) as usize;
-                            inter_mc_plane_8bpc(
+                    if opfl {
+                        // bilinear prefetch both refs into p[i] (3-bit subpel mv).
+                        for i in 0..2 {
+                            let cy = cmv[i].y();
+                            let cx = cmv[i].x();
+                            prep_opfl_prefetch_8bpc(
                                 bd,
                                 recon.frame.exec,
-                                &mut recon.dst_y[off..],
-                                y_stride,
-                                refp[0],
+                                &mut p[i],
+                                p_stride,
+                                refp[i],
+                                bx + x,
+                                by + y,
+                                step,
+                                cx - 32,
+                                cy - 32,
+                                iclip(left[i], 0, w - 1),
+                                iclip(left[i] + 7 + step * 4, 1, w),
+                                iclip(top[i], 0, h - 1),
+                                iclip(top[i] + 7 + step * 4, 1, h),
+                                recon.scratch.inter_mc_tmp_mut(),
+                            );
+                        }
+                        let (mut dy, mut dx) = (0i32, 0i32);
+                        if refine {
+                            let (rdx, rdy) = crate::mc::sad_refine_mv::<BD::Pixel>(
+                                &p[0],
+                                p_stride,
+                                &p[1],
+                                p_stride,
+                                (step * 4) as usize,
+                                (step * 4) as usize,
+                                true,
+                                bd.bitdepth_min_8(),
+                            );
+                            dy = rdy;
+                            dx = rdx;
+                            cmv[0].set_y(cmv[0].y() + 8 * dy);
+                            cmv[1].set_y(cmv[1].y() - 8 * dy);
+                            cmv[0].set_x(cmv[0].x() + 8 * dx);
+                            cmv[1].set_x(cmv[1].x() - 8 * dx);
+                        }
+                        let mut dd = crate::recon::OpflMvDeltaBlock::default();
+                        let sad = if is_256 && frame_mode == 1 {
+                            0
+                        } else {
+                            let o0 = ((4 + dy) * p_stride as i32 + (4 + dx)) as usize;
+                            let o1 = ((4 - dy) * p_stride as i32 + (4 - dx)) as usize;
+                            crate::mc::sad8x8::<BD::Pixel>(
+                                &p[0][o0..],
+                                p_stride,
+                                &p[1][o1..],
+                                p_stride,
+                                bd.bitdepth_min_8(),
+                            )
+                        };
+                        if do_opfl && sad >= sad8x8_thr {
+                            let mut res = [crate::mc::OpflRegressionData::default(); 4];
+                            let o0 = ((4 + dy) * p_stride as i32 + (4 + dx)) as usize;
+                            let o1 = ((4 - dy) * p_stride as i32 + (4 - dx)) as usize;
+                            crate::mc::opfl_derive_mv(
+                                bd,
+                                &mut res,
+                                &p[0][o0..],
+                                p_stride,
+                                &p[1][o1..],
+                                p_stride,
+                                (step * 4) as usize,
+                                (step * 4) as usize,
+                                8,
+                                dweights,
+                            );
+                            crate::recon::opfl_mv_adj(&res[0], &mut dd, dweights);
+                        }
+                        for i in 0..2 {
+                            cmv[i].set_x(cmv[i].x() * 2 + dd.d[i].x as i32);
+                            cmv[i].set_y(cmv[i].y() * 2 + dd.d[i].y as i32);
+                        }
+                        for i in 0..2 {
+                            let cy = cmv[i].y();
+                            let cx = cmv[i].x();
+                            let off = (y * 4) as usize * yw + (x * 4) as usize;
+                            mc_opfl_8bpc(
+                                bd,
+                                recon.frame.exec,
+                                &mut tmp[i],
+                                off,
+                                yw,
+                                step,
+                                step,
+                                bx + x,
+                                by + y,
+                                0,
+                                cx,
+                                cy,
+                                refp[i],
+                                filter,
+                                iclip(left[i], 0, w - 1),
+                                iclip(left[i] + 7 + step * 4, 1, w),
+                                iclip(top[i], 0, h - 1),
+                                iclip(top[i] + 7 + step * 4, 1, h),
+                                recon.scratch.inter_mc_tmp_mut(),
+                            );
+                        }
+                        let dmv = [
+                            Mv {
+                                c: MvXY {
+                                    y: (cmv[0].y() + (dd.d[0].y > 0) as i32) >> 1,
+                                    x: (cmv[0].x() + (dd.d[0].x > 0) as i32) >> 1,
+                                },
+                            },
+                            Mv {
+                                c: MvXY {
+                                    y: (cmv[1].y() + (dd.d[1].y > 0) as i32) >> 1,
+                                    x: (cmv[1].x() + (dd.d[1].x > 0) as i32) >> 1,
+                                },
+                            },
+                        ];
+                        update_temporal_grid(
+                            recon,
+                            by + y,
+                            bx + x,
+                            (step >> 1) as usize,
+                            (step >> 1) as usize,
+                            r_pair,
+                            &dmv,
+                            t_swap,
+                        );
+                        if bacp {
+                            luma_bacp |= crate::recon::get_mask(
+                                &mut seg_mask,
+                                (bw4 * 4) as usize,
+                                bx,
+                                x,
+                                by,
+                                y,
+                                &cmv,
+                                4,
+                                4,
+                                step,
+                                step,
+                                w,
+                                h,
+                            );
+                        }
+                        crate::recon::scaledown_16pel_mv_for_chroma(&mut cmv, layout);
+                    } else {
+                        // non-opfl: plain prep-MC, full bounds.
+                        for i in 0..2 - single as usize {
+                            let cy = cmv[i].y();
+                            let cx = cmv[i].x();
+                            if single {
+                                let off = dst_off + (y * 4) as usize * y_stride + (x * 4) as usize;
+                                inter_mc_plane_8bpc(
+                                    bd,
+                                    recon.frame.exec,
+                                    &mut recon.dst_y[off..],
+                                    y_stride,
+                                    refp[0],
+                                    0,
+                                    bx + x,
+                                    by + y,
+                                    step,
+                                    step,
+                                    cx,
+                                    cy,
+                                    filter,
+                                    ss_hor,
+                                    ss_ver,
+                                    &crate::scale::ScaleFactors::from_svc(&recon.svc[r0])
+                                        .with_anchor(recon.scratch.mc_anchor),
+                                    recon.scratch.inter_mc_tmp_mut(),
+                                );
+                                continue;
+                            }
+                            let off = (y * 4) as usize * yw + (x * 4) as usize;
+                            inter_mc_plane_prep_at_8bpc(
+                                bd,
+                                recon.frame.exec,
+                                &mut tmp[i],
+                                off,
+                                yw,
+                                refp[i],
                                 0,
                                 bx + x,
                                 by + y,
@@ -1141,155 +1175,131 @@ where
                                 filter,
                                 ss_hor,
                                 ss_ver,
-                                &crate::scale::ScaleFactors::from_svc(&recon.svc[r0])
-                                    .with_anchor(recon.scratch.mc_anchor),
+                                fi.bw,
+                                fi.bh,
                                 recon.scratch.inter_mc_tmp_mut(),
                             );
-                            continue;
                         }
-                        let off = (y * 4) as usize * yw + (x * 4) as usize;
-                        inter_mc_plane_prep_at_8bpc(
-                            bd,
-                            recon.frame.exec,
-                            &mut tmp[i],
-                            off,
-                            yw,
-                            refp[i],
-                            0,
-                            bx + x,
+                        // AVM stores only the ref0 TIP MV for `TIP_SINGLE_WTD`
+                        // (an out-of-range MV quantizes to the invalid marker).
+                        let mut tmvp_mv = cmv;
+                        if single {
+                            tmvp_mv[1] = Mv::from_xy(4096, 4096);
+                        }
+                        update_temporal_grid(
+                            recon,
                             by + y,
-                            step,
-                            step,
-                            cx,
-                            cy,
-                            filter,
-                            ss_hor,
-                            ss_ver,
-                            fi.bw,
-                            fi.bh,
-                            recon.scratch.inter_mc_tmp_mut(),
+                            bx + x,
+                            (step >> 1) as usize,
+                            (step >> 1) as usize,
+                            r_pair,
+                            &tmvp_mv,
+                            t_swap,
                         );
-                    }
-                    // AVM stores only the ref0 TIP MV for `TIP_SINGLE_WTD`
-                    // (an out-of-range MV quantizes to the invalid marker).
-                    let mut tmvp_mv = cmv;
-                    if single {
-                        tmvp_mv[1] = Mv::from_xy(4096, 4096);
-                    }
-                    update_temporal_grid(
-                        recon,
-                        by + y,
-                        bx + x,
-                        (step >> 1) as usize,
-                        (step >> 1) as usize,
-                        r_pair,
-                        &tmvp_mv,
-                        t_swap,
-                    );
-                    if step == 4 && frame_mode == 1 && refined_tmvp {
-                        for p in 1..4i32 {
-                            let mut tmv2 = recon.rf.rp_proj[rp_proj_off
-                                + off_8x8
-                                + (p & 1) as usize
-                                + (((p & 2) >> 1) as isize * t_stride) as usize]
-                                .mv;
-                            if tmv2.y() == crate::levels::INVALID_MV {
-                                tmv2 = Mv::from_bits(0);
+                        if step == 4 && frame_mode == 1 && refined_tmvp {
+                            for p in 1..4i32 {
+                                let mut tmv2 = recon.rf.rp_proj[rp_proj_off
+                                    + off_8x8
+                                    + (p & 1) as usize
+                                    + (((p & 2) >> 1) as isize * t_stride) as usize]
+                                    .mv;
+                                if tmv2.y() == crate::levels::INVALID_MV {
+                                    tmv2 = Mv::from_bits(0);
+                                }
+                                let mut dmv = [Mv::default(); 2];
+                                for i in 0..2 {
+                                    let tipmv = crate::refmvs::scale_mv(tmv2, recon.rf.tip.sf[i]);
+                                    dmv[i] = Mv {
+                                        c: MvXY {
+                                            y: iclip(tipmv.y() + b_mv0.y, -0xffff, 0xffff),
+                                            x: iclip(tipmv.x() + b_mv0.x, -0xffff, 0xffff),
+                                        },
+                                    };
+                                }
+                                update_temporal_grid_sub(
+                                    recon,
+                                    by + y,
+                                    bx + x,
+                                    p,
+                                    t_stride,
+                                    r_pair,
+                                    &dmv,
+                                    t_swap,
+                                );
                             }
-                            let mut dmv = [Mv::default(); 2];
-                            for i in 0..2 {
-                                let tipmv = crate::refmvs::scale_mv(tmv2, recon.rf.tip.sf[i]);
-                                dmv[i] = Mv {
-                                    c: MvXY {
-                                        y: iclip(tipmv.y() + b_mv0.y, -0xffff, 0xffff),
-                                        x: iclip(tipmv.x() + b_mv0.x, -0xffff, 0xffff),
-                                    },
-                                };
-                            }
-                            update_temporal_grid_sub(
-                                recon,
-                                by + y,
-                                bx + x,
-                                p,
-                                t_stride,
-                                r_pair,
-                                &dmv,
-                                t_swap,
+                        }
+                        if bacp {
+                            luma_bacp |= crate::recon::get_mask(
+                                &mut seg_mask,
+                                (bw4 * 4) as usize,
+                                bx,
+                                x,
+                                by,
+                                y,
+                                &cmv,
+                                3,
+                                3,
+                                step,
+                                step,
+                                w,
+                                h,
                             );
                         }
+                        crate::recon::scaleup_8pel_mv_for_chroma(&mut cmv, layout);
                     }
-                    if bacp {
-                        luma_bacp |= crate::recon::get_mask(
-                            &mut seg_mask,
-                            (bw4 * 4) as usize,
-                            bx,
-                            x,
-                            by,
-                            y,
-                            &cmv,
-                            3,
-                            3,
-                            step,
-                            step,
-                            w,
-                            h,
-                        );
-                    }
-                    crate::recon::scaleup_8pel_mv_for_chroma(&mut cmv, layout);
+                    // store rmv grid: [0]=cmv (post-process), [1]=chroma-scaled base
+                    recon.scratch.rmv[rmv_idx][0] = cmv;
+                    recon.scratch.rmv[rmv_idx][1] = rmv1;
+                    x += step;
                 }
-                // store rmv grid: [0]=cmv (post-process), [1]=chroma-scaled base
-                recon.scratch.rmv[rmv_idx][0] = cmv;
-                recon.scratch.rmv[rmv_idx][1] = rmv1;
-                x += step;
+                y += step;
+                yy += 1;
             }
-            y += step;
-            yy += 1;
-        }
-        let _ = yy;
+            let _ = yy;
 
-        // blend (COMP_INTER_NONE → COMP_INTER_AVG, cwp_idx==8).
-        let have_bacp = bacp && luma_bacp;
-        let (tmp0, tmp1) = tmp.split_at(1);
-        if single {
-            // predicted in place above
-        } else if have_bacp {
-            mc_mask(
-                recon.frame.exec,
-                bd,
-                &mut recon.dst_y[dst_off..],
-                y_stride,
-                &tmp0[0],
-                &tmp1[0],
-                yw,
-                yh,
-                &seg_mask,
-            );
-        } else if cwp_idx == 8 {
-            mc_avg(
-                recon.frame.exec,
-                bd,
-                &mut recon.dst_y[dst_off..],
-                y_stride,
-                &tmp0[0],
-                &tmp1[0],
-                yw,
-                yh,
-            );
-        } else {
-            // AVM `set_tip_interp_weight_factor`: the frame's TIP weight.
-            crate::decode::recon_intra::mc_w_avg(
-                recon.frame.exec,
-                bd,
-                &mut recon.dst_y[dst_off..],
-                y_stride,
-                &tmp0[0],
-                &tmp1[0],
-                yw,
-                yh,
-                cwp_idx,
-            );
-        }
-        recon.scratch.put_compound_tmp(tmp);
+            // blend (COMP_INTER_NONE → COMP_INTER_AVG, cwp_idx==8).
+            let have_bacp = bacp && luma_bacp;
+            let (tmp0, tmp1) = tmp.split_at(1);
+            if single {
+                // predicted in place above
+            } else if have_bacp {
+                mc_mask(
+                    recon.frame.exec,
+                    bd,
+                    &mut recon.dst_y[dst_off..],
+                    y_stride,
+                    &tmp0[0],
+                    &tmp1[0],
+                    yw,
+                    yh,
+                    &seg_mask,
+                );
+            } else if cwp_idx == 8 {
+                mc_avg(
+                    recon.frame.exec,
+                    bd,
+                    &mut recon.dst_y[dst_off..],
+                    y_stride,
+                    &tmp0[0],
+                    &tmp1[0],
+                    yw,
+                    yh,
+                );
+            } else {
+                // AVM `set_tip_interp_weight_factor`: the frame's TIP weight.
+                crate::decode::recon_intra::mc_w_avg(
+                    recon.frame.exec,
+                    bd,
+                    &mut recon.dst_y[dst_off..],
+                    y_stride,
+                    &tmp0[0],
+                    &tmp1[0],
+                    yw,
+                    yh,
+                    cwp_idx,
+                );
+            }
+            recon.scratch.put_compound_tmp(tmp);
         }
 
         // luma residual.
@@ -1357,7 +1367,8 @@ where
         // ..)` selects the picture plane. BACP is decided on the U plane and
         // carried to V (`bacpu`). Chroma MC runs only at the recon stage
         // (`Both`/`ReconOnly`); the read stage consumes coefficients only.
-        let do_chroma_mc = chroma_stage != ChromaPhase::ReadOnly && phase != TipPhase::ResidOnly;
+        let do_chroma_mc =
+            chroma_stage != ChromaPhase::ReadOnly && phase != TipPhase::ResidOnly && predict;
         let mut chroma_bacp = false;
         for plane in (0..2usize).filter(|_| do_chroma_mc) {
             let dst_off = 4 * ((cby >> ss_ver) as usize * uv_stride + (cbx >> ss_hor) as usize);
@@ -1450,24 +1461,26 @@ where
         let uv_txtp_seed = recon.scratch.txtp_map[(by & 15) as usize * 16 + (bx & 15) as usize];
         let cbw4ss = (cbw4 + ss_hor) >> ss_hor;
         let cbh4ss = (cbh4 + ss_ver) >> ss_ver;
-        inter_chroma_residual_8bpc(
-            recon,
-            msac,
-            cdf_m,
-            a,
-            l,
-            b,
-            uvtx,
-            cbx,
-            cby,
-            cbw4ss,
-            cbh4ss,
-            cw4ss,
-            ch4ss,
-            uv_txtp_seed,
-            chroma_stage,
-            fi,
-        )?;
+        if let Some(stage) = recon.scratch.split_phase.chroma_stage(chroma_stage) {
+            inter_chroma_residual_8bpc(
+                recon,
+                msac,
+                cdf_m,
+                a,
+                l,
+                b,
+                uvtx,
+                cbx,
+                cby,
+                cbw4ss,
+                cbh4ss,
+                cw4ss,
+                ch4ss,
+                uv_txtp_seed,
+                stage,
+                fi,
+            )?;
+        }
     }
     recon.scratch.put_compound_seg_mask(seg_mask);
     Ok(())
@@ -1532,12 +1545,14 @@ pub(crate) fn rmv_uvpred<BD: crate::pixel::BitDepth>(
     let h = fi.bh * 4 >> ss_ver;
     // Without vertical subsampling the 4x4 opfl sub-blocks of an 8x8 block are
     // visible in chroma; each has its own refined MV and reference window.
-    let opfl_8x8 = !tip
-        && ss_ver == 0
-        && b.bs == BlockSize::Bs8x8 as u8 as i8
-        && b.inter_data().is_opfl();
+    let opfl_8x8 =
+        !tip && ss_ver == 0 && b.bs == BlockSize::Bs8x8 as u8 as i8 && b.inter_data().is_opfl();
     let rmv_base0 = ((cby & 63) >> 1) as usize * 32 + ((cbx & 63) >> 1) as usize;
-    let rw4 = if opfl_8x8 { 1 << ss_hor } else { imin(bw4, r_step) };
+    let rw4 = if opfl_8x8 {
+        1 << ss_hor
+    } else {
+        imin(bw4, r_step)
+    };
     let rh4 = if opfl_8x8 { 1 } else { imin(bh4, r_step) };
     let ow4 = if opfl_8x8 { rw4 } else { imin(bw4, o_step) };
     let oh4 = if opfl_8x8 { rh4 } else { imin(bh4, o_step) };
@@ -1713,7 +1728,7 @@ fn prep_opfl_prefetch_8bpc<BD: crate::pixel::BitDepth>(
         || dy + dim + (my != 0) as i32 * 4 > bottom;
     let dimu = dim as usize;
     let mut emu_buf = if need_emu {
-        Some(vec![BD::Pixel::default(); 192 * 192])
+        Some(crate::pixel::EmuBuf::<BD::Pixel>::take())
     } else {
         None
     };
@@ -1889,7 +1904,7 @@ fn apply_sign_i8(x: i32, s: i32) -> i8 {
 /// (stride `tmp_stride`) at the given block offset. Output buffer must be 8bpc
 /// luma/chroma (this clip's refs are unscaled, so the scaled branch is omitted).
 #[allow(clippy::too_many_arguments)]
-fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
+fn mc_prep_bounds_8bpc<BD: BitDepth>(
     bd: BD,
     exec: &crate::exec_context::ExecContext,
     tmp: &mut [i16],
@@ -1939,7 +1954,7 @@ fn mc_prep_bounds_8bpc<BD: crate::pixel::BitDepth>(
     let is_bilin = filter == 3;
 
     let mut emu_buf = if need_emu {
-        Some(vec![BD::Pixel::default(); 192 * 192])
+        Some(crate::pixel::EmuBuf::<BD::Pixel>::take())
     } else {
         None
     };
@@ -2148,7 +2163,7 @@ fn bounded_mc_src<BD: crate::pixel::BitDepth>(
     dx: i32,
     dy: i32,
     bounds: [i32; 4],
-) -> (std::borrow::Cow<'_, [BD::Pixel]>, usize, usize) {
+) -> (McSrc<'_, BD::Pixel>, usize, usize) {
     let [left, right, top, bottom] = bounds;
     let need_emu = dx - (mx != 0) as i32 * 3 < left
         || dy - (my != 0) as i32 * 3 < top
@@ -2156,9 +2171,9 @@ fn bounded_mc_src<BD: crate::pixel::BitDepth>(
         || dy + h as i32 + (my != 0) as i32 * 4 > bottom;
     if !need_emu {
         let off = dy as usize * ref_stride + dx as usize;
-        return (std::borrow::Cow::Borrowed(ref_data), off, ref_stride);
+        return (McSrc::Ref(ref_data), off, ref_stride);
     }
-    let mut buf = vec![BD::Pixel::default(); 192 * 192];
+    let mut buf = crate::pixel::EmuBuf::<BD::Pixel>::take();
     let emu_w = w + (mx != 0) as usize * 7;
     let emu_h = h + (my != 0) as usize * 7;
     let emu_stride = 192usize;
@@ -2176,7 +2191,24 @@ fn bounded_mc_src<BD: crate::pixel::BitDepth>(
         dy - (my != 0) as i32 * 3 - top,
     );
     let off = emu_stride * (my != 0) as usize * 3 + (mx != 0) as usize * 3;
-    (std::borrow::Cow::Owned(buf), off, emu_stride)
+    (McSrc::Emu(buf), off, emu_stride)
+}
+
+/// The reference plane itself, or an edge-emulated copy of the window.
+enum McSrc<'a, P: crate::pixel::Pixel> {
+    Ref(&'a [P]),
+    Emu(crate::pixel::EmuBuf<P>),
+}
+
+impl<P: crate::pixel::Pixel> core::ops::Deref for McSrc<'_, P> {
+    type Target = [P];
+    #[inline(always)]
+    fn deref(&self) -> &[P] {
+        match self {
+            McSrc::Ref(r) => r,
+            McSrc::Emu(b) => b,
+        }
+    }
 }
 
 /// `mc_opfl_8bpc` with single-reference rounding: writes pixels to `dst`
@@ -2491,6 +2523,8 @@ where
     // Pick which warp params to use: local warpmv for warp motion modes, the
     // frame global motion otherwise (GLOBALMV warp).
     let use_local_warp = motion_mode >= MotionMode::WarpCausal as u8;
+    // The entropy pass walks the block for its coefficients only.
+    let predict = recon.scratch.split_phase.predicts();
 
     if has_luma {
         let bs = lbs;
@@ -2504,7 +2538,8 @@ where
         } else {
             recon.frm_hdr.gmv.m[ref0 as usize]
         };
-        if warp_block {
+        if !predict {
+        } else if warp_block {
             // applies for affine warps where the (subsampled) block is >= 8 in
             // both dims; otherwise ext_warp.
             if wmp.affine != 0 && imin(bw4 * 4, bh4 * 4) >= 8 {
@@ -2572,7 +2607,8 @@ where
 
         // over the inter-intra blend for single-ref blocks.
         let bawp0 = b.inter_data().bawp[0] as i32;
-        if bawp0 != 0 {
+        if !predict {
+        } else if bawp0 != 0 {
             let w4c = imin(bw4, fi.bw - bx);
             let h4c = imin(bh4, fi.bh - by);
             bawp_plane(
@@ -2670,7 +2706,10 @@ where
             lbs != BlockSize::Invalid && cbs != lbs && imin(luma_bw4, luma_bh4) < 16 && !warp_block;
         // Chroma MC + iiblend run only at the recon stage (`Both`/`ReconOnly`);
         // the read stage (`ReadOnly`) only consumes the chroma coefficients.
-        let do_chroma_mc = chroma_stage != ChromaPhase::ReadOnly;
+        let do_chroma_mc = chroma_stage != ChromaPhase::ReadOnly && predict;
+        if sub8x8 && chroma_stage != ChromaPhase::ReadOnly {
+            sub8x8_refmvs(recon, cbx, cby, cw4, ch4);
+        }
         if sub8x8 && do_chroma_mc {
             // Per-sub-block chroma MC from spatial refmvs. cw4/ch4 are chroma
             // 4x4 extents; for each origin sub-block (ox4==oy4==0) MC both planes.
@@ -2883,24 +2922,26 @@ where
         let uv_txtp_seed = recon.scratch.txtp_map[(by & 15) as usize * 16 + (bx & 15) as usize];
         let cbw4ss = (cbw4 + ss_hor) >> ss_hor;
         let cbh4ss = (cbh4 + ss_ver) >> ss_ver;
-        inter_chroma_residual_8bpc(
-            recon,
-            msac,
-            cdf_m,
-            a,
-            l,
-            b,
-            uvtx,
-            cbx,
-            cby,
-            cbw4ss,
-            cbh4ss,
-            cw4ss,
-            ch4ss,
-            uv_txtp_seed,
-            chroma_stage,
-            fi,
-        )?;
+        if let Some(stage) = recon.scratch.split_phase.chroma_stage(chroma_stage) {
+            inter_chroma_residual_8bpc(
+                recon,
+                msac,
+                cdf_m,
+                a,
+                l,
+                b,
+                uvtx,
+                cbx,
+                cby,
+                cbw4ss,
+                cbh4ss,
+                cw4ss,
+                ch4ss,
+                uv_txtp_seed,
+                stage,
+                fi,
+            )?;
+        }
     }
     Ok(())
 }
@@ -2970,7 +3011,11 @@ where
     } else {
         let csplit_row = (bs as i32 - BlockSize::Bs128x128 as i32) as usize;
         // Lossless: one chroma unit per 64x64 luma unit (dav2d 8c86497528).
-        let csi = if lossless { 0 } else { (ss_hor + ss_ver) as usize };
+        let csi = if lossless {
+            0
+        } else {
+            (ss_hor + ss_ver) as usize
+        };
         (
             16,
             if lbs == BlockSize::Invalid {
@@ -3105,7 +3150,7 @@ where
 }
 
 /// type defines the visitation order and per-tile transform size, which is
-/// load-bearing for the per-4x4 coefficient neighbour context (and hence the
+/// load-bearing for the per-4x4 coefficient neighbor context (and hence the
 /// entropy stream). A naive raster tiling desyncs for non-square partitions.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn inter_luma_tx_walk<

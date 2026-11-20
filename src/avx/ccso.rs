@@ -380,20 +380,6 @@ pub(crate) fn ccso_prep_lut_8bpc_avx2(
 }
 
 #[inline(always)]
-fn fill_offsets_16(out: &mut [i8; 16], idx: &[u8; 16], offset_map: &[i8; 256]) {
-    for (out, &idx) in out.iter_mut().zip(idx.iter()) {
-        *out = offset_map[idx as usize];
-    }
-}
-
-#[inline(always)]
-fn fill_offsets_32(out: &mut [i8; 32], idx: &[u8; 32], offset_map: &[i8; 256]) {
-    for (out, &idx) in out.iter_mut().zip(idx.iter()) {
-        *out = offset_map[idx as usize];
-    }
-}
-
-#[inline(always)]
 fn fill_offsets_4_i16(out: &mut [i16; 8], idx: &[u8; 4], offset_map: &[i8; 256]) {
     for (out, &idx) in out[..4].iter_mut().zip(idx.iter()) {
         *out = offset_map[idx as usize] as i16;
@@ -431,6 +417,63 @@ fn ccso_add_4x4_8bpc(
     }
 }
 
+/// Vector form of `ccso_build_offset_map`: the 64 bytes of packed 3-bit
+/// offset indices as four 16-entry shuffle tables, and the 8 offsets.
+struct OffsetTables {
+    idxs: [__m256i; 4],
+    lut: __m256i,
+}
+
+impl OffsetTables {
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    fn new(offset_idxs: &[u8; 64], offset_lut: &[i8; 8]) -> Self {
+        let rows = offset_idxs.as_chunks::<16>().0;
+        unsafe {
+            Self {
+                idxs: std::array::from_fn(|t| {
+                    _mm256_broadcastsi128_si256(_mm_loadu_si128(rows[t].as_ptr().cast()))
+                }),
+                lut: _mm256_broadcastsi128_si256(_mm_loadl_epi64(offset_lut.as_ptr().cast())),
+            }
+        }
+    }
+
+    /// The offset of each LUT index byte: entry `i & 127` of the offset map,
+    /// i.e. `lut[(idxs[i >> 1] >> (4 * (i & 1))) & 7]`.
+    #[inline]
+    #[target_feature(enable = "avx2")]
+    fn offsets(&self, idx: __m256i) -> __m256i {
+        // Byte holding the index: (i & 127) >> 1, in 0..64.
+        let byte = _mm256_and_si256(_mm256_srli_epi16::<1>(idx), _mm256_set1_epi8(0x3f));
+        // A shuffle index with bit 7 set yields 0, so each table only
+        // answers for its own 16 bytes: (byte ^ 16t) + 0x70 has bit 7 clear
+        // exactly when byte is in table t.
+        let bias = _mm256_set1_epi8(0x70);
+        let mut packed = _mm256_setzero_si256();
+        for (t, table) in self.idxs.iter().enumerate() {
+            let sel = _mm256_xor_si256(byte, _mm256_set1_epi8((t as i8) << 4));
+            let hit = _mm256_shuffle_epi8(*table, _mm256_adds_epu8(sel, bias));
+            packed = _mm256_or_si256(packed, hit);
+        }
+        // Odd indices take the high nibble; blendv looks at bit 7 only.
+        let high = _mm256_srli_epi16::<4>(packed);
+        let odd = _mm256_slli_epi16::<7>(idx);
+        let nibble = _mm256_blendv_epi8(packed, high, odd);
+        _mm256_shuffle_epi8(self.lut, _mm256_and_si256(nibble, _mm256_set1_epi8(7)))
+    }
+}
+
+/// `clamp(cur + off, 0, 255)` per byte for unsigned `cur` and signed `off`.
+#[inline]
+#[target_feature(enable = "avx2")]
+fn add_offsets_u8(cur: __m256i, off: __m256i) -> __m256i {
+    let zero = _mm256_setzero_si256();
+    let up = _mm256_max_epi8(off, zero);
+    let down = _mm256_max_epi8(_mm256_sub_epi8(zero, off), zero);
+    _mm256_subs_epu8(_mm256_adds_epu8(cur, up), down)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[inline]
 #[target_feature(enable = "avx2")]
@@ -445,11 +488,27 @@ pub(crate) fn ccso_add_8bpc_avx2(
     h: usize,
     ll_mask: &[[u16; 4]],
 ) {
-    let zero = _mm_setzero_si128();
-    let zero256 = _mm256_setzero_si256();
-    let offset_map = crate::ccso::ccso_build_offset_map(offset_idxs, offset_lut);
-    let mut off_tmp = [0i8; 32];
-    let mut off_tmp16 = [0i8; 16];
+    // Header tables always have these sizes; anything else takes the
+    // portable kernel.
+    let (Ok(idxs), Ok(lut)) = (
+        <&[u8; 64]>::try_from(offset_idxs),
+        <&[i8; 8]>::try_from(offset_lut),
+    ) else {
+        return crate::ccso::ccso_add_8bpc_scalar(
+            dst,
+            dst_stride,
+            idx_buf,
+            idx_stride,
+            offset_idxs,
+            offset_lut,
+            w,
+            h,
+            ll_mask,
+        );
+    };
+    let tables = OffsetTables::new(idxs, lut);
+    // Only the 4x4 fallback for partly masked spans needs the byte map.
+    let mut offset_map: Option<[i8; 256]> = None;
     let n_blocks = (h + 3) >> 2;
     for (by, mask) in (0..h).step_by(4).zip(ll_mask[..n_blocks].iter()) {
         let block_h = (h - by).min(4);
@@ -469,27 +528,10 @@ pub(crate) fn ccso_add_8bpc_avx2(
             for (yy, idx_row) in idx_rows.chunks(idx_stride).take(block_h).enumerate() {
                 let dst_row = &mut dst_rows[yy * dst_stride..];
                 let idx32 = &idx_row[xx..xx + 32].as_chunks::<32>().0[0];
-                fill_offsets_32(&mut off_tmp, idx32, &offset_map);
-
-                let off = unsafe { _mm256_loadu_si256(off_tmp.as_ptr().cast()) };
-                let off0 = _mm256_castsi256_si128(off);
-                let off1 = _mm256_extracti128_si256::<1>(off);
-                let off_lo = _mm256_inserti128_si256::<1>(
-                    _mm256_castsi128_si256(_mm_cvtepi8_epi16(off0)),
-                    _mm_cvtepi8_epi16(off1),
-                );
-                let off_hi = _mm256_inserti128_si256::<1>(
-                    _mm256_castsi128_si256(_mm_cvtepi8_epi16(_mm_srli_si128(off0, 8))),
-                    _mm_cvtepi8_epi16(_mm_srli_si128(off1, 8)),
-                );
+                let off = tables.offsets(unsafe { _mm256_loadu_si256(idx32.as_ptr().cast()) });
                 let dst32 = &mut dst_row[xx..xx + 32].as_chunks_mut::<32>().0[0];
                 let cur = unsafe { _mm256_loadu_si256(dst32.as_ptr().cast()) };
-                let cur_lo = _mm256_unpacklo_epi8(cur, zero256);
-                let cur_hi = _mm256_unpackhi_epi8(cur, zero256);
-                let out = _mm256_packus_epi16(
-                    _mm256_add_epi16(cur_lo, off_lo),
-                    _mm256_add_epi16(cur_hi, off_hi),
-                );
+                let out = add_offsets_u8(cur, off);
                 unsafe { _mm256_storeu_si256(dst32.as_mut_ptr().cast(), out) };
             }
             xx += 32;
@@ -500,18 +542,12 @@ pub(crate) fn ccso_add_8bpc_avx2(
                 for (yy, idx_row) in idx_rows.chunks(idx_stride).take(block_h).enumerate() {
                     let dst_row = &mut dst_rows[yy * dst_stride..];
                     let idx16 = &idx_row[xx..xx + 16].as_chunks::<16>().0[0];
-                    fill_offsets_16(&mut off_tmp16, idx16, &offset_map);
-                    let off = unsafe { _mm_loadu_si128(off_tmp16.as_ptr() as *const __m128i) };
-                    let off_lo = _mm_cvtepi8_epi16(off);
-                    let off_hi = _mm_cvtepi8_epi16(_mm_srli_si128(off, 8));
+                    let idx = unsafe { _mm_loadu_si128(idx16.as_ptr().cast()) };
+                    let off = tables.offsets(_mm256_zextsi128_si256(idx));
                     let dst16 = &mut dst_row[xx..xx + 16].as_chunks_mut::<16>().0[0];
                     let cur = unsafe { _mm_loadu_si128(dst16.as_ptr() as *const __m128i) };
-                    let cur_lo = _mm_unpacklo_epi8(cur, zero);
-                    let cur_hi = _mm_unpackhi_epi8(cur, zero);
-                    let out = _mm_packus_epi16(
-                        _mm_add_epi16(cur_lo, off_lo),
-                        _mm_add_epi16(cur_hi, off_hi),
-                    );
+                    let out =
+                        _mm256_castsi256_si128(add_offsets_u8(_mm256_zextsi128_si256(cur), off));
                     unsafe { _mm_storeu_si128(dst16.as_mut_ptr() as *mut __m128i, out) };
                 }
                 xx += 16;
@@ -525,7 +561,9 @@ pub(crate) fn ccso_add_8bpc_avx2(
                             idx_rows,
                             idx_stride,
                             block_h,
-                            &offset_map,
+                            offset_map.get_or_insert_with(|| {
+                                crate::ccso::ccso_build_offset_map(offset_idxs, offset_lut)
+                            }),
                             xx,
                         );
                     }
@@ -542,11 +580,65 @@ pub(crate) fn ccso_add_8bpc_avx2(
                     idx_rows,
                     idx_stride,
                     block_h,
-                    &offset_map,
+                    offset_map.get_or_insert_with(|| {
+                        crate::ccso::ccso_build_offset_map(offset_idxs, offset_lut)
+                    }),
                     xx,
                 );
             }
             xx += 4;
+        }
+    }
+}
+
+#[cfg(test)]
+mod ccso_add_tests {
+    struct Rng(u64);
+
+    impl Rng {
+        fn r(&mut self, n: u32) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 16) as u32 % n
+        }
+    }
+
+    /// The AVX2 add against the scalar one: every LUT index byte, all offset
+    /// scales, pixels near both clamps, masked and unmasked spans.
+    #[test]
+    fn add_8bpc_matches_scalar() {
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let mut rng = Rng(0xcc50_add0_1357);
+        for iter in 0..3000 {
+            let w = [64usize, 60, 48, 36, 32, 20, 16, 8, 4][rng.r(9) as usize];
+            let h = [8usize, 4][rng.r(2) as usize];
+            let (ds, is) = (w + rng.r(9) as usize, 64);
+            let filter_off: [u8; 64] = core::array::from_fn(|_| rng.r(256) as u8);
+            let lut = &crate::tables::CCSO_OFFSET[rng.r(4) as usize];
+            let idx: Vec<u8> = (0..is * h).map(|_| rng.r(256) as u8).collect();
+            let edge = iter % 3 == 0;
+            let src: Vec<u8> = (0..ds * h)
+                .map(|_| {
+                    if edge {
+                        [0, 3, 250, 255][rng.r(4) as usize]
+                    } else {
+                        rng.r(256) as u8
+                    }
+                })
+                .collect();
+            let masked = rng.r(3) == 0;
+            let ll: Vec<[u16; 4]> = (0..2)
+                .map(|_| [if masked { rng.r(1 << 16) as u16 } else { 0 }, 0, 0, 0])
+                .collect();
+            let (mut d0, mut d1) = (src.clone(), src.clone());
+            crate::ccso::ccso_add_8bpc_scalar(&mut d0, ds, &idx, is, &filter_off, lut, w, h, &ll);
+            unsafe {
+                super::ccso_add_8bpc_avx2(&mut d1, ds, &idx, is, &filter_off, lut, w, h, &ll)
+            };
+            assert_eq!(d0, d1, "iter {iter} {w}x{h} masked {masked}");
         }
     }
 }

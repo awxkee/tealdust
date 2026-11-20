@@ -945,47 +945,6 @@ pub(crate) fn prep_8tap_hbd_neon(
 
 #[inline]
 #[target_feature(enable = "neon")]
-fn load_u16x8_i32_warp(src: &[u16]) -> (int32x4_t, int32x4_t) {
-    let v = unsafe { vld1q_u16(src.as_ptr()) };
-    (
-        vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(v))),
-        vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(v))),
-    )
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn load_i16x8_i32_warp(src: &[i16]) -> (int32x4_t, int32x4_t) {
-    let v = unsafe { vld1q_s16(src.as_ptr()) };
-    (vmovl_s16(vget_low_s16(v)), vmovl_s16(vget_high_s16(v)))
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
-fn warp_coeff_i32x4(pos: i32, step: i32, tap: usize, lane_base: i32) -> int32x4_t {
-    let f0 =
-        &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * lane_base + 512) >> 10)) as usize];
-    let f1 = &crate::tables::MC_WARP_FILTER
-        [(192 + ((pos + step * (lane_base + 1) + 512) >> 10)) as usize];
-    let f2 = &crate::tables::MC_WARP_FILTER
-        [(192 + ((pos + step * (lane_base + 2) + 512) >> 10)) as usize];
-    let f3 = &crate::tables::MC_WARP_FILTER
-        [(192 + ((pos + step * (lane_base + 3) + 512) >> 10)) as usize];
-    unsafe {
-        vld1q_s32(
-            [
-                f0[tap] as i32,
-                f1[tap] as i32,
-                f2[tap] as i32,
-                f3[tap] as i32,
-            ]
-            .as_ptr(),
-        )
-    }
-}
-
-#[inline]
-#[target_feature(enable = "neon")]
 fn warp_horz_u16x8(
     src: &[u16],
     row_base: usize,
@@ -994,12 +953,15 @@ fn warp_horz_u16x8(
     rnd: i32,
     shift: i32,
 ) -> int16x8_t {
+    let c = super::mc::warp_tap_coeffs(mx, alpha);
     let mut lo = vdupq_n_s32(0);
     let mut hi = vdupq_n_s32(0);
-    for tap in 0..8 {
-        let (px_lo, px_hi) = load_u16x8_i32_warp(unsafe { src.get_unchecked(row_base + tap..) });
-        lo = vmlaq_s32(lo, px_lo, warp_coeff_i32x4(mx, alpha, tap, 0));
-        hi = vmlaq_s32(hi, px_hi, warp_coeff_i32x4(mx, alpha, tap, 4));
+    for (tap, c) in c.into_iter().enumerate() {
+        // Samples are at most 12 bits, so they are valid as signed words.
+        let px = unsafe { vld1q_u16(src.get_unchecked(row_base + tap..).as_ptr()) };
+        let px = vreinterpretq_s16_u16(px);
+        lo = vmlal_s16(lo, vget_low_s16(px), vget_low_s16(c));
+        hi = vmlal_high_s16(hi, px, c);
     }
     let lo = round_s32(lo, rnd, shift);
     let hi = round_s32(hi, rnd, shift);
@@ -1015,13 +977,13 @@ fn warp_vert_i16x8(
     my: i32,
     gamma: i32,
 ) -> (int32x4_t, int32x4_t) {
+    let c = super::mc::warp_tap_coeffs(my, gamma);
     let mut lo = vdupq_n_s32(0);
     let mut hi = vdupq_n_s32(0);
-    for tap in 0..8 {
-        let (px_lo, px_hi) =
-            load_i16x8_i32_warp(unsafe { mid.get_unchecked(base + tap * stride..) });
-        lo = vmlaq_s32(lo, px_lo, warp_coeff_i32x4(my, gamma, tap, 0));
-        hi = vmlaq_s32(hi, px_hi, warp_coeff_i32x4(my, gamma, tap, 4));
+    for (tap, c) in c.into_iter().enumerate() {
+        let px = unsafe { vld1q_s16(mid.get_unchecked(base + tap * stride..).as_ptr()) };
+        lo = vmlal_s16(lo, vget_low_s16(px), vget_low_s16(c));
+        hi = vmlal_high_s16(hi, px, c);
     }
     (lo, hi)
 }

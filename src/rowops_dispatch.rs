@@ -30,7 +30,7 @@ use std::sync::OnceLock;
 
 use crate::gdf_tables::{GDF_ALPHA, GDF_BIAS, GDF_INTER_ERROR, GDF_INTRA_ERROR, GDF_WEIGHT};
 
-const GDF_PREP_COORDS: [[i8; 2]; 18] = [
+pub(crate) static GDF_PREP_COORDS: [[i8; 2]; 18] = [
     [6, 0],
     [5, 0],
     [4, 0],
@@ -51,7 +51,7 @@ const GDF_PREP_COORDS: [[i8; 2]; 18] = [
     [0, 1],
 ];
 
-const GDF_PREP_COORDS_8BPC: [[i8; 2]; 18] = [
+static GDF_PREP_COORDS_8BPC: [[i8; 2]; 18] = [
     [6, 0],
     [5, 0],
     [4, 0],
@@ -1404,8 +1404,8 @@ mod gdf_prep_row_tests {
     const STRIDE: usize = 64 + 2 * O;
 
     fn params(rng: &mut Rng, grad_shift: i32) -> GdfPrepRow {
-        let ref_dst_idx = rng.r(6) as usize;
-        let qp_idx = rng.r(6) as usize;
+        let set = rng.r(36) as usize;
+        let (ref_dst_idx, qp_idx) = (set / 6, set % 6);
         let (error_lut_base, scale) = if ref_dst_idx == 0 {
             (qp_idx * 4096, 8)
         } else {
@@ -1448,6 +1448,50 @@ mod gdf_prep_row_tests {
                     .collect()
             })
             .collect()
+    }
+
+    /// The SIMD row kernels rely on this: classes 1..3 are the class-0
+    /// kernel transposed (bit 0) and/or mirrored (bit 1), each output only
+    /// uses a fixed subset of taps, and the gradient terms are
+    /// class-independent and feed only the third output.
+    #[test]
+    fn gdf_table_structure() {
+        let slot = |dy: i8, dx: i8| {
+            let c = if dy < 0 || (dy == 0 && dx < 0) {
+                [-dy, -dx]
+            } else {
+                [dy, dx]
+            };
+            GDF_PREP_COORDS.iter().position(|&t| t == c).unwrap()
+        };
+        let used = |idx: usize, [dy, dx]: [i8; 2]| match idx {
+            0 => dx == 0 || (dy == 0 && dx <= 2) || (dy == 1 && dx.abs() == 1) || dy == 2,
+            1 => dy == 0 || (dx == 0 && dy <= 2) || dy == 1,
+            _ => (dx == 0 && dy <= 3) || (dy == 0 && dx <= 3),
+        };
+        for set in 0..36 {
+            let (ab, wb) = (set * 88, set * 264);
+            for cls in 0..4 {
+                for (k, &[dy, dx]) in GDF_PREP_COORDS.iter().enumerate() {
+                    let (ty, tx) = if cls & 1 != 0 { (dx, dy) } else { (dy, dx) };
+                    let pk = slot(ty, if cls & 2 != 0 { -tx } else { tx });
+                    assert_eq!(GDF_ALPHA[ab + k * 4 + cls], GDF_ALPHA[ab + pk * 4]);
+                    for idx in 0..3 {
+                        let w = GDF_WEIGHT[wb + idx * 88 + k * 4 + cls];
+                        assert_eq!(w, GDF_WEIGHT[wb + idx * 88 + pk * 4]);
+                        assert!(cls != 0 || w == 0 || used(idx, [dy, dx]), "{set} {idx} {k}");
+                    }
+                }
+                for k in 18..22 {
+                    assert_eq!(GDF_ALPHA[ab + k * 4 + cls], GDF_ALPHA[ab + k * 4]);
+                    for idx in 0..3 {
+                        let w = GDF_WEIGHT[wb + idx * 88 + k * 4 + cls];
+                        assert_eq!(w, GDF_WEIGHT[wb + idx * 88 + k * 4]);
+                        assert!(idx == 2 || w == 0);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

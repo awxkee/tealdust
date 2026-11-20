@@ -93,9 +93,9 @@ fn tile_log2(sz: i32, tgt: i32) -> i32 {
 /// scan order with optional symmetry, transpose and copy-from-plane shortcuts.
 fn parse_qm_set(gb: &mut GetBits, num_planes: usize) -> Result<crate::quantizer::QmSet> {
     static SCAN_8X8: [u8; 64] = [
-        0, 8, 1, 16, 9, 2, 24, 17, 10, 3, 32, 25, 18, 11, 4, 40, 33, 26, 19, 12, 5, 48, 41, 34,
-        27, 20, 13, 6, 56, 49, 42, 35, 28, 21, 14, 7, 57, 50, 43, 36, 29, 22, 15, 58, 51, 44, 37,
-        30, 23, 59, 52, 45, 38, 31, 60, 53, 46, 39, 61, 54, 47, 62, 55, 63,
+        0, 8, 1, 16, 9, 2, 24, 17, 10, 3, 32, 25, 18, 11, 4, 40, 33, 26, 19, 12, 5, 48, 41, 34, 27,
+        20, 13, 6, 56, 49, 42, 35, 28, 21, 14, 7, 57, 50, 43, 36, 29, 22, 15, 58, 51, 44, 37, 30,
+        23, 59, 52, 45, 38, 31, 60, 53, 46, 39, 61, 54, 47, 62, 55, 63,
     ];
     static SCAN_8X4: [u8; 32] = [
         0, 8, 1, 16, 9, 2, 24, 17, 10, 3, 25, 18, 11, 4, 26, 19, 12, 5, 27, 20, 13, 6, 28, 21, 14,
@@ -203,7 +203,11 @@ fn parse_tile_info(
     let sbh = (h + sbsz_min1) >> sbsz_log2;
     let w_adj = (level >= 18) as i32 + ((level >= 14 && tier != 0) as i32);
     // seq_level_idx 31 (SEQ_LEVEL_MAX) has no tile size limits.
-    let max_tile_width_sb = if level == 31 { sbw } else { 4096 >> (sbsz_log2 - w_adj) };
+    let max_tile_width_sb = if level == 31 {
+        sbw
+    } else {
+        4096 >> (sbsz_log2 - w_adj)
+    };
     let sz_adj = (level >= 14) as i32 + (level >= 18) as i32 + ((level >= 14 && tier != 0) as i32);
     let max_tile_area_sb = if level == 31 {
         sbw * sbh
@@ -377,9 +381,7 @@ pub fn parse_tile_info_frmhdr(
     {
         hdr.tiling.t = seqhdr.tiling.t.clone();
         sbmul = 1 + (hdr.sb128 != seqhdr.sb128) as i32;
-        debug_assert!(
-            sbmul == 1 || (hdr.sb128 == 1 && seqhdr.sb128 == 2 && hdr.is_key_or_intra())
-        );
+        debug_assert!(sbmul == 1 || (hdr.sb128 == 1 && seqhdr.sb128 == 2 && hdr.is_key_or_intra()));
         if hdr.tiling.t.uniform {
             // Only the tile count is reused; the distribution follows the
             // (possibly scaled) frame size (dav2d cc696eaa92, AVM
@@ -778,7 +780,11 @@ pub fn parse_seq_hdr(gb: &mut GetBits, strict: bool) -> Result<SequenceHeader> {
     }
 
     if !hdr.reduced_still_picture_header {
-        hdr.tip_mode = if gb.get_bit() != 0 { 1 + gb.get_bit() as u8 } else { 0 };
+        hdr.tip_mode = if gb.get_bit() != 0 {
+            1 + gb.get_bit() as u8
+        } else {
+            0
+        };
         hdr.tip = hdr.tip_mode != 0;
         if hdr.tip {
             hdr.tip_hole_fill = gb.get_bit() != 0;
@@ -988,7 +994,11 @@ pub fn parse_frame_hdr(
     // AVM setup_multiframe_header_id / setup_sequence_header_id: bridge
     // frames carry no mfh_id; the sequence header id is coded only with
     // mfh_id 0, otherwise it comes from the multi-frame header.
-    let mfh_id = if obu_type == ObuType::Bridge { 0 } else { gb.get_vlc() as usize };
+    let mfh_id = if obu_type == ObuType::Bridge {
+        0
+    } else {
+        gb.get_vlc() as usize
+    };
     if mfh_id >= crate::headers::MAX_MFH_NUM {
         return Err(TealdustError::InvalidFrameHeader);
     }
@@ -1109,7 +1119,9 @@ pub fn parse_frame_hdr(
         // Derived: refresh every slot except the long-term key frames kept.
         let mut flags = all_slots;
         for (i, r) in refs.iter().enumerate().take(seqhdr.ref_frames as usize) {
-            let Some(rh) = r.p.frame_hdr.as_ref() else { continue };
+            let Some(rh) = r.p.frame_hdr.as_ref() else {
+                continue;
+            };
             let kept = hdr.ref_long_term_ids[..hdr.num_ref_key_frames as usize]
                 .iter()
                 .any(|&id| id as i32 == rh.ltr_id as i32);
@@ -1269,7 +1281,11 @@ pub fn parse_frame_hdr(
                 if seqhdr.layout != PixelLayout::I400 && seqhdr.uvac_dq_enabled {
                     let diff_uv_delta = seqhdr.separate_uv_delta_q && gb.get_bit() != 0;
                     let read_delta_q = |gb: &mut GetBits| -> i8 {
-                        if gb.get_bit() != 0 { gb.get_sbits(7) as i8 } else { 0 }
+                        if gb.get_bit() != 0 {
+                            gb.get_sbits(7) as i8
+                        } else {
+                            0
+                        }
                     };
                     let u = read_delta_q(gb);
                     let v = if diff_uv_delta { read_delta_q(gb) } else { u };
@@ -1714,7 +1730,11 @@ pub fn parse_frame_hdr(
         // restoration
         if hdr.all_lossless == 0 && seqhdr.restoration {
             // AVM decode_restoration_mode loops over the coded planes only.
-            let lr_planes = if seqhdr.layout == PixelLayout::I400 { 1 } else { 3 };
+            let lr_planes = if seqhdr.layout == PixelLayout::I400 {
+                1
+            } else {
+                3
+            };
             for p in 0..lr_planes {
                 let disable_mask = seqhdr.rst_disable_mask[if p != 0 { 1 } else { 0 }];
                 hdr.restoration.p[p].restoration_type = if disable_mask == 0 {
@@ -1839,8 +1859,11 @@ pub fn parse_frame_hdr(
 
                 let mut i = 0usize;
                 // Reference filters join the dictionary on inter frames only.
-                let n_dict_refs =
-                    if hdr.frame_type == FrameType::Inter { hdr.n_ref_frames as usize } else { 0 };
+                let n_dict_refs = if hdr.frame_type == FrameType::Inter {
+                    hdr.n_ref_frames as usize
+                } else {
+                    0
+                };
                 for r in 0..n_dict_refs {
                     let ref_hdr = ref_slot(refs, hdr.refidx[r] as i32)?
                         .p
@@ -1880,7 +1903,11 @@ pub fn parse_frame_hdr(
                 let mut grp_ref_cnt = [0u8; 3];
                 grp_cnt[0] = n_classes as u8;
                 grp_cnt[1] = i as u8;
-                grp_cnt[2] = if use_pc_wiener { (n_filters - n_classes - i) as u8 } else { 0 };
+                grp_cnt[2] = if use_pc_wiener {
+                    (n_filters - n_classes - i) as u8
+                } else {
+                    0
+                };
                 let mut filter_refs = [0u8; 64];
                 // AVM most_probable_group(0)
                 let mut pred_grp: usize = if grp_cnt[1] > 2 {
@@ -2720,7 +2747,10 @@ pub fn get_ref_frames(
         let refhdr = refhdr_arc.as_ref();
 
         if seqhdr.tlayer_dependency_present {
-            if seqhdr.tlayer_dependencies[mlayer as usize][tlayer as usize] & (1 << refhdr.tlayer_id) == 0 {
+            if seqhdr.tlayer_dependencies[mlayer as usize][tlayer as usize]
+                & (1 << refhdr.tlayer_id)
+                == 0
+            {
                 continue;
             }
         } else if tlayer < refhdr.tlayer_id as i32 {
@@ -3153,7 +3183,8 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
                     0xff
                 };
                 let hdr_start = gb.bit_pos();
-                let mut hdr = parse_frame_hdr(&seqhdr, &c.refs, &c.mfh, obu_type, allowed_slots, &mut gb)?;
+                let mut hdr =
+                    parse_frame_hdr(&seqhdr, &c.refs, &c.mfh, obu_type, allowed_slots, &mut gb)?;
                 let ml = (mlayer_id as usize).min(7);
                 if obu_type == ObuType::OpenLoopKf {
                     c.olk_refresh[ml] = hdr.refresh_frame_flags as i16;
@@ -3403,12 +3434,8 @@ pub fn parse_obus(c: &mut DecoderContext, data: &[u8]) -> Result<usize> {
             // derive_sef_order_hint it is output at its own display order.
             if fh.sef_derive_order_hint == 0 {
                 let bits = c.seq_hdr.as_ref().unwrap().order_hint_n_bits as u32;
-                trigger.disp_order = crate::output_order::disp_order_hint(
-                    c,
-                    fh.frame_offset as u32,
-                    bits,
-                    false,
-                );
+                trigger.disp_order =
+                    crate::output_order::disp_order_hint(c, fh.frame_offset as u32, bits, false);
             }
             crate::output_order::output_frame_buffers(c, &trigger);
             c.frame_hdr = None;

@@ -76,7 +76,11 @@ pub(crate) fn user_qm_table(set: &QmSet, plane: usize, tx: usize) -> Option<Vec<
         TX_4X4 => {
             // downsample(8, 8, 4, 4, 0, 0)
             let b = &set.m[plane];
-            (4, 4, (0..16).map(|k| b[(k / 4) * 2 * 8 + (k % 4) * 2]).collect())
+            (
+                4,
+                4,
+                (0..16).map(|k| b[(k / 4) * 2 * 8 + (k % 4) * 2]).collect(),
+            )
         }
         TX_8X8 => (8, 8, set.m[plane].to_vec()),
         RTX_8X4 => (8, 4, set.m[3 + plane][..32].to_vec()),

@@ -676,6 +676,388 @@ fn store_i16x16_shift(dst: &mut [i16], lo: __m256i, hi: __m256i, rnd: i32, shift
     }
 }
 
+/// Output sample of the 16-bit 8-tap paths: rounded words in, saturated to
+/// the sample type on store.
+trait TapOut: Copy + Default {
+    fn from_i32(v: i32) -> Self;
+    /// Stores 16 words; `dst` must be valid for 16 samples.
+    unsafe fn store16(dst: *mut Self, v: __m256i);
+    /// Stores 8 words; `dst` must be valid for 8 samples.
+    unsafe fn store8(dst: *mut Self, v: __m128i);
+}
+
+impl TapOut for i16 {
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v as i16
+    }
+    #[inline(always)]
+    unsafe fn store16(dst: *mut Self, v: __m256i) {
+        unsafe { _mm256_storeu_si256(dst.cast(), v) }
+    }
+    #[inline(always)]
+    unsafe fn store8(dst: *mut Self, v: __m128i) {
+        unsafe { _mm_storeu_si128(dst.cast(), v) }
+    }
+}
+
+impl TapOut for u8 {
+    #[inline(always)]
+    fn from_i32(v: i32) -> Self {
+        v.clamp(0, 255) as u8
+    }
+    #[inline(always)]
+    unsafe fn store16(dst: *mut Self, v: __m256i) {
+        unsafe {
+            let p = _mm256_permute4x64_epi64::<0b10_00>(_mm256_packus_epi16(v, v));
+            _mm_storeu_si128(dst.cast(), _mm256_castsi256_si128(p))
+        }
+    }
+    #[inline(always)]
+    unsafe fn store8(dst: *mut Self, v: __m128i) {
+        unsafe { _mm_storel_epi64(dst.cast(), _mm_packus_epi16(v, v)) }
+    }
+}
+
+/// Stores the first `dst.len()` (< 8) of 8 words.
+#[inline(always)]
+fn store_tail<O: TapOut>(dst: &mut [O], v: __m128i) {
+    let mut t = [O::default(); 8];
+    unsafe { O::store8(t.as_mut_ptr(), v) };
+    dst.copy_from_slice(&t[..dst.len()]);
+}
+
+/// Whether the 16-bit `maddubs` accumulation of 8-bit pixels plus the
+/// rounding offset stays inside i16 for every partial sum.
+#[inline(always)]
+fn fits_i16(f: &[i8; 8], rnd: i32) -> bool {
+    let pos: i32 = f.iter().map(|&c| (c as i32).max(0)).sum();
+    let neg: i32 = f.iter().map(|&c| (c as i32).min(0)).sum();
+    255 * pos + rnd <= i16::MAX as i32 && 255 * neg >= i16::MIN as i32
+}
+
+/// The four tap pairs as `maddubs` byte-pair coefficients.
+#[inline(always)]
+fn pair_coeffs_u8(f: &[i8; 8]) -> [__m256i; 4] {
+    std::array::from_fn(|k| unsafe { _mm256_set1_epi16(pair_coeff(f[2 * k], f[2 * k + 1])) })
+}
+
+/// The four tap pairs as `madd` word-pair coefficients.
+#[inline(always)]
+fn pair_coeffs_i16(f: &[i8; 8]) -> [__m256i; 4] {
+    std::array::from_fn(|k| unsafe {
+        _mm256_set1_epi32(((f[2 * k + 1] as u16 as i32) << 16) | f[2 * k] as u16 as i32)
+    })
+}
+
+/// Unrounded horizontal sums of 16 pixels; `p` addresses the pixel 3 left of
+/// the first one and 24 bytes are read.
+#[inline(always)]
+unsafe fn h16_s16(p: *const u8, c: &[__m256i; 4]) -> __m256i {
+    unsafe {
+        let s = _mm256_inserti128_si256::<1>(
+            _mm256_castsi128_si256(_mm_loadu_si128(p.cast())),
+            _mm_loadu_si128(p.add(8).cast()),
+        );
+        let shuf01 = _mm256_broadcastsi128_si256(_mm_setr_epi8(
+            0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8,
+        ));
+        let two = _mm256_set1_epi8(2);
+        let shuf23 = _mm256_add_epi8(shuf01, two);
+        let shuf45 = _mm256_add_epi8(shuf23, two);
+        let shuf67 = _mm256_add_epi8(shuf45, two);
+        let p01 = _mm256_maddubs_epi16(_mm256_shuffle_epi8(s, shuf01), c[0]);
+        let p23 = _mm256_maddubs_epi16(_mm256_shuffle_epi8(s, shuf23), c[1]);
+        let p45 = _mm256_maddubs_epi16(_mm256_shuffle_epi8(s, shuf45), c[2]);
+        let p67 = _mm256_maddubs_epi16(_mm256_shuffle_epi8(s, shuf67), c[3]);
+        _mm256_add_epi16(_mm256_add_epi16(p01, p23), _mm256_add_epi16(p45, p67))
+    }
+}
+
+/// Unrounded horizontal sums of 8 pixels; 16 bytes are read at `p`.
+#[inline(always)]
+unsafe fn h8_s16(p: *const u8, c: &[__m256i; 4]) -> __m128i {
+    unsafe {
+        let s = _mm_loadu_si128(p.cast());
+        let shuf01 = _mm_setr_epi8(0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8);
+        let two = _mm_set1_epi8(2);
+        let shuf23 = _mm_add_epi8(shuf01, two);
+        let shuf45 = _mm_add_epi8(shuf23, two);
+        let shuf67 = _mm_add_epi8(shuf45, two);
+        let c = c.map(|c| _mm256_castsi256_si128(c));
+        let p01 = _mm_maddubs_epi16(_mm_shuffle_epi8(s, shuf01), c[0]);
+        let p23 = _mm_maddubs_epi16(_mm_shuffle_epi8(s, shuf23), c[1]);
+        let p45 = _mm_maddubs_epi16(_mm_shuffle_epi8(s, shuf45), c[2]);
+        let p67 = _mm_maddubs_epi16(_mm_shuffle_epi8(s, shuf67), c[3]);
+        _mm_add_epi16(_mm_add_epi16(p01, p23), _mm_add_epi16(p45, p67))
+    }
+}
+
+/// Unrounded vertical sums of 16 pixels; `p` addresses the centre row and
+/// rows -3..=4 are read, 16 bytes each. Pairs with zero taps are skipped.
+#[inline(always)]
+unsafe fn v16_s16(p: *const u8, stride: isize, c: &[__m256i; 4], on: [bool; 4]) -> __m256i {
+    unsafe {
+        let mut sum = _mm256_setzero_si256();
+        for k in 0..4 {
+            if on[k] {
+                let r = p.offset((2 * k as isize - 3) * stride);
+                let a = _mm256_cvtepu8_epi16(_mm_loadu_si128(r.cast()));
+                let b = _mm256_cvtepu8_epi16(_mm_loadu_si128(r.offset(stride).cast()));
+                let pairs = _mm256_or_si256(a, _mm256_slli_epi16::<8>(b));
+                sum = _mm256_add_epi16(sum, _mm256_maddubs_epi16(pairs, c[k]));
+            }
+        }
+        sum
+    }
+}
+
+/// As `v16_s16` for 8 pixels, reading 8 bytes per row.
+#[inline(always)]
+unsafe fn v8_s16(p: *const u8, stride: isize, c: &[__m256i; 4], on: [bool; 4]) -> __m128i {
+    unsafe {
+        let mut sum = _mm_setzero_si128();
+        for k in 0..4 {
+            if on[k] {
+                let r = p.offset((2 * k as isize - 3) * stride);
+                let a = _mm_loadl_epi64(r.cast());
+                let b = _mm_loadl_epi64(r.offset(stride).cast());
+                let c = _mm256_castsi256_si128(c[k]);
+                sum = _mm_add_epi16(sum, _mm_maddubs_epi16(_mm_unpacklo_epi8(a, b), c));
+            }
+        }
+        sum
+    }
+}
+
+/// Vertical 32-bit sums of 16 intermediate words, saturated back to words
+/// after rounding; `p` addresses the centre row, rows -3..=4 are read.
+#[inline(always)]
+unsafe fn v16_mid(
+    p: *const i16,
+    stride: isize,
+    c: &[__m256i; 4],
+    on: [bool; 4],
+    rnd: __m256i,
+    sh: __m128i,
+) -> __m256i {
+    unsafe {
+        let (mut lo, mut hi) = (rnd, rnd);
+        for k in 0..4 {
+            if on[k] {
+                let r = p.offset((2 * k as isize - 3) * stride);
+                let a = _mm256_loadu_si256(r.cast());
+                let b = _mm256_loadu_si256(r.offset(stride).cast());
+                lo = _mm256_add_epi32(lo, _mm256_madd_epi16(_mm256_unpacklo_epi16(a, b), c[k]));
+                hi = _mm256_add_epi32(hi, _mm256_madd_epi16(_mm256_unpackhi_epi16(a, b), c[k]));
+            }
+        }
+        // Unpack and pack are both lane-local, so the pixel order is kept.
+        _mm256_packs_epi32(_mm256_sra_epi32(lo, sh), _mm256_sra_epi32(hi, sh))
+    }
+}
+
+/// As `v16_mid` for 8 words.
+#[inline(always)]
+unsafe fn v8_mid(
+    p: *const i16,
+    stride: isize,
+    c: &[__m256i; 4],
+    on: [bool; 4],
+    rnd: __m256i,
+    sh: __m128i,
+) -> __m128i {
+    unsafe {
+        let mut sum = rnd;
+        for k in 0..4 {
+            if on[k] {
+                let r = p.offset((2 * k as isize - 3) * stride);
+                let a = _mm_loadu_si128(r.cast());
+                let b = _mm_loadu_si128(r.offset(stride).cast());
+                let pairs = _mm256_set_m128i(_mm_unpackhi_epi16(a, b), _mm_unpacklo_epi16(a, b));
+                sum = _mm256_add_epi32(sum, _mm256_madd_epi16(pairs, c[k]));
+            }
+        }
+        let v = _mm256_sra_epi32(sum, sh);
+        _mm_packs_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256::<1>(v))
+    }
+}
+
+/// One row of a 1-D filter over 8-bit pixels with 16-bit accumulation.
+/// `base` is the index of the row's first centre pixel and `stride` the tap
+/// direction (1 for horizontal). `f` must satisfy `fits_i16(f, rnd)`.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn tap_row_u8<O: TapOut>(
+    dst: &mut [O],
+    src: &[u8],
+    base: usize,
+    stride: isize,
+    f: &[i8; 8],
+    c: &[__m256i; 4],
+    on: [bool; 4],
+    rnd: i32,
+    sh: i32,
+) {
+    let w = dst.len();
+    let horizontal = stride == 1;
+    // First and one-past-last index read for a block of `n` pixels at `x`.
+    let first = base as isize - 3 * stride;
+    let last = |x: usize, n: usize| {
+        if horizontal {
+            // Whole 16-byte loads starting 3 pixels to the left.
+            base + x - 3 + n + 8
+        } else {
+            (base as isize + 4 * stride) as usize + x + n
+        }
+    };
+    let vrnd = unsafe { _mm256_set1_epi16(rnd as i16) };
+    let vsh = unsafe { _mm_cvtsi32_si128(sh) };
+    let mut x = 0;
+    if first >= 0 {
+        // SAFETY: each block checks its furthest read against `src`.
+        unsafe {
+            let p = src.as_ptr().add(base);
+            while x + 16 <= w && last(x, 16) <= src.len() {
+                let v = if horizontal {
+                    h16_s16(p.add(x).sub(3), c)
+                } else {
+                    v16_s16(p.add(x), stride, c, on)
+                };
+                let v = _mm256_sra_epi16(_mm256_add_epi16(v, vrnd), vsh);
+                O::store16(dst.as_mut_ptr().add(x), v);
+                x += 16;
+            }
+            while x < w && last(x, 8) <= src.len() {
+                let v = if horizontal {
+                    h8_s16(p.add(x).sub(3), c)
+                } else {
+                    v8_s16(p.add(x), stride, c, on)
+                };
+                let v = _mm_sra_epi16(_mm_add_epi16(v, _mm256_castsi256_si128(vrnd)), vsh);
+                if x + 8 <= w {
+                    O::store8(dst.as_mut_ptr().add(x), v);
+                    x += 8;
+                } else {
+                    store_tail(&mut dst[x..], v);
+                    x = w;
+                }
+            }
+        }
+    }
+    for (x, d) in dst.iter_mut().enumerate().skip(x) {
+        *d = O::from_i32(round_scalar(
+            filter_u8_scalar(src, base + x, stride, f),
+            rnd,
+            sh,
+        ));
+    }
+}
+
+/// Rounding of the 16-bit 8-tap paths: `(rnd, shift)` of the horizontal-only,
+/// vertical-only and second (vertical) stage of the 2-D case. The first 2-D
+/// stage always rounds by `bits - 4`.
+struct TapRounding {
+    h: (i32, i32),
+    v: (i32, i32),
+    hv: (i32, i32),
+}
+
+/// 8-tap filtering of 8-bit pixels for filters whose sums fit 16 bits.
+/// Returns false, having written nothing, when they do not.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn tap8_u8_s16<O: TapOut>(
+    dst: &mut [O],
+    dst_stride: usize,
+    src: &[u8],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    fh: Option<[i8; 8]>,
+    fv: Option<[i8; 8]>,
+    bits: i32,
+    r: TapRounding,
+    mid_scratch: &mut [i16],
+) -> bool {
+    let active =
+        |f: &[i8; 8]| -> [bool; 4] { std::array::from_fn(|k| f[2 * k] != 0 || f[2 * k + 1] != 0) };
+    match (fh, fv) {
+        (Some(fh), Some(fv)) => {
+            let sh0 = bits - 4;
+            let rnd0 = (1 << sh0) >> 1;
+            if !fits_i16(&fh, rnd0) {
+                return false;
+            }
+            let ch = pair_coeffs_u8(&fh);
+            let tmp_h = h + 7;
+            let mid_stride = w.next_multiple_of(16).max(64);
+            let mid = &mut mid_scratch[..mid_stride * tmp_h];
+            for (y, mid_row) in mid.chunks_mut(mid_stride).enumerate() {
+                let base = (src_off as isize + (y as isize - 3) * src_stride as isize) as usize;
+                tap_row_u8(
+                    &mut mid_row[..w],
+                    src,
+                    base,
+                    1,
+                    &fh,
+                    &ch,
+                    [true; 4],
+                    rnd0,
+                    sh0,
+                );
+            }
+            let cv = pair_coeffs_i16(&fv);
+            let on = active(&fv);
+            let vrnd = unsafe { _mm256_set1_epi32(r.hv.0) };
+            let vsh = unsafe { _mm_cvtsi32_si128(r.hv.1) };
+            let ms = mid_stride as isize;
+            for (y, dst_row) in dst.chunks_mut(dst_stride).take(h).enumerate() {
+                let dst_row = &mut dst_row[..w];
+                // SAFETY: rows y..y+8 of `mid` exist (tmp_h = h + 7), and
+                // every block of 8 or 16 words starting below `w` lies inside
+                // a `mid_stride`-wide row (a multiple of 16).
+                unsafe {
+                    let p = mid.as_ptr().add((y + 3) * mid_stride);
+                    let mut x = 0;
+                    while x + 16 <= w {
+                        let v = v16_mid(p.add(x), ms, &cv, on, vrnd, vsh);
+                        O::store16(dst_row.as_mut_ptr().add(x), v);
+                        x += 16;
+                    }
+                    while x < w {
+                        let v = v8_mid(p.add(x), ms, &cv, on, vrnd, vsh);
+                        if x + 8 <= w {
+                            O::store8(dst_row.as_mut_ptr().add(x), v);
+                            x += 8;
+                        } else {
+                            store_tail(&mut dst_row[x..], v);
+                            x = w;
+                        }
+                    }
+                }
+            }
+        }
+        (Some(f), None) | (None, Some(f)) => {
+            let horizontal = fh.is_some();
+            let (rnd, sh) = if horizontal { r.h } else { r.v };
+            if !fits_i16(&f, rnd) {
+                return false;
+            }
+            let c = pair_coeffs_u8(&f);
+            let on = active(&f);
+            let stride = if horizontal { 1 } else { src_stride as isize };
+            for (y, dst_row) in dst.chunks_mut(dst_stride).take(h).enumerate() {
+                let base = src_off + y * src_stride;
+                tap_row_u8(&mut dst_row[..w], src, base, stride, &f, &c, on, rnd, sh);
+            }
+        }
+        (None, None) => return false,
+    }
+    true
+}
+
 #[target_feature(enable = "avx2")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn put_8tap_8bpc_avx2(
@@ -695,6 +1077,27 @@ pub(crate) fn put_8tap_8bpc_avx2(
     let intermediate_rnd = ((1 << bits) >> 1) + ((1 << (bits - 4)) >> 1);
     let fh = crate::mc::get_h_filter(mx, filter_type, w);
     let fv = crate::mc::get_v_filter(my, filter_type, h);
+    let rounding = TapRounding {
+        h: (intermediate_rnd, bits),
+        v: ((1 << bits) >> 1, bits),
+        hv: ((1 << (bits + 4)) >> 1, bits + 4),
+    };
+    if tap8_u8_s16(
+        dst,
+        dst_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        fh,
+        fv,
+        bits,
+        rounding,
+        mid_scratch,
+    ) {
+        return;
+    }
     match (fh, fv) {
         (Some(fh), Some(fv)) => {
             let tmp_h = h + 7;
@@ -851,6 +1254,28 @@ pub(crate) fn prep_8tap_8bpc_avx2(
     let bits = 6 + (filter_type < 0) as i32;
     let fh = crate::mc::get_h_filter(mx, filter_type, w);
     let fv = crate::mc::get_v_filter(my, filter_type, h);
+    let rnd0 = (1 << (bits - 4)) >> 1;
+    let rounding = TapRounding {
+        h: (rnd0, bits - 4),
+        v: (rnd0, bits - 4),
+        hv: ((1 << bits) >> 1, bits),
+    };
+    if tap8_u8_s16(
+        tmp,
+        tmp_stride,
+        src,
+        src_off,
+        src_stride,
+        w,
+        h,
+        fh,
+        fv,
+        bits,
+        rounding,
+        mid_scratch,
+    ) {
+        return;
+    }
     match (fh, fv) {
         (Some(fh), Some(fv)) => {
             let tmp_h = h + 7;
@@ -982,63 +1407,226 @@ pub(crate) fn prep_8tap_8bpc_avx2(
     }
 }
 
-#[inline]
+/// 8-bit `w_mask`: blends two prepared predictions with a weight derived from
+/// their difference and writes that weight (subsampled as the chroma layout
+/// asks) to `mask`. Matches `mc::w_mask_8bpc`.
+#[allow(clippy::too_many_arguments)]
 #[target_feature(enable = "avx2")]
-fn load_u8x8_i32_warp(src: &[u8]) -> __m256i {
-    unsafe { _mm256_cvtepu8_epi32(_mm_loadl_epi64(src.as_ptr().cast())) }
+pub(crate) fn w_mask_8bpc_avx2(
+    dst: &mut [u8],
+    dst_stride: usize,
+    tmp1: &[i16],
+    tmp2: &[i16],
+    w: usize,
+    h: usize,
+    mask: &mut [u8],
+    mask_stride: usize,
+    sign: i32,
+    ss_hor: bool,
+    ss_ver: bool,
+) {
+    if w < 8 || !w.is_multiple_of(8) {
+        return crate::mc::w_mask_8bpc(
+            dst,
+            dst_stride,
+            tmp1,
+            tmp2,
+            w,
+            h,
+            mask,
+            mask_stride,
+            sign,
+            ss_hor,
+            ss_ver,
+        );
+    }
+    let c8 = _mm256_set1_epi16(8);
+    let c38 = _mm256_set1_epi16(38);
+    let c64 = _mm256_set1_epi16(64);
+    let ones = _mm256_set1_epi16(1);
+    let rnd = _mm256_set1_epi32(512);
+    let mask_w = if ss_hor { w / 2 } else { w };
+
+    for row in 0..h {
+        let t1 = &tmp1[row * w..][..w];
+        let t2 = &tmp2[row * w..][..w];
+        let d = &mut dst[row * dst_stride..][..w];
+        let mask_row = if ss_ver { row / 2 } else { row };
+        let mk = &mut mask[mask_row * mask_stride..][..mask_w];
+        // 4:2:0 folds the odd row into the sums the even row left behind.
+        let fold = ss_ver && row & 1 != 0;
+
+        let mut x = 0;
+        while x < w {
+            // A full 16-pixel step, or the last 8 in the low lane.
+            let n = (w - x).min(16);
+            let (a, b) = unsafe {
+                if n == 16 {
+                    (
+                        _mm256_loadu_si256(t1[x..x + 16].as_ptr().cast()),
+                        _mm256_loadu_si256(t2[x..x + 16].as_ptr().cast()),
+                    )
+                } else {
+                    (
+                        _mm256_zextsi128_si256(_mm_loadu_si128(t1[x..x + 8].as_ptr().cast())),
+                        _mm256_zextsi128_si256(_mm_loadu_si128(t2[x..x + 8].as_ptr().cast())),
+                    )
+                }
+            };
+            // m = min(38 + ((|a - b| + 8) >> 8), 64)
+            let adiff = _mm256_abs_epi16(_mm256_sub_epi16(a, b));
+            let m = _mm256_min_epi16(
+                _mm256_add_epi16(_mm256_srli_epi16::<8>(_mm256_add_epi16(adiff, c8)), c38),
+                c64,
+            );
+            let inv = _mm256_sub_epi16(c64, m);
+            // (a * m + b * (64 - m) + 512) >> 10, lane-local so pixel order holds.
+            let lo = _mm256_madd_epi16(_mm256_unpacklo_epi16(a, b), _mm256_unpacklo_epi16(m, inv));
+            let hi = _mm256_madd_epi16(_mm256_unpackhi_epi16(a, b), _mm256_unpackhi_epi16(m, inv));
+            let px = _mm256_packs_epi32(
+                _mm256_srai_epi32::<10>(_mm256_add_epi32(lo, rnd)),
+                _mm256_srai_epi32::<10>(_mm256_add_epi32(hi, rnd)),
+            );
+            let bytes = |v: __m256i| -> [u8; 16] {
+                let p = _mm256_permute4x64_epi64::<0b10_00>(_mm256_packus_epi16(v, v));
+                let mut out = [0u8; 16];
+                unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), _mm256_castsi256_si128(p)) };
+                out
+            };
+            d[x..x + n].copy_from_slice(&bytes(px)[..n]);
+
+            if !ss_hor {
+                mk[x..x + n].copy_from_slice(&bytes(m)[..n]);
+            } else {
+                // m + n of each pixel pair, as dwords in order.
+                let pair = _mm256_madd_epi16(m, ones);
+                let mx = x / 2;
+                let v = if fold {
+                    let mut prev = [0u8; 8];
+                    prev[..n / 2].copy_from_slice(&mk[mx..mx + n / 2]);
+                    let prev =
+                        _mm256_cvtepu8_epi32(unsafe { _mm_loadl_epi64(prev.as_ptr().cast()) });
+                    _mm256_srli_epi32::<2>(_mm256_add_epi32(
+                        _mm256_add_epi32(pair, prev),
+                        _mm256_set1_epi32(2 - sign),
+                    ))
+                } else if ss_ver {
+                    pair
+                } else {
+                    _mm256_srli_epi32::<1>(_mm256_add_epi32(pair, _mm256_set1_epi32(1 - sign)))
+                };
+                let w16 =
+                    _mm_packs_epi32(_mm256_castsi256_si128(v), _mm256_extracti128_si256::<1>(v));
+                let mut out = [0u8; 16];
+                unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), _mm_packus_epi16(w16, w16)) };
+                mk[mx..mx + n / 2].copy_from_slice(&out[..n / 2]);
+            }
+            x += n;
+        }
+    }
 }
 
-#[inline]
-#[target_feature(enable = "avx2")]
-fn load_i16x8_i32_warp(src: &[i16]) -> __m256i {
-    unsafe { _mm256_cvtepi16_epi32(_mm_loadu_si128(src.as_ptr().cast())) }
+/// Tap-pair coefficients of the eight per-pixel warp filters at
+/// `pos + x * step`: element `i` holds, for each pixel `x` in order, the words
+/// `(f_x[2i], f_x[2i + 1])`.
+#[inline(always)]
+pub(super) fn warp_pair_coeffs(pos: i32, step: i32) -> [__m256i; 4] {
+    let f = |x: i32| -> __m128i {
+        let taps: &[i8; 8] =
+            &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * x + 512) >> 10)) as usize];
+        unsafe { _mm_loadl_epi64(taps.as_ptr().cast()) }
+    };
+    unsafe {
+        // Transpose the 8 filters x 4 tap pairs.
+        let a01 = _mm_unpacklo_epi16(f(0), f(1));
+        let a23 = _mm_unpacklo_epi16(f(2), f(3));
+        let a45 = _mm_unpacklo_epi16(f(4), f(5));
+        let a67 = _mm_unpacklo_epi16(f(6), f(7));
+        let b0 = _mm_unpacklo_epi32(a01, a23);
+        let b1 = _mm_unpackhi_epi32(a01, a23);
+        let b2 = _mm_unpacklo_epi32(a45, a67);
+        let b3 = _mm_unpackhi_epi32(a45, a67);
+        [
+            _mm256_cvtepi8_epi16(_mm_unpacklo_epi64(b0, b2)),
+            _mm256_cvtepi8_epi16(_mm_unpackhi_epi64(b0, b2)),
+            _mm256_cvtepi8_epi16(_mm_unpacklo_epi64(b1, b3)),
+            _mm256_cvtepi8_epi16(_mm_unpackhi_epi64(b1, b3)),
+        ]
+    }
 }
 
-#[inline]
-#[target_feature(enable = "avx2")]
-fn warp_coeff_i32x8(pos: i32, step: i32, tap: usize) -> __m256i {
-    let f0 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + 512) >> 10)) as usize];
-    let f1 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step + 512) >> 10)) as usize];
-    let f2 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 2 + 512) >> 10)) as usize];
-    let f3 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 3 + 512) >> 10)) as usize];
-    let f4 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 4 + 512) >> 10)) as usize];
-    let f5 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 5 + 512) >> 10)) as usize];
-    let f6 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 6 + 512) >> 10)) as usize];
-    let f7 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 7 + 512) >> 10)) as usize];
-    _mm256_setr_epi32(
-        f0[tap] as i32,
-        f1[tap] as i32,
-        f2[tap] as i32,
-        f3[tap] as i32,
-        f4[tap] as i32,
-        f5[tap] as i32,
-        f6[tap] as i32,
-        f7[tap] as i32,
-    )
+/// Words of two 8-sample rows interleaved per pixel: `(a[x], b[x])`.
+#[inline(always)]
+pub(super) fn warp_pair_rows(a: __m128i, b: __m128i) -> __m256i {
+    unsafe { _mm256_set_m128i(_mm_unpackhi_epi16(a, b), _mm_unpacklo_epi16(a, b)) }
 }
 
+/// The 14 adjacent row pairs of the 15x8 intermediate block.
+#[inline(always)]
+pub(super) fn warp_mid_pairs(mid: &[i16; 15 * 8]) -> [__m256i; 14] {
+    let rows = mid.as_chunks::<8>().0;
+    std::array::from_fn(|j| unsafe {
+        warp_pair_rows(
+            _mm_loadu_si128(rows[j].as_ptr().cast()),
+            _mm_loadu_si128(rows[j + 1].as_ptr().cast()),
+        )
+    })
+}
+
+/// Unrounded vertical sums of output row `y`, filters at `my + x * gamma`.
+#[inline(always)]
+pub(super) fn warp_vert(pairs: &[__m256i; 14], y: usize, my: i32, gamma: i32) -> __m256i {
+    let k = warp_pair_coeffs(my, gamma);
+    unsafe {
+        _mm256_add_epi32(
+            _mm256_add_epi32(
+                _mm256_madd_epi16(pairs[y], k[0]),
+                _mm256_madd_epi16(pairs[y + 2], k[1]),
+            ),
+            _mm256_add_epi32(
+                _mm256_madd_epi16(pairs[y + 4], k[2]),
+                _mm256_madd_epi16(pairs[y + 6], k[3]),
+            ),
+        )
+    }
+}
+
+/// Shuffle picking the byte pairs `(x + 2i, x + 2i + 1)`, x = 0..8, from a
+/// vector holding bytes 0..=7 followed by bytes 7..=14.
+const fn warp_h_shuffle(i: usize) -> [i8; 16] {
+    let mut m = [0i8; 16];
+    let mut n = 0;
+    while n < 16 {
+        let j = n / 2 + n % 2 + 2 * i;
+        m[n] = if j < 8 { j as i8 } else { j as i8 + 1 };
+        n += 1;
+    }
+    m
+}
+static WARP_H_SHUFFLE: [[i8; 16]; 4] = [
+    warp_h_shuffle(0),
+    warp_h_shuffle(1),
+    warp_h_shuffle(2),
+    warp_h_shuffle(3),
+];
+
+/// One intermediate row: 8 pixels filtered horizontally at `mx + x * alpha`.
+/// Reads the 15 bytes at `row_base`.
 #[inline]
 #[target_feature(enable = "avx2")]
 fn warp_horz_u8x8(src: &[u8], row_base: usize, mx: i32, alpha: i32) -> __m256i {
-    let mut acc = _mm256_setzero_si256();
-    for tap in 0..8 {
-        let px = load_u8x8_i32_warp(unsafe { src.get_unchecked(row_base + tap..) });
-        let coeff = warp_coeff_i32x8(mx, alpha, tap);
-        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(px, coeff));
+    let k = warp_pair_coeffs(mx, alpha);
+    unsafe {
+        let p = src.get_unchecked(row_base..).as_ptr();
+        let s = _mm_unpacklo_epi64(_mm_loadl_epi64(p.cast()), _mm_loadl_epi64(p.add(7).cast()));
+        let mut acc = _mm256_setzero_si256();
+        for i in 0..4 {
+            let shuf = _mm_loadu_si128(WARP_H_SHUFFLE[i].as_ptr().cast());
+            let px = _mm256_cvtepu8_epi16(_mm_shuffle_epi8(s, shuf));
+            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(px, k[i]));
+        }
+        round_s32(acc, 4, 3)
     }
-    round_s32(acc, 4, 3)
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn warp_vert_i16x8(mid: &[i16], base: usize, stride: usize, my: i32, gamma: i32) -> __m256i {
-    let mut acc = _mm256_setzero_si256();
-    for tap in 0..8 {
-        let px = load_i16x8_i32_warp(unsafe { mid.get_unchecked(base + tap * stride..) });
-        let coeff = warp_coeff_i32x8(my, gamma, tap);
-        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(px, coeff));
-    }
-    acc
 }
 
 #[inline]
@@ -1077,9 +1665,10 @@ pub(crate) fn warp_affine_8x8_8bpc_avx2(
         row_base += src_stride;
         mx += beta;
     }
+    let pairs = warp_mid_pairs(&mid);
 
     for (y, dst_row) in dst.chunks_mut(dst_stride).take(8).enumerate() {
-        let v = warp_vert_i16x8(&mid, y * 8, 8, my, gamma);
+        let v = warp_vert(&pairs, y, my, gamma);
         store_u8x8_shift_warp(&mut dst_row[..8], v, 1024, 11);
         my += delta;
     }
@@ -1109,9 +1698,10 @@ pub(crate) fn warp_affine_8x8t_8bpc_avx2(
         row_base += src_stride;
         mx += beta;
     }
+    let pairs = warp_mid_pairs(&mid);
 
     for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(8).enumerate() {
-        let v = warp_vert_i16x8(&mid, y * 8, 8, my, gamma);
+        let v = warp_vert(&pairs, y, my, gamma);
         store_i16x8_shift_warp(&mut tmp_row[..8], v, 64, 7);
         my += delta;
     }

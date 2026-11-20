@@ -53,7 +53,7 @@ struct DecodeEdgeCtx {
     comp_type: [u8; 2],
 }
 
-/// dav1d-style `case_set`: the neighbour context runs are tiny powers of two,
+/// dav1d-style `case_set`: the neighbor context runs are tiny powers of two,
 /// where a libc `memset` call costs more than the stores themselves. The
 /// match predicts perfectly (the width is constant within a block).
 #[inline(always)]
@@ -616,7 +616,7 @@ fn write_cur_segmap(
 
 #[inline(never)]
 fn push_block_record(
-    block_rec: &mut Vec<BlockRecord>,
+    scratch: &mut ReconScratch,
     b: Av2Block,
     bx: i32,
     by: i32,
@@ -624,8 +624,19 @@ fn push_block_record(
     cby: i32,
     lbs: BlockSize,
     cbs: BlockSize,
+    warpmv: [crate::headers::WarpedMotionParams; 2],
+    has_pal: bool,
 ) {
-    block_rec.push(BlockRecord {
+    let pal_idx_off = if has_pal {
+        let off = scratch.pal_idx_rec.len();
+        scratch
+            .pal_idx_rec
+            .extend_from_slice(&scratch.pal_idx_y[..PAL_IDX_REC_LEN]);
+        off as u32
+    } else {
+        u32::MAX
+    };
+    scratch.block_rec.push(BlockRecord {
         b,
         bx: bx as i16,
         by: by as i16,
@@ -633,6 +644,9 @@ fn push_block_record(
         cby: cby as i16,
         lbs: lbs as i8,
         cbs: cbs as i8,
+        warpmv,
+        pal: scratch.pal,
+        pal_idx_off,
     });
 }
 
@@ -887,15 +901,18 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                 mv: refmvs::TemporalBlockMv::from_packed(refmvs::INVALID_TRAJ as u32 * 0x10001),
                 reference: RefPair::from_pair(-1),
             };
-            let write_temporal = fi.is_inter_or_switch
-                && recon.seq_hdr.ref_frame_mvs
-                && !recon.cur_mvs.is_empty();
+            let write_temporal =
+                fi.is_inter_or_switch && recon.seq_hdr.ref_frame_mvs && !recon.cur_mvs.is_empty();
             let t_stride = recon.rf.rp_stride;
             let t_off = (by >> 1) as isize * t_stride + (bx >> 1) as isize;
             crate::refmvs::splat_mv(
                 &mut recon.rt.r[s_off..],
                 &mut s_src,
-                if write_temporal { Some(&mut recon.cur_mvs[t_off as usize..]) } else { None },
+                if write_temporal {
+                    Some(&mut recon.cur_mvs[t_off as usize..])
+                } else {
+                    None
+                },
                 if write_temporal { t_stride } else { 0 },
                 &t_src,
                 bw4,
@@ -914,14 +931,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                     id.mv[0] = bv;
                     id.mv[1] = Mv::default();
                 }
-                crate::refmvs::bank_add(
-                    &mut recon.rt.bank,
-                    bs,
-                    by,
-                    bx,
-                    fi.sb_step,
-                    b,
-                );
+                crate::refmvs::bank_add(&mut recon.rt.bank, bs, by, bx, fi.sb_step, b);
             }
         } else {
             let mut s_src = crate::refmvs::Block {
@@ -1085,7 +1095,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                 // Build t->warpmv[0] for the warp motion modes so recon can do
                 // warp-affine MC. WARP_DELTA applies the parsed matrix deltas to
                 // the base warp candidate; WARP_CAUSAL re-estimates from
-                // neighbour samples; WARP_EXTEND extends a neighbour's matrix.
+                // neighbor samples; WARP_EXTEND extends a neighbor's matrix.
                 let motion_mode_v = b.inter_data().motion_mode;
                 if motion_mode_v == MotionMode::WarpDelta as u8 {
                     let wri = b.inter_data().warp_ref_idx as usize;
@@ -1171,7 +1181,7 @@ fn resolve_refmv_state_after_parse<BD: BitDepth>(
                     let match_ref = |r: &crate::refmvs::Block| -> bool {
                         r.reference.r0() == ref0 || r.reference.r1() == ref0
                     };
-                    // left neighbour on the current row, lmt the top neighbour.
+                    // left neighbor on the current row, lmt the top neighbor.
                     let tml_ok = have_left && {
                         let r = &recon.rt.r[(by & 63) as usize * 128 + ((bx - 1) & 127) as usize];
                         match_ref(r)
@@ -1686,13 +1696,44 @@ where
         debug_assert_eq!(rec.cbs, cbs as i8);
         let b = rec.b;
 
-        // This first replay step is intentionally intra-only.  Inter needs the
-        // separate MV-resolution replay path before it can be enabled safely.
-        if b.is_intra == 0 || b.intrabc != 0 {
+        // IntraBC copies pre-filter pixels of this frame; such frames keep the
+        // fused path.
+        if b.intrabc != 0 {
             return Err(());
         }
+        // Per-block state the entropy pass resolved into shared slots.
+        recon.warpmv = rec.warpmv;
+        if rec.pal_idx_off != u32::MAX {
+            let off = rec.pal_idx_off as usize;
+            let scratch = &mut *recon.scratch;
+            scratch.pal = rec.pal;
+            scratch.pal_idx_y[..PAL_IDX_REC_LEN]
+                .copy_from_slice(&scratch.pal_idx_rec[off..off + PAL_IDX_REC_LEN]);
+        }
 
-        if (pass & Pass::Recon as u8) != 0 {
+        if (pass & Pass::Recon as u8) != 0 && b.is_intra == 0 {
+            recon.scratch.split_phase = SplitPhase::Replay;
+            let res = recon_b_inter(
+                recon,
+                msac,
+                cdf_m,
+                a,
+                l,
+                &b,
+                bx,
+                by,
+                cbx,
+                cby,
+                lbs,
+                cbs,
+                has_luma,
+                has_chroma,
+                ChromaPhase::Both,
+                fi,
+            );
+            recon.scratch.split_phase = SplitPhase::Fused;
+            res?;
+        } else if (pass & Pass::Recon as u8) != 0 {
             recon_b_intra_phase(
                 &mut ReconBCtx {
                     recon: &mut *recon,
@@ -1819,8 +1860,8 @@ where
         && bw4 * bh4 > 2
         && intra_region == 0
     {
-        // AVM sums only the neighbours it found (`neighbors_line_buffer`); with
-        // one neighbour the gathered pair holds it twice.
+        // AVM sums only the neighbors it found (`neighbors_line_buffer`); with
+        // one neighbor the gathered pair holds it twice.
         let ctx = nx_skip_mode[0] as usize * (n_ctx > 0) as usize
             + nx_skip_mode[1] as usize * (n_ctx > 1) as usize;
         b.skip_mode = msac.decode_bool_adapt(cdf_m.skip_mode(ctx)) as u8;
@@ -1833,7 +1874,7 @@ where
         b.is_intra = 0;
     } else if fi.is_inter_or_switch && intra_region == 0 {
         // AVM read_is_inter_block: a block sharing its chroma unit with
-        // neighbours (chroma_ref_info.offset_started) is inter. AVM derives the
+        // neighbors (chroma_ref_info.offset_started) is inter. AVM derives the
         // grouping from 4:2:0 subsampling for monochrome too, where tealdust
         // has no chroma tree: there the group members are the 4-wide/4-high
         // blocks.
@@ -1859,7 +1900,7 @@ where
         b.is_intra = 1;
     }
 
-    // Pre-compute spatial neighbour (nb) context values within SB.  This is
+    // Pre-compute spatial neighbor (nb) context values within SB.  This is
     // pure edge-cache bookkeeping, so do not clone it for each MSAC reader.
     let DecodeNbCtx {
         fsc: nb_fsc,
@@ -2024,7 +2065,8 @@ where
                     c += (c == 2) as i32;
                     c
                 } else {
-                    2 * ((have_left && left_cdef_idx == 0) || (have_top && top_cdef_idx == 0)) as i32
+                    2 * ((have_left && left_cdef_idx == 0) || (have_top && top_cdef_idx == 0))
+                        as i32
                 };
                 if msac.decode_bool_adapt(cdf_m.cdef_idx0(ctx as usize)) != 0 {
                     v = 0;
@@ -2207,7 +2249,7 @@ where
             } else {
                 let dir_idx = y_mode_idx - 5;
 
-                // Build custom mode list from neighbour directional modes
+                // Build custom mode list from neighbor directional modes
                 let mut custom_list = [0u8; 56];
                 let mut use_custom = false;
                 let mut _list_len = 0usize;
@@ -2582,7 +2624,7 @@ where
         read_tx_part(msac, cdf_m, &mut b, bs, __seg_ll, fi.txfm_switchable);
     }
 
-    // is_sm flags for reconstruction (smooth mode neighbours)
+    // is_sm flags for reconstruction (smooth mode neighbors)
     if b.is_intra != 0 && !intrabc {
         if has_luma {
             let sm = |mode: u8| -> i32 { (mode == 9 || mode == 10 || mode == 11) as i32 };
@@ -2680,27 +2722,30 @@ where
 
         // TIP decision (AVM `is_tip_allowed_bsize`: own chroma, both sides >= 8).
         // Monochrome uses AVM's 4:2:0 chroma-reference grouping instead.
-        let owns_chroma_unit =
-            if fi.has_chroma_layout { cbs == lbs } else { !ctx.mono_block_os };
+        let owns_chroma_unit = if fi.has_chroma_layout {
+            cbs == lbs
+        } else {
+            !ctx.mono_block_os
+        };
         let is_tip = if b.skip_mode == 0
             && fi.tip_frame_mode != 0
             && owns_chroma_unit
             && imin(bw4, bh4) >= 2
         {
-                let ctx = (if n_ctx >= 1 {
-                    (nx_ref0[0] == TIP_FRAME as i8) as usize
-                } else {
-                    0
-                }) + (if n_ctx >= 2 {
-                    (nx_ref0[1] == TIP_FRAME as i8) as usize
-                } else {
-                    0
-                });
-
-                msac.decode_bool_adapt(cdf_m.tip(ctx)) != 0
+            let ctx = (if n_ctx >= 1 {
+                (nx_ref0[0] == TIP_FRAME as i8) as usize
             } else {
-                false
-            };
+                0
+            }) + (if n_ctx >= 2 {
+                (nx_ref0[1] == TIP_FRAME as i8) as usize
+            } else {
+                0
+            });
+
+            msac.decode_bool_adapt(cdf_m.tip(ctx)) != 0
+        } else {
+            false
+        };
 
         // Compound decision
         let is_comp = if b.skip_mode != 0 {
@@ -2711,7 +2756,7 @@ where
             && bw4 * bh4 >= 4
         {
             // fi.refdir[ref] (refdir_intra is -1 from lib init).
-            // refdir_intra is -1 (lib.c init); intra/intrabc neighbours use it.
+            // refdir_intra is -1 (lib.c init); intra/intrabc neighbors use it.
             let refdir = |r: i8| -> i32 {
                 if r < 0 {
                     -1
@@ -2769,8 +2814,8 @@ where
                 }
             }
             // skip_mode ref pair: start from the frame skip_mode_refs, then
-            // -2518). The first context neighbour with a valid second ref (or a
-            // TIP-coded neighbour) supplies the actual ref pair; otherwise the
+            // -2518). The first context neighbor with a valid second ref (or a
+            // TIP-coded neighbor) supplies the actual ref pair; otherwise the
             // frame skip_mode_refs stand. This only affects the stored ref
             // context (no entropy is read), but later compound blocks key their
             // ref-selection context on it.
@@ -2965,7 +3010,7 @@ where
             }
 
             // For a NEWMV_NEWMV compound block with two distinct references, when
-            // every gathered spatial neighbour on both the left and the top edge
+            // every gathered spatial neighbor on both the left and the top edge
             // references each of the block's refs, a warp_causal flag is read that
             // promotes the block to MM_WARP_CAUSAL. Skipping this read (as the old
             // compound path did) desyncs the bitstream on such blocks.
@@ -2983,7 +3028,7 @@ where
                 let match_ref_a = |off: usize, r: i8| -> bool {
                     a.reference[0][off] == r || a.reference[1][off] == r
                 };
-                // At an SB-row top edge the above neighbours come from the
+                // At an SB-row top edge the above neighbors come from the
                 // previous SB row's bottom line (8x8 units, `rt.ra`); the 4x4
                 // above context may already hold this row's blocks there.
                 let ra = &recon.rt.ra;
@@ -2992,7 +3037,7 @@ where
                     let blk = &ra[ra_off + (x >> 1) as usize];
                     blk.reference.ref_at(0) == r || blk.reference.ref_at(1) == r
                 };
-                // AVM gates each neighbour on it lying inside the tile; at a
+                // AVM gates each neighbor on it lying inside the tile; at a
                 // tile's top row `rt.ra` still holds the previous frame's line.
                 let match_refs = |r: i8| -> bool {
                     let left = have_left
@@ -3440,7 +3485,7 @@ where
             } else {
                 let mut allow_warp = false;
                 if imin(bw4, bh4) >= 2 && fi.warp_motion {
-                    // At the top SB boundary the above neighbour is read from the
+                    // At the top SB boundary the above neighbor is read from the
                     // SB-edge cache snapshot (taken before this SB's blocks ran)
                     // at 8x8 resolution; elsewhere from the live `a` context.
                     let a_sb_cache = &recon.a_sb_cache;
@@ -3555,7 +3600,7 @@ where
             } else if !is_tip {
                 b.inter_data_mut().motion_mode = MotionMode::WarpDelta as u8;
 
-                // signal is only read when a spatial neighbour references the same
+                // signal is only read when a spatial neighbor references the same
                 // frame. Without this gate WARPNEWMV blocks read extra symbols and
                 // desync the parse. The is_sb_boundary top path uses the a_sb_cache
                 // is used directly here (exact for non-boundary; SB-boundary refmv
@@ -3883,21 +3928,69 @@ where
         fi.seg_enabled,
     );
 
-    if (pass & crate::internal::Pass::Entropy as u8) != 0 {
-        push_block_record(&mut recon.scratch.block_rec, b, bx, by, cbx, cby, lbs, cbs);
-    }
-
     update_block_filter_masks(
         recon, fi, a, l, &b, bs, cbs, bx, by, cbx, cby, bx4, by4, bh4, b_dim, has_luma, has_chroma,
     );
 
-    // Entropy-only replay scaffold for intra/key frames: syntax + filter masks
-    // have been produced above; consume and store residual coefficients here,
-    // then leave pixel prediction / inverse transforms to PASS_RECON.
-    if (pass & crate::internal::Pass::Recon as u8) == 0 {
-        if b.is_intra == 0 || b.intrabc != 0 {
-            return Err(());
-        }
+    // Entropy-only pass: resolve the MVs, then save the block syntax and
+    // residual coefficients for the separate recon pass.
+    let entropy_only = (pass & crate::internal::Pass::Recon as u8) == 0;
+    if entropy_only && intrabc {
+        return Err(());
+    }
+
+    resolve_refmv_state_after_parse(
+        recon, fi, &mut b, bs, bx, by, bw4, bh4, have_top, have_left, has_luma, intrabc,
+    );
+
+    if entropy_only && b.is_intra == 0 {
+        push_block_record(
+            &mut *recon.scratch,
+            b,
+            bx,
+            by,
+            cbx,
+            cby,
+            lbs,
+            cbs,
+            recon.warpmv,
+            false,
+        );
+        recon.scratch.split_phase = SplitPhase::Parse;
+        let res = recon_b_inter(
+            recon,
+            msac,
+            cdf_m,
+            a,
+            l,
+            &b,
+            bx,
+            by,
+            cbx,
+            cby,
+            lbs,
+            cbs,
+            has_luma,
+            has_chroma,
+            ChromaPhase::Both,
+            fi,
+        );
+        recon.scratch.split_phase = SplitPhase::Fused;
+        res?;
+    } else if entropy_only {
+        let has_pal = has_luma && b.intra_data().pal_sz != 0;
+        push_block_record(
+            &mut *recon.scratch,
+            b,
+            bx,
+            by,
+            cbx,
+            cby,
+            lbs,
+            cbs,
+            recon.warpmv,
+            has_pal,
+        );
         recon_b_intra_phase(
             &mut ReconBCtx {
                 recon: &mut *recon,
@@ -3920,14 +4013,7 @@ where
             TxPhase::ReadOnly,
             ChromaPhase::ReadOnly,
         )?;
-        return Ok(b);
-    }
-
-    resolve_refmv_state_after_parse(
-        recon, fi, &mut b, bs, bx, by, bw4, bh4, have_top, have_left, has_luma, intrabc,
-    );
-
-    if pass & (Pass::Recon as u8) != 0 && b.is_intra != 0 {
+    } else if pass & (Pass::Recon as u8) != 0 && b.is_intra != 0 {
         recon_b_intra(
             &mut ReconBCtx {
                 recon: &mut *recon,

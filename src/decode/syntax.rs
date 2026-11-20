@@ -773,7 +773,7 @@ pub(crate) fn read_pal_indices<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>
 
 /// Read a luma palette color list from the bitstream.
 ///
-/// reused-cache mask over the above/left neighbour palettes, then any new entries,
+/// reused-cache mask over the above/left neighbor palettes, then any new entries,
 /// and merges them into a sorted palette in `pal` (8 entries). Returns `pal_sz`.
 ///
 /// - `a_pal`/`l_pal`: the above / left palette caches (`t->al_pal[0][bx4]` /
