@@ -1284,7 +1284,8 @@ fn decode_coefs_header<const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
             use crate::levels::txsz;
             let (lw, lh) = (t_dim.lw as usize, t_dim.lh as usize);
             if (lw >= txsz::TX_32X32 && t & (if lw == txsz::TX_64X64 { 0x03 } else { 0x02 }) != 0)
-                || (lh >= txsz::TX_32X32 && t & (if lh == txsz::TX_64X64 { 0x60 } else { 0x40 }) != 0)
+                || (lh >= txsz::TX_32X32
+                    && t & (if lh == txsz::TX_64X64 { 0x60 } else { 0x40 }) != 0)
                 || (p.tx == txsz::TX_16X16 && ((t & 0x47 == 0x41) || (t & 0xe2 == 0x22)))
                 || (p.tx == txsz::TX_32X32 && (t == txtp::V_DCT || t == txtp::H_DCT))
                 || matches!(p.tx, txsz::TX_64X64 | txsz::RTX_64X32 | txsz::RTX_32X64)
@@ -1728,7 +1729,7 @@ macro_rules! decode_coefs_impl {
 
     if eob != 0 {
         // Reuse the per-thread scratch buffer; clear only the prefix the scan
-        // for this `tx_class`/size actually touches (incl. the +2 neighbour
+        // for this `tx_class`/size actually touches (incl. the +2 neighbor
         // padding the context reads rely on). Worst case is 33*33 = 1089.
         let level_len = match tx_class {
             0 => {

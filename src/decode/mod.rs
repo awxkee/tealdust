@@ -501,10 +501,10 @@ pub struct SbFrameInfo {
     pub cwp: bool,
     pub refine_mv_enabled: bool,
     pub absrefdist: [u8; 8],
-    /// (`comp_type`) neighbour context. -1/-2 sentinel when no future ref.
+    /// (`comp_type`) neighbor context. -1/-2 sentinel when no future ref.
     pub furthest_future_refidx: i8,
     /// `f->rf.tip.ref` (the TIP reference pair). Used by `get_compref_ctx` to
-    /// match TIP-coded neighbours against the current block's compound refs.
+    /// match TIP-coded neighbors against the current block's compound refs.
     pub tip: RefPair,
     // Tile bounds
     pub tile_col_start: i32,
@@ -786,6 +786,10 @@ std::thread_local! {
         const { core::cell::RefCell::new(Vec::new()) };
     static LUMA_SNAP_HBD: core::cell::RefCell<Vec<u16>> =
         const { core::cell::RefCell::new(Vec::new()) };
+    /// Per-thread CCSO padding scratch (8-bit, high bit depth) for the filter
+    /// phases of the parallel path.
+    static FILTER_CCSO_TMP: core::cell::RefCell<(Vec<u8>, Vec<u16>)> =
+        const { core::cell::RefCell::new((Vec::new(), Vec::new())) };
 }
 
 #[derive(Clone, Copy, Default)]
@@ -954,7 +958,17 @@ struct BlockRecord {
     cby: i16,
     lbs: i8,
     cbs: i8,
+    /// Resolved local warp models (`recon.warpmv`), one slot shared by all
+    /// blocks during parsing.
+    warpmv: [crate::headers::WarpedMotionParams; 2],
+    /// Palette colours, and the offset of the packed index map in
+    /// `pal_idx_rec` (`u32::MAX`: no palette).
+    pal: [u16; 8],
+    pal_idx_off: u32,
 }
+
+/// Bytes of the packed luma palette index map kept per palette block.
+const PAL_IDX_REC_LEN: usize = 64 * 64;
 
 /// Chroma 4px transform units of the largest chroma block (256x256 in 4:4:4).
 pub(crate) const MAX_CHROMA_TU: usize = 64 * 64;
@@ -964,6 +978,8 @@ pub(crate) const MAX_CHROMA_TU: usize = 64 * 64;
 pub(crate) struct SbReplayStore {
     part: Vec<u8>,
     block_rec: Vec<BlockRecord>,
+    pal_idx_rec: Vec<u8>,
+    sub8x8_rec: Vec<refmvs::Block>,
     luma_tx: Vec<LumaTxRecord>,
     luma_tx_cf8: Vec<i16>,
     luma_tx_cf32: Vec<i32>,
@@ -979,6 +995,8 @@ impl SbReplayStore {
     fn clear(&mut self) {
         self.part.clear();
         self.block_rec.clear();
+        self.pal_idx_rec.clear();
+        self.sub8x8_rec.clear();
         self.luma_tx.clear();
         self.luma_tx_cf8.clear();
         self.luma_tx_cf32.clear();
@@ -997,6 +1015,8 @@ impl SbReplayStore {
         self.part.extend_from_slice(part_w);
 
         self.block_rec.append(&mut scratch.block_rec);
+        self.pal_idx_rec.append(&mut scratch.pal_idx_rec);
+        self.sub8x8_rec.append(&mut scratch.sub8x8_rec);
         self.luma_tx.append(&mut scratch.luma_tx);
         C::replay_luma_cf_mut(self).append(C::scratch_luma_cf_mut(scratch));
         self.chroma_tx.append(&mut scratch.chroma_tx);
@@ -1017,6 +1037,10 @@ impl SbReplayStore {
     fn load_into<C: DecodeCoeff>(&self, scratch: &mut ReconScratch) {
         scratch.block_rec.clear();
         scratch.block_rec.extend_from_slice(&self.block_rec);
+        scratch.pal_idx_rec.clear();
+        scratch.pal_idx_rec.extend_from_slice(&self.pal_idx_rec);
+        scratch.sub8x8_rec.clear();
+        scratch.sub8x8_rec.extend_from_slice(&self.sub8x8_rec);
 
         scratch.luma_tx.clear();
         scratch.luma_tx.extend_from_slice(&self.luma_tx);
@@ -1070,6 +1094,18 @@ pub struct ReconScratch {
     /// Parsed block replay stream.
     block_rec: Vec<BlockRecord>,
     block_rpos: usize,
+    /// Packed palette index maps of the recorded palette blocks.
+    pal_idx_rec: Vec<u8>,
+    /// Spatial refmvs of the luma blocks under each sub-8x8 chroma block, read
+    /// by its chroma MC (`sub8x8_refmvs`); the `rt.r` ring they live in is
+    /// overwritten by later superblocks before a deferred replay.
+    sub8x8_rec: Vec<refmvs::Block>,
+    sub8x8_rpos: usize,
+    /// The refmvs tile a deferred replay reconstructs with (only `r` and
+    /// `rp_proj_off` are read by reconstruction).
+    replay_rt: Option<Box<refmvs::Tile>>,
+    /// Which half of each block the inter walkers run (see `SplitPhase`).
+    pub(crate) split_phase: SplitPhase,
     /// Deferred luma transform payloads for future entropy/recon split.
     /// `luma_tx` records order; `luma_tx_cf` owns the corresponding coefficient
     /// slices. `luma_tx_rpos` is the replay cursor used by ReconOnly.
@@ -1100,7 +1136,7 @@ pub struct ReconScratch {
     pub pal_idx_y: Box<[u8; 64 * 64]>,
     /// Unpacked palette index scratch (avoids a per-block heap alloc).
     pub pal_idx_unpack: Box<[u8; 64 * 64]>,
-    /// Reusable coefficient-level neighbour map for `decode_coefs` (worst case
+    /// Reusable coefficient-level neighbor map for `decode_coefs` (worst case
     /// 33*33 = 1089). Only the prefix actually used by the current transform is
     /// cleared per block, so small TUs avoid a full 1089-byte memset.
     pub coef_levels: [i8; 1089],
@@ -1151,6 +1187,11 @@ impl Default for ReconScratch {
             chroma_tx_rpos: 0,
             block_rec: Vec::new(),
             block_rpos: 0,
+            pal_idx_rec: Vec::new(),
+            sub8x8_rec: Vec::new(),
+            sub8x8_rpos: 0,
+            replay_rt: None,
+            split_phase: SplitPhase::Fused,
             luma_tx: Vec::new(),
             luma_tx_cf8: Vec::new(),
             luma_tx_cf32: Vec::new(),
@@ -1258,6 +1299,10 @@ impl ReconScratch {
         self.chroma_tx_rpos = 0;
         self.block_rec.clear();
         self.block_rpos = 0;
+        self.pal_idx_rec.clear();
+        self.sub8x8_rec.clear();
+        self.sub8x8_rpos = 0;
+        self.split_phase = SplitPhase::Fused;
         self.luma_tx.clear();
         self.luma_tx_cf8.clear();
         self.luma_tx_cf32.clear();
@@ -1318,9 +1363,29 @@ impl ReconScratch {
         self.compound_seg_mask = mask;
     }
 
+    /// Drop every queued replay payload (records, coefficients, palettes).
+    fn clear_replay_fifos(&mut self) {
+        self.block_rec.clear();
+        self.pal_idx_rec.clear();
+        self.sub8x8_rec.clear();
+        self.sub8x8_rpos = 0;
+        self.luma_tx.clear();
+        self.luma_tx_cf8.clear();
+        self.luma_tx_cf32.clear();
+        self.chroma_tx.clear();
+        self.chroma_tx_cf8.clear();
+        self.chroma_tx_cf32.clear();
+        self.chroma_tx_txtp.clear();
+        self.chroma_tx_eob.clear();
+        self.block_rpos = 0;
+        self.luma_tx_rpos = 0;
+        self.chroma_tx_rpos = 0;
+    }
+
     #[inline]
     fn reset_replay_cursors(&mut self) {
         self.block_rpos = 0;
+        self.sub8x8_rpos = 0;
         self.luma_tx_rpos = 0;
         self.chroma_tx_rpos = 0;
         self.is_coded = [[0u64; 64]; 2];
@@ -1485,6 +1550,11 @@ pub(crate) fn clear_thread_local_decode_scratch() {
     LUMA_SNAP_HBD.with(|snap| {
         *snap.borrow_mut() = Vec::new();
     });
+    FILTER_CCSO_TMP.with(|tmp| {
+        *tmp.borrow_mut() = (Vec::new(), Vec::new());
+    });
+    refmvs::clear_thread_local_tmvs_scratch();
+    crate::pixel::clear_emu_pools();
 }
 /// Mutable reconstruction borrows bundled so only one new param threads through
 /// decode_sb's recursion (Rust auto-reborrows &mut ReconCtx at each call).
@@ -1570,7 +1640,7 @@ pub struct ReconCtx<'a, 'f, BD: BitDepth> {
     /// because the 8x8 rounding can otherwise read `a` entries already clobbered
     pub a_sb_cache: crate::env::SBEdgeCtx,
     /// Per-plane block-adaptive weighted prediction state (`t->pb.bawp[plane]` =
-    /// alpha/beta). The luma plane derives alpha/beta from neighbour templates;
+    /// alpha/beta). The luma plane derives alpha/beta from neighbor templates;
     /// chroma reuses the luma alpha. Sub-blocks of a >64px partition reuse the
     pub bawp_ab: [(i32, i32); 3],
 }
@@ -1629,6 +1699,238 @@ pub(crate) struct DecodeTileSbrowEntropyCtx<
     pub(crate) seq_hdr: &'a crate::headers::SequenceHeader,
     pub(crate) frm_hdr: &'a FrameHeader,
     pub(crate) masks: &'a crate::wedge::Masks,
+    /// Split passes: where to hand the parsed row's superblocks instead of
+    /// reconstructing them here (`None`: reconstruct in this call).
+    pub(crate) replay_out: Option<&'a mut Vec<(i32, SbReplayStore)>>,
+}
+
+/// A parsed superblock row waiting for reconstruction on any worker.
+struct RowJob {
+    stores: Vec<(i32, SbReplayStore)>,
+    rp_proj_off: usize,
+    by: i32,
+}
+
+/// Bytes behind the symbol reader a reconstruction worker hands to
+/// `decode_sb`, which never reads it in the reconstruction pass.
+static REPLAY_MSAC_BUF: [u8; 64] = [0u8; 64];
+
+std::thread_local! {
+    /// CDFs a reconstruction worker hands to `decode_sb` (never read there).
+    static REPLAY_CDF: core::cell::RefCell<Option<Box<crate::cdf::CdfContext>>> =
+        const { core::cell::RefCell::new(None) };
+}
+
+/// Per-superblock wait / publish hooks of a wavefront row (see
+/// [`ReplayRowCtx::wavefront`]).
+pub(crate) type WavefrontHooks<'a> = (&'a dyn Fn(usize) -> bool, &'a dyn Fn(usize));
+
+/// One parsed superblock row to reconstruct (see [`replay_tile_sbrow`]).
+pub(crate) struct ReplayRowCtx<
+    'a,
+    'f,
+    BD: BitDepth,
+    const UPDATE_CDF: bool,
+    M: MsacReader<UPDATE_CDF>,
+> {
+    pub(crate) bd: BD,
+    pub(crate) fi: &'a SbFrameInfo,
+    /// Only to satisfy `decode_sb`'s signature: the reconstruction pass reads
+    /// no symbols and no CDFs.
+    pub(crate) msac: &'a mut M,
+    pub(crate) cdf: &'a mut crate::cdf::CdfContext,
+    pub(crate) lf_mask: &'a mut [crate::lf_mask::Av2Filter],
+    pub(crate) dst_y: &'a mut [BD::Pixel],
+    pub(crate) dst_u: &'a mut [BD::Pixel],
+    pub(crate) dst_v: &'a mut [BD::Pixel],
+    pub(crate) cf: &'a mut [BD::Coef],
+    pub(crate) recon_scratch: &'a mut ReconScratch,
+    pub(crate) recon_edge: &'a mut [BD::Pixel; 2048],
+    pub(crate) recon_frame: &'a ReconFrameCtx<'f>,
+    pub(crate) cur_segmap: &'a mut [u8],
+    pub(crate) prev_segmap: Option<&'a [u8]>,
+    pub(crate) segmap_uv: &'a mut [u8],
+    pub(crate) segmap_uv_stride: isize,
+    pub(crate) cur_ccsomap: &'a mut [u8],
+    pub(crate) prev_ccsomap: [Option<&'a [u8]>; 3],
+    pub(crate) by: i32,
+    pub(crate) sb256w: i32,
+    pub(crate) root_bs: BlockSize,
+    pub(crate) c_root_bs: BlockSize,
+    /// The sbrow's offset into the projected temporal MVs (TIP blocks).
+    pub(crate) rp_proj_off: usize,
+    pub(crate) rf: &'a refmvs::Frame,
+    pub(crate) cur_mvs: &'a mut [refmvs::TemporalBlock],
+    pub(crate) refp: &'a [Option<std::sync::Arc<crate::picture::Picture>>; 7],
+    pub(crate) svc: &'a [[ScalableMotionParams; 2]; 7],
+    pub(crate) seq_hdr: &'a crate::headers::SequenceHeader,
+    pub(crate) frm_hdr: &'a FrameHeader,
+    pub(crate) masks: &'a crate::wedge::Masks,
+    /// Wavefront hooks: `wait(i)` blocks until superblock `i` of the row may
+    /// be reconstructed (returns false to abort), `done(i + 1)` publishes
+    /// that superblocks `0..=i` are reconstructed.
+    pub(crate) wavefront: Option<WavefrontHooks<'a>>,
+}
+
+/// Reconstruct one parsed superblock row of a tile from its stores (split
+/// passes). Reconstruction reads nothing the entropy pass keeps: its block
+/// contexts are scratch, and its refmvs tile only needs the sbrow's projection
+/// offset (the sub-8x8 chroma neighbours come from the records). So it can run
+/// on any thread once the row is parsed and the rows above are reconstructed.
+pub(crate) fn replay_tile_sbrow<BD: BitDepth, const UPDATE_CDF: bool, M: MsacReader<UPDATE_CDF>>(
+    ctx: ReplayRowCtx<'_, '_, BD, UPDATE_CDF, M>,
+    stores: &[(i32, SbReplayStore)],
+) -> Result<(), ()>
+where
+    BD::Coef: DecodeCoeff,
+{
+    let ReplayRowCtx {
+        bd,
+        fi,
+        msac,
+        cdf,
+        lf_mask,
+        dst_y,
+        dst_u,
+        dst_v,
+        cf,
+        recon_scratch,
+        recon_edge,
+        recon_frame,
+        cur_segmap,
+        prev_segmap,
+        segmap_uv,
+        segmap_uv_stride,
+        cur_ccsomap,
+        prev_ccsomap,
+        by,
+        sb256w,
+        root_bs,
+        c_root_bs,
+        rp_proj_off,
+        rf,
+        cur_mvs,
+        refp,
+        svc,
+        seq_hdr,
+        frm_hdr,
+        masks,
+        wavefront,
+    } = ctx;
+    let sb256y = by >> 6;
+    // Reconstruct the parsed row. Reconstruction reads nothing the entropy
+    // pass keeps: its block contexts are scratch, and its refmvs tile only
+    // needs the sbrow's projection offset (the sub-8x8 chroma neighbours come
+    // from the records).
+    {
+        let mut replay_rt = recon_scratch
+            .replay_rt
+            .take()
+            .unwrap_or_else(|| Box::new(make_refmv_tile(1, 0, 0)));
+        replay_rt.rp_proj_off = rp_proj_off;
+        let mut replay_a = BlockContext::default();
+        let mut replay_l = BlockContext::default();
+        for (sb_i, (sb_bx, store)) in stores.iter().enumerate() {
+            if let Some((wait, _)) = wavefront {
+                if !wait(sb_i) {
+                    recon_scratch.replay_rt = Some(replay_rt);
+                    return Err(());
+                }
+            }
+            let bx = *sb_bx;
+            let lf_idx = ((bx >> 6) + sb256y * sb256w) as usize;
+            store.load_into::<BD::Coef>(recon_scratch);
+            let mut recon = ReconCtx {
+                bd,
+                dst_y: &mut *dst_y,
+                dst_u: &mut *dst_u,
+                dst_v: &mut *dst_v,
+                cdf_coef: &mut cdf.coef,
+                cf: &mut *cf,
+                frame: recon_frame,
+                masks,
+                scratch: &mut *recon_scratch,
+                edge: &mut recon_edge[..],
+                cur_segmap: &mut *cur_segmap,
+                prev_segmap,
+                b4_stride: fi.b4_stride,
+                segmap_uv: &mut *segmap_uv,
+                segmap_uv_stride,
+                last_qidx: 0,
+                dqmem: *recon_frame.dq,
+                dq_active: *recon_frame.dq,
+                seg_id_err: false,
+                lf_mask: &mut *lf_mask,
+                lf_idx,
+                sb256w,
+                cur_ccsomap: &mut *cur_ccsomap,
+                prev_ccsomap: [prev_ccsomap[0], prev_ccsomap[1], prev_ccsomap[2]],
+                rt: &mut replay_rt,
+                rf,
+                cur_mvs: &mut *cur_mvs,
+                refp,
+                svc,
+                scratch_u_has_cf: 0,
+                seq_hdr,
+                frm_hdr,
+                warpmv: [crate::headers::WarpedMotionParams::default(); 2],
+                a_sb_cache: crate::env::SBEdgeCtx::default(),
+                bawp_ab: [(256, 0); 3],
+            };
+            let (mut bx_m, mut by_m, mut cbx, mut cby) = (bx, by, bx, by);
+            let mut intra_region = 0i32;
+            let mut sdp_cfl_disallowed = 0i32;
+            let mut part_r_idx = 0usize;
+            let mut replay_part_w: Vec<u8> = Vec::new();
+            let mut replay_part_w_idx = 0usize;
+            let mut recon_dir = 0i32;
+            let mut sb_ctx = SbCtx {
+                fi,
+                bx: &mut bx_m,
+                by: &mut by_m,
+                cbx: &mut cbx,
+                cby: &mut cby,
+                intra_region: &mut intra_region,
+                sdp_cfl_disallowed: &mut sdp_cfl_disallowed,
+                a: &mut replay_a,
+                l: &mut replay_l,
+                msac: &mut *msac,
+                cdf_m: &mut cdf.m,
+                cdf_mv: &mut cdf.mv,
+                cdf_dmv: &mut cdf.dmv,
+                part_w: &mut replay_part_w,
+                part_w_idx: &mut replay_part_w_idx,
+                part_r: &store.part[..],
+                part_r_idx: &mut part_r_idx,
+                sdp_lr: None,
+                mono_parent: (
+                    false,
+                    BlockSize::Invalid,
+                    crate::levels::BlockPartition::None,
+                ),
+                mono_block_os: false,
+            };
+            let res = decode_sb(
+                &mut sb_ctx,
+                &mut recon,
+                crate::internal::Pass::Recon as u8,
+                root_bs,
+                c_root_bs,
+                &mut recon_dir,
+            );
+            recon.scratch.clear_replay_fifos();
+            if res.is_err() {
+                recon_scratch.replay_rt = Some(replay_rt);
+                return Err(());
+            }
+            if let Some((_, done)) = wavefront {
+                done(sb_i + 1);
+            }
+        }
+        recon_scratch.replay_rt = Some(replay_rt);
+    }
+
+    Ok(())
 }
 
 /// Decode one superblock row of a tile (entropy/parse pass).
@@ -1687,6 +1989,7 @@ where
         seq_hdr,
         frm_hdr,
         masks,
+        replay_out,
     } = ctx;
     let sb_step = fi.sb_step;
     let sb256y = by >> 6;
@@ -1714,11 +2017,15 @@ where
             col_end,
             row_start,
             row_end,
-            by >> 6,
+            by >> 1,
             tile_row,
         );
     }
     let is_key_or_intra = frame_hdr.is_key_or_intra();
+
+    // Split passes: each superblock's parsed payload, reconstructed once the
+    // whole row has been parsed.
+    let mut row_replay: Vec<(i32, SbReplayStore)> = Vec::new();
 
     let mut bx = col_start;
     while bx < col_end {
@@ -1730,7 +2037,7 @@ where
         recon_scratch.is_coded = [[0u64; 64]; 2];
 
         // reset_context path); marks all 4x4 units intra (invalid mv) so that
-        // not-yet-decoded neighbours are skipped by refmvs_find.
+        // not-yet-decoded neighbors are skipped by refmvs_find.
         if refmvs_active {
             crate::refmvs::reset_sb(
                 rt,
@@ -1886,9 +2193,11 @@ where
                 fi,
             )?;
         } else {
-            let intra_split_capable = !fi.is_inter_or_switch && !fi.allow_intrabc;
+            // IntraBC copies pre-filter pixels of this frame while parsing it,
+            // so those frames keep the fused path.
+            let split_capable = !fi.allow_intrabc;
             let wants_split =
-                intra_split_capable && (fi.n_passes > 1 || pass != crate::internal::PASS_ALL);
+                split_capable && (fi.n_passes > 1 || pass != crate::internal::PASS_ALL);
 
             if wants_split {
                 let do_entropy = (pass & crate::internal::Pass::Entropy as u8) != 0;
@@ -1926,7 +2235,11 @@ where
                                 frame_hdr,
                                 geom: lr_geom,
                             }),
-                            mono_parent: (false, BlockSize::Invalid, crate::levels::BlockPartition::None),
+                            mono_parent: (
+                                false,
+                                BlockSize::Invalid,
+                                crate::levels::BlockPartition::None,
+                            ),
                             mono_block_os: false,
                         };
                         decode_sb(
@@ -1941,66 +2254,13 @@ where
 
                     if do_recon {
                         local_replay.capture_from::<BD::Coef>(part_w, recon.scratch);
+                        // Reconstructed after the whole row is parsed (below).
+                        row_replay.push((bx, local_replay));
                     }
                 }
-
-                if do_recon {
-                    if do_entropy {
-                        local_replay.load_into::<BD::Coef>(recon.scratch);
-                    } else {
-                        // A real scheduler replay will have preloaded the scratch
-                        // from its tile/sbrow-owned `SbReplayStore` before entering
-                        // this pass.  Keep the cursor reset here so replay-only
-                        // unit tests can call the pass directly after filling
-                        // `recon.scratch`.
-                        recon.scratch.reset_replay_cursors();
-                    }
-
-                    bx_m = bx;
-                    by_m = by;
-                    cbx = bx;
-                    cby = by;
-                    intra_region = 0;
-                    sdp_cfl_disallowed = 0;
-                    part_r_idx = 0;
-                    let mut replay_part_w: Vec<u8> = Vec::new();
-                    let mut replay_part_w_idx = 0usize;
-                    let mut recon_dir = 0i32;
-                    let replay_part_r: &[u8] = if do_entropy {
-                        &local_replay.part[..]
-                    } else {
-                        part_r
-                    };
-                    let mut sb_ctx = SbCtx {
-                        fi,
-                        bx: &mut bx_m,
-                        by: &mut by_m,
-                        cbx: &mut cbx,
-                        cby: &mut cby,
-                        intra_region: &mut intra_region,
-                        sdp_cfl_disallowed: &mut sdp_cfl_disallowed,
-                        a: &mut a_arr[a_idx],
-                        l: &mut *l,
-                        msac: &mut *msac,
-                        cdf_m: &mut ts.cdf.m,
-                        cdf_mv: &mut ts.cdf.mv,
-                        cdf_dmv: &mut ts.cdf.dmv,
-                        part_w: &mut replay_part_w,
-                        part_w_idx: &mut replay_part_w_idx,
-                        part_r: replay_part_r,
-                        part_r_idx: &mut part_r_idx,
-                        sdp_lr: None,
-                        mono_parent: (false, BlockSize::Invalid, crate::levels::BlockPartition::None),
-                        mono_block_os: false,
-                    };
-                    decode_sb(
-                        &mut sb_ctx,
-                        &mut recon,
-                        crate::internal::Pass::Recon as u8,
-                        root_bs,
-                        c_root_bs,
-                        &mut recon_dir,
-                    )?;
+                if do_recon && !do_entropy {
+                    // A replay-only pass needs a preloaded store; not wired.
+                    return Err(());
                 }
             } else {
                 if pass != crate::internal::PASS_ALL {
@@ -2033,7 +2293,11 @@ where
                         frame_hdr,
                         geom: lr_geom,
                     }),
-                    mono_parent: (false, BlockSize::Invalid, crate::levels::BlockPartition::None),
+                    mono_parent: (
+                        false,
+                        BlockSize::Invalid,
+                        crate::levels::BlockPartition::None,
+                    ),
                     mono_block_os: false,
                 };
                 decode_sb(
@@ -2079,6 +2343,50 @@ where
         }
 
         bx += sb_step;
+    }
+
+    // Reconstruct the parsed row here, or hand it to the caller.
+    if !row_replay.is_empty() {
+        if let Some(out) = replay_out {
+            out.append(&mut row_replay);
+        } else {
+            replay_tile_sbrow(
+                ReplayRowCtx {
+                    bd,
+                    fi,
+                    msac: &mut *msac,
+                    cdf: &mut ts.cdf,
+                    lf_mask: &mut *lf_mask,
+                    dst_y: &mut *dst_y,
+                    dst_u: &mut *dst_u,
+                    dst_v: &mut *dst_v,
+                    cf: &mut *cf,
+                    recon_scratch: &mut *recon_scratch,
+                    recon_edge: &mut *recon_edge,
+                    recon_frame,
+                    cur_segmap: &mut *cur_segmap,
+                    prev_segmap,
+                    segmap_uv: &mut *segmap_uv,
+                    segmap_uv_stride,
+                    cur_ccsomap: &mut *cur_ccsomap,
+                    prev_ccsomap,
+                    by,
+                    sb256w,
+                    root_bs,
+                    c_root_bs,
+                    rp_proj_off: rt.rp_proj_off,
+                    rf,
+                    cur_mvs: &mut *cur_mvs,
+                    refp,
+                    svc,
+                    seq_hdr,
+                    frm_hdr,
+                    masks,
+                    wavefront: None,
+                },
+                &row_replay,
+            )?;
+        }
     }
 
     // Write back the running per-tile delta-q state.
@@ -2161,6 +2469,142 @@ impl<T> DisjointMut<T> {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }
+
+/// Progress of the in-loop filters while they run alongside tile decode in
+/// the parallel path. Bands are the 64-pixel filter bands (`by64`), roots the
+/// superblock rows that loop restoration works on.
+///
+/// The order each stage waits for, with the rows it touches (luma, band `k`
+/// starting at row `64k`):
+/// - deblock `k` writes `[64k-8, 64k+64)`, in band order on one thread, and
+///   waits until decode has finished band `k+1`. Later superblock rows only
+///   read reconstruction from the rows just above them, so they never see
+///   deblocked pixels.
+/// - CDEF save `k` reads `[64k-2, 64k+58)` and needs deblock through `k+1`.
+/// - CDEF filter `k` writes `[64k-8, 64k+56)` and reads seams saved by bands
+///   `k-1` and `k`, so it needs saves through `k`.
+/// - deblocking the last band of root `q` also takes q's loop-restoration
+///   line backup, which reads the pre-CDEF rows of root `q` and the 2 rows
+///   above it. CDEF and restoration must not overwrite those rows first.
+/// - the tile-line save of band `k` reads the CDEF output just above row
+///   `64k`, so it needs CDEF through `k`.
+/// - loop restoration of root `r` writes its root's rows; it waits for CDEF
+///   and tile-line saves through the first band of root `r+1`, as the
+///   stage-by-stage order guarantees.
+struct FilterOverlap {
+    n_bands: usize,
+    n_roots: usize,
+    sb128: usize,
+    cdef_on: bool,
+    lr_on: bool,
+    /// Held by the thread running the serial deblock / save / line-save chain.
+    chain: std::sync::atomic::AtomicBool,
+    deblocked: std::sync::atomic::AtomicUsize,
+    saved: std::sync::atomic::AtomicUsize,
+    filtered: Vec<std::sync::atomic::AtomicBool>,
+    /// Bands `0..filtered_prefix` are all CDEF-filtered.
+    filtered_prefix: std::sync::atomic::AtomicUsize,
+    filter_next: std::sync::atomic::AtomicUsize,
+    line_saved: std::sync::atomic::AtomicUsize,
+    lr_next: std::sync::atomic::AtomicUsize,
+    lr_done: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FilterStep {
+    Did,
+    Idle,
+    Finished,
+}
+
+impl FilterOverlap {
+    fn new(n_bands: usize, sb128: usize, cdef_on: bool, lr_on: bool) -> Self {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        Self {
+            n_bands,
+            n_roots: (n_bands + (1usize << sb128) - 1) >> sb128,
+            sb128,
+            cdef_on,
+            lr_on,
+            chain: AtomicBool::new(false),
+            deblocked: AtomicUsize::new(0),
+            saved: AtomicUsize::new(0),
+            filtered: (0..n_bands).map(|_| AtomicBool::new(false)).collect(),
+            filtered_prefix: AtomicUsize::new(0),
+            filter_next: AtomicUsize::new(0),
+            line_saved: AtomicUsize::new(0),
+            lr_next: AtomicUsize::new(0),
+            lr_done: AtomicUsize::new(0),
+        }
+    }
+
+    /// Bands from the top whose CDEF output (deblock output with CDEF off) is
+    /// final.
+    fn cdef_final(&self) -> usize {
+        use std::sync::atomic::Ordering::Acquire;
+        if self.cdef_on {
+            self.filtered_prefix.load(Acquire)
+        } else {
+            self.deblocked.load(Acquire)
+        }
+    }
+
+    /// Bands that must be deblocked before anything may overwrite rows of
+    /// root `q` or the 2 rows above it: deblocking the root's last band takes
+    /// its loop-restoration line backup, which reads those rows pre-CDEF.
+    fn backup_taken_through(&self, q: usize) -> usize {
+        if self.lr_on {
+            ((q + 1) << self.sb128).min(self.n_bands)
+        } else {
+            0
+        }
+    }
+
+    fn filter_ready(&self, k: usize) -> bool {
+        use std::sync::atomic::Ordering::Acquire;
+        // Filtering band `k` writes rows up to the top of band `k+1`: the 2
+        // rows above the root that band starts, when it starts one.
+        let below_root = (k + 1).min(self.n_bands - 1) >> self.sb128;
+        self.saved.load(Acquire) > k
+            && self.deblocked.load(Acquire) >= self.backup_taken_through(below_root)
+    }
+
+    fn root_ready(&self, r: usize) -> bool {
+        use std::sync::atomic::Ordering::Acquire;
+        let need = (((r + 1) << self.sb128) + 1).min(self.n_bands);
+        self.cdef_final() >= need
+            && self.line_saved.load(Acquire) >= need
+            // Restoring root `r` rewrites the 2 rows above root `r+1`.
+            && self.deblocked.load(Acquire) >= self.backup_taken_through(r + 1)
+    }
+
+    fn finished(&self) -> bool {
+        use std::sync::atomic::Ordering::Acquire;
+        self.deblocked.load(Acquire) == self.n_bands
+            && (!self.cdef_on || self.filtered_prefix.load(Acquire) == self.n_bands)
+            && (!self.lr_on || self.lr_done.load(Acquire) == self.n_roots)
+    }
+}
+
+/// Entropy/reconstruction passes per superblock: 1 = fused, 2 = split, 0 =
+/// automatic (split on the parallel path with at least
+/// [`SPLIT_MIN_THREADS`] threads, fused otherwise). `TEALDUST_SPLIT=0` / `=1`
+/// forces fused / split for testing.
+fn split_passes() -> i32 {
+    static PASSES: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    *PASSES.get_or_init(|| match std::env::var_os("TEALDUST_SPLIT") {
+        Some(v) if v == "0" => 1,
+        Some(v) if v == "1" => 2,
+        _ => 0,
+    })
+}
+
+/// Fewest pool threads at which the automatic mode splits entropy decoding
+/// from reconstruction. Below this the wavefront has too few threads to pay
+/// for the recording (~2-3% single-threaded); with 4+ it is 0.68-0.77x the
+/// fused time on reconstruction-bound streams and costs entropy-bound ones
+/// 3-6%.
+const SPLIT_MIN_THREADS: usize = 4;
 
 #[inline]
 fn parallel_tiles_complete(progress: &[std::sync::atomic::AtomicUsize], totals: &[usize]) -> bool {
@@ -2382,8 +2826,8 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     let is_tip = frame_hdr.tip.frame_mode == 2;
 
     // multi-threaded reset lives in decode_frame_init. Without this, the above
-    // neighbour `midx`/mode arrays retain default 0 instead of the 0xff "no
-    // neighbour" sentinel, corrupting intra-mode context derivation.
+    // neighbor `midx`/mode arrays retain default 0 instead of the 0xff "no
+    // neighbor" sentinel, corrupting intra-mode context derivation.
     if n_tc <= 1 {
         let n_a = (sb256w * rows) as usize;
         for ctx in a.iter_mut().take(n_a) {
@@ -2398,9 +2842,28 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     let allow_intrabc = frame_hdr.allow_intrabc != 0;
     let is_inter_or_switch = frame_hdr.is_inter_or_switch();
     let refmvs_active = allow_intrabc || is_inter_or_switch;
+    // Whether this frame takes the tile-parallel path below.
+    let par_dispatch = {
+        let decode_units =
+            (((bh + sb_step - 1) / sb_step).max(0) as usize).saturating_mul(cols.max(0) as usize);
+        let filter_bands = ((bh + 15) >> 4).max(0) as usize;
+        (n_tc as usize) >= 2 && (decode_units > 1 || filter_bands > 1)
+    };
+    // The parallel path projects every superblock row's temporal MVs before the
+    // tiles start, so it needs the frame-wide projection layout. The serial
+    // path keeps the rolling window and projects row by row.
+    let tmvs_frame_wide = par_dispatch && is_inter_or_switch && frame_hdr.use_ref_frame_mvs != 0;
     if refmvs_active {
         refmvs::init_frame(
-            rf, seq_hdr, frame_hdr, refpoc, refrefpoc, refcnt, ref_mvs, false, false,
+            rf,
+            seq_hdr,
+            frame_hdr,
+            refpoc,
+            refrefpoc,
+            refcnt,
+            ref_mvs,
+            false,
+            tmvs_frame_wide,
         )?;
     }
 
@@ -2422,12 +2885,11 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
         rf.rp.clear();
     }
 
-    // The projection of reference temporal MVs into `rf.rp_proj`
-    // path uses a rolling-window projection buffer (`rp_proj_off` is a fixed
-    // 2-row top margin, not a per-sbrow base), so each sbrow's load_tmvs
-    // overwrites the previous sbrow's projection; batching all rows up front
-    // would leave only the last row's data and corrupt the temporal MV grid
-    // that the inter tmvp candidates and frame_mode=2 whole-frame TIP recon read.
+    // The projection of reference temporal MVs into `rf.rp_proj`. The serial
+    // path uses a rolling-window buffer, so each sbrow's load_tmvs overwrites
+    // the previous sbrow's projection and must run just before that sbrow is
+    // decoded. Only the frame-wide layout (`tmvs_frame_wide`) can project all
+    // rows up front.
     let need_load_tmvs = is_inter_or_switch && frame_hdr.use_ref_frame_mvs != 0;
     // Hold the current-frame temporal MV grid separately so the inter splat can
     // mutate it while `rf` itself stays shared immutably (refmvs_find reads it).
@@ -2437,7 +2899,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
         std::array::from_fn(|i| refp[i].pic.clone());
     let svc_v = *svc;
 
-    // Compound `comp_type`/`get_compref_ctx` neighbour contexts need the
+    // Compound `comp_type`/`get_compref_ctx` neighbor contexts need the
     // few scalar `rf` fields needed before the loop so `rf` can be re-borrowed
     // mutably (for the per-sbrow load_tmvs) inside it.
     let ffr_idx = *furthest_future_refidx;
@@ -2459,19 +2921,12 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
     );
     let sb128 = frame_hdr.sb128 as i32;
 
-    // for every superblock-row in the tile row, THEN PHASE B runs the deferred
-    // filter pass `for sby: filter_sbrow(sby)`.Filters must run only after a
-    // whole tile row has decoded because intrabc reads pre-filter pixels to the
-    // left within the tile row.
+    // Finish reconstructing the frame before in-loop filters change the pixels.
+    // IntraBC can read pre-filter pixels to the left within a tile row.
     macro_rules! run_decode_tile_rows {
         ($bd:expr, $Pixel:ty, $Coef:ty) => {{
             let bd_local = $bd;
-            let estimated_decode_units = (((bh + sb_step - 1) / sb_step).max(0) as usize)
-                .saturating_mul(cols.max(0) as usize);
-            let estimated_filter_bands = ((bh + 15) >> 4).max(0) as usize;
-            let do_parallel = (n_tc as usize) >= 2
-                && !need_load_tmvs
-                && (estimated_decode_units > 1 || estimated_filter_bands > 1);
+            let do_parallel = par_dispatch;
             let active_pool = pool;
             let (dst_y, dst_u, dst_v): (&mut [$Pixel], &mut [$Pixel], &mut [$Pixel]) = cur_pic
                 .plane_slices_rows3_mut::<$Pixel>(
@@ -2480,20 +2935,8 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                 seq_hdr.layout != crate::headers::PixelLayout::I400,
             );
             if do_parallel {
-                // One persistent dispatch replaces the old decode-barrier-filter
-                // two-phase. Every worker runs the same loop and pulls whichever
-                // unit is available, preferring filter so that as decode marches
-                // top-to-bottom the loop-filter trails a couple of rows behind it
-                // on spare workers instead of waiting on a global barrier:
-                //   (1) a *ready* filter tile-row — ready once its own and its
-                //       vertically-adjacent rows (tr-1,tr,tr+1) have finished
-                //       decoding, so every seam pixel/mask entry it reads exists;
-                //   (2) else the next decode tile (claimed row-major);
-                //   (3) else PARK on a condvar until a decode completion (or the
-                //       final filter completion) signals progress. Workers never
-                //       busy-spin — the spin is exactly what regressed the earlier
-                //       fused attempt, its progress-poll traffic competing with the
-                //       decode critical path.
+                // Each worker decodes whole tiles. Once they are all done, the
+                // in-loop filters run stage by stage (see below).
                 let n_tiles = (rows as usize) * (cols as usize);
                 let rows_us = rows as usize;
                 let max_workers = (n_tc as usize).max(1);
@@ -2509,6 +2952,39 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                 let recon_frame = &recon_frame;
                 let refp_pics = &refp_pics;
                 let svc_v = &svc_v;
+                if need_load_tmvs {
+                    // Same calls as the serial path makes before each
+                    // superblock row; the frame-wide layout keeps every row's
+                    // result. Rows are independent in that layout, so they
+                    // are projected in parallel.
+                    debug_assert!(rf.have_frame_threading);
+                    let mut tmvs_rows: Vec<(i32, i32)> = Vec::new();
+                    for tr in 0..rows {
+                        let (row_rs, row_re) = {
+                            let t = &ts[(tr * cols) as usize].tiling;
+                            (t.row_start, t.row_end)
+                        };
+                        let mut by = row_rs;
+                        while by < row_re {
+                            tmvs_rows.push((by >> 1, (by + sb_step) >> 1));
+                            by += sb_step;
+                        }
+                    }
+                    let tmvs_threads = max_workers
+                        .min(active_pool.map_or(max_workers, |pool| pool.workers() + 1));
+                    refmvs::load_tmvs_frame_wide(
+                        rf,
+                        &tmvs_rows,
+                        bw >> 1,
+                        seq_hdr.mv_traj,
+                        frame_hdr.tip.frame_mode,
+                        seq_hdr.tip_hole_fill,
+                        frame_hdr.tmvp_sample_step as i32,
+                        frame_hdr.n_ref_frames as i32,
+                        active_pool,
+                        tmvs_threads,
+                    )?;
+                }
                 let rf_imm: &refmvs::Frame = &*rf;
                 let prev_ccsomap_ref = prev_ccsomap_ref;
                 let refdist: &[i8; 7] = refdist;
@@ -2541,7 +3017,6 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                 let got_err = std::sync::atomic::AtomicBool::new(false);
                 let got_err = &got_err;
 
-                let cols_us = cols as usize;
                 let tile_nsb: Vec<usize> = {
                     let ts_ref = unsafe { ts_dm.whole() };
                     (0..n_tiles)
@@ -2552,35 +3027,13 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                         .collect()
                 };
                 let tile_nsb = &tile_nsb[..];
-                let sb64h_us = ((bh + 15) >> 4).max(0) as usize;
-                let by64_tile_row: Vec<usize> = {
-                    let ts_ref = unsafe { ts_dm.whole() };
-                    let mut map = vec![0usize; sb64h_us];
-                    for tr in 0..rows_us {
-                        let tb = &ts_ref[tr * cols_us].tiling;
-                        let by64_start = ((tb.row_start + 15) >> 4).max(0) as usize;
-                        let by64_end = ((tb.row_end + 15) >> 4).max(0) as usize;
-                        for slot in map
-                            .iter_mut()
-                            .take(by64_end.min(sb64h_us))
-                            .skip(by64_start.min(sb64h_us))
-                        {
-                            *slot = tr;
-                        }
-                    }
-                    map
-                };
-                let by64_tile_row = &by64_tile_row[..];
-                let n_decode_units = tile_nsb.iter().copied().sum::<usize>();
-                let n_filter_units = sb64h_us;
-                // Every sb64 band is filtered, including a partial bottom band when
-                // `bh` is not a multiple of 16 (`h4 = min(bh - y64 * 16, 16)` inside
-                // the band filters). Skipping it left the last rows unfiltered, e.g.
-                // the horizontal edge at the frame bottom that AVM deblocks.
-                let n_filter_bands = n_filter_units;
-                let n_workers = max_workers
-                    .min(n_decode_units.max(n_filter_units).max(1))
-                    .max(1);
+                // Include the partial bottom band when the frame height is not
+                // a multiple of 64 pixels.
+                let n_filter_bands = ((bh + 15) >> 4).max(0) as usize;
+                // Workers own whole tiles. The in-loop filters run after they return.
+                let pool_threads =
+                    max_workers.min(active_pool.map_or(max_workers, |pool| pool.workers() + 1));
+                let n_workers = pool_threads.min(n_tiles.max(1));
                 let tile_sbrow: Vec<std::sync::atomic::AtomicUsize> = (0..n_tiles)
                     .map(|_| std::sync::atomic::AtomicUsize::new(0))
                     .collect();
@@ -2589,66 +3042,9 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                     .map(|_| std::sync::atomic::AtomicBool::new(false))
                     .collect();
                 let tile_busy = &tile_busy[..];
-                let dec_remaining: Vec<std::sync::atomic::AtomicUsize> = (0..rows_us)
-                    .map(|_| std::sync::atomic::AtomicUsize::new(cols as usize))
-                    .collect();
-                let dec_remaining = &dec_remaining[..];
-                let sb64_dec_remaining: Vec<std::sync::atomic::AtomicUsize> = (0..n_filter_units)
-                    .map(|_| std::sync::atomic::AtomicUsize::new(cols_us))
-                    .collect();
-                let sb64_dec_remaining = &sb64_dec_remaining[..];
-                let granular_filter_ready = !allow_intrabc;
-                let flt_done = std::sync::atomic::AtomicUsize::new(0);
-                let flt_done = &flt_done;
-                // Filter scheduler.
-                //   deblock      : single owner, in-order        -> deblock_progress
-                //   CDEF SAVE    : single owner, in-order (cheap)-> cdef_save_progress
-                //   CDEF FILTER  : data-parallel rows            -> cdef_filter_claim/_done
-                //   LR           : data-parallel rows            -> lr_claim/flt_done
-                let deblock_rows_busy = std::sync::atomic::AtomicBool::new(false);
-                let deblock_rows_busy = &deblock_rows_busy;
-                let deblock_cols_claim = std::sync::atomic::AtomicUsize::new(0);
-                let deblock_cols_claim = &deblock_cols_claim;
-                let cols_done: Vec<std::sync::atomic::AtomicBool> = (0..n_filter_bands)
-                    .map(|_| std::sync::atomic::AtomicBool::new(false))
-                    .collect();
-                let cols_done = &cols_done;
-                let deblock_progress = std::sync::atomic::AtomicUsize::new(0);
-                let deblock_progress = &deblock_progress;
-                let cdef_save_progress = std::sync::atomic::AtomicUsize::new(0);
-                let cdef_save_progress = &cdef_save_progress;
-                let cdef_save_claim = std::sync::atomic::AtomicUsize::new(0);
-                let cdef_save_claim = &cdef_save_claim;
-                // Per-band CDEF-SAVE completion. SAVE is data-parallel (each band
-                // writes disjoint seam slots: cdef_line[k] and cdef_top one-past, which
-                // save(k+1) skips), so it finishes out of order; cdef-filter(k) needs
-                // save(k-1) and save(k) (it reads cdef_line[k-1] and cdef_top[k+1]).
-                let cdef_save_done: Vec<std::sync::atomic::AtomicBool> = (0..n_filter_bands)
-                    .map(|_| std::sync::atomic::AtomicBool::new(false))
-                    .collect();
-                let cdef_save_done = &cdef_save_done;
-                let cdef_filter_claim = std::sync::atomic::AtomicUsize::new(0);
-                let cdef_filter_claim = &cdef_filter_claim;
-                let cdef_filter_done = std::sync::atomic::AtomicUsize::new(0);
-                let cdef_filter_done = &cdef_filter_done;
-                let lr_claim = std::sync::atomic::AtomicUsize::new(0);
-                let lr_claim = &lr_claim;
-                // Per-band CDEF-FILTER completion flags. CDEF-filter rows finish out
-                // of order, so LR (which needs its own root's CDEF complete) checks
-                // these rather than the done count, letting LR overlap CDEF-filter
-                // instead of waiting at a full-CDEF barrier.
-                let cdef_band_done: Vec<std::sync::atomic::AtomicBool> = (0..n_filter_bands)
-                    .map(|_| std::sync::atomic::AtomicBool::new(false))
-                    .collect();
-                let cdef_band_done = &cdef_band_done;
-                // `filter_progress` retained as the LR completion cursor for
-                // park/wake accounting (== flt_done after the LR pass).
-                let filter_progress = std::sync::atomic::AtomicUsize::new(0);
-                let filter_progress = &filter_progress;
                 // Per-frame seam line buffers, pre-sized so the parallel passes never
-                // resize. Written by the single-owner SAVE/deblock passes, read by the
-                // parallel FILTER/LR passes; the two phases are separated in time by
-                // the cursors, so DisjointMut shared access is sound.
+                // resize. The serial deblock and SAVE stages fill them before the
+                // parallel FILTER and LR stages read them.
                 let n_roots_alloc = ((n_filter_bands >> sb128) + 2).max(1);
                 let mono_alloc = seq_hdr.layout == crate::headers::PixelLayout::I400;
                 ensure_filter_lines(
@@ -2705,88 +3101,418 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                 let lr_cdef_dm = &lr_cdef_dm;
                 let lr_cdef_hbd_dm = DisjointMut::new(std::slice::from_mut(&mut lf.lr_cdef_line_hbd));
                 let lr_cdef_hbd_dm = &lr_cdef_hbd_dm;
-                let park_mx = std::sync::Mutex::new(());
-                let park_mx = &park_mx;
-                let park_cv = std::sync::Condvar::new();
-                let park_cv = &park_cv;
-                let park_waiters = std::sync::atomic::AtomicUsize::new(0);
-                let park_waiters = &park_waiters;
-                // A single global "something progressed" counter. Every producer
-                // wake site bumps it (Release) after publishing its work, so an idle
-                // worker can detect that progress happened with ONE relaxed-ish
-                // atomic load instead of re-scanning all `n_tiles + n_filter_units`
-                // per-unit atomics each spin iteration (that scan bounces O(units)
-                // cache lines that other workers are actively writing, which is the
-                // dominant source of MT timing noise on many-core targets). The
-                // epoch is only a spin/scan-avoidance hint: the authoritative park
-                // decision is still the full predicate recheck under `park_mx`, so a
-                // missed bump can at worst cost a redundant scan, never a lost wakeup.
-                let progress_epoch = std::sync::atomic::AtomicUsize::new(0);
-                let progress_epoch = &progress_epoch;
-                // Number of cheap epoch-poll spins before falling back to yield then
-                // pthread_cond_wait. Each spin is now a single atomic load (not an
-                // O(tiles+units) scan), so this trades a little busy-wait for avoiding
-                // the high-variance OS condvar wakeup when work lands a few hundred
-                // cycles later. Tunable; measure on the target.
-                const PARK_SPIN_ITERS: usize = 96;
-                let wake_one = || {
-                    // Publish "progress happened" before (possibly) signalling, so a
-                    // spinning worker that loads the new epoch also observes the work.
-                    progress_epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
-                    // Avoid the pthread mutex/condvar path when all workers are
-                    // currently running. A waiter increments `park_waiters` before
-                    // its final predicate recheck under `park_mx`, so skipping here
-                    // cannot lose a wakeup: either the waiter will see the freshly
-                    // published atomic state during that final recheck, or it will
-                    // have become visible in `park_waiters` before this notify.
-                    if park_waiters.load(std::sync::atomic::Ordering::Relaxed) != 0 {
-                        let _guard = park_mx.lock().unwrap_or_else(|e| e.into_inner());
-                        park_cv.notify_one();
+                use crate::looprestoration::{
+                    INLOOPFILTER_CCSO, INLOOPFILTER_CDEF, INLOOPFILTER_GDF,
+                    INLOOPFILTER_WIENER,
+                };
+                macro_rules! run_stage {
+                    ($k:expr, $stages:expr, $tmp:expr) => {{
+                        let by64 = $k as i32;
+                        let sh = FilterShared {
+                            mask: unsafe { &*mask_dm.whole() },
+                            lr_mask: unsafe { &*lrmask_dm.whole() },
+                            segmap_uv: unsafe { &*seguv_dm.whole() },
+                            start_of_tile_row: lf_start_of_tile_row,
+                            seams: crate::lf_mask::TileSeams {
+                                right: unsafe { &*seam_r_dm.whole() },
+                                bottom: unsafe { &*seam_b_dm.whole() },
+                                h4: seam_h4,
+                                w4: seam_w4,
+                            },
+                            uv_segmap_stride,
+                            base_q,
+                            gdf_ref_dst_idx,
+                            wiener_idx,
+                            ns_subclass_class_idx,
+                            restore_planes,
+                        };
+                        // SAFETY: decode has finished, so nothing else
+                        // touches these buffers. Within a parallel stage
+                        // each band (or superblock row) writes only its own
+                        // picture rows and only reads the seam buffers.
+                        filter_sb64(
+                            bd_local,
+                            crate::decode::loopfilter::FilterSb64Ctx {
+                                exec,
+                                seq_hdr,
+                                frame_hdr,
+                                sh: &sh,
+                                fp: filter_params,
+                                cur_segmap: unsafe { &*cseg_dm.whole() },
+                                b4_stride: b4_stride_v,
+                                hbd: hbd_v,
+                                inloop: fc_inloop_filters,
+                                sbh: fc_sbh,
+                                sb_step,
+                                sb256w,
+                                sb128,
+                                bw,
+                                bh,
+                            },
+                            crate::decode::loopfilter::FilterSb64Scratch {
+                                cdef_line: unsafe { cdef_line_dm.whole() },
+                                cdef_top: unsafe { cdef_top_dm.whole() },
+                                lr_db_line: unsafe { lr_db_dm.whole() },
+                                lr_cdef_line: unsafe { &mut lr_cdef_dm.whole()[0] },
+                                ccso_tmp_buf: &mut $tmp.0,
+                                cdef_line_hbd: unsafe { cdef_line_hbd_dm.whole() },
+                                cdef_top_hbd: unsafe { cdef_top_hbd_dm.whole() },
+                                lr_db_line_hbd: unsafe { lr_db_hbd_dm.whole() },
+                                lr_cdef_line_hbd: unsafe { &mut lr_cdef_hbd_dm.whole()[0] },
+                                ccso_tmp_buf_hbd: &mut $tmp.1,
+                            },
+                            crate::decode::loopfilter::FilterSb64Dst {
+                                y: unsafe { dst_y_dm.whole() },
+                                u: unsafe { dst_u_dm.whole() },
+                                v: unsafe { dst_v_dm.whole() },
+                            },
+                            crate::decode::loopfilter::FilterSb64Band {
+                                by64,
+                                stages: $stages,
+                            },
+                        );
+                    }};
+                }
+                let cdef_on = (seq_hdr.cdef || frame_hdr.ccso.p.iter().any(|p| p.enabled != 0))
+                    && fc_inloop_filters & (INLOOPFILTER_CDEF | INLOOPFILTER_CCSO) != 0;
+                let lr_on = restore_planes != 0
+                    && fc_inloop_filters & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0;
+
+                // Run the in-loop filters alongside tile decode: threads with
+                // no tile to decode filter every band that decode has moved
+                // past (see `FilterOverlap` for the order). IntraBC can copy
+                // pre-filter pixels from anywhere above, so those frames
+                // filter after decode as before.
+                let overlap_filters = !allow_intrabc && pool_threads >= 2;
+                let n_passes = match n_passes {
+                    0 if pool_threads >= SPLIT_MIN_THREADS => 2,
+                    0 => 1,
+                    n => n,
+                };
+                let split_jobs = n_passes > 1;
+                let n_workers = if overlap_filters || split_jobs { pool_threads } else { n_workers };
+                let sched = FilterOverlap::new(n_filter_bands, sb128 as usize, cdef_on, lr_on);
+                let sched = &sched;
+                let tile_rs: Vec<i32> = {
+                    let ts_ref = unsafe { ts_dm.whole() };
+                    (0..n_tiles).map(|t| ts_ref[t].tiling.row_start).collect()
+                };
+                let tile_rs = &tile_rs[..];
+                // First 4px row not yet reconstructed in every tile.
+                let decode_frontier = || -> i32 {
+                    let mut f = i32::MAX;
+                    for t in 0..n_tiles {
+                        let s = tile_sbrow[t].load(std::sync::atomic::Ordering::Acquire);
+                        if s < tile_nsb[t] {
+                            f = f.min(tile_rs[t] + s as i32 * sb_step);
+                        }
+                    }
+                    f
+                };
+                let filter_step = |tmp: &mut (Vec<u8>, Vec<u16>)| -> FilterStep {
+                    use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+                    let nb = sched.n_bands;
+                    let mut did = false;
+                    if sched.chain.compare_exchange(false, true, Acquire, Relaxed).is_ok() {
+                        loop {
+                            let mut progressed = false;
+                            let d = sched.deblocked.load(Relaxed);
+                            if d < nb && decode_frontier() >= ((d as i32 + 2) * 16).min(bh) {
+                                run_stage!(d, crate::decode::STAGE_DEBLOCK, tmp);
+                                sched.deblocked.store(d + 1, Release);
+                                progressed = true;
+                            }
+                            if cdef_on {
+                                let k = sched.saved.load(Relaxed);
+                                if k < nb && sched.deblocked.load(Relaxed) >= (k + 2).min(nb) {
+                                    run_stage!(k, crate::decode::STAGE_CDEF_SAVE, tmp);
+                                    sched.saved.store(k + 1, Release);
+                                    progressed = true;
+                                }
+                                let mut p = sched.filtered_prefix.load(Relaxed);
+                                while p < nb && sched.filtered[p].load(Acquire) {
+                                    p += 1;
+                                }
+                                sched.filtered_prefix.store(p, Release);
+                            }
+                            if lr_on {
+                                let t = sched.line_saved.load(Relaxed);
+                                if t < nb && sched.cdef_final() > t {
+                                    run_stage!(t, crate::decode::STAGE_TILE_LINE_SAVE, tmp);
+                                    sched.line_saved.store(t + 1, Release);
+                                    progressed = true;
+                                }
+                            }
+                            if !progressed {
+                                break;
+                            }
+                            did = true;
+                        }
+                        sched.chain.store(false, Release);
+                    }
+                    if cdef_on {
+                        let k = sched.filter_next.load(Relaxed);
+                        if k < nb
+                            && sched.filter_ready(k)
+                            && sched
+                                .filter_next
+                                .compare_exchange(k, k + 1, Relaxed, Relaxed)
+                                .is_ok()
+                        {
+                            run_stage!(k, crate::decode::STAGE_CDEF_FILTER, tmp);
+                            sched.filtered[k].store(true, Release);
+                            return FilterStep::Did;
+                        }
+                    }
+                    if lr_on {
+                        let r = sched.lr_next.load(Relaxed);
+                        if r < sched.n_roots
+                            && sched.root_ready(r)
+                            && sched.lr_next.compare_exchange(r, r + 1, Relaxed, Relaxed).is_ok()
+                        {
+                            // Restoration runs from the root's last band.
+                            let k = (((r + 1) << sched.sb128) - 1).min(nb - 1);
+                            run_stage!(k, crate::decode::STAGE_LR, tmp);
+                            sched.lr_done.fetch_add(1, Release);
+                            return FilterStep::Did;
+                        }
+                    }
+                    if did {
+                        FilterStep::Did
+                    } else if sched.finished() {
+                        FilterStep::Finished
+                    } else {
+                        FilterStep::Idle
                     }
                 };
-                let wake_one = &wake_one;
-                let wake_all = || {
-                    progress_epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
-                    if park_waiters.load(std::sync::atomic::Ordering::Relaxed) != 0 {
-                        let _guard = park_mx.lock().unwrap_or_else(|e| e.into_inner());
-                        park_cv.notify_all();
-                    }
+                // Split passes: a tile's parsing thread hands each parsed row
+                // to any worker for reconstruction. `tile_parsed` counts parsed
+                // rows, `tile_sbrow` fully reconstructed ones (what the filters
+                // wait on). Rows are reconstructed as a wavefront: claimed in
+                // order (`recon_next`), each by its own thread, with superblock
+                // `i` of row `r` waiting until row `r - 1` has reconstructed
+                // superblocks `0..=i + 1` (`row_prog`). Nothing reconstruction
+                // reads from the row above lies further right: the intra /
+                // interintra top-right edge reaches at most one 64px TX width
+                // past the block, BAWP templates stay within the block's width.
+                let tile_parsed: Vec<std::sync::atomic::AtomicUsize> = (0..n_tiles)
+                    .map(|_| std::sync::atomic::AtomicUsize::new(0))
+                    .collect();
+                let tile_parsed = &tile_parsed[..];
+                let recon_next: Vec<std::sync::atomic::AtomicUsize> = (0..n_tiles)
+                    .map(|_| std::sync::atomic::AtomicUsize::new(0))
+                    .collect();
+                let recon_next = &recon_next[..];
+                let row_prog: Vec<Vec<std::sync::atomic::AtomicUsize>> = (0..n_tiles)
+                    .map(|t| {
+                        (0..tile_nsb[t]).map(|_| std::sync::atomic::AtomicUsize::new(0)).collect()
+                    })
+                    .collect();
+                let row_prog = &row_prog[..];
+                // Superblocks of row `r - 1` that must be reconstructed before
+                // superblock `i` of row `r` (`n`: superblocks per row).
+                const WAVEFRONT_LAG: usize = 2;
+                let row_above_ready = |t: usize, r: usize, i: usize, n: usize| -> bool {
+                    use std::sync::atomic::Ordering::Acquire;
+                    r == 0 || row_prog[t][r - 1].load(Acquire) >= (i + WAVEFRONT_LAG).min(n)
                 };
-                let wake_all = &wake_all;
+                let row_jobs: Vec<Vec<std::sync::Mutex<Option<RowJob>>>> = (0..n_tiles)
+                    .map(|t| (0..tile_nsb[t]).map(|_| std::sync::Mutex::new(None)).collect())
+                    .collect();
+                let row_jobs = &row_jobs[..];
+                let tile_fi: Vec<std::sync::OnceLock<SbFrameInfo>> =
+                    (0..n_tiles).map(|_| std::sync::OnceLock::new()).collect();
+                let tile_fi = &tile_fi[..];
+                let recon_done = || (0..n_tiles).all(|t| {
+                    tile_sbrow[t].load(std::sync::atomic::Ordering::Acquire) >= tile_nsb[t]
+                });
+                // Reconstruct one parsed row on this thread.
+                let replay_job = |t: usize, r: usize, job: &RowJob| -> bool {
+                    let n = job.stores.len();
+                    let wait = |i: usize| -> bool {
+                        let mut spins = 0u32;
+                        while !row_above_ready(t, r, i, n) {
+                            if got_err.load(std::sync::atomic::Ordering::Relaxed) {
+                                return false;
+                            }
+                            spins += 1;
+                            if spins < 64 {
+                                std::hint::spin_loop();
+                            } else {
+                                std::thread::yield_now();
+                            }
+                        }
+                        true
+                    };
+                    let done = |k: usize| {
+                        row_prog[t][r].store(k, std::sync::atomic::Ordering::Release);
+                    };
+                    <$Coef as DecodeCoeff>::with_cf_scratch(|cf| {
+                        WORKER_SCRATCH.with(|ws_cell| {
+                            let mut ws_guard = ws_cell.borrow_mut();
+                            let ws = ws_guard.get_or_insert_with(|| {
+                                DecodeWorkerScratch::new(rf_rp_stride.max(1) as usize, bw, bh)
+                            });
+                            if ws.prepare(rf_rp_stride.max(1) as usize, bw, bh).is_err() {
+                                return false;
+                            }
+                            let DecodeWorkerScratch {
+                                recon_scratch,
+                                recon_edge8,
+                                recon_edge16,
+                                ..
+                            } = &mut *ws;
+                            let recon_edge =
+                                <$Pixel as DecodeEdgePixel>::edge_mut(recon_edge8, recon_edge16);
+                            recon_scratch.reset_for_sbrow(true);
+                            let Some(fi) = tile_fi[t].get() else {
+                                return false;
+                            };
+                            REPLAY_CDF.with(|cdf_cell| {
+                                let mut cdf_guard = cdf_cell.borrow_mut();
+                                let cdf = cdf_guard
+                                    .get_or_insert_with(|| Box::new(crate::cdf::CdfContext::default()));
+                                let mut msac = B::new(&REPLAY_MSAC_BUF[..]);
+                                replay_tile_sbrow(
+                                    ReplayRowCtx {
+                                        bd: bd_local,
+                                        fi,
+                                        msac: &mut msac,
+                                        cdf: &mut **cdf,
+                                        lf_mask: unsafe { mask_dm.whole() },
+                                        dst_y: unsafe { dst_y_dm.whole() },
+                                        dst_u: unsafe { dst_u_dm.whole() },
+                                        dst_v: unsafe { dst_v_dm.whole() },
+                                        cf: &mut *cf,
+                                        recon_scratch: &mut *recon_scratch,
+                                        recon_edge: &mut *recon_edge,
+                                        recon_frame,
+                                        cur_segmap: unsafe { cseg_dm.whole() },
+                                        prev_segmap: prev_segmap_ref,
+                                        segmap_uv: unsafe { seguv_dm.whole() },
+                                        segmap_uv_stride: uv_segmap_stride,
+                                        cur_ccsomap: unsafe { cccso_dm.whole() },
+                                        prev_ccsomap: prev_ccsomap_ref,
+                                        by: job.by,
+                                        sb256w,
+                                        root_bs,
+                                        c_root_bs,
+                                        rp_proj_off: job.rp_proj_off,
+                                        rf: rf_imm,
+                                        cur_mvs: unsafe { cmvs_dm.whole() },
+                                        refp: refp_pics,
+                                        svc: svc_v,
+                                        seq_hdr,
+                                        frm_hdr: frame_hdr,
+                                        masks,
+                                        wavefront: Some((&wait, &done)),
+                                    },
+                                    &job.stores,
+                                )
+                                .is_ok()
+                            })
+                        })
+                    })
+                };
+                // Claim and reconstruct the next row of some tile, if one is
+                // parsed and its first superblock can start right away (so
+                // claimed rows rarely wait on the row above).
+                let recon_step = || -> bool {
+                    use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
+                    if !split_jobs {
+                        return false;
+                    }
+                    for t in 0..n_tiles {
+                        // Parsed first: a row parsed and reconstructed in place
+                        // publishes `tile_sbrow` before `tile_parsed`.
+                        let parsed = tile_parsed[t].load(Acquire);
+                        if tile_sbrow[t].load(Acquire) >= parsed {
+                            continue;
+                        }
+                        let r = recon_next[t].load(Acquire);
+                        if r >= parsed
+                            || !(tile_sbrow[t].load(Acquire) >= r
+                                || row_above_ready(t, r, 0, usize::MAX))
+                        {
+                            continue;
+                        }
+                        if recon_next[t].compare_exchange(r, r + 1, AcqRel, Relaxed).is_err() {
+                            continue;
+                        }
+                        let job = row_jobs[t][r].lock().ok().and_then(|mut g| g.take());
+                        let ok = match job {
+                            Some(job) => replay_job(t, r, &job),
+                            None => false,
+                        };
+                        if !ok {
+                            got_err.store(true, Relaxed);
+                            return true;
+                        }
+                        // Row `r` waited for all of row `r - 1`, so rows
+                        // complete in order; a later row may still publish first.
+                        tile_sbrow[t].fetch_max(r + 1, Release);
+                        return true;
+                    }
+                    false
+                };
+
+                let filter_loop = || {
+                    FILTER_CCSO_TMP.with(|tmp| {
+                        let mut guard = tmp.borrow_mut();
+                        let tmp = &mut *guard;
+                        let mut idle = 0u32;
+                        loop {
+                            if got_err.load(std::sync::atomic::Ordering::Relaxed) {
+                                return;
+                            }
+                            if recon_step() {
+                                idle = 0;
+                                continue;
+                            }
+                            let step = if overlap_filters {
+                                filter_step(tmp)
+                            } else if recon_done() {
+                                FilterStep::Finished
+                            } else {
+                                FilterStep::Idle
+                            };
+                            match step {
+                                FilterStep::Did => idle = 0,
+                                FilterStep::Finished => return,
+                                FilterStep::Idle => {
+                                    // Back off to sleeping: busy waiters would
+                                    // compete for cores with the decoding thread.
+                                    idle += 1;
+                                    if idle < 32 {
+                                        std::hint::spin_loop();
+                                    } else if idle < 48 {
+                                        std::thread::yield_now();
+                                    } else {
+                                        std::thread::sleep(std::time::Duration::from_micros(50));
+                                    }
+                                }
+                            }
+                        }
+                    });
+                };
+
                 let worker_seq = std::sync::atomic::AtomicUsize::new(0);
                 let worker_seq = &worker_seq;
 
                 let worker = || {
-                    use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed, Release};
+                    use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
                     let worker_id = worker_seq.fetch_add(1, Relaxed);
-                    // A filter sb64 row is ready when the owning tile-row and its
-                    // vertical neighbor tile-rows are fully decoded (Acquire pairs
-                    // with the decode Release).
-                    let tile_row_ready = |tr: usize| -> bool {
-                        let lo = tr.saturating_sub(1);
-                        let hi = (tr + 1).min(rows_us - 1);
-                        (lo..=hi).all(|r| dec_remaining[r].load(Acquire) == 0)
-                    };
-                    let sb64_decoded = |by64: usize| -> bool {
-                        sb64_dec_remaining
-                            .get(by64)
-                            .map(|r| r.load(Acquire) == 0)
-                            .unwrap_or(true)
-                    };
-                    let filter_ready = |by64: usize| -> bool {
-                        if granular_filter_ready {
-                            // Deblock rows and the root-SB CDEF seam read the top
-                            // neighbor. They do not need the next band: CDEF's
-                            // normal by64 slice deliberately leaves the bottom two
-                            // 4x4 rows for the following task.
-                            sb64_decoded(by64) && (by64 == 0 || sb64_decoded(by64 - 1))
-                        } else {
-                            by64_tile_row
-                                .get(by64)
-                                .map(|&tr| tile_row_ready(tr))
-                                .unwrap_or(false)
+                    // Tiles are only ever claimed until finished, so a thread
+                    // that finds none free has no decode work at all.
+                    let tile_free = (0..n_tiles).any(|t| {
+                        !tile_busy[t].load(Acquire) && tile_parsed[t].load(Acquire) < tile_nsb[t]
+                    });
+                    if !tile_free {
+                        if overlap_filters || split_jobs {
+                            filter_loop();
                         }
-                    };
+                        return;
+                    }
                     <$Coef as DecodeCoeff>::with_cf_scratch(|cf| {
                         WORKER_SCRATCH.with(|ws_cell| {
                             let mut ws_guard = ws_cell.borrow_mut();
@@ -2802,36 +3528,35 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                 rt,
                                 recon_scratch,
                                 part_w,
-                                ccso_tmp_buf,
-                                ccso_tmp_buf_hbd,
                                 recon_edge8,
                                 recon_edge16,
+                                ..
                             } = &mut *ws;
                             let recon_edge =
                                 <$Pixel as DecodeEdgePixel>::edge_mut(recon_edge8, recon_edge16);
                             let mut l = BlockContext::default();
                             let part_r: &[u8] = &[];
-                            let mut cached_fi: Option<(usize, SbFrameInfo)> = None;
 
                             loop {
                                 if got_err.load(Relaxed) {
                                     return;
                                 }
-                                // Snapshot the progress epoch *before* the phase-1/2 work
-                                // scan below.
-                                let seen_epoch = progress_epoch.load(Acquire);
 
                                 let mut claimed = None;
                                 let start_t = if n_tiles != 0 { worker_id % n_tiles } else { 0 };
                                 for ti in 0..n_tiles {
                                     let t = (start_t + ti) % n_tiles;
-                                    if tile_sbrow[t].load(Acquire) >= tile_nsb[t] {
+                                    if tile_parsed[t].load(Acquire) >= tile_nsb[t] {
                                         continue;
                                     }
-                                    if tile_busy[t].swap(true, AcqRel) {
-                                        continue; // another worker is advancing this tile
+                                    if tile_busy[t].load(Relaxed)
+                                        || tile_busy[t]
+                                            .compare_exchange(false, true, Acquire, Relaxed)
+                                            .is_err()
+                                    {
+                                        continue;
                                     }
-                                    if tile_sbrow[t].load(Acquire) >= tile_nsb[t] {
+                                    if tile_parsed[t].load(Acquire) >= tile_nsb[t] {
                                         tile_busy[t].store(false, Release);
                                         continue;
                                     }
@@ -2839,7 +3564,6 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                     break;
                                 }
                                 if let Some(t) = claimed {
-                                    let tr = t / cols_us;
                                     let ts_idx = t;
                                     let a = unsafe { a_dm.whole() };
                                     let cur_segmap = unsafe { cseg_dm.whole() };
@@ -2859,10 +3583,8 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                         let tb = &ts[ts_idx].tiling;
                                         (tb.col_start, tb.col_end, tb.row_start, tb.row_end)
                                     };
-                                    if cached_fi.as_ref().map_or(true, |(ct, _)| *ct != t) {
-                                        cached_fi = Some((
-                                            t,
-                                            SbFrameInfo::from_frame(SbFrameInfoArgs {
+                                    let fi = tile_fi[t].get_or_init(|| {
+                                        SbFrameInfo::from_frame(SbFrameInfoArgs {
                                                 seq_hdr,
                                                 frame_hdr,
                                                 bw,
@@ -2880,17 +3602,14 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                                 tile_row_end: re,
                                                 furthest_future_refidx: ffr_idx,
                                                 tip: tip_ref,
-                                            }),
-                                        ));
-                                    }
-                                    let fi = &cached_fi.as_ref().unwrap().1;
+                                            })
+                                    });
 
                                     // Keep advancing the same tile while it remains ready.
                                     loop {
-                                        let s = tile_sbrow[t].load(Relaxed);
+                                        let s = tile_parsed[t].load(Relaxed);
                                         if s >= tile_nsb[t] {
                                             tile_busy[t].store(false, Release);
-                                            wake_one();
                                             break;
                                         }
 
@@ -2899,6 +3618,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                         part_w.clear();
                                         reset_context(&mut l, keyframe, is_tip);
                                         // Resume this tile's parked entropy state for sbrow `s`.
+                                        let mut row_out: Vec<(i32, SbReplayStore)> = Vec::new();
                                         let (sbrow_res, saved_msac_state) = {
                                             let mut msac = B::resume(&buf, ts[ts_idx].msac_state);
                                             let sbrow_res = decode_tile_sbrow_entropy(
@@ -2944,6 +3664,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                                     seq_hdr,
                                                     frm_hdr: frame_hdr,
                                                     masks,
+                                                    replay_out: split_jobs.then_some(&mut row_out),
                                                 },
                                             );
                                             let saved_msac_state = msac.save();
@@ -2958,373 +3679,151 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                             got_err.store(true, Relaxed);
                                             cf.fill(<$Coef as crate::pixel::Coeff>::ZERO);
                                             tile_busy[t].store(false, Release);
-                                            wake_all();
                                             return;
                                         }
 
                                         let new_s = s + 1;
-                                        tile_sbrow[t].store(new_s, Release);
-
-                                        // Publish the exact sb64 bands covered by this
-                                        // decoded root-sbrow. This is what lets the
-                                        // filter side trail decode at sb64 granularity
-                                        // instead of waiting for the whole tile-row.
-                                        let row_start = by.max(0) as usize;
-                                        let row_end =
-                                            (by + sb_step).min(re).min(bh).max(by) as usize;
-                                        let by64_start = (row_start >> 4).min(n_filter_units);
-                                        let by64_end = ((row_end + 15) >> 4).min(n_filter_units);
-                                        let mut made_filter_ready = false;
-                                        for by64 in by64_start..by64_end {
-                                            if sb64_dec_remaining[by64].fetch_sub(1, AcqRel) == 1 {
-                                                made_filter_ready = true;
+                                        if row_out.is_empty() {
+                                            // Reconstructed in the call above. Publish
+                                            // it as reconstructed before parsed, so no
+                                            // reader sees a parsed row without a job.
+                                            tile_sbrow[t].store(new_s, Release);
+                                            tile_parsed[t].store(new_s, Release);
+                                        } else {
+                                            if let Ok(mut slot) = row_jobs[t][s].lock() {
+                                                *slot = Some(RowJob {
+                                                    stores: row_out,
+                                                    rp_proj_off: rt.rp_proj_off,
+                                                    by,
+                                                });
                                             }
+                                            tile_parsed[t].store(new_s, Release);
                                         }
 
                                         if new_s >= tile_nsb[t] {
                                             tile_busy[t].store(false, Release);
-                                            dec_remaining[tr].fetch_sub(1, AcqRel);
-                                            wake_one();
-                                            break;
-                                        }
-                                        if made_filter_ready {
-                                            wake_one();
-                                        }
-                                    }
-                                    continue;
-                                }
-
-                                // Reconstruction writes disjoint tile rows, but the
-                                // in-loop filters deliberately reach across sb64
-                                // boundaries. Running either filter work beside
-                                // reconstruction, or two adjacent filter bands beside
-                                // each other, aliases those boundary pixels. Finish the
-                                // parallel tile decode first, then let worker zero run
-                                // the ordered filter pipeline while the dispatch keeps
-                                // the other workers joined.
-                                let decode_done = parallel_tiles_complete(tile_sbrow, tile_nsb);
-                                if !decode_done {
-                                    std::thread::yield_now();
-                                    continue;
-                                }
-                                if worker_id != 0 {
-                                    return;
-                                }
-
-                                // (2) Filter pipeline
-                                let mut did_work = false;
-                                macro_rules! run_stage {
-                                    ($k:expr, $stages:expr) => {{
-                                        let by64 = $k as i32;
-                                        let cur_segmap = unsafe { cseg_dm.whole() };
-                                        let dst_y = unsafe { dst_y_dm.whole() };
-                                        let dst_u = unsafe { dst_u_dm.whole() };
-                                        let dst_v = unsafe { dst_v_dm.whole() };
-                                        let sh = FilterShared {
-                                            mask: unsafe { &*mask_dm.whole() },
-                                            lr_mask: unsafe { &*lrmask_dm.whole() },
-                                            segmap_uv: unsafe { &*seguv_dm.whole() },
-                                            start_of_tile_row: lf_start_of_tile_row,
-                                            seams: crate::lf_mask::TileSeams {
-                                                right: unsafe { &*seam_r_dm.whole() },
-                                                bottom: unsafe { &*seam_b_dm.whole() },
-                                                h4: seam_h4,
-                                                w4: seam_w4,
-                                            },
-                                            uv_segmap_stride,
-                                            base_q,
-                                            gdf_ref_dst_idx,
-                                            wiener_idx,
-                                            ns_subclass_class_idx,
-                                            restore_planes,
-                                        };
-                                        // SAFETY: SAVE/deblock (writers) and FILTER/LR
-                                        // (readers) of the seam buffers are separated in
-                                        // time by the stage cursors, so the DisjointMut
-                                        // accesses never overlap a write with a read.
-                                        filter_sb64(
-                                            bd_local,
-                                            crate::decode::loopfilter::FilterSb64Ctx {
-                                                exec,
-                                                seq_hdr,
-                                                frame_hdr,
-                                                sh: &sh,
-                                                fp: filter_params,
-                                                cur_segmap,
-                                                b4_stride: b4_stride_v,
-                                                hbd: hbd_v,
-                                                inloop: fc_inloop_filters,
-                                                sbh: fc_sbh,
-                                                sb_step,
-                                                sb256w,
-                                                sb128,
-                                                bw,
-                                                bh,
-                                            },
-                                            crate::decode::loopfilter::FilterSb64Scratch {
-                                                cdef_line: unsafe { cdef_line_dm.whole() },
-                                                cdef_top: unsafe { cdef_top_dm.whole() },
-                                                lr_db_line: unsafe { lr_db_dm.whole() },
-                                                lr_cdef_line: unsafe { &mut lr_cdef_dm.whole()[0] },
-                                                ccso_tmp_buf: &mut *ccso_tmp_buf,
-                                                cdef_line_hbd: unsafe { cdef_line_hbd_dm.whole() },
-                                                cdef_top_hbd: unsafe { cdef_top_hbd_dm.whole() },
-                                                lr_db_line_hbd: unsafe { lr_db_hbd_dm.whole() },
-                                                lr_cdef_line_hbd: unsafe {
-                                                    &mut lr_cdef_hbd_dm.whole()[0]
-                                                },
-                                                ccso_tmp_buf_hbd: &mut *ccso_tmp_buf_hbd,
-                                            },
-                                            crate::decode::loopfilter::FilterSb64Dst {
-                                                y: &mut *dst_y,
-                                                u: &mut *dst_u,
-                                                v: &mut *dst_v,
-                                            },
-                                            crate::decode::loopfilter::FilterSb64Band {
-                                                by64,
-                                                stages: $stages,
-                                            },
-                                        );
-                                    }};
-                                }
-
-                                // Stage A0: deblock COLS (data-parallel). Vertical edges are
-                                // within-band and independent, so any worker filters any
-                                // decode-ready band's columns. CAS-claim ready bands.
-                                loop {
-                                    let k = deblock_cols_claim.load(Acquire);
-                                    // The horizontal pass for band k-1 reaches into
-                                    // the first rows of band k. Do not start k's
-                                    // vertical pass until that predecessor has
-                                    // completed, otherwise both workers write the
-                                    // same boundary pixels concurrently.
-                                    if k >= n_filter_bands
-                                        || deblock_progress.load(Acquire) < k
-                                        || !filter_ready(k)
-                                    {
-                                        break;
-                                    }
-                                    if deblock_cols_claim
-                                        .compare_exchange_weak(k, k + 1, AcqRel, Relaxed)
-                                        .is_err()
-                                    {
-                                        continue;
-                                    }
-                                    run_stage!(k, crate::decode::STAGE_DEBLOCK_COLS);
-                                    cols_done[k].store(true, Release);
-                                    did_work = true;
-                                    wake_one();
-                                }
-
-                                // Stage A1: deblock ROWS
-                                if deblock_rows_busy
-                                    .compare_exchange(false, true, AcqRel, Relaxed)
-                                    .is_ok()
-                                {
-                                    let mut adv = false;
-                                    loop {
-                                        let k = deblock_progress.load(Relaxed);
-                                        if k >= n_filter_bands || !cols_done[k].load(Acquire) {
-                                            break;
-                                        }
-                                        run_stage!(k, crate::decode::STAGE_DEBLOCK_ROWS);
-                                        deblock_progress.store(k + 1, Release);
-                                        did_work = true;
-                                        adv = true;
-                                    }
-                                    deblock_rows_busy.store(false, Release);
-                                    if adv {
-                                        wake_one();
-                                    }
-                                }
-
-                                // Stage B: CDEF SAVE
-                                loop {
-                                    let k = cdef_save_claim.load(Acquire);
-                                    if k >= n_filter_bands {
-                                        break;
-                                    }
-                                    let dp = deblock_progress.load(Acquire);
-                                    if k + 1 >= dp && dp < n_filter_bands {
-                                        break;
-                                    }
-                                    if cdef_save_claim
-                                        .compare_exchange_weak(k, k + 1, AcqRel, Relaxed)
-                                        .is_err()
-                                    {
-                                        continue;
-                                    }
-                                    run_stage!(k, crate::decode::STAGE_CDEF_SAVE);
-                                    cdef_save_done[k].store(true, Release);
-                                    cdef_save_progress.fetch_add(1, AcqRel);
-                                    did_work = true;
-                                    wake_one();
-                                }
-
-                                // Stage C: CDEF FILTER
-                                loop {
-                                    let k = cdef_filter_claim.load(Acquire);
-                                    if k >= n_filter_bands {
-                                        break;
-                                    }
-                                    // The next root's LR backup (`copy_db`, taken
-                                    // once its last band is deblocked) includes the
-                                    // two rows above its first stripe, which lie in
-                                    // band `k`: filtering them first would back up
-                                    // CDEF output (sb128/sb256 roots span bands).
-                                    let next_root_end = (((k + 1) >> sb128) + 1) << sb128;
-                                    let ready = cdef_save_done[k].load(Acquire)
-                                        && (k == 0 || cdef_save_done[k - 1].load(Acquire))
-                                        && deblock_progress.load(Acquire)
-                                            >= next_root_end.min(n_filter_bands);
-                                    if !ready {
-                                        break;
-                                    }
-                                    if cdef_filter_claim
-                                        .compare_exchange_weak(k, k + 1, AcqRel, Relaxed)
-                                        .is_err()
-                                    {
-                                        continue;
-                                    }
-                                    run_stage!(k, crate::decode::STAGE_CDEF_FILTER);
-                                    cdef_band_done[k].store(true, Release);
-                                    let d = cdef_filter_done.fetch_add(1, AcqRel) + 1;
-                                    did_work = true;
-                                    if d >= n_filter_bands {
-                                        wake_all();
-                                    }
-                                }
-
-                                // Stage D: LR
-                                loop {
-                                    let k = lr_claim.load(Acquire);
-                                    if k >= n_filter_bands {
-                                        break;
-                                    }
-                                    let root_first = (k >> sb128) << sb128;
-                                    let ready =
-                                        (root_first..=k).all(|j| cdef_band_done[j].load(Acquire));
-                                    // Cross-tile-row CDEF line (findings issue #2): the
-                                    // previous tile row's bottom CDEF rows are saved
-                                    // during CDEF-FILTER of THIS tile row's first band
-                                    // (= `root_first` for the first root of a tile row),
-                                    // which the base readiness above already waits for
-                                    // (`cdef_band_done[root_first]`). So no extra gate is
-                                    // needed and the MT scheduler is unchanged.
-                                    if !ready {
-                                        break;
-                                    }
-                                    if lr_claim
-                                        .compare_exchange_weak(k, k + 1, AcqRel, Relaxed)
-                                        .is_err()
-                                    {
-                                        continue;
-                                    }
-                                    run_stage!(k, crate::decode::STAGE_LR);
-                                    filter_progress.fetch_add(1, AcqRel);
-                                    let done_now = flt_done.fetch_add(1, AcqRel) + 1;
-                                    did_work = true;
-                                    if done_now >= n_filter_bands {
-                                        wake_all();
-                                    }
-                                }
-
-                                if did_work {
-                                    continue;
-                                }
-
-                                // (3) Nothing claimable now.
-                                if flt_done.load(Relaxed) >= n_filter_bands {
-                                    return;
-                                }
-
-                                let mut should_park = true;
-                                for _ in 0..PARK_SPIN_ITERS {
-                                    if got_err.load(Relaxed)
-                                        || flt_done.load(Relaxed) >= n_filter_bands
-                                    {
-                                        return;
-                                    }
-                                    if progress_epoch.load(Acquire) != seen_epoch {
-                                        should_park = false;
-                                        break;
-                                    }
-                                    std::hint::spin_loop();
-                                }
-                                if should_park {
-                                    for _ in 0..2 {
-                                        std::thread::yield_now();
-                                        if got_err.load(Relaxed)
-                                            || flt_done.load(Relaxed) >= n_filter_bands
-                                        {
-                                            return;
-                                        }
-                                        if progress_epoch.load(Acquire) != seen_epoch {
-                                            should_park = false;
                                             break;
                                         }
                                     }
-                                }
-                                if !should_park {
                                     continue;
                                 }
 
-                                let guard = park_mx.lock().unwrap_or_else(|e| e.into_inner());
-                                park_waiters.fetch_add(1, Relaxed);
-                                if got_err.load(Relaxed) || flt_done.load(Relaxed) >= n_filter_bands
-                                {
-                                    park_waiters.fetch_sub(1, Relaxed);
-                                    return;
-                                }
-                                let more_decode = (0..n_tiles).any(|t| {
-                                    tile_sbrow[t].load(Relaxed) < tile_nsb[t]
-                                        && !tile_busy[t].load(Relaxed)
-                                });
-                                let dp = deblock_progress.load(Acquire);
-                                let deblock_cols_av = {
-                                    let c = deblock_cols_claim.load(Acquire);
-                                    c < n_filter_bands && filter_ready(c)
-                                };
-                                let deblock_rows_av = !deblock_rows_busy.load(Relaxed)
-                                    && dp < n_filter_bands
-                                    && cols_done.get(dp).map_or(false, |b| b.load(Acquire));
-                                let cdef_save_av = {
-                                    let c = cdef_save_claim.load(Acquire);
-                                    c < n_filter_bands && (c + 1 < dp || dp >= n_filter_bands)
-                                };
-                                let cdef_filter_av = {
-                                    let c = cdef_filter_claim.load(Acquire);
-                                    c < n_filter_bands
-                                        && cdef_save_done[c].load(Acquire)
-                                        && (c == 0 || cdef_save_done[c - 1].load(Acquire))
-                                };
-                                let lr_av = {
-                                    let k = lr_claim.load(Acquire);
-                                    k < n_filter_bands && {
-                                        let rf = (k >> sb128) << sb128;
-                                        (rf..=k).all(|j| cdef_band_done[j].load(Acquire))
-                                    }
-                                };
-                                let ready_filter = deblock_cols_av
-                                    || deblock_rows_av
-                                    || cdef_save_av
-                                    || cdef_filter_av
-                                    || lr_av;
-                                if more_decode || ready_filter {
-                                    park_waiters.fetch_sub(1, Relaxed);
-                                    drop(guard);
-                                    continue;
-                                }
-                                let guard = park_cv.wait(guard).unwrap_or_else(|e| e.into_inner());
-                                park_waiters.fetch_sub(1, Relaxed);
-                                drop(guard);
+                                // No tile left to claim: every unfinished tile has an owner
+                                // that will finish it or report an error.
+                                break;
                             }
                         });
                     });
+                    if overlap_filters || split_jobs {
+                        filter_loop();
+                    }
                 };
-                crate::mtpool::dispatch(active_pool, n_workers, &worker);
+                if n_workers == 1 {
+                    worker();
+                } else {
+                    crate::mtpool::dispatch(active_pool, n_workers, &worker);
+                }
                 if got_err.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err(());
+                }
+
+                debug_assert!(parallel_tiles_complete(tile_sbrow, tile_nsb));
+                debug_assert!(!overlap_filters || sched.finished());
+                // Without the overlap, the in-loop filters run one stage at a
+                // time over the finished reconstruction. Each parallel stage is one dispatch, which
+                // returns only after every thread has finished, so a later
+                // stage never overlaps an earlier one.
+                //
+                // Deblocking stays in band order on one thread: its
+                // horizontal-edge pass rewrites the last rows of the band
+                // above. Bands of the CDEF/CCSO filter, and superblock rows
+                // of loop restoration, each read and write only their own
+                // picture rows; everything they need from neighbors comes
+                // from seam buffers filled by an earlier stage.
+                if !overlap_filters {
+                    let filter_threads = pool_threads;
+
+                    // Stage 1: deblock (and the loop-restoration line backup that
+                    // rides with it), then every CDEF seam save. Both must see
+                    // the whole frame deblocked and not yet CDEF-filtered.
+                    FILTER_CCSO_TMP.with(|tmp| {
+                        let mut guard = tmp.borrow_mut();
+                        let tmp = &mut *guard;
+                        for k in 0..n_filter_bands {
+                            run_stage!(k, crate::decode::STAGE_DEBLOCK, tmp);
+                        }
+                        if cdef_on {
+                            for k in 0..n_filter_bands {
+                                run_stage!(k, crate::decode::STAGE_CDEF_SAVE, tmp);
+                            }
+                        }
+                    });
+
+                    // Stage 2: CDEF and CCSO. Band k filters rows
+                    // [64k - 8, 64k + 56), disjoint from every other band.
+                    if cdef_on {
+                        let next_band = std::sync::atomic::AtomicUsize::new(0);
+                        let job = || {
+                            FILTER_CCSO_TMP.with(|tmp| {
+                                let mut guard = tmp.borrow_mut();
+                        let tmp = &mut *guard;
+                                loop {
+                                    let k = next_band
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    if k >= n_filter_bands {
+                                        break;
+                                    }
+                                    run_stage!(k, crate::decode::STAGE_CDEF_FILTER, tmp);
+                                }
+                            });
+                        };
+                        let n = filter_threads.min(n_filter_bands);
+                        if n <= 1 {
+                            job();
+                        } else {
+                            crate::mtpool::dispatch(active_pool, n, &job);
+                        }
+                    }
+
+                    if lr_on {
+                        // Stage 3: save the CDEF output above each tile row,
+                        // which loop restoration reads across the tile seam.
+                        FILTER_CCSO_TMP.with(|tmp| {
+                            let mut guard = tmp.borrow_mut();
+                        let tmp = &mut *guard;
+                            for k in 0..n_filter_bands {
+                                run_stage!(k, crate::decode::STAGE_TILE_LINE_SAVE, tmp);
+                            }
+                        });
+
+                        // Stage 4: loop restoration and GDF, one superblock row
+                        // per task. Row r covers picture rows
+                        // [r * size - 8, (r + 1) * size - 8).
+                        let n_roots = (n_filter_bands + (1usize << sb128) - 1) >> sb128;
+                        let next_root = std::sync::atomic::AtomicUsize::new(0);
+                        let job = || {
+                            FILTER_CCSO_TMP.with(|tmp| {
+                                let mut guard = tmp.borrow_mut();
+                        let tmp = &mut *guard;
+                                loop {
+                                    let r = next_root
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    if r >= n_roots {
+                                        break;
+                                    }
+                                    // Restoration runs from the root's last band.
+                                    let k = (((r + 1) << sb128) - 1).min(n_filter_bands - 1);
+                                    run_stage!(k, crate::decode::STAGE_LR, tmp);
+                                }
+                            });
+                        };
+                        let n = filter_threads.min(n_roots);
+                        if n <= 1 {
+                            job();
+                        } else {
+                            crate::mtpool::dispatch(active_pool, n, &job);
+                        }
+                    }
                 }
             } else {
                 <$Coef as DecodeCoeff>::with_cf_scratch(|cf| {
@@ -3462,6 +3961,7 @@ fn decode_frame_main_inner<const UPDATE_CDF: bool, B: MsacBackend<UPDATE_CDF>>(
                                                 seq_hdr,
                                                 frm_hdr: frame_hdr,
                                                 masks,
+                                                replay_out: None,
                                             },
                                         );
                                         let saved_msac_state = msac.save();
@@ -3919,7 +4419,7 @@ fn submit_frame_inner(
             // refdir[TIP_FRAME] is a fixed sentinel: TIP references are always
             // treated as a future-direction ref for context derivation
             // ref-context (get_comp_ctx / single-ref) reads refdir[ref] for a
-            // TIP neighbour (ref == TIP_FRAME), so this slot must be 1.
+            // TIP neighbor (ref == TIP_FRAME), so this slot must be 1.
             fc.refdir[TIP_FRAME as usize] = 1;
         } else {
             fc.refpoc = [0; 7];
@@ -4004,7 +4504,7 @@ fn submit_frame_inner(
     decode_frame(
         &mut *fc,
         n_tc,
-        1,
+        split_passes(),
         in_cdf_ref.as_ref(),
         qcat,
         c.pool.as_ref(),

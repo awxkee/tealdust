@@ -1214,10 +1214,62 @@ mod simd_matches_scalar_tests {
         }
     }
 
+    /// The AVX2 and NEON shape kernels take the direction taps as (row, column) steps
+    /// for whatever stride the buffer has, so the same bordered block gives
+    /// the same result at stride 12 and inside a wider buffer.
+    #[cfg(any(target_arch = "aarch64", all(target_arch = "x86_64", feature = "avx")))]
+    #[test]
+    fn simd_shapes_are_stride_invariant() {
+        #[cfg(target_arch = "x86_64")]
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let mut rng = Rng(0x0bad_cafe_4242);
+        for iter in 0..2000 {
+            let si = rng.r(4) as usize;
+            let (w, h) = SHAPES[si];
+            let wide = 12 + 1 + rng.r(40) as usize;
+            let (o12, ow) = (2 * 12 + 2, 2 * wide + 2 + 5);
+            let hbd = iter % 2 == 1;
+            let bdm8 = if hbd { [2, 4][rng.r(2) as usize] } else { 0 };
+            let tmp12 = tmp_block(&mut rng, 12, w, h, 1 << (8 + bdm8));
+            let mut tmpw = vec![i16::MAX; wide * 12 + 16];
+            for r in 0..12 {
+                tmpw[r * wide + 5..][..12].copy_from_slice(&tmp12[r * 12..][..12]);
+            }
+            let (pri, sec, ps, ss, pt, dir) = strengths(&mut rng, bdm8);
+            if hbd {
+                let (mut d0, mut d1) = (vec![7u16; 16 * 8], vec![7u16; 16 * 8]);
+                unsafe {
+                    let f = resolve_cdef_filter_hbd_shapes()[si];
+                    f(&mut d0, 16, 0, &tmp12, 12, o12, pri, sec, ps, ss, pt, dir);
+                    f(&mut d1, 16, 0, &tmpw, wide, ow, pri, sec, ps, ss, pt, dir);
+                }
+                assert_eq!(
+                    d0, d1,
+                    "hbd {w}x{h} stride {wide} pri={pri} sec={sec} dir={dir}"
+                );
+            } else {
+                let (mut d0, mut d1) = (vec![7u8; 16 * 8], vec![7u8; 16 * 8]);
+                unsafe {
+                    let f = resolve_cdef_filter_shapes()[si];
+                    f(&mut d0, 16, 0, &tmp12, 12, o12, pri, sec, ps, ss, pt, dir);
+                    f(&mut d1, 16, 0, &tmpw, wide, ow, pri, sec, ps, ss, pt, dir);
+                }
+                assert_eq!(
+                    d0, d1,
+                    "{w}x{h} stride {wide} pri={pri} sec={sec} dir={dir}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn filter_8bpc_matches_scalar() {
         let mut rng = Rng(0xdead_beef_1234);
-        let ts = 16;
+        // The stride `CDEF_DIRECTIONS` is written for; the portable kernels
+        // apply its offsets as they are.
+        let ts = 12;
         let o = 2 * ts + 2;
         for _ in 0..2000 {
             let si = rng.r(4) as usize;
@@ -1244,7 +1296,9 @@ mod simd_matches_scalar_tests {
     #[test]
     fn filter_hbd_matches_scalar() {
         let mut rng = Rng(0x00fe_edf0_0d77);
-        let ts = 16;
+        // The stride `CDEF_DIRECTIONS` is written for; the portable kernels
+        // apply its offsets as they are.
+        let ts = 12;
         let o = 2 * ts + 2;
         for _ in 0..2000 {
             let bdm8 = [2, 4][rng.r(2) as usize];

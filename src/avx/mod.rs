@@ -37,6 +37,7 @@ mod deblocking;
 mod filmgrain;
 mod filter;
 mod filter_hd;
+mod gdf;
 mod ipred;
 mod ipred_hd;
 mod itx;
@@ -50,6 +51,7 @@ mod refmvs;
 mod stx;
 mod stx512;
 
+pub(crate) use gdf::gdf_prep_unit_avx2;
 pub(crate) use itx::*;
 pub(crate) use itx512::*;
 

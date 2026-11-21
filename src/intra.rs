@@ -171,6 +171,8 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
     mvy: i32,
     right: i32,
     bottom: i32,
+    tile_left: i32,
+    tile_top: i32,
 ) {
     if bw4 <= 0 || bh4 <= 0 || stride == 0 {
         return;
@@ -201,14 +203,13 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
         return;
     }
 
-    // IntraBC's predictor source uses the same integer component as
-    // `intrabc_pred`; the fractional part affects the block copy/filter, but
-    // AVM's morph/BAWP template fit samples the integer-position reference
-    // template.
-    let Some(sx) = dpx.checked_add(mvx >> 3) else {
+    // AVM's morph/BAWP template fit samples the reference template at the
+    // block vector rounded to full-pel (`get_fullmv_from_mv` / GET_MV_RAWPEL),
+    // not floored: a half-pel vector rounds away from the `>> 3` position.
+    let Some(sx) = dpx.checked_add((mvx + 3 + (mvx >= 0) as i32) >> 3) else {
         return;
     };
-    let Some(sy) = dpy.checked_add(mvy >> 3) else {
+    let Some(sy) = dpy.checked_add((mvy + 3 + (mvy >= 0) as i32) >> 3) else {
         return;
     };
 
@@ -240,10 +241,18 @@ pub(crate) fn intrabc_morph_pred_luma<BD: BitDepth>(
 
     let src_right = sx.checked_add(bw as i32);
     let src_bottom = sy.checked_add(bh as i32);
-    let above_valid =
-        dpy > 0 && sy > 0 && sy <= bottom && sx >= 0 && matches!(src_right, Some(v) if v <= right);
-    let left_valid =
-        dpx > 0 && sx > 0 && sx <= right && sy >= 0 && matches!(src_bottom, Some(v) if v <= bottom);
+    // AVM `xd->up_available` / `xd->left_available`: the neighbour must be
+    // inside the current tile, not just inside the picture.
+    let above_valid = dpy > tile_top.max(0)
+        && sy > 0
+        && sy <= bottom
+        && sx >= 0
+        && matches!(src_right, Some(v) if v <= right);
+    let left_valid = dpx > tile_left.max(0)
+        && sx > 0
+        && sx <= right
+        && sy >= 0
+        && matches!(src_bottom, Some(v) if v <= bottom);
     let (numb_up, numb_left) =
         derive_number_ref_samples_bawp(above_valid, left_valid, width, height);
 

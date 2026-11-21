@@ -285,20 +285,25 @@ fn load_i16x16_2rows(tmp: &[i16], p0: isize, p1: isize, off: isize) -> __m256i {
     }
 }
 
+/// The rows of one filter iteration at `p0 + off`: two 8-pixel rows, or four
+/// 4-pixel rows so that narrow blocks also fill the vector.
 #[inline]
 #[target_feature(enable = "avx2")]
-fn load_i16xw_2rows<const W: usize>(tmp: &[i16], p0: isize, p1: isize, off: isize) -> __m256i {
+fn load_i16xw_rows<const W: usize>(tmp: &[i16], p0: isize, stride: isize, off: isize) -> __m256i {
     debug_assert!(W == 4 || W == 8);
     unsafe {
-        let lo = if W == 8 {
-            _mm_loadu_si128(tmp.as_ptr().offset(p0 + off).cast())
+        let p = tmp.as_ptr().offset(p0 + off);
+        let (lo, hi) = if W == 8 {
+            (
+                _mm_loadu_si128(p.cast()),
+                _mm_loadu_si128(p.offset(stride).cast()),
+            )
         } else {
-            _mm_loadl_epi64(tmp.as_ptr().offset(p0 + off).cast())
-        };
-        let hi = if W == 8 {
-            _mm_loadu_si128(tmp.as_ptr().offset(p1 + off).cast())
-        } else {
-            _mm_loadl_epi64(tmp.as_ptr().offset(p1 + off).cast())
+            let r = |i: isize| _mm_loadl_epi64(p.offset(i * stride).cast());
+            (
+                _mm_unpacklo_epi64(r(0), r(1)),
+                _mm_unpacklo_epi64(r(2), r(3)),
+            )
         };
         _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi)
     }
@@ -320,7 +325,7 @@ fn constrain_i16(diff: __m256i, threshold: __m256i, shc: __m128i) -> __m256i {
         _mm256_sub_epi16(threshold, _mm256_srl_epi16(adiff, shc)),
     );
     let m = _mm256_min_epu16(adiff, t);
-    _mm256_blendv_epi8(m, _mm256_sub_epi16(zero, m), _mm256_cmpgt_epi16(zero, diff))
+    _mm256_sign_epi16(m, diff)
 }
 
 #[inline]
@@ -353,23 +358,23 @@ fn store_u16x8_2rows(dst: &mut [u16], p0: usize, p1: usize, v: __m256i) {
     }
 }
 
+/// Stores what `load_i16xw_rows` covers: two rows of 8 or four rows of 4.
 #[inline]
 #[target_feature(enable = "avx2")]
-fn store_u16xw_2rows<const W: usize>(dst: &mut [u16], p0: usize, p1: usize, v: __m256i) {
+fn store_u16xw_rows<const W: usize>(dst: &mut [u16], p0: usize, stride: usize, v: __m256i) {
     debug_assert!(W == 4 || W == 8);
+    let lo = _mm256_castsi256_si128(v);
+    let hi = _mm256_extracti128_si256::<1>(v);
     unsafe {
+        let d = dst.as_mut_ptr().add(p0);
         if W == 8 {
-            _mm_storeu_si128(dst.as_mut_ptr().add(p0).cast(), _mm256_castsi256_si128(v));
-            _mm_storeu_si128(
-                dst.as_mut_ptr().add(p1).cast(),
-                _mm256_extracti128_si256::<1>(v),
-            );
+            _mm_storeu_si128(d.cast(), lo);
+            _mm_storeu_si128(d.add(stride).cast(), hi);
         } else {
-            _mm_storel_epi64(dst.as_mut_ptr().add(p0).cast(), _mm256_castsi256_si128(v));
-            _mm_storel_epi64(
-                dst.as_mut_ptr().add(p1).cast(),
-                _mm256_extracti128_si256::<1>(v),
-            );
+            _mm_storel_epi64(d.cast(), lo);
+            _mm_storel_epi64(d.add(stride).cast(), _mm_srli_si128::<8>(lo));
+            _mm_storel_epi64(d.add(2 * stride).cast(), hi);
+            _mm_storel_epi64(d.add(3 * stride).cast(), _mm_srli_si128::<8>(hi));
         }
     }
 }
@@ -405,66 +410,61 @@ fn cdef_filter_block_hbd_avx2_shape<
     let zero = _mm256_setzero_si256();
     let eight = _mm256_set1_epi16(8);
     let dirs = &crate::tables::CDEF_DIRECTIONS;
+    let pri_taps = [
+        _mm256_set1_epi16(pri_tap as i16),
+        _mm256_set1_epi16(((pri_tap & 3) | 2) as i16),
+    ];
     let mut y = 0usize;
 
     while y < H {
         let t0 = (o + y * tmp_stride) as isize;
-        let t1 = t0 + tmp_stride as isize;
-        let load = |off: isize| load_i16xw_2rows::<W>(tmp, t0, t1, off);
+        let load = |off: isize| load_i16xw_rows::<W>(tmp, t0, tmp_stride as isize, off);
         let px = load(0);
         let mut sum = zero;
         let mut min_v = px;
         let mut max_v = px;
 
-        if HAS_PRI {
-            let mut ptap = pri_tap;
-            for k in 0..2 {
-                let off = dirs[dir + 2][k] as isize;
+        let constrained = |neighbor, strength, shift| {
+            constrain_i16(_mm256_sub_epi16(neighbor, px), strength, shift)
+        };
+        for k in 0..2 {
+            if HAS_PRI {
+                let off = crate::cdef::cdef_dir_offset(dirs[dir + 2][k], tmp_stride);
                 let p0 = load(off);
                 let p1 = load(-off);
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(p0, px), pri_s, pri_shc),
-                    ptap,
+                let pri = _mm256_add_epi16(
+                    constrained(p0, pri_s, pri_shc),
+                    constrained(p1, pri_s, pri_shc),
                 );
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(p1, px), pri_s, pri_shc),
-                    ptap,
-                );
-                ptap = (ptap & 3) | 2;
+                sum = _mm256_add_epi16(sum, _mm256_mullo_epi16(pri, pri_taps[k]));
                 if clip {
                     min_v = cdef_min_i16(min_v, cdef_min_i16(p0, p1));
                     max_v = _mm256_max_epi16(max_v, _mm256_max_epi16(p0, p1));
                 }
-                if HAS_SEC {
-                    let off2 = dirs[dir + 4][k] as isize;
-                    let off3 = dirs[dir][k] as isize;
-                    let s0 = load(off2);
-                    let s1 = load(-off2);
-                    let s2 = load(off3);
-                    let s3 = load(-off3);
-                    let st = 2 - k as i32;
-                    sum = madd_i16(
-                        sum,
-                        constrain_i16(_mm256_sub_epi16(s0, px), sec_s, sec_shc),
-                        st,
-                    );
-                    sum = madd_i16(
-                        sum,
-                        constrain_i16(_mm256_sub_epi16(s1, px), sec_s, sec_shc),
-                        st,
-                    );
-                    sum = madd_i16(
-                        sum,
-                        constrain_i16(_mm256_sub_epi16(s2, px), sec_s, sec_shc),
-                        st,
-                    );
-                    sum = madd_i16(
-                        sum,
-                        constrain_i16(_mm256_sub_epi16(s3, px), sec_s, sec_shc),
-                        st,
-                    );
+            }
+            if HAS_SEC {
+                let off1 = crate::cdef::cdef_dir_offset(dirs[dir + 4][k], tmp_stride);
+                let off2 = crate::cdef::cdef_dir_offset(dirs[dir][k], tmp_stride);
+                let s0 = load(off1);
+                let s1 = load(-off1);
+                let s2 = load(off2);
+                let s3 = load(-off2);
+                let a = _mm256_add_epi16(
+                    constrained(s0, sec_s, sec_shc),
+                    constrained(s1, sec_s, sec_shc),
+                );
+                let b = _mm256_add_epi16(
+                    constrained(s2, sec_s, sec_shc),
+                    constrained(s3, sec_s, sec_shc),
+                );
+                let sec = _mm256_add_epi16(a, b);
+                let sec = if k == 0 {
+                    _mm256_add_epi16(sec, sec)
+                } else {
+                    sec
+                };
+                sum = _mm256_add_epi16(sum, sec);
+                if clip {
                     min_v = cdef_min_i16(
                         min_v,
                         cdef_min_i16(cdef_min_i16(s0, s1), cdef_min_i16(s2, s3)),
@@ -475,36 +475,6 @@ fn cdef_filter_block_hbd_avx2_shape<
                     );
                 }
             }
-        } else if HAS_SEC {
-            for k in 0..2 {
-                let off1 = dirs[dir + 4][k] as isize;
-                let off2 = dirs[dir][k] as isize;
-                let s0 = load(off1);
-                let s1 = load(-off1);
-                let s2 = load(off2);
-                let s3 = load(-off2);
-                let st = 2 - k as i32;
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(s0, px), sec_s, sec_shc),
-                    st,
-                );
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(s1, px), sec_s, sec_shc),
-                    st,
-                );
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(s2, px), sec_s, sec_shc),
-                    st,
-                );
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(s3, px), sec_s, sec_shc),
-                    st,
-                );
-            }
         }
 
         let mask = _mm256_cmpgt_epi16(zero, sum);
@@ -514,9 +484,8 @@ fn cdef_filter_block_hbd_avx2_shape<
             res = _mm256_min_epi16(_mm256_max_epi16(res, min_v), max_v);
         }
         let d0 = dst_off + y * dst_stride;
-        let d1 = d0 + dst_stride;
-        store_u16xw_2rows::<W>(dst, d0, d1, res);
-        y += 2;
+        store_u16xw_rows::<W>(dst, d0, dst_stride, res);
+        y += if W == 4 { 4 } else { 2 };
     }
 }
 

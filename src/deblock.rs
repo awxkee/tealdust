@@ -1500,7 +1500,7 @@ fn near_frame_end(pos4: i32, end4: i32, chroma: bool) -> bool {
 }
 
 /// Lowers each edge in `m` (one bitmask per filter-length level, bit `i` =
-/// position `i`) to at most `nb[i]`, the TX category on the neighbouring
+/// position `i`) to at most `nb[i]`, the TX category on the neighboring
 /// tile's side of a tile seam.
 fn clamp_seam_levels(m: &mut [u16], nb: &[u8]) {
     for (i, &cap) in nb.iter().enumerate() {

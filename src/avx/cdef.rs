@@ -27,7 +27,6 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-use crate::avx::{_mm_hsumv_epi32, _mm256_hsum_epi32};
 use crate::cdef::{CDEF_HAVE_BOTTOM, CDEF_HAVE_LEFT, CDEF_HAVE_RIGHT, CDEF_HAVE_TOP};
 use std::arch::x86_64::*;
 
@@ -276,46 +275,58 @@ pub(crate) fn cdef_padding_8bpc_avx2(
     }
 }
 
+/// `lo[n]^2 + mirror[n]^2` for the eight words, as dwords in order.
 #[inline]
 #[target_feature(enable = "avx2")]
-fn square_weighted_sym15_avx2(p: &[i32; 15]) -> u32 {
-    let a = _mm256_setr_epi32(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
-    let b = _mm256_setr_epi32(p[14], p[13], p[12], p[11], p[10], p[9], p[8], 0);
+fn square_pairs(lo: __m128i, mirror: __m128i) -> __m256i {
+    let v = _mm256_set_m128i(
+        _mm_unpackhi_epi16(lo, mirror),
+        _mm_unpacklo_epi16(lo, mirror),
+    );
+    _mm256_madd_epi16(v, v)
+}
+
+/// Weighted squares of a diagonal's 15 partial sums, to be summed: `lo` holds
+/// sums 0..=7 and `hi` sums 8..=14 (its last word is zero).
+#[inline]
+#[target_feature(enable = "avx2")]
+fn cost_diag_avx2(lo: __m128i, hi: __m128i) -> __m256i {
+    // [p14, p13, .., p8, 0] pairs sum n with sum 14 - n.
+    let mirror = _mm_srli_si128::<2>(reverse_i16x8(hi));
     let w = _mm256_setr_epi32(840, 420, 280, 210, 168, 140, 120, 105);
-    let sq = _mm256_add_epi32(_mm256_mullo_epi32(a, a), _mm256_mullo_epi32(b, b));
-    _mm256_hsum_epi32(_mm256_mullo_epi32(sq, w)) as u32
+    _mm256_mullo_epi32(square_pairs(lo, mirror), w)
 }
 
+/// Weighted squares of an alternate direction's 11 partial sums, to be
+/// summed: `lo` holds sums 0..=7 and `hi` sums 8..=10 (its other words are
+/// zero).
 #[inline]
 #[target_feature(enable = "avx2")]
-fn square_weighted_alt11_avx2(p: &[i32; 11]) -> u32 {
-    let a = _mm256_setr_epi32(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
-    let b = _mm256_setr_epi32(p[10], p[9], p[8], 0, 0, 0, 0, 0);
+fn cost_alt_avx2(lo: __m128i, hi: __m128i) -> __m256i {
+    // [p10, p9, p8, 0, ..] pairs sum m with sum 10 - m.
+    let mirror = reverse_i16x4_low(_mm_slli_si128::<2>(hi));
     let w = _mm256_setr_epi32(420, 210, 140, 105, 105, 105, 105, 105);
-    let sq = _mm256_add_epi32(_mm256_mullo_epi32(a, a), _mm256_mullo_epi32(b, b));
-    _mm256_hsum_epi32(_mm256_mullo_epi32(sq, w)) as u32
+    _mm256_mullo_epi32(square_pairs(lo, mirror), w)
+}
+
+/// 105 times the squares of up to 16 words, to be summed.
+#[inline]
+#[target_feature(enable = "avx2")]
+fn cost_hv_avx2(v: __m256i) -> __m256i {
+    _mm256_mullo_epi32(_mm256_madd_epi16(v, v), _mm256_set1_epi32(105))
+}
+
+/// The lane totals of four vectors of dwords, one per output dword.
+#[inline]
+#[target_feature(enable = "avx2")]
+fn sum4_avx2(v: [__m256i; 4]) -> __m128i {
+    let h = _mm256_hadd_epi32(_mm256_hadd_epi32(v[0], v[1]), _mm256_hadd_epi32(v[2], v[3]));
+    _mm_add_epi32(_mm256_castsi256_si128(h), _mm256_extracti128_si256::<1>(h))
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
-fn finish_cdef_dir_avx2(
-    partial_sum_hv: &[[i32; 8]; 2],
-    partial_sum_diag: &[[i32; 15]; 2],
-    partial_sum_alt: &[[i32; 11]; 4],
-    var: &mut u32,
-) -> i32 {
-    let hv0 = unsafe { _mm256_loadu_si256(partial_sum_hv[0].as_ptr().cast()) };
-    let hv1 = unsafe { _mm256_loadu_si256(partial_sum_hv[1].as_ptr().cast()) };
-    let mut cost = [0u32; 8];
-    cost[2] = _mm256_hsum_epi32(_mm256_mullo_epi32(hv0, hv0)) as u32 * 105;
-    cost[6] = _mm256_hsum_epi32(_mm256_mullo_epi32(hv1, hv1)) as u32 * 105;
-    cost[0] = square_weighted_sym15_avx2(&partial_sum_diag[0]);
-    cost[4] = square_weighted_sym15_avx2(&partial_sum_diag[1]);
-    cost[1] = square_weighted_alt11_avx2(&partial_sum_alt[0]);
-    cost[3] = square_weighted_alt11_avx2(&partial_sum_alt[1]);
-    cost[5] = square_weighted_alt11_avx2(&partial_sum_alt[2]);
-    cost[7] = square_weighted_alt11_avx2(&partial_sum_alt[3]);
-
+fn pick_cdef_dir(cost: &[u32; 8], var: &mut u32) -> i32 {
     let mut best_dir = 0i32;
     let mut best_cost = cost[0];
     for (n, &c) in cost.iter().enumerate().skip(1) {
@@ -327,12 +338,6 @@ fn finish_cdef_dir_avx2(
 
     *var = (best_cost - cost[(best_dir ^ 4) as usize]) >> 10;
     best_dir
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn hsum_i16x8(v: __m128i) -> i32 {
-    _mm_cvtsi128_si32(_mm_hsumv_epi32(_mm_madd_epi16(v, _mm_set1_epi16(1)))) as i32
 }
 
 #[inline]
@@ -349,141 +354,94 @@ fn reverse_i16x4_low(v: __m128i) -> __m128i {
     _mm_shuffle_epi8(v, shuf)
 }
 
-#[inline]
-#[target_feature(enable = "avx2")]
-fn pair_sum_i16x8(v: __m128i) -> __m128i {
-    _mm_hadd_epi16(v, _mm_setzero_si128())
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn shl_words_i16x8(v: __m128i, n: usize) -> __m128i {
-    match n {
-        0 => v,
-        1 => _mm_slli_si128::<2>(v),
-        2 => _mm_slli_si128::<4>(v),
-        3 => _mm_slli_si128::<6>(v),
-        4 => _mm_slli_si128::<8>(v),
-        5 => _mm_slli_si128::<10>(v),
-        6 => _mm_slli_si128::<12>(v),
-        7 => _mm_slli_si128::<14>(v),
-        _ => _mm_setzero_si128(),
-    }
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn overflow_words_i16x8(v: __m128i, n: usize) -> __m128i {
-    match n {
-        0 => _mm_setzero_si128(),
-        1 => _mm_srli_si128::<14>(v),
-        2 => _mm_srli_si128::<12>(v),
-        3 => _mm_srli_si128::<10>(v),
-        4 => _mm_srli_si128::<8>(v),
-        5 => _mm_srli_si128::<6>(v),
-        6 => _mm_srli_si128::<4>(v),
-        7 => _mm_srli_si128::<2>(v),
-        _ => v,
-    }
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn add_shifted_i16x8(lo: &mut __m128i, hi: &mut __m128i, v: __m128i, n: usize) {
-    *lo = _mm_add_epi16(*lo, shl_words_i16x8(v, n));
-    *hi = _mm_add_epi16(*hi, overflow_words_i16x8(v, n));
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn store_i32x4_prefix(dst: &mut [i32], v: __m128i, n: usize) {
-    match n {
-        0 => {}
-        1 => unsafe { _mm_store_ss(dst.as_mut_ptr().cast(), _mm_castsi128_ps(v)) },
-        2 => unsafe { _mm_storel_epi64(dst.as_mut_ptr().cast(), v) },
-        3 => {
-            unsafe { _mm_storel_epi64(dst.as_mut_ptr().cast(), v) };
-            dst[2] = _mm_extract_epi32::<2>(v);
-        }
-        _ => unsafe { _mm_storeu_si128(dst.as_mut_ptr().cast(), v) },
-    }
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn store_i16x8_to_i32(dst: &mut [i32], v: __m128i, n: usize) {
-    let lo = _mm_cvtepi16_epi32(v);
-    let hi = _mm_cvtepi16_epi32(_mm_srli_si128::<8>(v));
-    let lo_n = n.min(4);
-
-    store_i32x4_prefix(dst, lo, lo_n);
-    if n > 4 {
-        store_i32x4_prefix(&mut dst[4..], hi, n - 4);
+#[inline(always)]
+fn add_shifted_i16x8x2(lo: &mut __m256i, hi: &mut __m256i, v: __m256i, n: usize) {
+    unsafe {
+        let (l, h) = match n {
+            0 => (v, _mm256_setzero_si256()),
+            1 => (_mm256_slli_si256::<2>(v), _mm256_srli_si256::<14>(v)),
+            2 => (_mm256_slli_si256::<4>(v), _mm256_srli_si256::<12>(v)),
+            3 => (_mm256_slli_si256::<6>(v), _mm256_srli_si256::<10>(v)),
+            4 => (_mm256_slli_si256::<8>(v), _mm256_srli_si256::<8>(v)),
+            5 => (_mm256_slli_si256::<10>(v), _mm256_srli_si256::<6>(v)),
+            6 => (_mm256_slli_si256::<12>(v), _mm256_srli_si256::<4>(v)),
+            _ => (_mm256_slli_si256::<14>(v), _mm256_srli_si256::<2>(v)),
+        };
+        *lo = _mm256_add_epi16(*lo, l);
+        *hi = _mm256_add_epi16(*hi, h);
     }
 }
 
 #[inline]
 #[target_feature(enable = "avx2")]
 pub(super) fn cdef_find_dir_from_rows_avx2(rows: &[__m128i; 8], var: &mut u32) -> i32 {
-    let mut partial_sum_hv = [[0i32; 8]; 2];
-    let mut partial_sum_diag = [[0i32; 15]; 2];
-    let mut partial_sum_alt = [[0i32; 11]; 4];
-
-    let zero = _mm_setzero_si128();
-    let mut col_sum = zero;
-    let mut diag0_lo = zero;
-    let mut diag0_hi = zero;
-    let mut diag1_lo = zero;
-    let mut diag1_hi = zero;
-    let mut alt0_lo = zero;
-    let mut alt0_hi = zero;
-    let mut alt1_lo = zero;
-    let mut alt1_hi = zero;
-    let mut alt2_lo = zero;
-    let mut alt2_hi = zero;
-    let mut alt3_lo = zero;
-    let mut alt3_hi = zero;
+    let zero = _mm256_setzero_si256();
+    let ones = _mm256_set1_epi16(1);
+    // Low lane as is, high lane with its eight words reversed.
+    let fwd_rev = _mm256_setr_epi8(
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 14, 15, 12, 13, 10, 11, 8, 9, 6, 7,
+        4, 5, 2, 3, 0, 1,
+    );
+    let mut row_part = [zero; 4];
+    let mut col_sum = _mm_setzero_si128();
+    // Two directions per vector, one in each lane: both diagonals, the two
+    // alternates built from column pairs, and the two built from row pairs.
+    let (mut diag_lo, mut diag_hi) = (zero, zero);
+    let (mut alt01_lo, mut alt01_hi) = (zero, zero);
+    let (mut alt32_lo, mut alt32_hi) = (zero, zero);
 
     for y in 0..8usize {
         let row = rows[y];
-        let rev = reverse_i16x8(row);
-        let pair = pair_sum_i16x8(row);
-        let pair_rev = reverse_i16x4_low(pair);
-
-        partial_sum_hv[0][y] = hsum_i16x8(row);
         col_sum = _mm_add_epi16(col_sum, row);
 
-        add_shifted_i16x8(&mut diag0_lo, &mut diag0_hi, row, y);
-        add_shifted_i16x8(&mut diag1_lo, &mut diag1_hi, rev, y);
-        add_shifted_i16x8(&mut alt0_lo, &mut alt0_hi, pair, y);
-        add_shifted_i16x8(&mut alt1_lo, &mut alt1_hi, pair_rev, y);
-
-        let half_y = y >> 1;
-        add_shifted_i16x8(
-            &mut alt2_lo,
-            &mut alt2_hi,
-            row,
-            3usize.saturating_sub(half_y),
+        // [row | reversed row]; its adjacent-pair sums are [pairs | reversed pairs].
+        let both = _mm256_shuffle_epi8(_mm256_broadcastsi128_si256(row), fwd_rev);
+        add_shifted_i16x8x2(&mut diag_lo, &mut diag_hi, both, y);
+        add_shifted_i16x8x2(
+            &mut alt01_lo,
+            &mut alt01_hi,
+            _mm256_hadd_epi16(both, zero),
+            y,
         );
-        add_shifted_i16x8(&mut alt3_lo, &mut alt3_hi, row, half_y);
+        // Direction 7 shifts row y by y / 2; direction 5 shifts it by
+        // 3 - y / 2, which is row 7 - y shifted by y / 2.
+        let mirrored = _mm256_set_m128i(rows[7 - y], row);
+        add_shifted_i16x8x2(&mut alt32_lo, &mut alt32_hi, mirrored, y >> 1);
+        if y < 4 {
+            // Rows y and 7 - y, as four partial dwords each.
+            row_part[y] = _mm256_madd_epi16(mirrored, ones);
+        }
     }
 
-    store_i16x8_to_i32(&mut partial_sum_hv[1], col_sum, 8);
+    // The eight row sums as words (their order does not matter).
+    let row_sums = _mm256_hadd_epi32(
+        _mm256_hadd_epi32(row_part[0], row_part[1]),
+        _mm256_hadd_epi32(row_part[2], row_part[3]),
+    );
+    let row_sums = _mm256_packs_epi32(row_sums, zero);
 
-    store_i16x8_to_i32(&mut partial_sum_diag[0][..8], diag0_lo, 8);
-    store_i16x8_to_i32(&mut partial_sum_diag[0][8..], diag0_hi, 7);
-    store_i16x8_to_i32(&mut partial_sum_diag[1][..8], diag1_lo, 8);
-    store_i16x8_to_i32(&mut partial_sum_diag[1][8..], diag1_hi, 7);
-    store_i16x8_to_i32(&mut partial_sum_alt[0][..8], alt0_lo, 8);
-    store_i16x8_to_i32(&mut partial_sum_alt[0][8..], alt0_hi, 3);
-    store_i16x8_to_i32(&mut partial_sum_alt[1][..8], alt1_lo, 8);
-    store_i16x8_to_i32(&mut partial_sum_alt[1][8..], alt1_hi, 3);
-    store_i16x8_to_i32(&mut partial_sum_alt[2][..8], alt2_lo, 8);
-    store_i16x8_to_i32(&mut partial_sum_alt[2][8..], alt2_hi, 3);
-    store_i16x8_to_i32(&mut partial_sum_alt[3][..8], alt3_lo, 8);
-    store_i16x8_to_i32(&mut partial_sum_alt[3][8..], alt3_hi, 3);
-
-    finish_cdef_dir_avx2(&partial_sum_hv, &partial_sum_diag, &partial_sum_alt, var)
+    let lo = |v: __m256i| _mm256_castsi256_si128(v);
+    let hi = |v: __m256i| _mm256_extracti128_si256::<1>(v);
+    // The partial sums stay in registers; the taps past each direction's
+    // length are zero by construction of `add_shifted_i16x8x2`.
+    let cost_lo = sum4_avx2([
+        cost_diag_avx2(lo(diag_lo), lo(diag_hi)),
+        cost_alt_avx2(lo(alt01_lo), lo(alt01_hi)),
+        cost_hv_avx2(row_sums),
+        cost_alt_avx2(hi(alt01_lo), hi(alt01_hi)),
+    ]);
+    let cost_hi = sum4_avx2([
+        cost_diag_avx2(hi(diag_lo), hi(diag_hi)),
+        cost_alt_avx2(hi(alt32_lo), hi(alt32_hi)),
+        cost_hv_avx2(_mm256_zextsi128_si256(col_sum)),
+        cost_alt_avx2(lo(alt32_lo), lo(alt32_hi)),
+    ]);
+    let mut cost = [0u32; 8];
+    unsafe {
+        _mm_storeu_si128(cost.as_mut_ptr().cast(), cost_lo);
+        _mm_storeu_si128(cost[4..].as_mut_ptr().cast(), cost_hi);
+    }
+    pick_cdef_dir(&cost, var)
 }
 
 #[inline]
@@ -494,20 +452,25 @@ fn load_i16x16_2rows(tmp: &[i16], p0: isize, p1: isize, off: isize) -> __m256i {
     _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi)
 }
 
+/// The rows of one filter iteration at `p0 + off`: two 8-pixel rows, or four
+/// 4-pixel rows so that narrow blocks also fill the vector.
 #[inline]
 #[target_feature(enable = "avx2")]
-fn load_i16xw_2rows<const W: usize>(tmp: &[i16], p0: isize, p1: isize, off: isize) -> __m256i {
+fn load_i16xw_rows<const W: usize>(tmp: &[i16], p0: isize, stride: isize, off: isize) -> __m256i {
     debug_assert!(W == 4 || W == 8);
     unsafe {
-        let lo = if W == 8 {
-            _mm_loadu_si128(tmp.as_ptr().offset(p0 + off).cast())
+        let p = tmp.as_ptr().offset(p0 + off);
+        let (lo, hi) = if W == 8 {
+            (
+                _mm_loadu_si128(p.cast()),
+                _mm_loadu_si128(p.offset(stride).cast()),
+            )
         } else {
-            _mm_loadl_epi64(tmp.as_ptr().offset(p0 + off).cast())
-        };
-        let hi = if W == 8 {
-            _mm_loadu_si128(tmp.as_ptr().offset(p1 + off).cast())
-        } else {
-            _mm_loadl_epi64(tmp.as_ptr().offset(p1 + off).cast())
+            let r = |i: isize| _mm_loadl_epi64(p.offset(i * stride).cast());
+            (
+                _mm_unpacklo_epi64(r(0), r(1)),
+                _mm_unpacklo_epi64(r(2), r(3)),
+            )
         };
         _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo), hi)
     }
@@ -529,7 +492,7 @@ fn constrain_i16(diff: __m256i, threshold: __m256i, shc: __m128i) -> __m256i {
         _mm256_sub_epi16(threshold, _mm256_srl_epi16(adiff, shc)),
     );
     let m = _mm256_min_epu16(adiff, t);
-    _mm256_blendv_epi8(m, _mm256_sub_epi16(zero, m), _mm256_cmpgt_epi16(zero, diff))
+    _mm256_sign_epi16(m, diff)
 }
 
 #[inline]
@@ -562,23 +525,25 @@ fn store_u8x8_2rows(dst: &mut [u8], p0: usize, p1: usize, v: __m256i) {
     }
 }
 
+/// Stores what `load_i16xw_rows` covers: two rows of 8 or four rows of 4.
 #[inline]
 #[target_feature(enable = "avx2")]
-fn store_u8xw_2rows<const W: usize>(dst: &mut [u8], p0: usize, p1: usize, v: __m256i) {
+fn store_u8xw_rows<const W: usize>(dst: &mut [u8], p0: usize, stride: usize, v: __m256i) {
     debug_assert!(W == 4 || W == 8);
     let lo = _mm256_castsi256_si128(v);
     let hi = _mm256_extracti128_si256::<1>(v);
     let p = _mm_packus_epi16(lo, hi);
     unsafe {
+        let d = dst.as_mut_ptr().add(p0);
         if W == 8 {
-            _mm_storel_epi64(dst.as_mut_ptr().add(p0).cast(), p);
-            _mm_storel_epi64(dst.as_mut_ptr().add(p1).cast(), _mm_srli_si128::<8>(p));
+            _mm_storel_epi64(d.cast(), p);
+            _mm_storel_epi64(d.add(stride).cast(), _mm_srli_si128::<8>(p));
         } else {
-            _mm_store_ss(dst.as_mut_ptr().add(p0).cast(), _mm_castsi128_ps(p));
-            _mm_store_ss(
-                dst.as_mut_ptr().add(p1).cast(),
-                _mm_castsi128_ps(_mm_srli_si128::<8>(p)),
-            );
+            let row = |i: usize, px: i32| d.add(i * stride).cast::<i32>().write_unaligned(px);
+            row(0, _mm_cvtsi128_si32(p));
+            row(1, _mm_extract_epi32::<1>(p));
+            row(2, _mm_extract_epi32::<2>(p));
+            row(3, _mm_extract_epi32::<3>(p));
         }
     }
 }
@@ -615,66 +580,61 @@ fn cdef_filter_block_8bpc_avx2_shape<
     let eight = _mm256_set1_epi16(8);
     let lowmask = _mm256_set1_epi16(0xff);
     let dirs = &crate::tables::CDEF_DIRECTIONS;
+    let pri_taps = [
+        _mm256_set1_epi16(pri_tap as i16),
+        _mm256_set1_epi16(((pri_tap & 3) | 2) as i16),
+    ];
     let mut y = 0usize;
 
     while y < H {
         let t0 = (o + y * tmp_stride) as isize;
-        let t1 = t0 + tmp_stride as isize;
-        let load = |off: isize| load_i16xw_2rows::<W>(tmp, t0, t1, off);
+        let load = |off: isize| load_i16xw_rows::<W>(tmp, t0, tmp_stride as isize, off);
         let px = load(0);
         let mut sum = zero;
         let mut min_v = px;
         let mut max_v = px;
 
-        if HAS_PRI {
-            let mut ptap = pri_tap;
-            for k in 0..2 {
-                let off = dirs[dir + 2][k] as isize;
+        let constrained = |neighbor, strength, shift| {
+            constrain_i16(_mm256_sub_epi16(neighbor, px), strength, shift)
+        };
+        for k in 0..2 {
+            if HAS_PRI {
+                let off = crate::cdef::cdef_dir_offset(dirs[dir + 2][k], tmp_stride);
                 let p0 = load(off);
                 let p1 = load(-off);
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(p0, px), pri_s, pri_shc),
-                    ptap,
+                let pri = _mm256_add_epi16(
+                    constrained(p0, pri_s, pri_shc),
+                    constrained(p1, pri_s, pri_shc),
                 );
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(p1, px), pri_s, pri_shc),
-                    ptap,
-                );
-                ptap = (ptap & 3) | 2;
+                sum = _mm256_add_epi16(sum, _mm256_mullo_epi16(pri, pri_taps[k]));
                 if clip {
                     min_v = cdef_min_i16(min_v, cdef_min_i16(p0, p1));
                     max_v = _mm256_max_epi16(max_v, _mm256_max_epi16(p0, p1));
                 }
-                if HAS_SEC {
-                    let off2 = dirs[dir + 4][k] as isize;
-                    let off3 = dirs[dir][k] as isize;
-                    let s0 = load(off2);
-                    let s1 = load(-off2);
-                    let s2 = load(off3);
-                    let s3 = load(-off3);
-                    let st = 2 - k as i32;
-                    sum = madd_i16(
-                        sum,
-                        constrain_i16(_mm256_sub_epi16(s0, px), sec_s, sec_shc),
-                        st,
-                    );
-                    sum = madd_i16(
-                        sum,
-                        constrain_i16(_mm256_sub_epi16(s1, px), sec_s, sec_shc),
-                        st,
-                    );
-                    sum = madd_i16(
-                        sum,
-                        constrain_i16(_mm256_sub_epi16(s2, px), sec_s, sec_shc),
-                        st,
-                    );
-                    sum = madd_i16(
-                        sum,
-                        constrain_i16(_mm256_sub_epi16(s3, px), sec_s, sec_shc),
-                        st,
-                    );
+            }
+            if HAS_SEC {
+                let off1 = crate::cdef::cdef_dir_offset(dirs[dir + 4][k], tmp_stride);
+                let off2 = crate::cdef::cdef_dir_offset(dirs[dir][k], tmp_stride);
+                let s0 = load(off1);
+                let s1 = load(-off1);
+                let s2 = load(off2);
+                let s3 = load(-off2);
+                let a = _mm256_add_epi16(
+                    constrained(s0, sec_s, sec_shc),
+                    constrained(s1, sec_s, sec_shc),
+                );
+                let b = _mm256_add_epi16(
+                    constrained(s2, sec_s, sec_shc),
+                    constrained(s3, sec_s, sec_shc),
+                );
+                let sec = _mm256_add_epi16(a, b);
+                let sec = if k == 0 {
+                    _mm256_add_epi16(sec, sec)
+                } else {
+                    sec
+                };
+                sum = _mm256_add_epi16(sum, sec);
+                if clip {
                     min_v = cdef_min_i16(
                         min_v,
                         cdef_min_i16(cdef_min_i16(s0, s1), cdef_min_i16(s2, s3)),
@@ -684,36 +644,6 @@ fn cdef_filter_block_8bpc_avx2_shape<
                         _mm256_max_epi16(_mm256_max_epi16(s0, s1), _mm256_max_epi16(s2, s3)),
                     );
                 }
-            }
-        } else if HAS_SEC {
-            for k in 0..2 {
-                let off1 = dirs[dir + 4][k] as isize;
-                let off2 = dirs[dir][k] as isize;
-                let s0 = load(off1);
-                let s1 = load(-off1);
-                let s2 = load(off2);
-                let s3 = load(-off2);
-                let st = 2 - k as i32;
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(s0, px), sec_s, sec_shc),
-                    st,
-                );
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(s1, px), sec_s, sec_shc),
-                    st,
-                );
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(s2, px), sec_s, sec_shc),
-                    st,
-                );
-                sum = madd_i16(
-                    sum,
-                    constrain_i16(_mm256_sub_epi16(s3, px), sec_s, sec_shc),
-                    st,
-                );
             }
         }
 
@@ -725,9 +655,8 @@ fn cdef_filter_block_8bpc_avx2_shape<
         }
         res = _mm256_and_si256(res, lowmask);
         let d0 = dst_off + y * dst_stride;
-        let d1 = d0 + dst_stride;
-        store_u8xw_2rows::<W>(dst, d0, d1, res);
-        y += 2;
+        store_u8xw_rows::<W>(dst, d0, dst_stride, res);
+        y += if W == 4 { 4 } else { 2 };
     }
 }
 

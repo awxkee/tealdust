@@ -4,8 +4,7 @@
 //! `std::thread::scope` for every frame (twice — once for the decode phase and
 //! once for the filter phase). For a still-image / repeated-decode workload that
 //! per-frame `pthread_create` cost sits right on the critical path. A persistent
-//! pool spawns the workers once and reuses them across every frame, the way a
-//! C decoder's task pool does.
+//! pool starts workers as dispatches need them and reuses them across frames.
 //!
 //! Like `std::thread::scope`, [`ThreadPool::run`] is a *scoped* dispatch: it
 //! broadcasts a borrowed job to the workers, runs it on the caller too, and does
@@ -17,6 +16,7 @@
 //! workers before returning, so no reference can outlive `'env` (the same
 //! argument that makes `std::thread::scope` sound).
 
+use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
@@ -34,64 +34,70 @@ enum Msg {
     Stop,
 }
 
-/// A fixed set of worker threads spawned once and reused for every dispatch.
+/// A pool of persistent workers that grows up to its configured capacity.
 ///
 /// The dispatch state sits behind a `Mutex`, which serializes dispatches (at most
 /// one `run` in flight per pool, so completion signals never cross) and makes the
 /// pool `Send + Sync` so a decoder can own one across its frames.
 pub(crate) struct ThreadPool {
     inner: Mutex<Inner>,
-    n: usize,
-    handles: Vec<Option<JoinHandle<()>>>,
+    capacity: usize,
 }
 
 struct Inner {
-    txs: Vec<Sender<Msg>>,
+    workers: Vec<Worker>,
+    done_tx: Sender<bool>,
     done_rx: Receiver<bool>,
 }
 
-impl ThreadPool {
-    /// Spawns `n` (>= 1) persistent worker threads.
-    pub(crate) fn new(n: usize) -> Self {
-        let n = n.max(1);
-        let (done_tx, done_rx) = channel::<bool>();
-        let mut txs = Vec::with_capacity(n);
-        let mut handles = Vec::with_capacity(n);
-        for _ in 0..n {
-            let (tx, rx) = channel::<Msg>();
-            let done_tx = done_tx.clone();
-            let handle = std::thread::spawn(move || {
-                #[allow(clippy::while_let_loop)]
-                loop {
-                    match rx.recv() {
-                        Ok(Msg::Run(JobPtr(job))) => {
-                            // SAFETY: the dispatcher blocks until it has received our
-                            // completion signal below, so `job` is valid for this call.
-                            let job: &(dyn Fn() + Sync) = unsafe { &*job };
-                            let ok =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).is_ok();
-                            // Signal completion last. Report whether we panicked so the
-                            // dispatcher can propagate it (rather than deadlock) while
-                            // this worker thread stays alive for future dispatches.
-                            let _ = done_tx.send(ok);
+struct Worker {
+    tx: Sender<Msg>,
+    handle: JoinHandle<()>,
+}
+
+impl Worker {
+    fn spawn(done_tx: Sender<bool>) -> std::io::Result<Self> {
+        let (tx, rx) = channel::<Msg>();
+        let handle = std::thread::Builder::new().spawn(move || {
+            while let Ok(Msg::Run(JobPtr(job))) = rx.recv() {
+                // SAFETY: the dispatcher waits for our completion below, so
+                // `job` remains valid throughout this call.
+                let job: &(dyn Fn() + Sync) = unsafe { &*job };
+                let ok = match catch_unwind(AssertUnwindSafe(job)) {
+                    Ok(()) => true,
+                    Err(payload) => {
+                        // A custom panic payload can panic on drop. Signal the
+                        // failed job even in that case and keep the worker alive.
+                        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(payload))) {
+                            std::mem::forget(payload);
                         }
-                        Ok(Msg::Stop) | Err(_) => break,
+                        false
                     }
-                }
-            });
-            txs.push(tx);
-            handles.push(Some(handle));
-        }
+                };
+                let _ = done_tx.send(ok);
+            }
+        })?;
+        Ok(Self { tx, handle })
+    }
+}
+
+impl ThreadPool {
+    /// Configures up to `n` (>= 1) persistent workers.
+    pub(crate) fn new(n: usize) -> Self {
+        let (done_tx, done_rx) = channel::<bool>();
         Self {
-            inner: Mutex::new(Inner { txs, done_rx }),
-            n,
-            handles,
+            inner: Mutex::new(Inner {
+                workers: Vec::new(),
+                done_tx,
+                done_rx,
+            }),
+            capacity: n.max(1),
         }
     }
 
-    /// Number of worker threads (the maximum `n_active` that adds parallelism).
+    /// Maximum number of helpers, excluding the calling thread.
     pub(crate) fn workers(&self) -> usize {
-        self.n
+        self.capacity
     }
 
     /// Runs `job` on `n_active` threads total: `n_active - 1` pool workers plus
@@ -101,42 +107,52 @@ impl ThreadPool {
     /// This is a scoped dispatch: `job` may borrow `'env` stack data, and that
     /// borrow is guaranteed live until `run` returns.
     pub(crate) fn run<'env>(&self, n_active: usize, job: &(dyn Fn() + Sync + 'env)) {
-        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        let helpers = n_active.min(self.n + 1).saturating_sub(1);
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let helpers = n_active.saturating_sub(1).min(self.capacity);
+        // Start every required helper before sending any borrowed jobs. If a
+        // spawn fails, the workers already started are idle and can be reused.
+        while inner.workers.len() < helpers {
+            let worker = Worker::spawn(inner.done_tx.clone())
+                .expect("failed to spawn a tealdust pool worker");
+            inner.workers.push(worker);
+        }
         // SAFETY: erase `'env` to hand the reference to the `'static` workers. We
-        // block on `done_rx` for every helper below before returning, and a worker
-        // only signals after it has finished calling `job`; therefore no worker
-        // retains the reference past this call, so it never outlives `'env`.
+        // wait for every submitted helper before returning or propagating a
+        // panic. Every worker signals completion after it stops using `job`.
         let job_erased: *const (dyn Fn() + Sync) =
             unsafe { std::mem::transmute::<*const (dyn Fn() + Sync + 'env), _>(job) };
-        for tx in inner.txs.iter().take(helpers) {
-            let _ = tx.send(Msg::Run(JobPtr(job_erased)));
-        }
-        // The caller participates so it is never idle while helpers run.
-        job();
-        let mut panicked = false;
-        for _ in 0..helpers {
-            if let Ok(false) = inner.done_rx.recv() {
-                panicked = true
+        let mut submitted = 0;
+        for worker in inner.workers.iter().take(helpers) {
+            if worker.tx.send(Msg::Run(JobPtr(job_erased))).is_err() {
+                break;
             }
+            submitted += 1;
         }
-        if panicked {
-            panic!("a tealdust pool worker panicked");
+        let caller_result = if submitted == helpers {
+            catch_unwind(AssertUnwindSafe(job))
+        } else {
+            Ok(())
+        };
+        let mut worker_failed = submitted != helpers;
+        for _ in 0..submitted {
+            worker_failed |= !matches!(inner.done_rx.recv(), Ok(true));
         }
+        drop(inner);
+        if let Err(payload) = caller_result {
+            resume_unwind(payload);
+        }
+        assert!(!worker_failed, "a tealdust pool worker stopped or panicked");
     }
 }
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
-        if let Ok(inner) = self.inner.lock() {
-            for tx in &inner.txs {
-                let _ = tx.send(Msg::Stop);
-            }
+        let inner = self.inner.get_mut().unwrap_or_else(|e| e.into_inner());
+        for worker in &inner.workers {
+            let _ = worker.tx.send(Msg::Stop);
         }
-        for h in &mut self.handles {
-            if let Some(h) = h.take() {
-                let _ = h.join();
-            }
+        for worker in inner.workers.drain(..) {
+            let _ = worker.handle.join();
         }
     }
 }
@@ -165,7 +181,8 @@ pub(crate) fn dispatch<'env>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Barrier;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     // Workers + caller cooperatively drain a shared atomic cursor; every index is
     // handled exactly once and the pool is reusable across dispatches.
@@ -200,6 +217,44 @@ mod tests {
         };
         pool.run(1, &job);
         assert_eq!(hit.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn pool_starts_and_reuses_only_needed_helpers() {
+        let pool = ThreadPool::new(4);
+        assert!(pool.inner.lock().unwrap().workers.is_empty());
+        pool.run(1, &|| {});
+        assert!(pool.inner.lock().unwrap().workers.is_empty());
+
+        pool.run(2, &|| {});
+        let first = {
+            let inner = pool.inner.lock().unwrap();
+            assert_eq!(inner.workers.len(), 1);
+            inner.workers[0].handle.thread().id()
+        };
+        pool.run(4, &|| {});
+        pool.run(2, &|| {});
+        let inner = pool.inner.lock().unwrap();
+        assert_eq!(inner.workers.len(), 3);
+        assert_eq!(inner.workers[0].handle.thread().id(), first);
+    }
+
+    #[test]
+    fn pool_waits_for_helpers_before_propagating_a_caller_panic() {
+        let pool = ThreadPool::new(1);
+        let caller = std::thread::current().id();
+        let started = Barrier::new(2);
+        let finished = AtomicBool::new(false);
+        let job = || {
+            started.wait();
+            assert_ne!(std::thread::current().id(), caller, "caller job panicked");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            finished.store(true, Ordering::Relaxed);
+        };
+        let result = catch_unwind(AssertUnwindSafe(|| pool.run(2, &job)));
+        assert!(result.is_err());
+        assert!(finished.load(Ordering::Relaxed));
+        pool.run(2, &|| {});
     }
 
     // `dispatch` with no pool falls back to thread::scope and is still correct.

@@ -954,35 +954,8 @@ pub(crate) fn prep_8tap_hbd_avx2(
     }
 }
 
-#[inline]
-#[target_feature(enable = "avx2")]
-fn load_i16x8_i32_warp(src: &[i16]) -> __m256i {
-    unsafe { _mm256_cvtepi16_epi32(_mm_loadu_si128(src.as_ptr().cast())) }
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn warp_coeff_i32x8(pos: i32, step: i32, tap: usize) -> __m256i {
-    let f0 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + 512) >> 10)) as usize];
-    let f1 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step + 512) >> 10)) as usize];
-    let f2 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 2 + 512) >> 10)) as usize];
-    let f3 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 3 + 512) >> 10)) as usize];
-    let f4 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 4 + 512) >> 10)) as usize];
-    let f5 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 5 + 512) >> 10)) as usize];
-    let f6 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 6 + 512) >> 10)) as usize];
-    let f7 = &crate::tables::MC_WARP_FILTER[(192 + ((pos + step * 7 + 512) >> 10)) as usize];
-    _mm256_setr_epi32(
-        f0[tap] as i32,
-        f1[tap] as i32,
-        f2[tap] as i32,
-        f3[tap] as i32,
-        f4[tap] as i32,
-        f5[tap] as i32,
-        f6[tap] as i32,
-        f7[tap] as i32,
-    )
-}
-
+/// One intermediate row: 8 pixels filtered horizontally at `mx + x * alpha`.
+/// Reads the 15 samples at `row_base`.
 #[inline]
 #[target_feature(enable = "avx2")]
 fn warp_horz_u16x8(
@@ -993,28 +966,22 @@ fn warp_horz_u16x8(
     rnd: i32,
     shift: i32,
 ) -> __m128i {
-    let mut acc = _mm256_setzero_si256();
-    for tap in 0..8 {
-        let px = load_u16x8_i32(unsafe { src.get_unchecked(row_base + tap..) });
-        let coeff = warp_coeff_i32x8(mx, alpha, tap);
-        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(px, coeff));
+    let k = super::mc::warp_pair_coeffs(mx, alpha);
+    unsafe {
+        let p = src.get_unchecked(row_base..).as_ptr();
+        let mut acc = _mm256_setzero_si256();
+        for i in 0..4 {
+            let px = super::mc::warp_pair_rows(
+                _mm_loadu_si128(p.add(2 * i).cast()),
+                _mm_loadu_si128(p.add(2 * i + 1).cast()),
+            );
+            acc = _mm256_add_epi32(acc, _mm256_madd_epi16(px, k[i]));
+        }
+        let v = round_s32(acc, rnd, shift);
+        let lo = _mm256_castsi256_si128(v);
+        let hi = _mm256_extracti128_si256::<1>(v);
+        _mm_packs_epi32(lo, hi)
     }
-    let v = round_s32(acc, rnd, shift);
-    let lo = _mm256_castsi256_si128(v);
-    let hi = _mm256_extracti128_si256::<1>(v);
-    _mm_packs_epi32(lo, hi)
-}
-
-#[inline]
-#[target_feature(enable = "avx2")]
-fn warp_vert_i16x8(mid: &[i16], base: usize, stride: usize, my: i32, gamma: i32) -> __m256i {
-    let mut acc = _mm256_setzero_si256();
-    for tap in 0..8 {
-        let px = load_i16x8_i32_warp(unsafe { mid.get_unchecked(base + tap * stride..) });
-        let coeff = warp_coeff_i32x8(my, gamma, tap);
-        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(px, coeff));
-    }
-    acc
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1049,9 +1016,10 @@ pub(crate) fn warp_affine_8x8_hbd_avx2(
         row_base += src_stride;
         mx += beta;
     }
+    let pairs = super::mc::warp_mid_pairs(&mid);
 
     for (y, dst_row) in dst.chunks_mut(dst_stride).take(8).enumerate() {
-        let v = warp_vert_i16x8(&mid, y * 8, 8, my, gamma);
+        let v = super::mc::warp_vert(&pairs, y, my, gamma);
         store_clip_u16x8(&mut dst_row[..8], v, v_rnd, v_shift, max);
         my += delta;
     }
@@ -1086,9 +1054,10 @@ pub(crate) fn warp_affine_8x8t_hbd_avx2(
         row_base += src_stride;
         mx += beta;
     }
+    let pairs = super::mc::warp_mid_pairs(&mid);
 
     for (y, tmp_row) in tmp.chunks_mut(tmp_stride).take(8).enumerate() {
-        let v = warp_vert_i16x8(&mid, y * 8, 8, my, gamma);
+        let v = super::mc::warp_vert(&pairs, y, my, gamma);
         store_i16x8(&mut tmp_row[..8], v, 64, 7, 8192);
         my += delta;
     }

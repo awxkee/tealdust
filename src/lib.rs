@@ -73,6 +73,8 @@ pub(crate) mod env;
 pub(crate) mod exec_context;
 pub(crate) mod filmgrain;
 pub(crate) mod gdf_tables;
+#[cfg(any(target_arch = "aarch64", all(target_arch = "x86_64", feature = "avx")))]
+pub(crate) mod gdf_unit;
 pub(crate) mod getbits;
 pub(crate) mod ibp;
 pub(crate) mod internal;

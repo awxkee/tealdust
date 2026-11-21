@@ -37,9 +37,9 @@ pub struct Av2RestorationUnit {
 
 /// `tx_lpf_*` edge categories along tile seams, captured as each tile sbrow
 /// decodes. Block contexts reset to the maximum category at tile starts, so
-/// the masks of a tile's first column/row are built without the neighbouring
+/// the masks of a tile's first column/row are built without the neighboring
 /// tile; the deblocker clamps those edges with these (AVM takes the min of
-/// both sides' TX sizes from the real neighbouring block).
+/// both sides' TX sizes from the real neighboring block).
 #[derive(Default)]
 pub(crate) struct TileSeamLpf {
     /// `[(c * 2 + chroma) * h4 + y4]`: right column of tile column `c`.

@@ -160,7 +160,11 @@ where
         } else {
             let csplit_row = (bs as i32 - BlockSize::Bs128x128 as i32) as usize;
             // Lossless: one chroma unit per 64x64 luma unit (dav2d 8c86497528).
-            let csi = if lossless { 0 } else { (ss_hor + ss_ver) as usize };
+            let csi = if lossless {
+                0
+            } else {
+                (ss_hor + ss_ver) as usize
+            };
             (
                 16,
                 if lbs == BlockSize::Invalid {
@@ -353,6 +357,8 @@ where
                     mv.y as i32,
                     fi.bw * 4,
                     fi.bh * 4,
+                    fi.tile_col_start * 4,
+                    fi.tile_row_start * 4,
                 );
             }
         }
@@ -533,7 +539,7 @@ pub(crate) fn bawp_plane<BD: BitDepth>(
             [[0, 4], [3, 3], [4, 4]],
         ],
     ];
-    // AVM `xd->left_available` / `up_available`: neighbours inside the tile.
+    // AVM `xd->left_available` / `up_available`: neighbors inside the tile.
     let have_left = bx > fi.tile_col_start;
     let have_above = by > fi.tile_row_start;
     // AVM clamps each template side to BAWP_MAX_REF_NUMB (16) samples, halved
@@ -739,7 +745,7 @@ pub(crate) fn inter_mc_plane_8bpc<BD: BitDepth>(
     let is_bilin = filter == 3;
 
     let mut emu_buf = if need_emu {
-        Some(vec![BD::Pixel::default(); 192 * 192])
+        Some(crate::pixel::EmuBuf::<BD::Pixel>::take())
     } else {
         None
     };
@@ -931,7 +937,7 @@ fn inter_mc_plane_prep_8bpc<BD: BitDepth>(
     let is_bilin = filter == 3;
 
     let mut emu_buf = if need_emu {
-        Some(vec![BD::Pixel::default(); 192 * 192])
+        Some(crate::pixel::EmuBuf::<BD::Pixel>::take())
     } else {
         None
     };
@@ -1782,9 +1788,29 @@ where
     // (itx_2d dequant cores + itx.rs WHT/DC/generic), and cf starts zeroed, so
     // cf is already zero on entry here. Verified bit-exact + via prefill poison.
 
+    let phase = recon.scratch.split_phase;
     let mut txtp: u16 = txtp_seed;
     let mut res_ctx: u8 = 0;
-    let (mut eob, stx, mut txtp) = if b.skip_txfm != 0 {
+    let (mut eob, stx, mut txtp) = if phase == SplitPhase::Replay {
+        let rec = recon
+            .scratch
+            .luma_tx
+            .get(recon.scratch.luma_tx_rpos)
+            .copied()
+            .ok_or(())?;
+        recon.scratch.luma_tx_rpos += 1;
+        debug_assert_eq!(rec.tx as usize, tx);
+        debug_assert_eq!(rec.bx as i32, bx);
+        debug_assert_eq!(rec.by as i32, by);
+        debug_assert_eq!(rec.lossless, lossless);
+        let cf_off = rec.cf_off as usize;
+        let cf_len = rec.cf_len as usize;
+        if cf_len != 0 {
+            recon.cf[..cf_len]
+                .copy_from_slice(&recon.scratch.luma_tx_cf::<BD::Coef>()[cf_off..cf_off + cf_len]);
+        }
+        (rec.eob as i32, rec.stx as i32, rec.txtp as u32)
+    } else if b.skip_txfm != 0 {
         res_ctx = 0x40;
         (-1i32, 0i32, crate::levels::txtp::DCT_DCT as u32)
     } else {
@@ -1858,14 +1884,16 @@ where
         (eob, stx, (txtp & 0xff) as u32)
     };
 
-    if pl == 1 {
+    if pl == 1 && phase != SplitPhase::Replay {
         recon.scratch_u_has_cf = (eob >= 0) as i32;
     }
 
     // context fill
     let aw = imin(tw4, (fi.bw >> ss_hor) - (bx >> ss_hor)).max(0) as usize;
     let lh = imin(th4, (fi.bh >> ss_ver) - (by >> ss_ver)).max(0) as usize;
-    if pl == 0 {
+    if phase == SplitPhase::Replay {
+        // Parse-side contexts were filled by the entropy pass.
+    } else if pl == 0 {
         if aw > 0 {
             a.lcoef[bx4..bx4 + aw].fill(res_ctx);
         }
@@ -1881,9 +1909,38 @@ where
         }
     }
 
+    if phase == SplitPhase::Parse {
+        // Record the coefficients for the replay; the inverse transform there
+        // consumes (and clears) them, so keep `cf` zero on exit here too.
+        let tu_n = tw * th;
+        let cf_len = if eob != -1 { tu_n } else { 0 };
+        let cf_off = recon.scratch.luma_tx_cf_mut::<BD::Coef>().len();
+        if cf_len != 0 {
+            recon
+                .scratch
+                .luma_tx_cf_mut::<BD::Coef>()
+                .extend_from_slice(&recon.cf[..cf_len]);
+            recon.cf[..cf_len].fill(<BD::Coef as crate::pixel::Coeff>::ZERO);
+        }
+        recon.scratch.luma_tx.push(LumaTxRecord {
+            tx: tx as u8,
+            bx: bx as i16,
+            by: by as i16,
+            pb_col_start: 0,
+            pb_row_start: 0,
+            eob: eob as i16,
+            stx: stx as i8,
+            txtp: txtp as u16,
+            cf_off: cf_off as u32,
+            cf_len: cf_len as u16,
+            lossless,
+        });
+    }
+
     // later blocks' top-right / bottom-left intra-edge availability (n_tr/n_bl,
-    // used by SMOOTH_PRED incl. warp-interintra) sees inter neighbours as coded.
-    if pl == 0 {
+    // used by SMOOTH_PRED incl. warp-interintra) sees inter neighbors as coded.
+    // Reconstruction state: marked when the block is reconstructed.
+    if pl == 0 && phase != SplitPhase::Parse {
         let mask: u64 = ((1u64 << tw4) - 1) << (bx4 as u32);
         for y in 0..th4 as usize {
             let row = by4 + y;
@@ -1891,6 +1948,8 @@ where
                 recon.scratch.is_coded[0][row] |= mask;
             }
         }
+    }
+    if pl == 0 && phase != SplitPhase::Replay {
         // LR no-skip mask (luma): set per coded luma TX block, used by the
         // block has coefficients (eob != -1).
         if eob != -1 {
@@ -1904,7 +1963,7 @@ where
                 }
             }
         }
-    } else if pl == 1 {
+    } else if pl == 1 && phase != SplitPhase::Parse {
         // Chroma `is_coded` is marked once per chroma TX (pl==1 only, mirroring
         let mask: u64 = ((1u64 << tw4) - 1) << (bx4 as u32);
         for y in 0..th4 as usize {
@@ -1915,7 +1974,7 @@ where
         }
     }
 
-    if eob == -1 {
+    if eob == -1 || phase == SplitPhase::Parse {
         return Ok(());
     }
 
@@ -2227,6 +2286,25 @@ where
         scratch.chroma_txtp[..n_tu].copy_from_slice(&scratch.chroma_tx_txtp[mo..mo + n_tu]);
         scratch.chroma_eob[..n_tu].copy_from_slice(&scratch.chroma_tx_eob[mo..mo + n_tu]);
         recon.scratch_u_has_cf = rec.u_has_cf;
+        // Reconstruction-side availability for later intra edges, as marked
+        // by the read above (a replay after a separate entropy pass skipped it).
+        let mut y = 0;
+        while y < ch4ss {
+            let mut x = 0;
+            while x < cw4ss {
+                let bx4 = (((cbx + (x << ss_hor)) & 63) >> ss_hor) as usize;
+                let by4 = (((cby + (y << ss_ver)) & 63) >> ss_ver) as usize;
+                let mask: u64 = ((1u64 << txw) - 1) << (bx4 as u32);
+                for yy in 0..txh as usize {
+                    let row = by4 + yy;
+                    if row < 64 {
+                        recon.scratch.is_coded[1][row] |= mask;
+                    }
+                }
+                x += txw;
+            }
+            y += txh;
+        }
     }
 
     let cctx_enabled = recon.frame.seq_cctx
@@ -2298,7 +2376,7 @@ where
 }
 
 /// in `dst`; build the intra prediction (DC/V/H/SMOOTH, or wedge) from the
-/// reconstructed neighbour edges into a temp buffer, then blend it over `dst`
+/// reconstructed neighbor edges into a temp buffer, then blend it over `dst`
 /// with the II / wedge mask. Plane 0 (luma) or 1/2 (chroma, subsampled).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn iiblend_luma_8bpc<BD: crate::pixel::BitDepth>(
@@ -2932,6 +3010,8 @@ where
 
     let mut seg_mask = recon.scratch.take_compound_seg_mask(128 * 128);
     let mut seg_mask_stride = 0usize;
+    // The entropy pass walks the block for its coefficients only.
+    let predict = recon.scratch.split_phase.predicts();
     if has_luma {
         let b_dim = &BLOCK_DIMENSIONS[lbs as u8 as usize];
         let bw4 = b_dim[0] as i32;
@@ -2941,215 +3021,218 @@ where
         let y_stride = recon.frame.y_stride_px;
         let dst_off = 4 * (by as usize * y_stride + bx as usize);
 
-        let _len = crate::mc_dispatch::compound_tmp_len(w, h);
-        let mut tmp = recon.scratch.take_compound_tmp(_len);
-        let mut opfl_bacp = false;
-        if is_opfl {
-            let w4 = imin(bw4, fi.bw - bx);
-            let h4 = imin(bh4, fi.bh - by);
-            opfl_bacp = opfl_pred_luma(
-                recon,
-                &mut tmp,
-                &mut seg_mask,
-                b,
-                bx,
-                by,
-                bw4,
-                bh4,
-                w4,
-                h4,
-                fi,
-            );
-        } else {
-            for i in 0..2 {
-                if warp_use[i] {
-                    warp_affine_plane_prep_8bpc(
-                        recon.bd,
-                        recon.frame.exec,
-                        &mut tmp[i],
-                        w,
-                        refp[i],
-                        0,
-                        bx,
-                        by,
-                        b_dim,
-                        &warp_mat[i],
-                        ss_hor,
-                        ss_ver,
-                        fi.bw,
-                        fi.bh,
-                        &crate::scale::ScaleFactors::from_svc(&recon.svc[refs[i] as usize])
-                            .with_anchor(recon.scratch.mc_anchor),
-                        recon.scratch.inter_mc_tmp_mut(),
-                    );
-                } else {
-                    inter_mc_plane_prep_8bpc(
-                        recon.bd,
-                        recon.frame.exec,
-                        &mut tmp[i],
-                        refp[i],
-                        0,
-                        bx,
-                        by,
-                        bw4,
-                        bh4,
-                        mvs[i].x,
-                        mvs[i].y,
-                        filter,
-                        ss_hor,
-                        ss_ver,
-                        &crate::scale::ScaleFactors::from_svc(&recon.svc[refs[i] as usize])
-                            .with_anchor(recon.scratch.mc_anchor),
-                        recon.scratch.inter_mc_tmp_mut(),
-                    );
-                }
-            }
-        }
-
-        let (tmp0, tmp1) = tmp.split_at(1);
-        match comp_type {
-            2 => {
-                // WEDGE
-                let mask = recon.masks.wedge_mask(
-                    lbs as usize,
-                    bw4 as usize,
-                    bh4 as usize,
-                    wedge_idx as usize,
-                    0,
+        if predict {
+            let _len = crate::mc_dispatch::compound_tmp_len(w, h);
+            let mut tmp = recon.scratch.take_compound_tmp(_len);
+            let mut opfl_bacp = false;
+            if is_opfl {
+                let w4 = imin(bw4, fi.bw - bx);
+                let h4 = imin(bh4, fi.bh - by);
+                opfl_bacp = opfl_pred_luma(
+                    recon,
+                    &mut tmp,
+                    &mut seg_mask,
+                    b,
+                    bx,
+                    by,
+                    bw4,
+                    bh4,
+                    w4,
+                    h4,
+                    fi,
                 );
-                let (a0, a1) = if wedge_sign == 0 {
-                    (&tmp0[0], &tmp1[0])
-                } else {
-                    (&tmp1[0], &tmp0[0])
-                };
-                mc_mask(
-                    recon.frame.exec,
-                    recon.bd,
-                    &mut recon.dst_y[dst_off..],
-                    y_stride,
-                    a0,
-                    a1,
-                    w,
-                    h,
-                    mask,
-                );
-            }
-            3 => {
-                // SEG: luma w_mask derives subsampled seg mask for chroma reuse.
-                seg_mask_stride = imin(bw4 * 4 >> ss_hor, 64) as usize;
-                let (a0, a1) = if mask_sign == 0 {
-                    (&tmp0[0], &tmp1[0])
-                } else {
-                    (&tmp1[0], &tmp0[0])
-                };
-                // A 64x64 piece of a split block: its mask goes to its place in
-                // the chroma unit's mask, which the unit's chroma pass reads
-                // after the last piece (AVM builds one mask for the block).
-                let anchor = recon.scratch.mc_anchor;
-                let mut split_mask = if anchor.cu_w4 != 0 {
-                    let ustride = (anchor.cu_w4 * 4 >> ss_hor) as usize;
-                    let uh = (anchor.cu_h4 * 4 >> ss_ver) as usize;
-                    let ox4 = anchor.l_dx4 % anchor.cu_w4;
-                    let oy4 = anchor.l_dy4 % anchor.cu_h4;
-                    let off = ((oy4 * 4 >> ss_ver) as usize) * ustride + (ox4 * 4 >> ss_hor) as usize;
-                    let mut m = core::mem::take(&mut recon.scratch.split_seg_mask);
-                    if m.len() < ustride * uh {
-                        m.resize(ustride * uh, 0);
-                    }
-                    Some((m, off, ustride))
-                } else {
-                    None
-                };
-                let (mask_buf, mask_stride): (&mut [u8], usize) = match split_mask {
-                    Some((ref mut m, off, ustride)) => (&mut m[off..], ustride),
-                    None => (&mut seg_mask[..], seg_mask_stride),
-                };
-                mc_w_mask(
-                    recon.frame.exec,
-                    recon.bd,
-                    &mut recon.dst_y[dst_off..],
-                    y_stride,
-                    a0,
-                    a1,
-                    w,
-                    h,
-                    mask_buf,
-                    mask_stride,
-                    mask_sign,
-                    ss_hor != 0,
-                    ss_ver != 0,
-                );
-                if let Some((m, _, _)) = split_mask {
-                    recon.scratch.split_seg_mask = m;
-                }
-            }
-            _ => {
-                // AVG (or implicit mask / CWP weighted)
-                if cwp_idx == 8 {
-                    // For OPFL/refine blocks the BACP mask is already derived by
-                    // the plain-MC `bacp==2` case).
-                    let mut bacp = if is_opfl {
-                        opfl_bacp as i32
-                    } else {
-                        2 * imp_base as i32
-                    };
-                    if bacp == 2 {
-                        bacp = crate::recon::get_mask(
-                            &mut seg_mask,
-                            (bw4 * 4) as usize,
+            } else {
+                for i in 0..2 {
+                    if warp_use[i] {
+                        warp_affine_plane_prep_8bpc(
+                            recon.bd,
+                            recon.frame.exec,
+                            &mut tmp[i],
+                            w,
+                            refp[i],
+                            0,
                             bx,
-                            0,
                             by,
+                            b_dim,
+                            &warp_mat[i],
+                            ss_hor,
+                            ss_ver,
+                            fi.bw,
+                            fi.bh,
+                            &crate::scale::ScaleFactors::from_svc(&recon.svc[refs[i] as usize])
+                                .with_anchor(recon.scratch.mc_anchor),
+                            recon.scratch.inter_mc_tmp_mut(),
+                        );
+                    } else {
+                        inter_mc_plane_prep_8bpc(
+                            recon.bd,
+                            recon.frame.exec,
+                            &mut tmp[i],
+                            refp[i],
                             0,
-                            &mv_pair,
-                            3,
-                            3,
+                            bx,
+                            by,
                             bw4,
                             bh4,
-                            fi.bw * 4,
-                            fi.bh * 4,
-                        ) as i32;
-                    }
-                    if bacp != 0 {
-                        mc_mask(
-                            recon.frame.exec,
-                            recon.bd,
-                            &mut recon.dst_y[dst_off..],
-                            y_stride,
-                            &tmp0[0],
-                            &tmp1[0],
-                            w,
-                            h,
-                            &seg_mask,
+                            mvs[i].x,
+                            mvs[i].y,
+                            filter,
+                            ss_hor,
+                            ss_ver,
+                            &crate::scale::ScaleFactors::from_svc(&recon.svc[refs[i] as usize])
+                                .with_anchor(recon.scratch.mc_anchor),
+                            recon.scratch.inter_mc_tmp_mut(),
                         );
+                    }
+                }
+            }
+
+            let (tmp0, tmp1) = tmp.split_at(1);
+            match comp_type {
+                2 => {
+                    // WEDGE
+                    let mask = recon.masks.wedge_mask(
+                        lbs as usize,
+                        bw4 as usize,
+                        bh4 as usize,
+                        wedge_idx as usize,
+                        0,
+                    );
+                    let (a0, a1) = if wedge_sign == 0 {
+                        (&tmp0[0], &tmp1[0])
                     } else {
-                        mc_avg(
-                            recon.frame.exec,
-                            recon.bd,
-                            &mut recon.dst_y[dst_off..],
-                            y_stride,
-                            &tmp0[0],
-                            &tmp1[0],
-                            w,
-                            h,
-                        );
-                    }
-                } else {
-                    mc_w_avg(
+                        (&tmp1[0], &tmp0[0])
+                    };
+                    mc_mask(
                         recon.frame.exec,
                         recon.bd,
                         &mut recon.dst_y[dst_off..],
                         y_stride,
-                        &tmp0[0],
-                        &tmp1[0],
+                        a0,
+                        a1,
                         w,
                         h,
-                        cwp_idx,
+                        mask,
                     );
                 }
+                3 => {
+                    // SEG: luma w_mask derives subsampled seg mask for chroma reuse.
+                    seg_mask_stride = imin(bw4 * 4 >> ss_hor, 64) as usize;
+                    let (a0, a1) = if mask_sign == 0 {
+                        (&tmp0[0], &tmp1[0])
+                    } else {
+                        (&tmp1[0], &tmp0[0])
+                    };
+                    // A 64x64 piece of a split block: its mask goes to its place in
+                    // the chroma unit's mask, which the unit's chroma pass reads
+                    // after the last piece (AVM builds one mask for the block).
+                    let anchor = recon.scratch.mc_anchor;
+                    let mut split_mask = if anchor.cu_w4 != 0 {
+                        let ustride = (anchor.cu_w4 * 4 >> ss_hor) as usize;
+                        let uh = (anchor.cu_h4 * 4 >> ss_ver) as usize;
+                        let ox4 = anchor.l_dx4 % anchor.cu_w4;
+                        let oy4 = anchor.l_dy4 % anchor.cu_h4;
+                        let off =
+                            ((oy4 * 4 >> ss_ver) as usize) * ustride + (ox4 * 4 >> ss_hor) as usize;
+                        let mut m = core::mem::take(&mut recon.scratch.split_seg_mask);
+                        if m.len() < ustride * uh {
+                            m.resize(ustride * uh, 0);
+                        }
+                        Some((m, off, ustride))
+                    } else {
+                        None
+                    };
+                    let (mask_buf, mask_stride): (&mut [u8], usize) = match split_mask {
+                        Some((ref mut m, off, ustride)) => (&mut m[off..], ustride),
+                        None => (&mut seg_mask[..], seg_mask_stride),
+                    };
+                    mc_w_mask(
+                        recon.frame.exec,
+                        recon.bd,
+                        &mut recon.dst_y[dst_off..],
+                        y_stride,
+                        a0,
+                        a1,
+                        w,
+                        h,
+                        mask_buf,
+                        mask_stride,
+                        mask_sign,
+                        ss_hor != 0,
+                        ss_ver != 0,
+                    );
+                    if let Some((m, _, _)) = split_mask {
+                        recon.scratch.split_seg_mask = m;
+                    }
+                }
+                _ => {
+                    // AVG (or implicit mask / CWP weighted)
+                    if cwp_idx == 8 {
+                        // For OPFL/refine blocks the BACP mask is already derived by
+                        // the plain-MC `bacp==2` case).
+                        let mut bacp = if is_opfl {
+                            opfl_bacp as i32
+                        } else {
+                            2 * imp_base as i32
+                        };
+                        if bacp == 2 {
+                            bacp = crate::recon::get_mask(
+                                &mut seg_mask,
+                                (bw4 * 4) as usize,
+                                bx,
+                                0,
+                                by,
+                                0,
+                                &mv_pair,
+                                3,
+                                3,
+                                bw4,
+                                bh4,
+                                fi.bw * 4,
+                                fi.bh * 4,
+                            ) as i32;
+                        }
+                        if bacp != 0 {
+                            mc_mask(
+                                recon.frame.exec,
+                                recon.bd,
+                                &mut recon.dst_y[dst_off..],
+                                y_stride,
+                                &tmp0[0],
+                                &tmp1[0],
+                                w,
+                                h,
+                                &seg_mask,
+                            );
+                        } else {
+                            mc_avg(
+                                recon.frame.exec,
+                                recon.bd,
+                                &mut recon.dst_y[dst_off..],
+                                y_stride,
+                                &tmp0[0],
+                                &tmp1[0],
+                                w,
+                                h,
+                            );
+                        }
+                    } else {
+                        mc_w_avg(
+                            recon.frame.exec,
+                            recon.bd,
+                            &mut recon.dst_y[dst_off..],
+                            y_stride,
+                            &tmp0[0],
+                            &tmp1[0],
+                            w,
+                            h,
+                            cwp_idx,
+                        );
+                    }
+                }
             }
+            recon.scratch.put_compound_tmp(tmp);
         }
-        recon.scratch.put_compound_tmp(tmp);
 
         // Luma residual (same walk as single-ref).
         let seg_id = b.seg_id as usize;
@@ -3208,7 +3291,7 @@ where
 
         // Chroma MC + blend run only at the recon stage (`Both`/`ReconOnly`);
         // the read stage (`ReadOnly`) only consumes the chroma coefficients
-        let do_chroma_mc = chroma_stage != ChromaPhase::ReadOnly;
+        let do_chroma_mc = chroma_stage != ChromaPhase::ReadOnly && predict;
 
         // o_step = 4>>opfl.
         let opfl_refine = comp_type == 1 && refine_mv != 0;
@@ -3228,6 +3311,9 @@ where
             (ld[0] as i32, ld[1] as i32)
         };
         let sub8x8 = lbs != BlockSize::Invalid && cbs != lbs && imin(luma_bw4, luma_bh4) < 16;
+        if sub8x8 && chroma_stage != ChromaPhase::ReadOnly {
+            sub8x8_refmvs(recon, cbx, cby, cw4, ch4);
+        }
         if sub8x8 && do_chroma_mc {
             let base = ((cby & 63) as usize) * 128 + ((cbx & 127) as usize);
             for y in 0..ch4 {
@@ -3545,25 +3631,62 @@ where
         let uv_txtp_seed = recon.scratch.txtp_map[(by & 15) as usize * 16 + (bx & 15) as usize];
         let cbw4ss = (cbw4 + ss_hor) >> ss_hor;
         let cbh4ss = (cbh4 + ss_ver) >> ss_ver;
-        inter_chroma_residual_8bpc(
-            recon,
-            msac,
-            cdf_m,
-            a,
-            l,
-            b,
-            uvtx,
-            cbx,
-            cby,
-            cbw4ss,
-            cbh4ss,
-            cw4ss,
-            ch4ss,
-            uv_txtp_seed,
-            chroma_stage,
-            fi,
-        )?;
+        if let Some(stage) = recon.scratch.split_phase.chroma_stage(chroma_stage) {
+            inter_chroma_residual_8bpc(
+                recon,
+                msac,
+                cdf_m,
+                a,
+                l,
+                b,
+                uvtx,
+                cbx,
+                cby,
+                cbw4ss,
+                cbh4ss,
+                cw4ss,
+                ch4ss,
+                uv_txtp_seed,
+                stage,
+                fi,
+            )?;
+        }
     }
     recon.scratch.put_compound_seg_mask(seg_mask);
     Ok(())
+}
+
+/// Make the spatial refmvs of the luma blocks under a sub-8x8 chroma block
+/// (`cw4 x ch4` units at `cbx, cby` in the `rt.r` ring) available to its chroma
+/// MC: recorded by the entropy pass, written back into the replay's own tile
+/// by the replay. Fused decoding reads the ring as it is.
+pub(crate) fn sub8x8_refmvs<BD: BitDepth>(
+    recon: &mut ReconCtx<BD>,
+    cbx: i32,
+    cby: i32,
+    cw4: i32,
+    ch4: i32,
+) {
+    let base = ((cby & 63) as usize) * 128 + ((cbx & 127) as usize);
+    match recon.scratch.split_phase {
+        SplitPhase::Fused => {}
+        SplitPhase::Parse => {
+            for y in 0..ch4.max(0) as usize {
+                let row = base + y * 128;
+                recon
+                    .scratch
+                    .sub8x8_rec
+                    .extend_from_slice(&recon.rt.r[row..row + cw4.max(0) as usize]);
+            }
+        }
+        SplitPhase::Replay => {
+            for y in 0..ch4.max(0) as usize {
+                let row = base + y * 128;
+                let n = cw4.max(0) as usize;
+                let pos = recon.scratch.sub8x8_rpos;
+                recon.rt.r[row..row + n].copy_from_slice(&recon.scratch.sub8x8_rec[pos..pos + n]);
+                recon.scratch.sub8x8_rpos += n;
+            }
+        }
+    }
 }

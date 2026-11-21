@@ -37,7 +37,7 @@ use crate::levels::{Av2Block, BlockSize, Mv, MvXY, RefPair};
 pub(crate) const INVALID_TRAJ: u16 = 0x8080;
 
 /// Projected-MV rows kept above each superblock row (copied from the previous
-/// row). A TIP neighbour sampled at its 16x16 unit origin can sit up to three
+/// row). A TIP neighbor sampled at its 16x16 unit origin can sit up to three
 /// 8x8 rows above the current superblock row.
 pub(crate) const RP_PROJ_ROWS_ABOVE: usize = 3;
 pub(crate) const INVALID_REF2CUR: i8 = -32;
@@ -1240,6 +1240,8 @@ pub(crate) struct MvSearchState {
     pub(crate) sngl_iter_cntr: i32,
     pub(crate) iter_cntr: i32,
     pub(crate) b8x8: isize,
+    /// Base of this tile superblock row inside `rp_traj`.
+    pub(crate) traj_base: isize,
     /// Current block position (4x4 units, absolute).
     pub(crate) by4: i32,
     pub(crate) bx4: i32,
@@ -1259,6 +1261,7 @@ impl Default for MvSearchState {
             sngl_iter_cntr: 0,
             iter_cntr: 0,
             b8x8: 0,
+            traj_base: 0,
             by4: 0,
             bx4: 0,
         }
@@ -1315,7 +1318,7 @@ pub(crate) fn add_temporal_candidate(
     // `off3`) is added so negative-row (top SB-boundary) accesses stay in bounds,
     // `rp_traj` already carries its own per-sbrow base (`off2`, == 0 single-thread).
     let off = (rp_base + off_8x8) as usize;
-    let traj_off = off_8x8 as usize;
+    let traj_off = (st.traj_base + off_8x8) as usize;
     let mv = if seq_mv_traj && rp_traj[ref0 as usize][traj_off].y() != INVALID_MV {
         rp_traj[ref0 as usize][traj_off]
     } else {
@@ -2050,7 +2053,8 @@ pub(crate) fn refmvs_find(
     let tms_8x8y = ((by4 & (rf.sbsz - 1)) >> 1) as isize;
     let lms_8x8x = (bx4 >> 1) as isize;
     let mut st = MvSearchState {
-        b8x8: lms_8x8x + tms_8x8y * stride,
+        b8x8: rt.rp_traj_off as isize + lms_8x8x + tms_8x8y * stride,
+        traj_base: rt.rp_traj_off as isize,
         by4,
         bx4,
         ..Default::default()
@@ -2760,9 +2764,9 @@ pub(crate) fn splat_mv_scalar(
     }
 }
 
-pub(crate) fn check_traj_intersect(
+fn check_traj_intersect(
     rf: &Frame,
-    rp_traj: &mut [Vec<Mv>; 7],
+    rp_traj: &mut [&mut [Mv]; 7],
     map: &mut [[Vec<TrajMap>; 7]; 3],
     ref1: usize,
     ref2: usize,
@@ -2778,6 +2782,8 @@ pub(crate) fn check_traj_intersect(
     let mfmv_edge = rf.mfmv_edge;
     let shift = rf.mfmv_k_shift;
     let stride = rf.rp_stride;
+    // `rp_traj` starts at the superblock row being projected.
+    let tb = 0usize;
     let (mv_in_y, mv_in_x) = (mv_in.y(), mv_in.x());
 
     let pos = |yv: i32, xv: i32| -> usize {
@@ -2811,14 +2817,14 @@ pub(crate) fn check_traj_intersect(
             continue;
         }
         let pos1 = pos(y1, x1);
-        if rp_traj[ref2][pos1].y() != INVALID_MV {
+        if rp_traj[ref2][tb + pos1].y() != INVALID_MV {
             continue;
         }
-        let src_y = rp_traj[ref1][pos1].y();
-        let src_x = rp_traj[ref1][pos1].x();
+        let src_y = rp_traj[ref1][tb + pos1].y();
+        let src_x = rp_traj[ref1][tb + pos1].x();
         let py = iclip(src_y + mv_in_y, -2047, 2047);
         let px = iclip(src_x + mv_in_x, -2047, 2047);
-        rp_traj[ref2][pos1] = Mv {
+        rp_traj[ref2][tb + pos1] = Mv {
             c: MvXY { y: py, x: px },
         };
 
@@ -2878,14 +2884,14 @@ pub(crate) fn check_traj_intersect(
             continue;
         }
         let pos2 = pos(y2, x2);
-        if rp_traj[ref1][pos2].y() != INVALID_MV {
+        if rp_traj[ref1][tb + pos2].y() != INVALID_MV {
             continue;
         }
-        let src_y = rp_traj[ref2][pos2].y();
-        let src_x = rp_traj[ref2][pos2].x();
+        let src_y = rp_traj[ref2][tb + pos2].y();
+        let src_x = rp_traj[ref2][tb + pos2].x();
         let py = iclip(src_y - mv_in_y, -0xffff, 0xffff);
         let px = iclip(src_x - mv_in_x, -0xffff, 0xffff);
-        rp_traj[ref1][pos2] = Mv {
+        rp_traj[ref1][tb + pos2] = Mv {
             c: MvXY { y: py, x: px },
         };
 
@@ -2915,7 +2921,7 @@ pub(crate) fn load_tmvs(
     col_start8: i32,
     col_end8: i32,
     row_start8: i32,
-    mut row_end8: i32,
+    row_end8: i32,
     mv_traj: bool,
     tip_frame_mode: u8,
     tip_hole_fill: bool,
@@ -2927,12 +2933,6 @@ pub(crate) fn load_tmvs(
     }
     debug_assert!(row_start8 >= 0);
     let sbsz8 = rf.sbsz >> 1;
-    let mfmv_sbsz8 = rf.mfmv_sbsz8;
-    let mfmv_edge = rf.mfmv_edge;
-    row_end8 = imin(row_end8, rf.ih8);
-    let col_start8i = imax(col_start8 - mfmv_edge, 0);
-    let col_end8i = imin(col_end8 + mfmv_edge, rf.iw8);
-
     let stride = rf.rp_stride;
     let offset = sbsz8 as isize * stride * tile_row_idx as isize;
     let poffset = if rf.have_frame_threading {
@@ -2940,6 +2940,14 @@ pub(crate) fn load_tmvs(
     } else {
         let above = RP_PROJ_ROWS_ABOVE as isize;
         (sbsz8 as isize + above) * stride * tile_row_idx as isize + above * stride
+    };
+
+    // `rp_traj` follows `rp_proj`: one window per tile row when rolling, the
+    // whole frame otherwise. `rp_map` is scratch for this call only.
+    let traj_offset = if rf.have_frame_threading {
+        row_start8 as isize * stride
+    } else {
+        offset
     };
 
     if !rf.have_frame_threading {
@@ -2956,16 +2964,212 @@ pub(crate) fn load_tmvs(
         }
     }
 
+    // Move the output buffers out so the row projection can read `rf` while
+    // writing them; moving a Vec only swaps its pointer.
+    let mut proj = std::mem::take(&mut rf.rp_proj);
+    let mut traj = std::mem::take(&mut rf.rp_traj);
+    let mut map = std::mem::take(&mut rf.rp_map);
     {
+        let to = traj_offset as usize;
+        let mut traj_rows: [&mut [Mv]; 7] = traj.each_mut().map(|v| {
+            let o = to.min(v.len());
+            &mut v[o..]
+        });
+        load_tmvs_rows(
+            rf,
+            &mut proj[poffset as usize..],
+            &mut traj_rows,
+            &mut map,
+            offset as usize,
+            col_start8,
+            col_end8,
+            row_start8,
+            row_end8,
+            mv_traj,
+            tip_frame_mode,
+            tip_hole_fill,
+            tmvp_sample_step,
+            n_ref_frames,
+        );
+    }
+    rf.rp_proj = proj;
+    rf.rp_traj = traj;
+    rf.rp_map = map;
+}
+
+std::thread_local! {
+    /// Per-thread `rp_map` scratch for the parallel frame-wide projection.
+    static TMVS_MAP: core::cell::RefCell<[[Vec<TrajMap>; 7]; 3]> =
+        core::cell::RefCell::new(Default::default());
+}
+
+/// Releases the calling thread's [`load_tmvs_frame_wide`] scratch.
+pub(crate) fn clear_thread_local_tmvs_scratch() {
+    TMVS_MAP.with(|m| *m.borrow_mut() = Default::default());
+}
+
+/// Projects every superblock row of a frame-wide (`have_frame_threading`)
+/// layout across up to `n_threads` threads. `rows` lists each call's
+/// `(row_start8, row_end8)` exactly as the serial loop would pass them to
+/// [`load_tmvs`] with full-width columns `0..col_end8`.
+///
+/// Rows are independent in this layout: a call writes `rp_proj`, `rp_traj`
+/// and `rp_map` only inside its own superblock row, and reads `rp_map` only
+/// where it reset it first. So each row gets disjoint `rp_proj`/`rp_traj`
+/// slices and each thread its own `rp_map`, and the result is identical to
+/// the serial order.
+pub(crate) fn load_tmvs_frame_wide(
+    rf: &mut Frame,
+    rows: &[(i32, i32)],
+    col_end8: i32,
+    mv_traj: bool,
+    tip_frame_mode: u8,
+    tip_hole_fill: bool,
+    tmvp_sample_step: i32,
+    n_ref_frames: i32,
+    pool: Option<&crate::mtpool::ThreadPool>,
+    n_threads: usize,
+) -> Result<(), ()> {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+
+    debug_assert!(rf.have_frame_threading && !rf.have_threading);
+    let stride = rf.rp_stride as usize;
+    let map_len = (rf.sbsz >> 1) as usize * stride;
+    let mut proj = std::mem::take(&mut rf.rp_proj);
+    let mut traj = std::mem::take(&mut rf.rp_traj);
+    let err = AtomicBool::new(false);
+    {
+        struct RowJob<'a> {
+            row_start8: i32,
+            row_end8: i32,
+            proj: &'a mut [SnglMvBlock],
+            traj: [&'a mut [Mv]; 7],
+        }
+        // Rows ascend and never overlap; carve each one out of the planes.
+        let limit = traj.iter().map(Vec::len).fold(proj.len(), usize::min);
+        let mut proj_rest: &mut [SnglMvBlock] = &mut proj[..limit];
+        let mut traj_rest: [&mut [Mv]; 7] = traj.each_mut().map(|v| &mut v[..limit]);
+        let mut base = 0usize;
+        let mut jobs: Vec<Mutex<Option<RowJob>>> = Vec::with_capacity(rows.len());
+        for &(row_start8, row_end8) in rows {
+            let start = (row_start8 as usize * stride).clamp(base, limit);
+            let end = (row_end8.max(row_start8) as usize * stride).clamp(start, limit);
+            let (_, rest) = std::mem::take(&mut proj_rest).split_at_mut(start - base);
+            let (cur, rest) = rest.split_at_mut(end - start);
+            proj_rest = rest;
+            let cur_traj = traj_rest.each_mut().map(|plane| {
+                let (_, rest) = std::mem::take(plane).split_at_mut(start - base);
+                let (cur, rest) = rest.split_at_mut(end - start);
+                *plane = rest;
+                cur
+            });
+            base = end;
+            jobs.push(Mutex::new(Some(RowJob {
+                row_start8,
+                row_end8,
+                proj: cur,
+                traj: cur_traj,
+            })));
+        }
+
+        let rf: &Frame = rf;
+        let next = AtomicUsize::new(0);
+        let job = || {
+            TMVS_MAP.with(|m| {
+                let mut map = m.borrow_mut();
+                if mv_traj {
+                    for plane in map.iter_mut().flatten() {
+                        if plane.len() < map_len && try_resize_default(plane, map_len).is_err() {
+                            err.store(true, Relaxed);
+                            return;
+                        }
+                    }
+                }
+                loop {
+                    let i = next.fetch_add(1, Relaxed);
+                    if i >= jobs.len() || err.load(Relaxed) {
+                        break;
+                    }
+                    let Some(mut j) = jobs[i].lock().ok().and_then(|mut g| g.take()) else {
+                        err.store(true, Relaxed);
+                        break;
+                    };
+                    load_tmvs_rows(
+                        rf,
+                        j.proj,
+                        &mut j.traj,
+                        &mut map,
+                        0,
+                        0,
+                        col_end8,
+                        j.row_start8,
+                        j.row_end8,
+                        mv_traj,
+                        tip_frame_mode,
+                        tip_hole_fill,
+                        tmvp_sample_step,
+                        n_ref_frames,
+                    );
+                }
+            });
+        };
+        let n = n_threads.clamp(1, jobs.len().max(1));
+        if n <= 1 {
+            job();
+        } else {
+            crate::mtpool::dispatch(pool, n, &job);
+        }
+    }
+    rf.rp_proj = proj;
+    rf.rp_traj = traj;
+    if err.load(Relaxed) { Err(()) } else { Ok(()) }
+}
+
+/// The body of [`load_tmvs`] for one superblock row. `proj` and `traj` start at
+/// that row's base in `rp_proj` / `rp_traj`; `map_off` is the row's base in
+/// `map`.
+#[allow(clippy::too_many_arguments)]
+fn load_tmvs_rows(
+    rf: &Frame,
+    proj: &mut [SnglMvBlock],
+    traj: &mut [&mut [Mv]; 7],
+    map: &mut [[Vec<TrajMap>; 7]; 3],
+    map_off: usize,
+    col_start8: i32,
+    col_end8: i32,
+    row_start8: i32,
+    mut row_end8: i32,
+    mv_traj: bool,
+    tip_frame_mode: u8,
+    tip_hole_fill: bool,
+    tmvp_sample_step: i32,
+    n_ref_frames: i32,
+) {
+    let sbsz8 = rf.sbsz >> 1;
+    let mfmv_sbsz8 = rf.mfmv_sbsz8;
+    let mfmv_edge = rf.mfmv_edge;
+    row_end8 = imin(row_end8, rf.ih8);
+    let col_start8i = imax(col_start8 - mfmv_edge, 0);
+    let col_end8i = imin(col_end8 + mfmv_edge, rf.iw8);
+    let stride = rf.rp_stride;
+    let offset = map_off as isize;
+    let poffset: isize = 0;
+    let traj_offset: isize = 0;
+
+    {
+        let invalid = Mv {
+            c: MvXY {
+                y: INVALID_MV,
+                x: 0,
+            },
+        };
         let mut pp = poffset as usize;
         for _y in row_start8..row_end8 {
-            for x in col_start8..col_end8 {
-                rf.rp_proj[pp + x as usize].mv = Mv {
-                    c: MvXY {
-                        y: INVALID_MV,
-                        x: 0,
-                    },
-                };
+            if col_start8 < col_end8 {
+                for b in &mut proj[pp + col_start8 as usize..pp + col_end8 as usize] {
+                    b.mv = invalid;
+                }
             }
             pp = (pp as isize + stride) as usize;
         }
@@ -2975,15 +3179,16 @@ pub(crate) fn load_tmvs(
         let off = offset as usize;
         let msk = mfmv_sbsz8 - 1;
         for n in 0..7 {
-            let mut tj_off = off;
+            let mut tj_off = traj_offset as usize;
+            let invalid = Mv {
+                c: MvXY {
+                    y: INVALID_MV,
+                    x: 0,
+                },
+            };
             for _y in row_start8..row_end8 {
-                for x in col_start8..col_end8 {
-                    rf.rp_traj[n][tj_off + x as usize] = Mv {
-                        c: MvXY {
-                            y: INVALID_MV,
-                            x: 0,
-                        },
-                    };
+                if col_start8 < col_end8 {
+                    traj[n][tj_off + col_start8 as usize..tj_off + col_end8 as usize].fill(invalid);
                 }
                 tj_off = (tj_off as isize + stride) as usize;
             }
@@ -2991,10 +3196,11 @@ pub(crate) fn load_tmvs(
                 let x_start = imax(0, col_start8 - k * mfmv_sbsz8);
                 let x_end = imin(rf.iw8, ((col_end8 + msk) & !msk) - k * mfmv_sbsz8);
                 let mut map_off = off;
+                let plane = &mut map[(k + 1) as usize][n];
                 for _y in row_start8..row_end8 {
-                    for x in x_start..x_end {
-                        rf.rp_map[(k + 1) as usize][n][map_off + x as usize] =
-                            TrajMap { y: -128, x: -128 };
+                    if x_start < x_end {
+                        plane[map_off + x_start as usize..map_off + x_end as usize]
+                            .fill(TrajMap { y: -128, x: -128 });
                     }
                     map_off = (map_off as isize + stride) as usize;
                 }
@@ -3040,20 +3246,10 @@ pub(crate) fn load_tmvs(
                     continue;
                 }
                 if mv_traj && ref2idx != -1 {
-                    let mut rp_traj_local: [Vec<Mv>; 7] = Default::default();
-                    for i in 0..7 {
-                        rp_traj_local[i] = std::mem::take(&mut rf.rp_traj[i]);
-                    }
-                    let mut map_local: [[Vec<TrajMap>; 7]; 3] = Default::default();
-                    for k in 0..3 {
-                        for r in 0..7 {
-                            map_local[k][r] = std::mem::take(&mut rf.rp_map[k][r]);
-                        }
-                    }
                     check_traj_intersect(
                         rf,
-                        &mut rp_traj_local,
-                        &mut map_local,
+                        traj,
+                        map,
                         mfmv_ref,
                         ref2idx as usize,
                         y,
@@ -3063,19 +3259,12 @@ pub(crate) fn load_tmvs(
                         col_end8_shifted,
                         mask,
                     );
-                    for i in 0..7 {
-                        rf.rp_traj[i] = std::mem::take(&mut rp_traj_local[i]);
-                    }
-                    for k in 0..3 {
-                        for r in 0..7 {
-                            rf.rp_map[k][r] = std::mem::take(&mut map_local[k][r]);
-                        }
-                    }
                 }
 
                 let ref2ref = rf.mfmv_ref2ref[n][b_ref as usize];
                 // ref2ref 0 (same-POC ref) still projects (AVM pos_valid).
-                if ref2ref == INVALID_REF2REF || (ref2ref != 0 && (ref2ref < 0) != (ref_sign != 0)) {
+                if ref2ref == INVALID_REF2REF || (ref2ref != 0 && (ref2ref < 0) != (ref_sign != 0))
+                {
                     continue;
                 }
                 let mv1 = scale_mv(b_mv, -rf.mfmv_ref2sf[n][b_ref as usize][0]);
@@ -3095,34 +3284,33 @@ pub(crate) fn load_tmvs(
                 if y < y_proj_start || y >= y_proj_end {
                     continue;
                 }
-                // AVM `check_block_position`: the target must lie within the
-                // source's processing block widened by `tmvp_col_offset`.
-                let x_src_base = x & !(mfmv_sbsz8 - 1);
-                if x1 < x_src_base - mfmv_edge || x1 >= x_src_base + mfmv_sbsz8 + mfmv_edge {
-                    continue;
-                }
-                // Trajectory end points are bounded around the target's block.
+                // Bound the source and reverse trajectory endpoint around the
+                // projected position's processing block.
                 let x_sb_align = x1 & !(mfmv_sbsz8 - 1);
                 let x_proj_start = imax(x_sb_align - mfmv_edge, 0);
                 let x_proj_end = imin(x_sb_align + mfmv_sbsz8 + mfmv_edge, rf.iw8);
+                if x < x_proj_start || x >= x_proj_end {
+                    continue;
+                }
 
                 let pos1 = (y1 as usize & (sbsz8 as usize - 1)) * stride as usize + x1 as usize;
                 let pp = poffset as usize;
-                if rf.rp_proj[pp + pos1].mv.y() != INVALID_MV
+                if proj[pp + pos1].mv.y() != INVALID_MV
                     && (tgt == -1
                         || ref2idx != tgt
-                        || rf.rp_proj[pp + pos1].reference == ref2ref.unsigned_abs())
+                        || proj[pp + pos1].reference == ref2ref.unsigned_abs())
                 {
                     continue;
                 }
 
                 if mv_traj {
                     let off = offset as usize;
+                    let toff = traj_offset as usize;
                     let k1 = (x1 >> shift) - (x >> shift);
                     debug_assert!((-1..=1).contains(&k1));
-                    rf.rp_traj[mfmv_ref][off + pos1].c.y = iclip(mv1_y, -2047, 2047);
-                    rf.rp_traj[mfmv_ref][off + pos1].c.x = iclip(mv1_x, -2047, 2047);
-                    rf.rp_map[(k1 + 1) as usize][mfmv_ref][off + pos] = TrajMap {
+                    traj[mfmv_ref][toff + pos1].c.y = iclip(mv1_y, -2047, 2047);
+                    traj[mfmv_ref][toff + pos1].c.x = iclip(mv1_x, -2047, 2047);
+                    map[(k1 + 1) as usize][mfmv_ref][off + pos] = TrajMap {
                         y: (y1 - y) as i8,
                         x: (x1 - x) as i8,
                     };
@@ -3131,8 +3319,8 @@ pub(crate) fn load_tmvs(
                         let ref2idx_u = ref2idx as usize;
                         let mv2 = scale_mv(b_mv, rf.mfmv_ref2sf[n][b_ref as usize][1]);
                         let (mv2_y, mv2_x) = (mv2.y(), mv2.x());
-                        rf.rp_traj[ref2idx_u][off + pos1].c.y = iclip(mv2_y, -2047, 2047);
-                        rf.rp_traj[ref2idx_u][off + pos1].c.x = iclip(mv2_x, -2047, 2047);
+                        traj[ref2idx_u][toff + pos1].c.y = iclip(mv2_y, -2047, 2047);
+                        traj[ref2idx_u][toff + pos1].c.x = iclip(mv2_x, -2047, 2047);
                         let (b_mv_y, b_mv_x) = (b_mv.y(), b_mv.x());
                         let mut ok = true;
                         let mut y2 = y + apply_sign(b_mv_y.abs() >> 6, b_mv_y);
@@ -3151,7 +3339,7 @@ pub(crate) fn load_tmvs(
                                     + x2 as usize;
                                 let k2 = (x1 >> shift) - (x2 >> shift);
                                 debug_assert!((-1..=1).contains(&k2));
-                                rf.rp_map[(k2 + 1) as usize][ref2idx_u][off + pos2] = TrajMap {
+                                map[(k2 + 1) as usize][ref2idx_u][off + pos2] = TrajMap {
                                     y: (y1 - y2) as i8,
                                     x: (x1 - x2) as i8,
                                 };
@@ -3164,8 +3352,8 @@ pub(crate) fn load_tmvs(
                 if ref2ref < 0 {
                     final_mv = Mv::from_xy(-final_mv.y(), -final_mv.x());
                 }
-                rf.rp_proj[pp + pos1].mv = final_mv;
-                rf.rp_proj[pp + pos1].reference = ref2ref.unsigned_abs();
+                proj[pp + pos1].mv = final_mv;
+                proj[pp + pos1].reference = ref2ref.unsigned_abs();
             }
         }
     }
@@ -3174,7 +3362,7 @@ pub(crate) fn load_tmvs(
         let pp = poffset as usize;
         let tip_delta = rf.tip.delta;
         tip_projection(
-            &mut rf.rp_proj[pp..],
+            &mut proj[pp..],
             stride,
             col_start8,
             col_end8,
@@ -3187,7 +3375,7 @@ pub(crate) fn load_tmvs(
         );
         if tip_hole_fill {
             fill_holes(
-                &mut rf.rp_proj[pp..],
+                &mut proj[pp..],
                 stride,
                 col_start8,
                 col_end8,
@@ -3199,7 +3387,7 @@ pub(crate) fn load_tmvs(
                 tip_delta,
             );
             smoothen(
-                &mut rf.rp_proj[pp..],
+                &mut proj[pp..],
                 stride,
                 col_start8,
                 col_end8,
@@ -3213,10 +3401,10 @@ pub(crate) fn load_tmvs(
         }
     }
     if tmvp_sample_step > 1 {
-        let off = offset as usize;
+        let off = traj_offset as usize;
         for n in 0..n_ref_frames as usize {
             fill_gap_traj(
-                &mut rf.rp_traj[n][off..],
+                &mut traj[n][off..],
                 stride,
                 col_start8,
                 col_end8,
@@ -3228,7 +3416,7 @@ pub(crate) fn load_tmvs(
         }
         let pp = poffset as usize;
         fill_gap_proj(
-            &mut rf.rp_proj[pp..],
+            &mut proj[pp..],
             stride,
             col_start8,
             col_end8,
@@ -3282,14 +3470,26 @@ pub(crate) fn init_frame(
     rf.have_threading = have_threading;
     rf.have_frame_threading = have_frame_threading;
 
+    if have_frame_threading {
+        // Frame-wide projection: every superblock row keeps its own rows, so
+        // all rows can be projected before the tiles are decoded in parallel.
+        let frame_sz = ((rf.ih8 + 31) & !31) as usize * rp_stride as usize;
+        if rf.rp_proj.len() < frame_sz {
+            try_resize_default(&mut rf.rp_proj, frame_sz)?;
+        }
+        for n in 0..7 {
+            if rf.rp_traj[n].len() < frame_sz {
+                try_resize_default(&mut rf.rp_traj[n], frame_sz)?;
+            }
+        }
+    }
     if n_blocks * rf.sbsz > rf.n_blocks {
         let sbsz8 = rf.sbsz >> 1;
-        let rp_proj_sz = if have_frame_threading {
-            ((rf.ih8 + 31) & !31) as usize * rp_stride as usize
-        } else {
-            (RP_PROJ_ROWS_ABOVE + sbsz8 as usize) * n_blocks as usize
-        };
-        let rp_traj_sz = sbsz8 as usize * n_blocks as usize;
+        // Grow only: a frame-wide buffer from an earlier frame also serves the
+        // rolling window.
+        let rp_proj_sz =
+            ((RP_PROJ_ROWS_ABOVE + sbsz8 as usize) * n_blocks as usize).max(rf.rp_proj.len());
+        let rp_traj_sz = (sbsz8 as usize * n_blocks as usize).max(rf.rp_traj[0].len());
         let rp_map_sz = sbsz8 as usize * n_blocks as usize;
         let r_above_sz = n_blocks as usize;
 
@@ -3630,7 +3830,11 @@ pub(crate) fn init_frame(
                         let rrpoc = ref_ref_poc[rf.mfmv[n].reference as usize][m] as i32;
                         let diff2 = get_poc_diff(nbits, rpoc, rrpoc);
                         let in_range = ((diff2 + 31) as u32) < 63;
-                        rf.mfmv_ref2ref[n][m] = if in_range { diff2 as i8 } else { INVALID_REF2REF };
+                        rf.mfmv_ref2ref[n][m] = if in_range {
+                            diff2 as i8
+                        } else {
+                            INVALID_REF2REF
+                        };
                         // refs at the same POC as the projected ref have no
                         // trajectory endpoint (overlays, inter-layer refs)
                         let mut l = n_refs;
@@ -3673,7 +3877,7 @@ pub(crate) fn tile_sbrow_init(
     tile_col_end4: i32,
     tile_row_start4: i32,
     tile_row_end4: i32,
-    sby: i32,
+    row8: i32,
     mut tile_row_idx: i32,
 ) {
     if !rf.have_threading {
@@ -3681,9 +3885,11 @@ pub(crate) fn tile_sbrow_init(
     }
     let off1 = rf.rp_stride * tile_row_idx as isize;
     let sbsz8 = rf.sbsz >> 1;
-    let off2 = sbsz8 as isize * off1;
+    let mut off2 = sbsz8 as isize * off1;
     let off3 = if rf.have_frame_threading {
-        (sby * sbsz8) as isize * rf.rp_stride
+        // `row8` is the superblock row's first 8x8 row in the frame.
+        off2 = row8 as isize * rf.rp_stride;
+        off2
     } else {
         let above = RP_PROJ_ROWS_ABOVE as isize;
         (sbsz8 as isize + above) * off1 + above * rf.rp_stride
@@ -3985,6 +4191,55 @@ pub(crate) fn splat_comp_warpmv(
         t_off = (t_off as isize + t_stride) as usize;
         s_src.oy4 += 2;
         bh4 -= 2;
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    #[test]
+    fn motion_field_checks_source_against_projected_group() {
+        let width = 32;
+        let rows = 8;
+        let mut rf = Frame {
+            iw8: width,
+            ih8: rows,
+            sbsz: rows * 2,
+            mfmv_sbsz8: 8,
+            mfmv_edge: 4,
+            mfmv_k_shift: 3,
+            n_mfmvs: 1,
+            rp_stride: width as isize,
+            rp_proj: vec![
+                SnglMvBlock::default();
+                (rows as usize + RP_PROJ_ROWS_ABOVE) * width as usize
+            ],
+            ..Frame::default()
+        };
+        rf.mfmv[0].tgt = -1;
+        rf.mfmv_ref2cur[0] = 1;
+        rf.mfmv_ref2ref[0][0] = 1;
+        rf.mfmv_ref2sf[0][0][0] = 1 << 14;
+        rf.rp_ref[0] = vec![
+            TemporalBlock {
+                reference: RefPair::from_refs(-1, -1),
+                ..TemporalBlock::default()
+            };
+            (width * rows) as usize
+        ];
+        for (x, dx) in [(16, -448), (9, 448)] {
+            rf.rp_ref[0][x] = TemporalBlock {
+                reference: RefPair::from_refs(0, -1),
+                mv: TemporalBlockMv::from_mvs(quantize_mv(Mv::from_xy(0, dx)), QMv::default()),
+            };
+        }
+
+        load_tmvs(&mut rf, 0, 0, width, 0, rows, false, 0, false, 1, 1);
+
+        let first_row = RP_PROJ_ROWS_ABOVE * width as usize;
+        assert_eq!(rf.rp_proj[first_row + 9].mv.x(), -448);
+        assert_eq!(rf.rp_proj[first_row + 16].mv.y(), INVALID_MV);
     }
 }
 

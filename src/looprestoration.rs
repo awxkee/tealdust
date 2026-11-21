@@ -38,6 +38,12 @@ pub(crate) const LR_HAVE_TOP: u8 = 1 << 2;
 pub(crate) const LR_HAVE_BOTTOM: u8 = 1 << 3;
 pub(crate) const LR_HAVE_TOP_INTEGRATED: u8 = 1 << 4;
 pub(crate) const LR_HAVE_BOTTOM_INTEGRATED: u8 = 1 << 5;
+/// `disable_loopfilters_across_tiles` only: the stripe starts / ends at a tile
+/// row seam. AVM then pads the cross-component luma with the tile's own edge
+/// row *before* downsampling, unlike a picture edge. Only the chroma
+/// cross-component kernels take these bits.
+pub(crate) const LR_TILE_TOP: u8 = 1 << 6;
+pub(crate) const LR_TILE_BOTTOM: u8 = 1 << 7;
 
 pub(crate) static PC_WIENER_NORMALIZER: [u16; 4] = [3739, 3273, 3074, 7];
 
@@ -1238,6 +1244,8 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
     let mut l_ptrs: [usize; 5] = [0; 5];
     let o = ROW_ORIGIN;
     let luma_w = w << ss_hor;
+    let (tile_top, tile_bottom) = (edges & LR_TILE_TOP != 0, edges & LR_TILE_BOTTOM != 0);
+    let edges = edges & !(LR_TILE_TOP | LR_TILE_BOTTOM);
 
     backup_row_8bpc(&mut c_buffers[2], o, &*p, p_off, &left[0], 6, w, 2, edges);
     c_ptrs[2] = 2;
@@ -1338,6 +1346,22 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
             ds_flt,
         );
         l_ptrs[1] = 1;
+    } else if tile_top {
+        // Tile-row seam: the rows above are the tile's first luma row.
+        backup_row_luma_8bpc(
+            &mut l_buffers[0],
+            o,
+            luma,
+            luma_off,
+            0,
+            luma_w,
+            edges,
+            ss_hor,
+            ss_ver,
+            ds_flt,
+        );
+        l_ptrs[0] = 0;
+        l_ptrs[1] = 0;
     } else {
         l_ptrs[0] = 2;
         l_ptrs[1] = 2;
@@ -1404,7 +1428,22 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
             bak_idx = 0;
         }
 
-        if c_ptrs[4] == c_ptrs[3] {
+        if tile_bottom && y + 2 >= h {
+            // Tile-row seam: the rows below are the tile's last luma row.
+            backup_row_luma_8bpc(
+                &mut l_buffers[lbak_idx],
+                o,
+                luma,
+                luma_off + ((h << ss_ver) - 1) * lstride,
+                0,
+                luma_w,
+                edges,
+                ss_hor,
+                ss_ver,
+                ds_flt,
+            );
+            l_ptrs[4] = lbak_idx;
+        } else if c_ptrs[4] == c_ptrs[3] {
             l_ptrs[4] = l_ptrs[3];
         } else if y + 2 == h && edges & LR_HAVE_BOTTOM_INTEGRATED == 0 {
             backup_row_luma_8bpc(
@@ -1519,7 +1558,98 @@ pub(crate) fn ns_wiener_single_uv_8bpc(
     }
 }
 
+// On aarch64 the NEON unit kernel always takes over.
+#[cfg_attr(target_arch = "aarch64", allow(unreachable_code))]
 pub(crate) fn gdf_prep_8bpc(
+    exec: &crate::exec_context::ExecContext,
+    dst: &mut [i8],
+    dst_stride: usize,
+    p: &[u8],
+    p_off: usize,
+    stride: usize,
+    left: &[[u8; 6]],
+    lpf: &[u8],
+    lpf_off: usize,
+    lpf_bottom: &[u8],
+    lpf_bottom_off: usize,
+    w: usize,
+    h: usize,
+    ref_dst_idx: usize,
+    qp_idx: usize,
+    edges: u8,
+) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        let _ = exec;
+        // SAFETY: NEON is part of the aarch64 baseline.
+        return unsafe {
+            crate::neon::gdf_prep_unit_neon(
+                dst,
+                dst_stride,
+                p,
+                p_off,
+                stride,
+                left,
+                lpf,
+                lpf_off,
+                lpf_bottom,
+                lpf_bottom_off,
+                w,
+                h,
+                ref_dst_idx,
+                qp_idx,
+                edges,
+                0,
+            )
+        };
+    }
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: AVX2 was just detected.
+        return unsafe {
+            crate::avx::gdf_prep_unit_avx2(
+                dst,
+                dst_stride,
+                p,
+                p_off,
+                stride,
+                left,
+                lpf,
+                lpf_off,
+                lpf_bottom,
+                lpf_bottom_off,
+                w,
+                h,
+                ref_dst_idx,
+                qp_idx,
+                edges,
+                0,
+            )
+        };
+    }
+    gdf_prep_rows_8bpc(
+        exec,
+        dst,
+        dst_stride,
+        p,
+        p_off,
+        stride,
+        left,
+        lpf,
+        lpf_off,
+        lpf_bottom,
+        lpf_bottom_off,
+        w,
+        h,
+        ref_dst_idx,
+        qp_idx,
+        edges,
+    )
+}
+
+/// Portable GDF prep: one row-kernel call per row.
+#[allow(clippy::too_many_arguments)]
+fn gdf_prep_rows_8bpc(
     exec: &crate::exec_context::ExecContext,
     dst: &mut [i8],
     dst_stride: usize,
@@ -1685,6 +1815,106 @@ pub(crate) fn gdf_prep_8bpc(
 }
 
 pub(crate) fn gdf_prep_hbd(
+    exec: &crate::exec_context::ExecContext,
+    dst: &mut [i8],
+    dst_stride: usize,
+    p: &[u16],
+    p_off: usize,
+    stride: usize,
+    left: &[[u16; 6]],
+    lpf: &[u16],
+    lpf_off: usize,
+    lpf_bottom: &[u16],
+    lpf_bottom_off: usize,
+    w: usize,
+    h: usize,
+    ref_dst_idx: usize,
+    qp_idx: usize,
+    edges: u8,
+    bitdepth_max: i32,
+) {
+    #[cfg(target_arch = "aarch64")]
+    if gdf_bitdepth_from_max(bitdepth_max) != 8 {
+        let down_shift = if gdf_bitdepth_from_max(bitdepth_max) == 12 {
+            2
+        } else {
+            0
+        };
+        // SAFETY: NEON is part of the aarch64 baseline.
+        return unsafe {
+            crate::neon::gdf_prep_unit_neon(
+                dst,
+                dst_stride,
+                p,
+                p_off,
+                stride,
+                left,
+                lpf,
+                lpf_off,
+                lpf_bottom,
+                lpf_bottom_off,
+                w,
+                h,
+                ref_dst_idx,
+                qp_idx,
+                edges,
+                down_shift,
+            )
+        };
+    }
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+    if gdf_bitdepth_from_max(bitdepth_max) != 8 && std::is_x86_feature_detected!("avx2") {
+        let down_shift = if gdf_bitdepth_from_max(bitdepth_max) == 12 {
+            2
+        } else {
+            0
+        };
+        // SAFETY: AVX2 was just detected.
+        return unsafe {
+            crate::avx::gdf_prep_unit_avx2(
+                dst,
+                dst_stride,
+                p,
+                p_off,
+                stride,
+                left,
+                lpf,
+                lpf_off,
+                lpf_bottom,
+                lpf_bottom_off,
+                w,
+                h,
+                ref_dst_idx,
+                qp_idx,
+                edges,
+                down_shift,
+            )
+        };
+    }
+    gdf_prep_rows_hbd(
+        exec,
+        dst,
+        dst_stride,
+        p,
+        p_off,
+        stride,
+        left,
+        lpf,
+        lpf_off,
+        lpf_bottom,
+        lpf_bottom_off,
+        w,
+        h,
+        ref_dst_idx,
+        qp_idx,
+        edges,
+        bitdepth_max,
+    )
+}
+
+/// Portable high-bit-depth GDF prep: one row-kernel call per row.
+#[allow(clippy::too_many_arguments)]
+fn gdf_prep_rows_hbd(
     exec: &crate::exec_context::ExecContext,
     dst: &mut [i8],
     dst_stride: usize,
@@ -1924,6 +2154,49 @@ pub(crate) struct LrContext<'a> {
     pub(crate) row_start_sb: &'a [u16],
     /// Luma SB size in pixels.
     pub(crate) sbsz: i32,
+    /// `disable_loopfilters_across_tiles`: LR/GDF treat tile edges as picture edges.
+    pub(crate) no_lf_across_tiles: bool,
+}
+
+/// Kernel edge flags for one stripe piece under `disable_loopfilters_across_tiles`.
+/// AVM pads a tile's top/bottom rows and left/right columns exactly as it pads
+/// the picture's (`save_tile_row_boundary_lines`, `tile_boundary_left/right`), so
+/// the seam passes drop their cross-tile sources. `x0`/`x1` are luma columns.
+#[inline]
+fn lr_tile_seam_edges(
+    no_lf_across_tiles: bool,
+    col_start_sb: &[u16],
+    sbsz: i32,
+    edges: u8,
+    x0: i32,
+    x1: i32,
+) -> u8 {
+    if !no_lf_across_tiles {
+        return edges;
+    }
+    let mut e = edges;
+    if e & LR_HAVE_BOTTOM_INTEGRATED != 0 {
+        e &= !(LR_HAVE_BOTTOM_INTEGRATED | LR_HAVE_BOTTOM);
+        e |= LR_TILE_BOTTOM;
+    }
+    if e & LR_HAVE_TOP_INTEGRATED != 0 {
+        e &= !(LR_HAVE_TOP_INTEGRATED | LR_HAVE_TOP);
+        e |= LR_TILE_TOP;
+    }
+    if lr_is_tile_col_seam(col_start_sb, sbsz, x0) {
+        e &= !LR_HAVE_LEFT;
+    }
+    if lr_is_tile_col_seam(col_start_sb, sbsz, x1) {
+        e &= !LR_HAVE_RIGHT;
+    }
+    e
+}
+
+/// Whether luma column `x` is the start of a tile column other than the first.
+#[inline]
+fn lr_is_tile_col_seam(col_start_sb: &[u16], sbsz: i32, x: i32) -> bool {
+    let n = col_start_sb.len();
+    n > 2 && col_start_sb[1..n - 1].iter().any(|&c| c as i32 * sbsz == x)
 }
 
 fn lr_stripe_8bpc(
@@ -2028,9 +2301,8 @@ fn lr_stripe_8bpc(
     // by `stripe_h * stride` each iteration). The slice kernels index `p` with a
     // local stripe-relative `y`, so this must track the stripe origin.
     let mut cur_off = p_off;
-    let mut lpf_off =
-        (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * stride_u as isize
-            + x as isize) as usize;
+    let mut lpf_off = (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * stride_u as isize
+        + x as isize) as usize;
     let mut llpf_off =
         (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * lstride_u as isize
             + (x << ss_hor) as isize) as usize;
@@ -2039,6 +2311,18 @@ fn lr_stripe_8bpc(
         edges ^= ((-(((sby + 1) != ctx.sbh) as i32 | (y + stripe_h != row_h) as i32)) as u8
             ^ edges)
             & LR_HAVE_BOTTOM;
+
+        // `disable_loopfilters_across_tiles`: tile edges pad like picture edges.
+        let kedges = lr_tile_seam_edges(
+            ctx.no_lf_across_tiles,
+            ctx.col_start_sb,
+            ctx.sbsz,
+            edges,
+            x << ss_hor,
+            (x + w) << ss_hor,
+        );
+        let uv_edges = kedges;
+        let kedges = kedges & !(LR_TILE_TOP | LR_TILE_BOTTOM);
 
         let inc = if (edges & (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED | LR_HAVE_BOTTOM_INTEGRATED))
             == LR_HAVE_TOP
@@ -2063,7 +2347,7 @@ fn lr_stripe_8bpc(
 
         // `top` source: the cross-tile-row CDEF line when both HAVE_TOP and
         // HAVE_TOP_INTEGRATED are set; otherwise the deblocked-line store.
-        let cdef_top: Option<usize> = if (edges & (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED))
+        let cdef_top: Option<usize> = if (kedges & (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED))
             == (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED)
         {
             let cdef_off = tile_row_m1 as usize * (6 - 4 * chroma as usize) * stride_u + x as usize;
@@ -2101,7 +2385,7 @@ fn lr_stripe_8bpc(
                 stripe_u,
                 ref_dst_idx as usize,
                 qp_idx as usize,
-                edges,
+                kedges,
             );
         }
 
@@ -2187,7 +2471,7 @@ fn lr_stripe_8bpc(
                         w_u,
                         stripe_u,
                         &filter,
-                        edges,
+                        kedges,
                         ll_mask_buf,
                     );
                 }
@@ -2231,7 +2515,7 @@ fn lr_stripe_8bpc(
                         ss_hor as usize,
                         ss_ver as usize,
                         ctx.cfl_ds_filter_index,
-                        edges,
+                        uv_edges,
                         ll_mask_buf,
                     );
                 }
@@ -2270,7 +2554,7 @@ fn lr_stripe_8bpc(
                         ctx.ns_subclass_lut,
                         &noskip_mask[noskip_offset..],
                         ctx.base_q,
-                        edges,
+                        kedges,
                         ll_mask_buf,
                     );
                     noskip_offset += (stripe_h >> 2) as usize;
@@ -2297,7 +2581,7 @@ fn lr_stripe_8bpc(
                         ctx.pc_subclass_lut,
                         &noskip_mask[noskip_offset..],
                         ctx.base_q,
-                        edges,
+                        kedges,
                         ll_mask_buf,
                     );
                     noskip_offset += (stripe_h >> 2) as usize;
@@ -2397,14 +2681,25 @@ fn lr_chunk_8bpc(
     // Segments of `width` that map to distinct restoration units.
     let mut segs: [(i32, (usize, usize)); 4] = [(0, first_unit); 4];
     let mut n_segs = 1usize;
-    let mut off = unit_size;
-    while unit_size < width && off < width && n_segs < 4 {
-        let unit = lr_unit_at_8bpc(ctx, x + off, w, unit_size, ss_hor, sb_idx, unit_idx_base);
-        if unit != segs[n_segs - 1].1 {
-            segs[n_segs] = (off, unit);
-            n_segs += 1;
+    // With `disable_loopfilters_across_tiles` a subsampled chunk can also
+    // straddle a tile column (32px chroma SBs); split there as well.
+    let step = if ctx.no_lf_across_tiles {
+        unit_size.min(32)
+    } else {
+        unit_size
+    };
+    let mut off = step;
+    while off < width && n_segs < 4 {
+        let seam = ctx.no_lf_across_tiles
+            && lr_is_tile_col_seam(ctx.col_start_sb, ctx.sbsz, (x + off) << ss_hor);
+        if seam || off % unit_size == 0 {
+            let unit = lr_unit_at_8bpc(ctx, x + off, w, unit_size, ss_hor, sb_idx, unit_idx_base);
+            if seam || unit != segs[n_segs - 1].1 {
+                segs[n_segs] = (off, unit);
+                n_segs += 1;
+            }
         }
-        off += unit_size;
+        off += step;
     }
 
     if n_segs == 1 {
@@ -3605,6 +3900,8 @@ pub(crate) fn ns_wiener_single_uv_hbd(
     let mut l_ptrs: [usize; 5] = [0; 5];
     let o = ROW_ORIGIN;
     let luma_w = w << ss_hor;
+    let (tile_top, tile_bottom) = (edges & LR_TILE_TOP != 0, edges & LR_TILE_BOTTOM != 0);
+    let edges = edges & !(LR_TILE_TOP | LR_TILE_BOTTOM);
 
     backup_row_hbd(&mut c_buffers[2], o, &*p, p_off, &left[0], 6, w, 2, edges);
     c_ptrs[2] = 2;
@@ -3705,6 +4002,22 @@ pub(crate) fn ns_wiener_single_uv_hbd(
             ds_flt,
         );
         l_ptrs[1] = 1;
+    } else if tile_top {
+        // Tile-row seam: the rows above are the tile's first luma row.
+        backup_row_luma_hbd(
+            &mut l_buffers[0],
+            o,
+            luma,
+            luma_off,
+            0,
+            luma_w,
+            edges,
+            ss_hor,
+            ss_ver,
+            ds_flt,
+        );
+        l_ptrs[0] = 0;
+        l_ptrs[1] = 0;
     } else {
         l_ptrs[0] = 2;
         l_ptrs[1] = 2;
@@ -3771,7 +4084,22 @@ pub(crate) fn ns_wiener_single_uv_hbd(
             bak_idx = 0;
         }
 
-        if c_ptrs[4] == c_ptrs[3] {
+        if tile_bottom && y + 2 >= h {
+            // Tile-row seam: the rows below are the tile's last luma row.
+            backup_row_luma_hbd(
+                &mut l_buffers[lbak_idx],
+                o,
+                luma,
+                luma_off + ((h << ss_ver) - 1) * lstride,
+                0,
+                luma_w,
+                edges,
+                ss_hor,
+                ss_ver,
+                ds_flt,
+            );
+            l_ptrs[4] = lbak_idx;
+        } else if c_ptrs[4] == c_ptrs[3] {
             l_ptrs[4] = l_ptrs[3];
         } else if y + 2 == h && edges & LR_HAVE_BOTTOM_INTEGRATED == 0 {
             backup_row_luma_hbd(
@@ -3924,6 +4252,8 @@ pub(crate) struct LrContextHbd<'a> {
     pub(crate) row_start_sb: &'a [u16],
     /// Luma SB size in pixels.
     pub(crate) sbsz: i32,
+    /// `disable_loopfilters_across_tiles`: LR/GDF treat tile edges as picture edges.
+    pub(crate) no_lf_across_tiles: bool,
 }
 fn lr_stripe_hbd(
     ctx: &LrContextHbd,
@@ -4027,9 +4357,8 @@ fn lr_stripe_hbd(
     // by `stripe_h * stride` each iteration). The slice kernels index `p` with a
     // local stripe-relative `y`, so this must track the stripe origin.
     let mut cur_off = p_off;
-    let mut lpf_off =
-        (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * stride_u as isize
-            + x as isize) as usize;
+    let mut lpf_off = (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * stride_u as isize
+        + x as isize) as usize;
     let mut llpf_off =
         (have_tt as isize * (sby as isize * (4 << ctx.sb128) - 4) * lstride_u as isize
             + (x << ss_hor) as isize) as usize;
@@ -4038,6 +4367,18 @@ fn lr_stripe_hbd(
         edges ^= ((-(((sby + 1) != ctx.sbh) as i32 | (y + stripe_h != row_h) as i32)) as u8
             ^ edges)
             & LR_HAVE_BOTTOM;
+
+        // `disable_loopfilters_across_tiles`: tile edges pad like picture edges.
+        let kedges = lr_tile_seam_edges(
+            ctx.no_lf_across_tiles,
+            ctx.col_start_sb,
+            ctx.sbsz,
+            edges,
+            x << ss_hor,
+            (x + w) << ss_hor,
+        );
+        let uv_edges = kedges;
+        let kedges = kedges & !(LR_TILE_TOP | LR_TILE_BOTTOM);
 
         let inc = if (edges & (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED | LR_HAVE_BOTTOM_INTEGRATED))
             == LR_HAVE_TOP
@@ -4062,7 +4403,7 @@ fn lr_stripe_hbd(
 
         // `top` source: the cross-tile-row CDEF line when both HAVE_TOP and
         // HAVE_TOP_INTEGRATED are set; otherwise the deblocked-line store.
-        let cdef_top: Option<usize> = if (edges & (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED))
+        let cdef_top: Option<usize> = if (kedges & (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED))
             == (LR_HAVE_TOP | LR_HAVE_TOP_INTEGRATED)
         {
             let cdef_off = tile_row_m1 as usize * (6 - 4 * chroma as usize) * stride_u + x as usize;
@@ -4100,7 +4441,7 @@ fn lr_stripe_hbd(
                 stripe_u,
                 ref_dst_idx as usize,
                 qp_idx as usize,
-                edges,
+                kedges,
                 ctx.bitdepth_max,
             );
         }
@@ -4187,7 +4528,7 @@ fn lr_stripe_hbd(
                         w_u,
                         stripe_u,
                         &filter,
-                        edges,
+                        kedges,
                         ll_mask_buf,
                         ctx.bitdepth_max,
                     );
@@ -4232,7 +4573,7 @@ fn lr_stripe_hbd(
                         ss_hor as usize,
                         ss_ver as usize,
                         ctx.cfl_ds_filter_index,
-                        edges,
+                        uv_edges,
                         ll_mask_buf,
                         ctx.bitdepth_max,
                     );
@@ -4272,7 +4613,7 @@ fn lr_stripe_hbd(
                         ctx.ns_subclass_lut,
                         &noskip_mask[noskip_offset..],
                         ctx.base_q,
-                        edges,
+                        kedges,
                         ll_mask_buf,
                         ctx.bitdepth_min_8,
                         ctx.bitdepth_max,
@@ -4301,7 +4642,7 @@ fn lr_stripe_hbd(
                         ctx.pc_subclass_lut,
                         &noskip_mask[noskip_offset..],
                         ctx.base_q,
-                        edges,
+                        kedges,
                         ll_mask_buf,
                         ctx.bitdepth_min_8,
                         ctx.bitdepth_max,
@@ -4403,14 +4744,25 @@ fn lr_chunk_hbd(
     // Segments of `width` that map to distinct restoration units.
     let mut segs: [(i32, (usize, usize)); 4] = [(0, first_unit); 4];
     let mut n_segs = 1usize;
-    let mut off = unit_size;
-    while unit_size < width && off < width && n_segs < 4 {
-        let unit = lr_unit_at_hbd(ctx, x + off, w, unit_size, ss_hor, sb_idx, unit_idx_base);
-        if unit != segs[n_segs - 1].1 {
-            segs[n_segs] = (off, unit);
-            n_segs += 1;
+    // With `disable_loopfilters_across_tiles` a subsampled chunk can also
+    // straddle a tile column (32px chroma SBs); split there as well.
+    let step = if ctx.no_lf_across_tiles {
+        unit_size.min(32)
+    } else {
+        unit_size
+    };
+    let mut off = step;
+    while off < width && n_segs < 4 {
+        let seam = ctx.no_lf_across_tiles
+            && lr_is_tile_col_seam(ctx.col_start_sb, ctx.sbsz, (x + off) << ss_hor);
+        if seam || off % unit_size == 0 {
+            let unit = lr_unit_at_hbd(ctx, x + off, w, unit_size, ss_hor, sb_idx, unit_idx_base);
+            if seam || unit != segs[n_segs - 1].1 {
+                segs[n_segs] = (off, unit);
+                n_segs += 1;
+            }
         }
-        off += unit_size;
+        off += step;
     }
 
     if n_segs == 1 {
@@ -4899,6 +5251,172 @@ mod pcw_feature_tests {
                     pcw_features(&rows16, 4, x0),
                     pcw_features_scalar(&rows16, 4, x0),
                     "{bits}b x0={x0}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(all(
+    test,
+    any(target_arch = "aarch64", all(target_arch = "x86_64", feature = "avx"))
+))]
+mod gdf_prep_unit_tests {
+    use super::*;
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn r(&mut self, n: u32) -> u32 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 16) as u32 % n
+        }
+    }
+
+    const STRIDE: usize = 96;
+
+    /// Smooth content with occasional edges, so the alpha clamps, the small
+    /// difference paths and all four classes are exercised.
+    fn plane<T: Copy>(rng: &mut Rng, rows: usize, max: u32, cast: fn(u32) -> T) -> Vec<T> {
+        let mut v = rng.r(max);
+        (0..rows * STRIDE)
+            .map(|_| {
+                v = if rng.r(8) == 0 {
+                    rng.r(max)
+                } else {
+                    (v + rng.r(9)).saturating_sub(4).min(max - 1)
+                };
+                cast(v)
+            })
+            .collect()
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    use crate::avx::gdf_prep_unit_avx2 as gdf_prep_unit_simd;
+    #[cfg(target_arch = "aarch64")]
+    use crate::neon::gdf_prep_unit_neon as gdf_prep_unit_simd;
+
+    /// The SIMD unit kernel against the portable row path, over all table
+    /// sets, edge combinations, sizes and bit depths.
+    #[test]
+    fn unit_simd_matches_rows() {
+        #[cfg(target_arch = "x86_64")]
+        if !std::is_x86_feature_detected!("avx2") {
+            return;
+        }
+        let exec = crate::exec_context::ExecContext::new();
+        let mut rng = Rng(0x9df_c0de_7711);
+        for iter in 0..3000 {
+            let (w, h) = if iter % 3 == 0 {
+                (64, 8 * (1 + rng.r(8) as usize))
+            } else {
+                (1 + rng.r(64) as usize, 1 + rng.r(64) as usize)
+            };
+            let (ref_dst_idx, qp_idx) = (iter % 6, (iter / 6) % 6);
+            let edges = rng.r(64) as u8;
+            let p_off = 8 * STRIDE + 8;
+            let (lpf_off, lpfb_off) = (STRIDE + 8, 2 * STRIDE + 8);
+            let mut want = vec![0i8; 64 * 64];
+            let mut got = vec![1i8; 64 * 64];
+            let bitdepth = [8u32, 10, 12][rng.r(3) as usize];
+            if bitdepth == 8 {
+                let p = plane(&mut rng, 84, 256, |v| v as u8);
+                let lpf = plane(&mut rng, 10, 256, |v| v as u8);
+                let left: Vec<[u8; 6]> = (0..70)
+                    .map(|_| core::array::from_fn(|_| rng.r(256) as u8))
+                    .collect();
+                gdf_prep_rows_8bpc(
+                    &exec,
+                    &mut want,
+                    64,
+                    &p,
+                    p_off,
+                    STRIDE,
+                    &left,
+                    &lpf,
+                    lpf_off,
+                    &lpf,
+                    lpfb_off,
+                    w,
+                    h,
+                    ref_dst_idx,
+                    qp_idx,
+                    edges,
+                );
+                unsafe {
+                    gdf_prep_unit_simd(
+                        &mut got,
+                        64,
+                        &p,
+                        p_off,
+                        STRIDE,
+                        &left,
+                        &lpf,
+                        lpf_off,
+                        &lpf,
+                        lpfb_off,
+                        w,
+                        h,
+                        ref_dst_idx,
+                        qp_idx,
+                        edges,
+                        0,
+                    )
+                };
+            } else {
+                let max = 1u32 << bitdepth;
+                let p = plane(&mut rng, 84, max, |v| v as u16);
+                let lpf = plane(&mut rng, 10, max, |v| v as u16);
+                let left: Vec<[u16; 6]> = (0..70)
+                    .map(|_| core::array::from_fn(|_| rng.r(max) as u16))
+                    .collect();
+                gdf_prep_rows_hbd(
+                    &exec,
+                    &mut want,
+                    64,
+                    &p,
+                    p_off,
+                    STRIDE,
+                    &left,
+                    &lpf,
+                    lpf_off,
+                    &lpf,
+                    lpfb_off,
+                    w,
+                    h,
+                    ref_dst_idx,
+                    qp_idx,
+                    edges,
+                    max as i32 - 1,
+                );
+                unsafe {
+                    gdf_prep_unit_simd(
+                        &mut got,
+                        64,
+                        &p,
+                        p_off,
+                        STRIDE,
+                        &left,
+                        &lpf,
+                        lpf_off,
+                        &lpf,
+                        lpfb_off,
+                        w,
+                        h,
+                        ref_dst_idx,
+                        qp_idx,
+                        edges,
+                        bitdepth.saturating_sub(10),
+                    )
+                };
+            }
+            for y in 0..h {
+                assert_eq!(
+                    want[y * 64..][..w],
+                    got[y * 64..][..w],
+                    "iter {iter} y {y} {w}x{h} bd {bitdepth} edges {edges:#x} set {ref_dst_idx}/{qp_idx}"
                 );
             }
         }

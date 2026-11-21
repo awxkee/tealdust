@@ -70,6 +70,77 @@ pub trait Pixel: Copy + Default + Send + Sync + Into<i32> + 'static {
 
     /// Mutable counterpart of [`Pixel::try_as_u16_slice`].
     fn try_as_u16_slice_mut(samples: &mut [Self]) -> Option<&mut [u16]>;
+
+    /// This thread's pool of free [`EmuBuf`] buffers for this sample type.
+    fn emu_pool() -> &'static std::thread::LocalKey<core::cell::RefCell<Vec<Vec<Self>>>>;
+}
+
+std::thread_local! {
+    static EMU_POOL_8: core::cell::RefCell<Vec<Vec<u8>>> = const { core::cell::RefCell::new(Vec::new()) };
+    static EMU_POOL_16: core::cell::RefCell<Vec<Vec<u16>>> = const { core::cell::RefCell::new(Vec::new()) };
+}
+
+/// Free buffers kept per thread and sample type. A block's prediction needs at
+/// most a few at once (one per reference and plane in flight).
+const EMU_POOL_KEEP: usize = 8;
+
+/// A `192 * 192` scratch block for edge-emulated motion compensation, taken
+/// from a per-thread pool and returned on drop. Per-block `vec!` buffers of
+/// this size went through the large-allocation path (and `madvise`) on every
+/// block.
+///
+/// The contents are not cleared between uses: the edge emulation writes every
+/// sample the prediction then reads.
+pub(crate) struct EmuBuf<P: Pixel> {
+    buf: Vec<P>,
+}
+
+impl<P: Pixel> EmuBuf<P> {
+    pub(crate) const LEN: usize = 192 * 192;
+
+    pub(crate) fn take() -> Self {
+        let buf = P::emu_pool()
+            .try_with(|pool| pool.borrow_mut().pop())
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| vec![P::default(); Self::LEN]);
+        debug_assert_eq!(buf.len(), Self::LEN);
+        Self { buf }
+    }
+}
+
+impl<P: Pixel> Drop for EmuBuf<P> {
+    fn drop(&mut self) {
+        let buf = core::mem::take(&mut self.buf);
+        let _ = P::emu_pool().try_with(|pool| {
+            if let Ok(mut pool) = pool.try_borrow_mut() {
+                if pool.len() < EMU_POOL_KEEP {
+                    pool.push(buf);
+                }
+            }
+        });
+    }
+}
+
+impl<P: Pixel> core::ops::Deref for EmuBuf<P> {
+    type Target = [P];
+    #[inline(always)]
+    fn deref(&self) -> &[P] {
+        &self.buf
+    }
+}
+
+impl<P: Pixel> core::ops::DerefMut for EmuBuf<P> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut [P] {
+        &mut self.buf
+    }
+}
+
+/// Releases this thread's [`EmuBuf`] pools.
+pub(crate) fn clear_emu_pools() {
+    let _ = EMU_POOL_8.try_with(|p| p.borrow_mut().clear());
+    let _ = EMU_POOL_16.try_with(|p| p.borrow_mut().clear());
 }
 
 impl Pixel for u8 {
@@ -132,6 +203,11 @@ impl Pixel for u8 {
     #[inline(always)]
     fn try_as_u16_slice_mut(_samples: &mut [Self]) -> Option<&mut [u16]> {
         None
+    }
+
+    #[inline(always)]
+    fn emu_pool() -> &'static std::thread::LocalKey<core::cell::RefCell<Vec<Vec<Self>>>> {
+        &EMU_POOL_8
     }
 }
 
@@ -203,6 +279,11 @@ impl Pixel for u16 {
     #[inline(always)]
     fn try_as_u16_slice_mut(samples: &mut [Self]) -> Option<&mut [u16]> {
         Some(samples)
+    }
+
+    #[inline(always)]
+    fn emu_pool() -> &'static std::thread::LocalKey<core::cell::RefCell<Vec<Vec<Self>>>> {
+        &EMU_POOL_16
     }
 }
 

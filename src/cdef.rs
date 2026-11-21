@@ -186,6 +186,136 @@ pub(crate) fn adjust_strength(strength: i32, var: u32) -> i32 {
     (strength * (4 + i) + 8) >> 4
 }
 
+/// A `CDEF_DIRECTIONS` offset (row * 12 + col) re-expressed for `stride`.
+#[cfg(any(target_arch = "aarch64", all(target_arch = "x86_64", feature = "avx")))]
+#[inline(always)]
+pub(crate) fn cdef_dir_offset(v: i8, stride: usize) -> isize {
+    let v = v as isize;
+    let dy = (v + 30).div_euclid(12) - 2;
+    dy * stride as isize + (v - 12 * dy)
+}
+
+/// Columns of padding on each side of a band buffer row; the left two hold
+/// nothing (blocks without a left neighbor never use the band).
+const CDEF_BAND_PAD: usize = 8;
+
+/// Widens one 8-luma-row band of a plane into `tmp`: the saved pre-CDEF seam
+/// rows above and below (when present) around the band's own `h` rows, each
+/// `w` pixels wide starting at column 2 of a `ts`-wide row. This is what
+/// `cdef_padding` builds per block, for every block of the band that has all
+/// four neighbors.
+#[allow(clippy::too_many_arguments)]
+fn cdef_fill_band<P: Pixel>(
+    tmp: &mut [i16],
+    ts: usize,
+    src: &[P],
+    src_off: usize,
+    src_stride: usize,
+    w: usize,
+    h: usize,
+    top: Option<&[P]>,
+    bottom: Option<&[P]>,
+) {
+    let mut row = |r: usize, s: &[P]| copy_pixels_to_i16(&mut tmp[r * ts + 2..][..w], &s[..w]);
+    if let Some(top) = top {
+        row(0, top);
+        row(1, &top[src_stride..]);
+    }
+    for r in 0..h {
+        row(2 + r, &src[src_off + r * src_stride..]);
+    }
+    if let Some(bottom) = bottom {
+        row(h + 2, bottom);
+        row(h + 3, &bottom[src_stride..]);
+    }
+}
+
+/// Filters one block whose bordered pre-CDEF pixels already sit in `tmp`
+/// with the block's first pixel at `o`. Only the SIMD shape kernels that
+/// accept any `tmp_stride` may be reached through this.
+#[allow(clippy::too_many_arguments)]
+fn cdef_filter_from_tmp<BD: BitDepth>(
+    bd: BD,
+    exec: &crate::exec_context::ExecContext,
+    dst: &mut [BD::Pixel],
+    dst_stride: usize,
+    dst_off: usize,
+    tmp: &[i16],
+    tmp_stride: usize,
+    o: usize,
+    pri_strength: i32,
+    sec_strength: i32,
+    dir: usize,
+    damping: i32,
+    w: usize,
+    h: usize,
+) {
+    if pri_strength == 0 && sec_strength == 0 {
+        return;
+    }
+    let pri_tap = if pri_strength != 0 {
+        4 - ((pri_strength >> bd.bitdepth_min_8()) & 1)
+    } else {
+        0
+    };
+    let pri_shift = if pri_strength != 0 {
+        imax(0, damping - ulog2(pri_strength as u32))
+    } else {
+        0
+    };
+    let sec_shift = if sec_strength != 0 {
+        damping - ulog2(sec_strength as u32)
+    } else {
+        0
+    };
+    let shape = match (w, h) {
+        (8, 8) => 0,
+        (4, 8) => 1,
+        (4, 4) => 2,
+        _ => 3,
+    };
+    debug_assert!(shape != 3 || (w, h) == (8, 4));
+    // The furthest tap reaches two rows and columns around the block.
+    assert!(o >= 2 * tmp_stride + 2 && o + (h + 1) * tmp_stride + w + 2 <= tmp.len());
+    if BD::BPC == 8 {
+        let d8 = <BD::Pixel as Pixel>::try_as_u8_slice_mut(dst).expect("8-bit CDEF storage");
+        unsafe {
+            (exec.cdef_filter_shapes[shape])(
+                d8,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            )
+        };
+    } else {
+        let d16 = <BD::Pixel as Pixel>::try_as_u16_slice_mut(dst).expect("HBD CDEF storage");
+        unsafe {
+            (exec.cdef_filter_hbd_shapes[shape])(
+                d16,
+                dst_stride,
+                dst_off,
+                tmp,
+                tmp_stride,
+                o,
+                pri_strength,
+                sec_strength,
+                pri_shift,
+                sec_shift,
+                pri_tap,
+                dir,
+            )
+        };
+    }
+}
+
 pub(crate) const BACKUP_2X8_Y: u8 = 1 << 0;
 pub(crate) const BACKUP_2X8_UV: u8 = 1 << 1;
 
@@ -574,11 +704,17 @@ impl CdefTileEdges<'_> {
     /// `CDEF_HAVE_LEFT`/`CDEF_HAVE_RIGHT` bits to clear for the 8px block at `bx`.
     #[inline]
     fn col_mask(&self, bx: i32) -> u8 {
+        self.span_col_mask(bx, 2)
+    }
+
+    /// Same for a span of `w4` 4px units starting at `bx`.
+    #[inline]
+    fn span_col_mask(&self, bx: i32, w4: i32) -> u8 {
         let mut m = 0;
         if Self::is_seam(self.col_start_sb, self.sb_step, bx) {
             m |= CDEF_HAVE_LEFT;
         }
-        if Self::is_seam(self.col_start_sb, self.sb_step, bx + 2) {
+        if Self::is_seam(self.col_start_sb, self.sb_step, bx + w4) {
             m |= CDEF_HAVE_RIGHT;
         }
         m
@@ -912,6 +1048,31 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
         let mut row_uv = ((by_start as usize * 4) >> ss_ver) * uv_ls;
         let mut edge_top = if by_start > 0 { CDEF_HAVE_TOP } else { 0 };
 
+        // With kernels that take any buffer stride, blocks with all four
+        // neighbors read a per-band widened copy instead of padding a 12x12
+        // block each. Every CDEF input pixel of a band is pre-CDEF: its own
+        // rows are still untouched when the band starts, and the rows above
+        // and below come from the saved seams, exactly as in `cdef_padding`.
+        #[cfg(all(target_arch = "x86_64", feature = "avx"))]
+        let use_band = std::is_x86_feature_detected!("avx2");
+        #[cfg(target_arch = "aarch64")]
+        let use_band = true;
+        #[cfg(not(any(target_arch = "aarch64", all(target_arch = "x86_64", feature = "avx"))))]
+        let use_band = false;
+        let band_w = [
+            (p.bw.max(0) as usize) * 4,
+            ((p.bw.max(0) as usize) * 4) >> ss_hor,
+        ];
+        let band_ts = [band_w[0] + CDEF_BAND_PAD, band_w[1] + CDEF_BAND_PAD];
+        let mut band_y = vec![0i16; if use_band { 12 * band_ts[0] } else { 0 }];
+        let uv_len = if use_band && have_chroma {
+            12 * band_ts[1]
+        } else {
+            0
+        };
+        let mut band_u = vec![0i16; uv_len];
+        let mut band_v = vec![0i16; uv_len];
+
         let mut by = by_start;
         while by < by_end {
             let ru = (by / 2) as usize;
@@ -921,9 +1082,38 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
             if by + 2 >= p.bh {
                 edges &= !CDEF_HAVE_BOTTOM;
             }
-            // Tile seams only narrow what the CDEF kernels may read; `edges`
-            // itself keeps driving the 2x8 backups and CCSO, whose tile-edge
-            // handling differs (AVM replicates the tile border for CCSO).
+            if use_band {
+                let has_top = edges & CDEF_HAVE_TOP != 0;
+                let has_bottom = edges & CDEF_HAVE_BOTTOM != 0;
+                let seams = |pl: usize| {
+                    (
+                        has_top.then(|| &cdef_line[ru_prev][pl][..]),
+                        has_bottom.then(|| &cdef_top[ru + 1][pl][..]),
+                    )
+                };
+                let (top, bottom) = seams(0);
+                cdef_fill_band(
+                    &mut band_y,
+                    band_ts[0],
+                    y,
+                    row_y,
+                    y_ls,
+                    band_w[0],
+                    8,
+                    top,
+                    bottom,
+                );
+                if have_chroma {
+                    let (w, h) = (band_w[1], 8 >> ss_ver);
+                    let (top, bottom) = seams(1);
+                    cdef_fill_band(&mut band_u, band_ts[1], u, row_uv, uv_ls, w, h, top, bottom);
+                    let (top, bottom) = seams(2);
+                    cdef_fill_band(&mut band_v, band_ts[1], v, row_uv, uv_ls, w, h, top, bottom);
+                }
+            }
+            // Tile seams only narrow what the kernels may read (CDEF per 8px
+            // block, CCSO per 64px span); `edges` itself keeps driving the
+            // 2x8 backups.
             let tile_row_mask = p.tile_edges.map_or(0, |t| t.row_mask(by));
 
             let _ = (sbrow_start, by_end);
@@ -984,6 +1174,11 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                         let mut sb_edges = edges;
                         if (sbx + 1) * sbsz >= p.bw {
                             sb_edges &= !CDEF_HAVE_RIGHT;
+                        }
+                        // AVM runs CCSO per tile on a border-replicated luma
+                        // copy, i.e. a tile seam pads like a picture edge.
+                        if let Some(t) = &p.tile_edges {
+                            sb_edges &= !(tile_row_mask | t.span_col_mask(sbx * sbsz, sbsz));
                         }
                         let w_full = imin(sbsz, p.bw - sbx * sbsz) * 4;
                         if w_full <= 0 {
@@ -1144,6 +1339,15 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
 
                         let fedges =
                             edges & !(tile_row_mask | p.tile_edges.map_or(0, |t| t.col_mask(bx)));
+                        // Interior blocks filter straight from the band buffers.
+                        let from_band = use_band
+                            && fedges
+                                == CDEF_HAVE_LEFT
+                                    | CDEF_HAVE_RIGHT
+                                    | CDEF_HAVE_TOP
+                                    | CDEF_HAVE_BOTTOM;
+                        let band_o_y = 2 * band_ts[0] + 2 + (b_y - row_y);
+                        let band_o_uv = 2 * band_ts[1] + 2 + (b_uv - row_uv);
 
                         let y_filter_active = !y_lossless && (y_pri_lvl != 0 || y_sec_lvl != 0);
                         let uv_filter_active = uv_lvl != 0 && have_chroma && !uv_lossless;
@@ -1163,7 +1367,14 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                         let top_col = bx as usize * 4;
                         if y_pri_lvl != 0 {
                             let adj = adjust_strength(y_pri_lvl, variance);
-                            if y_filter_active && (adj != 0 || y_sec_lvl != 0) {
+                            if !y_filter_active || (adj == 0 && y_sec_lvl == 0) {
+                                // Nothing to filter in luma.
+                            } else if from_band {
+                                cdef_filter_from_tmp(
+                                    bd, exec, y, y_ls, b_y, &band_y, band_ts[0], band_o_y, adj,
+                                    y_sec_lvl, dir, damping, 8, 8,
+                                );
+                            } else {
                                 let (y_bottom, y_bottom_off, y_bottom_stride) =
                                     saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, fedges);
                                 cdef_filter_block(
@@ -1187,6 +1398,11 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                                     fedges,
                                 );
                             }
+                        } else if y_filter_active && from_band {
+                            cdef_filter_from_tmp(
+                                bd, exec, y, y_ls, b_y, &band_y, band_ts[0], band_o_y, 0,
+                                y_sec_lvl, 0, damping, 8, 8,
+                            );
                         } else if y_filter_active {
                             let (y_bottom, y_bottom_off, y_bottom_stride) =
                                 saved_bottom_ref(cdef_top, ru, 0, top_col, y_ls, fedges);
@@ -1221,50 +1437,71 @@ pub(crate) fn cdef_brow<BD: BitDepth>(
                             let cw = 8 >> ss_hor;
                             let ch = 8 >> ss_ver;
                             let top_col_uv = (bx as usize * 4) >> ss_hor;
-                            let (u_bottom, u_bottom_off, u_bottom_stride) =
-                                saved_bottom_ref(cdef_top, ru, 1, top_col_uv, uv_ls, fedges);
-                            let (v_bottom, v_bottom_off, v_bottom_stride) =
-                                saved_bottom_ref(cdef_top, ru, 2, top_col_uv, uv_ls, fedges);
-                            cdef_filter_block(
-                                bd,
-                                exec,
-                                u,
-                                uv_ls,
-                                b_uv,
-                                &lr_bak[bit][1],
-                                &cdef_line[ru_prev][1],
-                                top_col_uv,
-                                u_bottom,
-                                u_bottom_off,
-                                u_bottom_stride,
-                                uv_pri_lvl,
-                                uv_sec_lvl,
-                                uvdir,
-                                damping - 1,
-                                cw,
-                                ch,
-                                fedges,
-                            );
-                            cdef_filter_block(
-                                bd,
-                                exec,
-                                v,
-                                uv_ls,
-                                b_uv,
-                                &lr_bak[bit][2],
-                                &cdef_line[ru_prev][2],
-                                top_col_uv,
-                                v_bottom,
-                                v_bottom_off,
-                                v_bottom_stride,
-                                uv_pri_lvl,
-                                uv_sec_lvl,
-                                uvdir,
-                                damping - 1,
-                                cw,
-                                ch,
-                                fedges,
-                            );
+                            if from_band {
+                                for (dst, band) in [(&mut *u, &band_u), (&mut *v, &band_v)] {
+                                    cdef_filter_from_tmp(
+                                        bd,
+                                        exec,
+                                        dst,
+                                        uv_ls,
+                                        b_uv,
+                                        band,
+                                        band_ts[1],
+                                        band_o_uv,
+                                        uv_pri_lvl,
+                                        uv_sec_lvl,
+                                        uvdir,
+                                        damping - 1,
+                                        cw,
+                                        ch,
+                                    );
+                                }
+                            } else {
+                                let (u_bottom, u_bottom_off, u_bottom_stride) =
+                                    saved_bottom_ref(cdef_top, ru, 1, top_col_uv, uv_ls, fedges);
+                                let (v_bottom, v_bottom_off, v_bottom_stride) =
+                                    saved_bottom_ref(cdef_top, ru, 2, top_col_uv, uv_ls, fedges);
+                                cdef_filter_block(
+                                    bd,
+                                    exec,
+                                    u,
+                                    uv_ls,
+                                    b_uv,
+                                    &lr_bak[bit][1],
+                                    &cdef_line[ru_prev][1],
+                                    top_col_uv,
+                                    u_bottom,
+                                    u_bottom_off,
+                                    u_bottom_stride,
+                                    uv_pri_lvl,
+                                    uv_sec_lvl,
+                                    uvdir,
+                                    damping - 1,
+                                    cw,
+                                    ch,
+                                    fedges,
+                                );
+                                cdef_filter_block(
+                                    bd,
+                                    exec,
+                                    v,
+                                    uv_ls,
+                                    b_uv,
+                                    &lr_bak[bit][2],
+                                    &cdef_line[ru_prev][2],
+                                    top_col_uv,
+                                    v_bottom,
+                                    v_bottom_off,
+                                    v_bottom_stride,
+                                    uv_pri_lvl,
+                                    uv_sec_lvl,
+                                    uvdir,
+                                    damping - 1,
+                                    cw,
+                                    ch,
+                                    fedges,
+                                );
+                            }
                         }
 
                         bit ^= 1;

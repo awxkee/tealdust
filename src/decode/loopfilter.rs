@@ -421,6 +421,10 @@ pub(crate) const STAGE_CDEF_SAVE: u8 = 8;
 pub(crate) const STAGE_CDEF_FILTER: u8 = 16;
 pub(crate) const STAGE_DEBLOCK_COLS: u8 = 32;
 pub(crate) const STAGE_DEBLOCK_ROWS: u8 = 64;
+/// The cross-tile-row CDEF line save on its own. `STAGE_CDEF` includes it;
+/// `STAGE_CDEF_FILTER` does not, so bands can be filtered in parallel and the
+/// saves done afterwards on one thread.
+pub(crate) const STAGE_TILE_LINE_SAVE: u8 = 128;
 
 pub(crate) struct FilterSb64Scratch<'a> {
     pub(crate) cdef_line: &'a mut [[Vec<u8>; 3]],
@@ -794,7 +798,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
     // 6 luma rows (`(T-1)*6*stride`) / 2 chroma rows (`(T-1)*2*stride`); the
     // integrated path consumes 4 rows from luma offset `+2*stride` / chroma
     // offset `+0`, i.e. the bottom 4 CDEF rows of tile row T-1.
-    if stages & (STAGE_CDEF | STAGE_CDEF_FILTER) != 0
+    if stages & (STAGE_CDEF | STAGE_TILE_LINE_SAVE) != 0
         && sh.restore_planes != 0
         && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
     {
@@ -852,10 +856,18 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                 }
                 let sb_luma_h = sb_step * 4;
                 let ystride = fp.y_stride.unsigned_abs() as usize;
+                // Exactly the rows this root's restoration covers (it trails
+                // the superblock row by 8). Chroma reads luma nowhere else, and
+                // the rows outside belong to roots another thread may be
+                // restoring.
+                let last_root = (root_sby + 1) * sb_luma_h >= bh * 4;
                 let band_lo =
-                    (((root_sby * sb_luma_h - 64).max(0)) as usize * ystride).min(dst_y.len());
-                let band_hi = ((((root_sby + 1) * sb_luma_h + 64).max(0)) as usize * ystride)
-                    .min(dst_y.len());
+                    (((root_sby * sb_luma_h - 8).max(0)) as usize * ystride).min(dst_y.len());
+                let band_hi = if last_root {
+                    dst_y.len()
+                } else {
+                    ((((root_sby + 1) * sb_luma_h - 8).max(0)) as usize * ystride).min(dst_y.len())
+                };
                 snap[band_lo..band_hi].copy_from_slice(&dst_y[band_lo..band_hi]);
                 &snap[..]
             } else {
@@ -899,6 +911,7 @@ pub(crate) fn filter_sb64<BD: BitDepth>(
                 restore_planes: sh.restore_planes,
                 col_start_sb: &frame_hdr.tiling.t.col_start_sb[..=frame_hdr.tiling.t.cols as usize],
                 row_start_sb: &frame_hdr.tiling.t.row_start_sb[..=frame_hdr.tiling.t.rows as usize],
+                no_lf_across_tiles: seq_hdr.disable_loopfilters_across_tiles,
                 sbsz: 4 * sb_step,
             };
             let mut dst: [&mut [u8]; 3] = [dst_y, dst_u, dst_v];
@@ -1193,7 +1206,7 @@ fn filter_sb64_hbd(
 
     // Cross-tile-row CDEF line save (findings issue #2), hbd. See the 8bpc
     // path for the full rationale. Strides here are already in u16 samples.
-    if stages & (STAGE_CDEF | STAGE_CDEF_FILTER) != 0
+    if stages & (STAGE_CDEF | STAGE_TILE_LINE_SAVE) != 0
         && sh.restore_planes != 0
         && inloop & (INLOOPFILTER_WIENER | INLOOPFILTER_GDF) != 0
     {
@@ -1249,10 +1262,18 @@ fn filter_sb64_hbd(
                 }
                 let sb_luma_h = sb_step * 4;
                 let ystride = y_ls;
+                // Exactly the rows this root's restoration covers (it trails
+                // the superblock row by 8). Chroma reads luma nowhere else, and
+                // the rows outside belong to roots another thread may be
+                // restoring.
+                let last_root = (root_sby + 1) * sb_luma_h >= bh * 4;
                 let band_lo =
-                    (((root_sby * sb_luma_h - 64).max(0)) as usize * ystride).min(dst_y.len());
-                let band_hi = ((((root_sby + 1) * sb_luma_h + 64).max(0)) as usize * ystride)
-                    .min(dst_y.len());
+                    (((root_sby * sb_luma_h - 8).max(0)) as usize * ystride).min(dst_y.len());
+                let band_hi = if last_root {
+                    dst_y.len()
+                } else {
+                    ((((root_sby + 1) * sb_luma_h - 8).max(0)) as usize * ystride).min(dst_y.len())
+                };
                 snap[band_lo..band_hi].copy_from_slice(&dst_y[band_lo..band_hi]);
                 &snap[..]
             } else {
@@ -1296,6 +1317,7 @@ fn filter_sb64_hbd(
                 restore_planes: sh.restore_planes,
                 col_start_sb: &frame_hdr.tiling.t.col_start_sb[..=frame_hdr.tiling.t.cols as usize],
                 row_start_sb: &frame_hdr.tiling.t.row_start_sb[..=frame_hdr.tiling.t.rows as usize],
+                no_lf_across_tiles: seq_hdr.disable_loopfilters_across_tiles,
                 sbsz: 4 * sb_step,
                 bitdepth_min_8: bd.bitdepth_min_8(),
                 bitdepth_max: bd.bitdepth_max(),

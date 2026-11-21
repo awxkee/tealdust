@@ -36,6 +36,7 @@ mod deblocking;
 mod filmgrain;
 mod filter;
 mod filter_hd;
+mod gdf;
 mod ipred;
 mod ipred_hd;
 mod itx;
@@ -91,6 +92,7 @@ pub(crate) use filter_hd::{
     gdf_prep_row_hbd_neon, mask_row_hbd_neon, morph_row_hbd_neon, residual_add_row_hbd_neon,
     w_avg_row_hbd_neon,
 };
+pub(crate) use gdf::gdf_prep_unit_neon;
 pub(crate) use ipred::*;
 pub(crate) use ipred_hd::*;
 pub(crate) use itx::*;
